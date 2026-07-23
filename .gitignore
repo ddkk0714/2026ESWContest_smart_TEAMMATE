@@ -1,0 +1,44 @@
+# --- 자격증명 (절대 커밋 금지) ---
+secrets.h
+secrets.yaml
+secrets.json
+.env
+*.pem
+*.key
+
+# --- 수집 데이터 · 라벨 (비공개) ---
+ml/datasets/
+logs/
+*.jsonl
+*.csv
+
+# --- 학습 모델 ---
+ml/models/
+*.tflite
+*.pt
+*.pth
+*.h5
+*.onnx
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# --- PlatformIO / ESP32 ---
+.pio/
+.pioenvs/
+.piolibdeps/
+build/
+
+# --- 에디터 · OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
