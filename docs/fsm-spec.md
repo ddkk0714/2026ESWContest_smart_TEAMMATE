@@ -1,87 +1,170 @@
-# 규칙 기반 FSM 사양 (1단계 추론 엔진)
+# 규칙 기반 FSM 사양 (1단계 추론 엔진) — VER5
 
-담당: 박소연 · 임계값은 `hub/deskmate_hub/config/` 에 두고 코드에 하드코딩하지 않는다.
+담당: 박소연 · 기준 다이어그램: `DESKMATE_FSM-VER5`
+임계값·가중치는 `hub/deskmate_hub/config/fsm.yaml` 에 두고 코드에 하드코딩하지 않는다.
 
-## 상태 정의
+> 이전 버전은 `start/focus/fatigue/end` 4상태 초안이었다. 본 문서는 이를 확장한
+> **이중 신뢰도(C_fatigue·C_focus) 기반 18상태** 확정 설계다. 개발 계획·일정·WBS는
+> 별도 개발계획서(FSM 작업 폴더, 저장소 미포함)에 있고, 본 문서는 **구현 사양**만 다룬다.
 
-| 상태 | 의미 | 대표 신호 |
+## 핵심 개념
+
+두 지표를 **30초 주기로 동시 계산**하고, 각 임계값으로 **독립 판정**한다.
+
+```
+C_fatigue = Σ (wᵢ · δᵢ)     피로도 점수   (0~1)
+C_focus   = Σ (vᵢ · φᵢ)     집중도 점수   (0~1)
+```
+
+- `δᵢ` = 신호 i의 피로 기여도, `φᵢ` = 집중 기여도. baseline 대비 **상대값**으로 정규화.
+- 가용하지 않은 신호(비타이핑 구간의 키스트로크 등)는 항에서 제외하고 분모를 재정규화한다.
+
+## 상태 정의 (5계층 · 18상태)
+
+| 계층 | 상태 | 의미 | 핵심 동작 |
+|---|---|---|---|
+| 대기 | `IDLE` | 시스템 대기 | `tof_poll()`, `dual_monitor_standby()`, idle 화면 |
+| 시작 | `START` | Baseline 측정(5~10분) | `baseline_timer.start()`, `capture(tof, resp, keystroke_rate)` |
+| 시작 | `CONTEXT_DETECT` | 컨텍스트 판정 | `PC_ratio`(15분 윈도우) → 가중치 선택 |
+| 몰입 | `FOCUS_PC` | 컴퓨터 작업 | 주력 키스트로크 / 보조 ToF·호흡·환경 |
+| 몰입 | `FOCUS_MIXED` | 혼용 | `blend = r·PC + (1−r)·NPC` |
+| 몰입 | `FOCUS_비PC` | 비컴퓨터 작업 | 주력 ToF·호흡 / 보조 CO₂·조도·시간 (키스트로크 N/A) |
+| 판단 | `FOCUS_BREAK` | 집중 저하 감지 | `classify_focus_cause(φⱼ)`, `micro_intervention()`, `poll C_focus(Δt=3min)` |
+| 판단 | `FATIGUE_SUSPECT` | 피로 의심 | `display_warning(yellow)`, `esc_timer.start()`, `poll_C_fatigue(Δt=30s)` |
+| 판단 | `FATIGUE` | 피로 확정 | `log_fatigue_event()`, await CAUSE_ANALYSIS |
+| 후속조치 | `CAUSE_ANALYSIS` | 원인 분석·라우팅 | `dominant = argmax(wᵢ·δᵢ)` |
+| 후속조치 | `MONITOR` | 개입 효과 검증 | `measure C_fatigue trend(Δt=5~10min)` → reward → `update_AI_policy()` |
+| 후속조치 | `ESCALATE` | 개입 실패·격상 | `log_intervention_fail()`, `reward(−)` |
+| 후속조치 | `RECOVERY` | 회복 판정 | `poll_C_fatigue + C_focus(Δt=30s)` |
+| 출력 | `ACTION_ENV` | 환경 조정 | `ThinQ_API(조명·환기)`, `await_api_response()` |
+| 출력 | `ACTION_POSTURE` | 자세 교정 | `posture_alert(display)`, `await_correction(Δt=3min)` |
+| 출력 | `ACTION_BREAK` | 휴식 권유 | `display_break_suggest()`, `await_touch(user_decision)` |
+| 출력 | `REST` | 휴식 중 | `rest_timer.start()`, `maintain_env()`, `ambient_display()` |
+| 출력 | `END` | 작업 종료 | `save_session_log()`, `display_summary()` |
+
+## 컨텍스트별 가중치
+
+`PC_ratio` (15분 윈도우 내 키보드/PC 전원 활성 비율)로 컨텍스트를 정한다.
+`> 70% → PC`, `< 30% → 비PC`, `30~70% → MIXED`.
+
+**C_focus 가중치 (vᵢ)**
+
+| 컨텍스트 | 키스트로크 | ToF 자세 | 호흡수 | 환경 | 경과시간 |
+|---|---|---|---|---|---|
+| PC | 0.35 | 0.25 | 0.15 | — | 0.20 |
+| 비PC | N/A | 0.50 | — | 0.25 | 0.25 |
+| MIXED | `blend = r·PC + (1−r)·NPC` | | | | |
+
+**C_fatigue 가중치 (wᵢ)**
+
+| 컨텍스트 | 키스트로크 | ToF 자세 | 호흡수 | 환경 | 경과시간 |
+|---|---|---|---|---|---|
+| PC | 0.35 | 0.25 | 0.15 | 0.10 | 0.15 |
+| 비PC | N/A | 0.40 | 0.25 | 0.20 | 0.15 |
+| MIXED | `blend = r·PC + (1−r)·NPC` | | | | |
+
+`r = PC_ratio`.
+
+## 자세 해석 분기 (핵심 차별점)
+
+동일한 "숙임"도 컨텍스트에 따라 집중/피로로 갈린다. 자세 단독 판정 금지 — 반드시 융합.
+
+| 컨텍스트 | 관찰 | 해석 |
 |---|---|---|
-| `start` | 착석 직후, 작업 준비 | 재실 전환, 타이핑 개시, 자세 baseline 캘리브레이션 |
-| `focus` | 몰입 | 자세 안정, 타이핑 리듬 일정, 공백 비율 낮음 |
-| `fatigue` | 피로 누적 | 자세 정적화 또는 잦은 전환, 타이핑 느려짐 · 불규칙 · 정정 증가, CO₂ 누적 상승 |
-| `end` | 작업 종료 | 재실 해제 지속 |
+| PC | 숙임 + 키입력↓ | 피로↑ |
+| PC | 숙임 + 키입력 정상 | 중립 |
+| 비PC | 숙임 + motion↓ | 집중 |
+| 비PC | 숙임 + 정적 | 피로↑ |
+| 공통 | 젖힘 · 슬럼프 | 양쪽 피로↑ |
 
-> 선행연구 근거: 피로 상태일수록 자세가 **정적**이고, 인지 부하가 높을수록
-> 자세 **전환이 잦다**. 두 방향 모두 `focus` 이탈 신호가 될 수 있으므로
-> 자세 단독으로 판정하지 않고 키스트로크 · 작업시간과 융합한다.
+## 판정 임계값 (초안 — 8월 실측 후 보정)
+
+| 상태/전이 | 조건 |
+|---|---|
+| Baseline 완료 (`START`→`CONTEXT_DETECT`) | `timer_10s ∧ baseline_ok` |
+| 몰입 유지 | `C_fatigue < 0.40` |
+| 집중 저하 (`FOCUS_BREAK`) | `C_focus ≥ 0.30 ∧ C_fatigue < 0.40` |
+| 재유도 성공 → 몰입 복귀 | `C_focus < 0.25` |
+| 피로 의심 (`FATIGUE_SUSPECT`) | `0.40 ≤ C_fatigue < 0.70` |
+| 피로 확정 (`FATIGUE`) | `C_fatigue ≥ 0.70` (3분 지속) |
+| 자연 회복 | `C_fatigue < 0.30` |
+| 회복 승인 (`RECOVERY`→몰입) | `C_fatigue < 0.30` |
+| 회복 실패 (`RECOVERY`→`ESCALATE`) | `C_fatigue ≥ 0.70` |
+| 대기 강제 전환 (→`IDLE`) | 재실 없음 10분 |
+
+**baseline 캘리브레이션** — 자세·키스트로크·호흡의 작업 초기 분포를 기준값으로 저장하고
+**상대 변화**로 판정한다. 체격·의자 높이·개인 타이핑 속도에 자동 적응. (담당: 김태환)
 
 ## 상태 전이
 
 ```
-        재실 감지            안정 구간 진입
-  end ──────────► start ──────────────► focus
-   ▲                │                     │
-   │                │ 재실 해제           │ 피로 신호 누적
-   │                ▼                     ▼
-   └──────────────────────────────── fatigue
-        재실 해제 T_absent 지속            │
-                                          │ 회복(휴식 수용 · 리듬 복귀)
-                                          └──────► focus
+IDLE ──TouchEvent──► START ──baseline_ok──► CONTEXT_DETECT
+                                                 │ PC_ratio
+                    ┌────────────────┬───────────┴───────────┐
+                    ▼ >70%           ▼ 30~70%                 ▼ <30%
+                FOCUS_PC ◄──────► FOCUS_MIXED ◄──────► FOCUS_비PC
+                    └────────────────┼────────────────────────┘
+                                     │
+             C_focus≥0.30 ┌──────────┴──────────┐ C_fatigue≥0.40 (3분)
+                          ▼                      ▼
+                    FOCUS_BREAK ───재유도 실패──► FATIGUE_SUSPECT
+                          │ 재유도 성공                │ C≥0.70(3분)
+                          └──► (몰입 복귀)             ▼
+                                                    FATIGUE
+                                                       │ dominant
+                                                       ▼
+                                                 CAUSE_ANALYSIS
+                            ┌──────────────────┬───────┴────────┐
+                     환경성 ▼           자세성 ▼          인지성 ▼
+                     ACTION_ENV      ACTION_POSTURE     ACTION_BREAK
+                            └──────────────────┴────────┬───────┘
+                                        실행 완료        │  (BREAK 수락→REST)
+                                                        ▼
+                                                    MONITOR
+                                        C↓(개선) ┌─────┴─────┐ C↑(불변)
+                                                 ▼           ▼
+                                            RECOVERY      ESCALATE
+                                    C<0.30 복귀 │            │ remaining_options → CAUSE_ANALYSIS
+                                    C≥0.70 실패 └──►ESCALATE  └ options 소진 → force REST → RECOVERY
 ```
 
-## 임계값 (초안 — 8월 실측 후 보정)
+- `FOCUS_PC/MIXED/비PC` 는 판단·후속조치 전이를 공유한다(구현은 `ACTIVE` 슈퍼상태 후보 — 설계 확정 필요).
+- 모든 활성 상태에서 **재실 없음 10분 → IDLE**, 디스플레이 터치(작업 종료) → `END`.
 
-| 이름 | 초기값 | 설명 |
-|---|---|---|
-| `T_absent` | 120 s | 이 시간 이상 재실 해제 시 `end` |
-| `T_settle` | 90 s | `start` → `focus` 진입에 필요한 안정 지속 |
-| `W_feature` | 300 s | 특징 벡터 슬라이딩 윈도우 |
-| `posture_static_ratio` | 0.85 | 이 이상 자세 변화 없음 → 정적 판정 |
-| `idle_ratio_fatigue` | 0.35 | 입력 공백 비율이 이 이상이면 피로 가중 |
-| `flight_slowdown` | 1.25 | baseline 대비 flight time 배수 |
-| `correction_rate_hi` | 0.12 | 정정(백스페이스) 빈도 상한 |
-| `co2_rise_ppm` | 400 | 작업 시작 대비 누적 상승량 |
-| `co2_abs_ppm` | 1000 | 절대 농도 트리거 (환기) |
-| `conf_auto` | 0.75 | 이 이상이면 자동 제어 |
-| `conf_suggest` | 0.45 | 이 이상이면 사용자 제안, 미만이면 무동작 |
-
-**baseline 캘리브레이션** — 자세와 키스트로크 모두 작업 초기 구간의 분포를
-기준값으로 저장하고 **상대 변화**로 판정한다. 체격 · 의자 높이 · 개인 타이핑 속도에
-자동 적응하기 위함이다. (담당: 김태환)
-
-## 신뢰도 점수
-
-각 신호의 기여도를 가중합한 뒤 가용성으로 정규화한다.
-키스트로크가 없는 구간에서는 해당 항이 빠지고 분모도 줄어든다.
+## 개입 라우팅 (CAUSE_ANALYSIS)
 
 ```
-score(phase) = Σ wᵢ · sᵢ / Σ wᵢ      (가용한 신호 i 에 대해서만)
+dominant = argmax(wᵢ · δᵢ)
+  환경성 (CO₂·조도 항 지배)        → ACTION_ENV      ThinQ: 조명·환기
+  자세성 (ToF 자세 항 지배)         → ACTION_POSTURE  자세 교정 알림
+  인지성 (경과시간·키스트로크 지배)  → ACTION_BREAK    휴식 권유
 ```
 
-| 신호 | 가중치 초안 | 가용성 |
-|---|---|---|
-| 자세 · 재실 (ToF) | 0.35 | 항상 |
-| 키스트로크 | 0.35 | 타이핑 중에만 |
-| 작업 지속 시간 | 0.20 | 항상 |
-| 환경 (CO₂ · 조도) | 0.10 | 항상 |
-| 호흡 (ToF) | 0.00 → 검증 후 상향 | 정지 구간에서만 |
+## RL 정책 갱신 (MONITOR)
 
-> 호흡은 초기 가중치 **0** 으로 두고, 8월 실측에서 유효성이 확인된 경우에만
-> 상향한다. 호흡 실패가 전체 판정을 흔들면 안 된다.
+- `C_fatigue trend(Δt=5~10min)` 측정 → `C↓ = reward(+)`, `C↑/불변 = reward(−)`
+- `update_AI_policy(reward)` 로 개입 정책을 점진 학습 (예: "오후 인지피로엔 BREAK 우선")
+- **초기에는 고정 규칙**으로 라우팅. RL 갱신은 로그 축적 후(9월~) 활성화하며 개입 폭주 상한을 둔다.
 
-## 행동 분기 (신뢰도 게이트)
+## 신뢰도 게이트 (자동/제안/무동작)
 
 | 신뢰도 | 행동 |
 |---|---|
-| `>= conf_auto` | 자동 제어 실행 + 디스플레이에 실행 사실 표시 |
-| `>= conf_suggest` | 제안 카드만 표시, 사용자 수락 시 실행 |
+| `≥ conf_auto` (초안 0.75) | 자동 제어 실행 + 디스플레이에 실행 사실 표시 |
+| `≥ conf_suggest` (초안 0.45) | 제안 카드만 표시, 사용자 수락 시 실행 |
 | `< conf_suggest` | 무동작 (로그만 기록) |
 
-2단계 분류기가 활성화되면 FSM 점수와 분류기 확신도를 융합해
-같은 게이트에 입력한다. 두 판정이 엇갈리면 보수적으로 `suggest` 로 낮춘다.
+2단계 TFLite 분류기가 활성화되면 FSM 점수와 분류기 확신도를 융합해 같은 게이트에 입력한다.
+두 판정이 엇갈리면 보수적으로 `suggest` 로 낮춘다. 분류기 import 실패 시에도 FSM 은 단독 동작한다.
 
 ## 채터링 방지
 
-- 상태 전이에 최소 유지 시간(`T_settle`)과 히스테리시스를 둔다
-- 동일 제어 명령 재발행은 쿨다운(기본 300s)을 둔다
-- 사용자가 `reject` 한 제안은 해당 세션 내 재제안하지 않는다
+- 상태 전이에 최소 유지 시간(`T_settle`)과 히스테리시스(임계값 진입/이탈 간격)를 둔다.
+- 동일 제어 명령 재발행은 쿨다운(기본 300s).
+- 사용자가 `reject` 한 제안은 해당 세션 내 재제안하지 않는다(ESM 라벨로 기록).
+
+## 오프라인·성능
+
+- 1단계 규칙 FSM 은 완전 오프라인 동작. 2단계 TFLite 는 RasPi 탑재 성공 시 오프라인.
+- 판정 사이클 ≤ 500ms, 신뢰도 계산 주기 30s.
+- 장시간 구동: deque 버퍼 상한 · 주기적 정리 · systemd 자동 재시작.

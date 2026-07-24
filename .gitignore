@@ -36,6 +36,9 @@ env/
 .piolibdeps/
 build/
 
+# --- FSM 작업 폴더 (LGE Internal PDF · drawio 원본 · 설계 초안) ---
+FSM/
+
 # --- 에디터 · OS ---
 .vscode/
 .idea/
