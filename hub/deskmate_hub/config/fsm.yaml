@@ -1,0 +1,51 @@
+# 규칙 기반 FSM 설정 — docs/fsm-spec.md (VER5) 대응
+# 8월 실측 후 이 파일의 값만 바꿔 재실험한다. 코드에 하드코딩 금지.
+
+# 호흡은 보조 신호다. go/no-go(8월) 통과 전까지 false 로 두면
+# scoring 이 호흡 항을 제외하고 나머지 가중치로 재정규화한다.
+respiration_enabled: false
+
+context:
+  pc_ratio_high: 0.70   # 초과 → PC
+  pc_ratio_low: 0.30    # 미만 → 비PC, 그 사이 → MIXED
+  window_sec: 900       # PC_ratio 산출 윈도우 (15분)
+
+# 신호 키: keystroke · posture(ToF) · respiration · environment(CO₂·조도) · elapsed(경과시간)
+weights:
+  focus:
+    pc:  {keystroke: 0.35, posture: 0.25, respiration: 0.15, environment: 0.00, elapsed: 0.20}
+    npc: {keystroke: 0.00, posture: 0.50, respiration: 0.00, environment: 0.25, elapsed: 0.25}
+  fatigue:
+    pc:  {keystroke: 0.35, posture: 0.25, respiration: 0.15, environment: 0.10, elapsed: 0.15}
+    npc: {keystroke: 0.00, posture: 0.40, respiration: 0.25, environment: 0.20, elapsed: 0.15}
+  # MIXED = r·pc + (1-r)·npc (런타임 blend, r = pc_ratio)
+
+thresholds:
+  fatigue_focus_low: 0.40    # 몰입 유지 상한 / 집중저하 판정 시 피로 상한
+  focus_break: 0.30          # C_focus 이 이상이면 집중 저하 감지
+  reengage_success: 0.25     # 재유도 성공 → 몰입 복귀
+  fatigue_suspect_low: 0.40  # 피로 의심 진입
+  fatigue_confirm: 0.70      # 피로 확정
+  natural_recovery: 0.30     # 자연 회복
+  recovery_success: 0.30     # 회복 승인
+  recovery_fail: 0.70        # 회복 실패 → 격상
+
+gate:
+  conf_auto: 0.75      # 이상 → 자동 제어
+  conf_suggest: 0.45   # 이상 → 제안, 미만 → 무동작
+
+timers:
+  score_period_sec: 30           # 신뢰도 계산 주기
+  baseline_sec: 300              # START Baseline 측정(5~10분, 초안 5분)
+  absent_idle_sec: 600           # 재실 없음 10분 → IDLE
+  fatigue_elevated_hold_sec: 180 # FOCUS→FATIGUE_SUSPECT 진입 유지(3분)
+  fatigue_confirm_hold_sec: 180  # FATIGUE_SUSPECT→FATIGUE 유지(3분)
+  focus_break_poll_sec: 180      # 집중 재유도 관찰(3분)
+  rest_min_sec: 300              # REST 최소 유지 후 회복 판정(≥300s)
+  cmd_cooldown_sec: 300          # 동일 제어 명령 재발행 쿨다운
+
+# 개입 라우팅 그룹 (dominant = argmax(wᵢ·δᵢ))
+routing:
+  environment: [environment]          # 환경성 → ACTION_ENV
+  posture: [posture, respiration]     # 자세성/생리 → ACTION_POSTURE
+  cognitive: [elapsed, keystroke]     # 인지성 → ACTION_BREAK
