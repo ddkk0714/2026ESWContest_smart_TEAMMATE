@@ -1,0 +1,3 @@
+pynput>=1.7.6
+paho-mqtt>=2.1.0
+pytest>=8.0.0
