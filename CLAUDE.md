@@ -108,15 +108,17 @@ PC (키스트로크 타이밍) ──────┘        FSM(1단계)+TFLite(
 
 ## 6. FSM 추론 엔진(inference/) 개발 현황 — 박소연
 
-**상태: 🚧 1단계 스켈레톤 완료 · 브랜치 `feat/fsm` (미머지)**
+**상태: 🚧 1단계 엔진 + 리플레이 + 작업 리포트 완료 (PR #1 머지, #2·#3 리뷰 대기)**
 
 기준 설계: `docs/fsm-spec.md` (VER5, 5계층 18상태, C_fatigue/C_focus 이중 모니터링).
 
 완료
 - `config/fsm.yaml` — 임계값·컨텍스트 가중치·타이머·라우팅 전부 외부화.
 - `inference/` — states(18상태) · types(SensorFrame/Signal 계약) · scoring(이중 신뢰도+재정규화) ·
-  context(PC/MIXED/비PC + blend) · cause(dominant 라우팅) · engine(tick 루프·타이머·게이트).
-- `tests/test_fsm_transitions.py` — **17종 전이 테스트 전부 통과** (합성 입력, 실기기 불필요).
+  context(PC/MIXED/비PC + blend) · cause(dominant 라우팅) · engine(tick 루프·타이머·게이트) ·
+  report(세션 로그·피로 에피소드·개입 결과·ESM 라벨).
+- 리플레이/리포트 CLI: `python -m deskmate_hub --demo --report`.
+- **테스트 36종 전부 통과** (전이 17 + 리플레이 11 + 리포트 8, 합성 입력·실기기 불필요).
 - 실행: `cd hub && pip install -r requirements.txt && pytest tests/`
 
 진행/예정 (코드 TODO)
@@ -128,6 +130,8 @@ PC (키스트로크 타이밍) ──────┘        FSM(1단계)+TFLite(
 - ⬜ 2단계 TFLite 분류기 확신도 → 신뢰도 게이트 융합.
 - ✅ 로그 리플레이 하네스 — `python -m deskmate_hub --replay <log.jsonl>` / `--demo`.
   실기기 없이 임계값 튜닝. 8월 실측 로그를 JSONL 로 저장해 반복 실험.
+- ✅ 작업 리포트(`report.py`) — 세션 요약·피로 에피소드·개입 결과·ESM 라벨.
+  ESM 라벨은 2단계 분류기(조명희) 학습 데이터로도 활용. `--report` 로 출력.
 
 ---
 

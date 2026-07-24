@@ -29,12 +29,14 @@ ESP32 노드와 PC 수집기가 발행한 센서 스트림을 구독해 슬라�
 cd hub
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python -m deskmate_hub            # 허브 기동
-python -m deskmate_hub --replay logs/2026-08-01.jsonl   # 로그 리플레이
+python -m deskmate_hub --demo                            # 합성 세션 스모크
+python -m deskmate_hub --replay logs/2026-08-01.jsonl    # 로그 리플레이
+python -m deskmate_hub --demo --report                   # + 세션 작업 리포트
 ```
 
 로그 리플레이는 실기기 없이 FSM 임계값을 튜닝하기 위한 것이다. 초기에 만들어 두면
-8월 데이터 수집 이후 반복 실험이 훨씬 빨라진다.
+8월 데이터 수집 이후 반복 실험이 훨씬 빨라진다. `--report` 는 세션 요약(몰입 시간·피로
+에피소드·개입 결과·ESM 라벨)을 함께 출력한다. (실시간 허브 기동 모드는 ingest 연결 후 구현)
 
 ## 테스트
 
