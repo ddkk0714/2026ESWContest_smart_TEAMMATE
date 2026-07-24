@@ -1,0 +1,6 @@
+# Raspberry Pi 4 중앙 추론 허브 의존성
+PyYAML>=5.4          # config/fsm.yaml 로딩
+paho-mqtt>=1.6       # MQTT 구독/발행 (ingest)
+
+# --- 개발/테스트 ---
+pytest>=7.0          # FSM 상태 전이 단위 테스트
