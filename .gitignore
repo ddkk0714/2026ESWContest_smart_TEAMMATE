@@ -29,6 +29,10 @@ env/
 *.egg-info/
 .pytest_cache/
 .ipynb_checkpoints/
+.dart_tool/
+.packages
+display/atlas/vendor/
+display/**/atlas/flutter/ephemeral/
 
 # --- PlatformIO / ESP32 ---
 .pio/

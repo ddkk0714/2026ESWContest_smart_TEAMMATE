@@ -1,0 +1,14 @@
+name: deskmate-atlas
+
+services:
+  atlas-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: deskmate-atlas-dev:local
+    working_dir: /workspace/display
+    stdin_open: true
+    tty: true
+    volumes:
+      - ../..:/workspace
+    command: sleep infinity
