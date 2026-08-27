@@ -9,6 +9,8 @@
 상세 설계는 `docs/` 참조. (`README.md`=소개, `docs/architecture.md`, `docs/fsm-spec.md`,
 `docs/mqtt-topics.md`, `docs/hardware.md`)
 
+> **Codex 협업 시 필수:** Git 스테이징·커밋·푸시는 Claude만 수행한다. 작업 전 [docs/development-rules.md](docs/development-rules.md)의 파일 소유·인계 규칙을 확인한다.
+
 ---
 
 ## 1. 시스템 한눈에
