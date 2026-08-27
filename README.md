@@ -17,7 +17,7 @@ ToF 거리 센서, 키스트로크 타이밍, 환경 센서를 융합해 책상 
 
   ESP32 노드 ──┐
    ToF(VL53L5CX)│                      Raspberry Pi 4        Raspberry Pi 5
-   CO2/온습도   ├── MQTT ────────────►  중앙 추론 허브  ─────►  디스플레이 단말
+   CO2/온습도   ├── MQTT + CRC ──────►  중앙 추론 허브  ─────►  ATLAS 디스플레이
    조도         │                      FSM + TFLite          상태·제안·리포트
                 │                            │                피드백 입력
   PC 수집기 ───┘                            │
@@ -31,12 +31,16 @@ ToF 거리 센서, 키스트로크 타이밍, 환경 센서를 융합해 책상 
 | 센싱 | ESP32 (센서 말단 노드) | [`firmware/`](firmware/) |
 | 센싱 | PC (키스트로크 수집) | [`collector/`](collector/) |
 | 추론 | Raspberry Pi 4 (중앙 허브) | [`hub/`](hub/) |
-| 출력 | Raspberry Pi 5 (디스플레이 단말) | [`display/`](display/) |
+| 출력 | Raspberry Pi 5 + ATLAS (디스플레이 단말) | [`display/`](display/) |
 | 학습 | PC (모델 학습 → TFLite) | [`ml/`](ml/) |
 
 > 개발계획서 기준 출력 단말은 Raspberry Pi Zero였으나, 대회 지원 장비가
 > **Raspberry Pi 5** 로 대체되었다. 가산점 요건(3종 HW 연동)을 위해
 > ESP32 · Pi 4 · Pi 5 **3종 구성을 유지**한다.
+
+> **ATLAS 배치 결정:** ATLAS 런타임은 Pi 5 display에 둔다. Pi 4는 MQTT·센서 융합·FSM·제어 판단을 맡고,
+> Pi 5는 Atlas Flutter 기반 터치 UI·스피커 알림·사용자 수락/거절/정정을 맡는다. 두 장치는 MQTT로 결합하므로
+> display가 중단되어도 hub의 안전한 기본 판정과 제어는 유지한다.
 
 ---
 
@@ -53,7 +57,8 @@ ToF 거리 센서, 키스트로크 타이밍, 환경 센서를 융합해 책상 
 │       ├── inference/   규칙 기반 FSM (1단계) · 경량 분류기 (2단계) · 신뢰도 게이트
 │       ├── control/     ThinQ API · 스마트 플러그 제어
 │       └── config/      임계값 · 토픽 · 장치 설정
-├── display/       Raspberry Pi 5 디스플레이 UI · 사용자 피드백
+├── display/       Raspberry Pi 5 + ATLAS 디스플레이 UI · 사용자 피드백
+│   └── atlas/         Docker 기반 Atlas Flutter 개발 환경
 ├── ml/            학습 파이프라인 · TFLite 변환 · ESM 라벨링
 └── tools/         데이터 로깅 · 시각화 · 실험 스크립트
 ```
@@ -73,6 +78,10 @@ ToF 거리 센서, 키스트로크 타이밍, 환경 센서를 융합해 책상 
    특징값만 발행한다. ([`docs/mqtt-topics.md`](docs/mqtt-topics.md))
 4. **프라이버시** — 키 값은 수집하지 않고 타임스탬프만 다룬다.
    카메라 · 마이크 미사용. 자가기록 라벨은 저장소에 커밋하지 않는다.
+5. **불확실성은 사용자에게 확인한다.** 센서 신호가 충돌하면 자동 제어 대신 display에서
+   제안·수락·거절·정정을 받고, 결과를 개인화에 활용한다.
+6. **가전은 양방향으로 연동한다.** 제어 명령뿐 아니라 가전 상태와 실행 결과를 받아
+   다음 판단과 안전한 복구에 반영한다.
 
 ---
 
@@ -110,4 +119,6 @@ ToF 거리 센서, 키스트로크 타이밍, 환경 센서를 융합해 책상 
 ## 관련 링크
 
 - 팀 Notion: 임베디드 SW 경진대회 (LG)
+- [개발 진행 현황](docs/development-progress.md)
+- [Pi 5 ATLAS Docker 개발 환경](display/atlas/README.md)
 - 시연 영상: (결선 제출 시 추가)
