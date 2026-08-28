@@ -25,7 +25,7 @@
 - 계약(토픽·스키마·FSM 상태)을 바꾸면 해당 문서를 같은 작업에서 함께 고쳐라.
 - git push, 브랜치 전환, merge, rebase, stash, reset은 내가 명시적으로 요청할 때만 해라.
 - 커밋할 때는 대상 파일만 명시적으로 스테이징하고 git diff --cached --check를 확인해라.
-- AGENTS.md, CLAUDE.md, docs/development-rules.md의 변경은 커밋하지 마라.
+- 에이전트 운영 규칙이 바뀌면 docs/agent-briefing.md를 먼저 고치고 AGENTS.md·CLAUDE.md·docs/development-rules.md를 같은 커밋에서 맞춰라.
 
 작업을 시작하기 전에 (1) 수정할 파일과 목적, (2) 검증 방법을 먼저 한 번에 알려주고 내 확인을 받아라.
 완료 보고에는 수정 파일 / 변경 요약 / 실행한 검증과 결과 / 커밋 해시 / 남은 위험을 적어라.
@@ -60,9 +60,9 @@ DESKMATE 프로젝트다. docs/agent-briefing.md의 확정 사항·미결정 사
 
 | 도구 | 자동으로 읽는 파일 | 비고 |
 |---|---|---|
-| Claude Code | `CLAUDE.md` | 로컬 운영용. 커밋 대상 아님. |
-| Codex | `AGENTS.md` | 로컬 운영용. 커밋 대상 아님. |
-| 공통 | `docs/agent-briefing.md` | **커밋되는 팀 공용 기준.** 위 문구로 명시적으로 읽힌다. |
+| Claude Code | `CLAUDE.md` | 저장소에서 추적. 브리핑과 내용을 맞춘다. |
+| Codex | `AGENTS.md` | 저장소에서 추적. 브리핑과 내용을 맞춘다. |
+| 공통 | `docs/agent-briefing.md` | **팀 공용 단일 출처.** 위 문구로 명시적으로 읽힌다. |
 
 `CLAUDE.md`와 `AGENTS.md`는 각 도구가 자동으로 읽지만 내용이 갈릴 수 있으므로,
-**팀 공용 기준은 항상 `docs/agent-briefing.md`가 단일 출처**다. 규칙이 바뀌면 이 문서를 먼저 고친다.
+**팀 공용 기준은 항상 `docs/agent-briefing.md`가 단일 출처**다. 규칙이 바뀌면 그 문서를 먼저 고치고 나머지 두 파일을 같은 커밋에서 맞춘다.

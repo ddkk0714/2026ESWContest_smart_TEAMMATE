@@ -133,7 +133,7 @@ VL53L9CX ─────┘            │
 - 커밋 메시지: `feat(scope): 내용` / `fix(scope): 내용` / `docs(scope): 내용` / `chore(scope): 내용`
 - 커밋 직전에 **대상 파일만 명시적으로 스테이징**하고 `git diff --cached --check`와 관련 테스트를 확인한다. 무관한 변경을 섞지 않는다.
 - **push·브랜치 전환·병합·리베이스·stash·reset은 사용자가 명시적으로 요청할 때만** 한다.
-- `AGENTS.md`, `CLAUDE.md`, `docs/development-rules.md`는 로컬 운영용이므로 그 변경은 커밋하지 않는다.
+- `AGENTS.md`, `CLAUDE.md`, `docs/development-rules.md`는 저장소에서 추적한다. 운영 규칙이 바뀌면 **이 문서를 먼저 고치고** 세 파일을 같은 커밋에서 맞춘다.
 
 ### 검증
 - FSM 전이는 합성 입력 단위 테스트로 검증한다(실기기 없이 검증 가능한 유일한 부분).
