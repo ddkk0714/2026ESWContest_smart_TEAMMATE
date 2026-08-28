@@ -84,6 +84,28 @@ VER5 18개 내부 상태로 추론하고, 사용자 화면에는 여섯 phase로
 
 ---
 
+## 명세 문서 — 개발 기준
+
+요구사항 명세서와 데이터 명세서를 **작성 완료**했다. 이 두 문서와 FSM·MQTT 문서는
+**모듈 간 계약**이므로, 구현을 바꾸기 전에 문서를 먼저 바꾸고 같은 PR 에 포함한다.
+
+| 문서 | 내용 | 상태 |
+|---|---|---|
+| [`docs/requirements-spec.md`](docs/requirements-spec.md) | MVP 기능 · 비기능 요구사항, 수용 기준, 검증 항목, 미결정 항목 | 작성 완료 |
+| [`docs/data-spec.md`](docs/data-spec.md) | L0~L5 데이터 계층, 값 · 단위 · 유효성 · 시간 · 보정 · 융합 계약 | 작성 완료 |
+| [`docs/fsm-spec.md`](docs/fsm-spec.md) | VER5 18상태 전이 · 임계값 · 이중 신뢰도 공식 | 유지보수 중 |
+| [`docs/mqtt-topics.md`](docs/mqtt-topics.md) | MQTT 채택 시 topic · payload 매핑 초안 | 통신 확정 대기 |
+
+**AI CLI 로 개발하기 전에** [`docs/agent-briefing.md`](docs/agent-briefing.md) 를 읽히고,
+[`docs/agent-kickoff-prompt.md`](docs/agent-kickoff-prompt.md) 의 공통 문구를 세션 첫 입력으로 넣는다.
+Claude Code · Codex 어느 쪽이든 동일한 기준으로 작업하게 하기 위한 단일 출처다.
+
+**아직 미결정이므로 코드·문서에 확정으로 못 박지 않는다:** 보드 간 물리 통신(MQTT 최우선 후보),
+`C_focus` 부호, Pi 4 FSM 배포 런타임, 개인화 저장소, 호흡 go/no-go.
+전체 목록은 [`docs/requirements-spec.md`](docs/requirements-spec.md) §9 와 [`docs/data-spec.md`](docs/data-spec.md) §16 에 있다.
+
+---
+
 ## 팀 구성
 
 | 이름 | 역할 | 담당 | 주 디렉터리 |
@@ -118,6 +140,8 @@ VER5 18개 내부 상태로 추론하고, 사용자 화면에는 여섯 phase로
 ## 관련 링크
 
 - 팀 Notion: 임베디드 SW 경진대회 (LG)
+- [AI 개발 공통 브리핑](docs/agent-briefing.md) · [CLI 시작 공통 문구](docs/agent-kickoff-prompt.md)
+- [요구사항 명세서](docs/requirements-spec.md) · [데이터 명세서](docs/data-spec.md)
 - [개발 진행 현황](docs/development-progress.md)
 - [Pi 5 ATLAS Docker 개발 환경](display/atlas/README.md)
 - 시연 영상: (결선 제출 시 추가)

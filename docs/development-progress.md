@@ -69,7 +69,7 @@ LG 가전 상태 <── 양방향 MQTT/API ───> └── 제어 명령 �
 | display·UI | 제안·확인·정정·상태 리포트가 제품의 중심 | 화면 요구사항 문서와 Atlas Docker 개발 골격 존재 | Flutter 앱 골격, MQTT client, 제안/정정 UI, 스피커 알림 정책 |
 | PC 연동 | 키 입력 내용은 수집하지 않고 타이밍 특징만 사용 | 키스트로크 payload 계약 존재 | collector 구현, PC 상태 UI/Stream Deck 연동 범위 및 권한 모델 |
 | CAD·브랜딩 | 접이식 힌지·데스크테리어형 제품 경험 | 저장소 내 구현 산출물 없음 | 패키징 치수·열 설계·ToF 배치 제약, Figma UI 흐름, 프로토타입 사진 |
-| 명세·품질 | 요구사항과 데이터 계약을 구현보다 먼저 고정 | MQTT·FSM 명세 존재 | 요구사항 명세서, 데이터 명세서, 시험 시나리오·수용 기준 |
+| 명세·품질 | 요구사항과 데이터 계약을 구현보다 먼저 고정 | 요구사항 명세서·데이터 명세서 작성 완료, MQTT·FSM 명세 존재 | 시험 시나리오·수용 기준 구체화, 미결정 항목 해소 |
 
 ## 5. 이번 우선순위
 
@@ -101,6 +101,10 @@ LG 가전 상태 <── 양방향 MQTT/API ───> └── 제어 명령 �
 
 ## 8. 관련 문서
 
+- AI 개발 공통 브리핑: [agent-briefing.md](agent-briefing.md)
+- CLI 시작 공통 문구: [agent-kickoff-prompt.md](agent-kickoff-prompt.md)
+- 요구사항 계약: [requirements-spec.md](requirements-spec.md)
+- 데이터 계약: [data-spec.md](data-spec.md)
 - 통신 계약: [mqtt-topics.md](mqtt-topics.md)
 - FSM 계약: [fsm-spec.md](fsm-spec.md)
 - FSM 구현 계획: [fsm-dev-plan.md](fsm-dev-plan.md)
