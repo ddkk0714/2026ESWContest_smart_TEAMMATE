@@ -4,32 +4,34 @@
 
 | 계층 | 장치 | 역할 |
 |---|---|---|
-| 센싱 | ESP32 × N | 센서 말단 노드. I2C/SPI 수집 → 1차 전처리 → Wi-Fi MQTT 발행 |
-| 추론 | Raspberry Pi 4 | 중앙 허브. MQTT 브로커 + 특징 융합 + FSM/TFLite 추론 + 제어 판단 |
-| 출력 | Raspberry Pi 5 | 디스플레이 단말. 상태 · 제안 카드 · 리포트 · AOD · 피드백 입력 |
+| 센싱 | ESP32 × N | mmWave·환경 센서 말단 노드. 1차 전처리 후 UART/MQTT 후보 경로로 Pi 4 전달 |
+| 추론 | Raspberry Pi 4 | 중앙 허브. 통신 broker/adapter 후보 + 특징 융합 + FSM/TFLite 추론 + 제어 판단 |
+| 출력 | Raspberry Pi 5 (8GB) | AI Native OS Video Profile 디스플레이 단말. Atlas Flutter 상태·제안·리포트·피드백 UI |
 | 학습 | PC | 모델 학습 → TFLite 변환 → Pi 4 배포. 키스트로크 수집기도 여기서 구동 |
 
 > **3종 HW 유지 필수.** Pi 5 가 강력해도 Pi 4 의 허브 역할을 Pi 5 로 합치지 않는다.
 > ESP32 · Pi 4 · Pi 5 3종 연동이 "3종 HW 연동 AI 가전" 가산점 요건이다.
+> LG 기술교육 제공 구성은 Pi 5의 AI Native OS Video Profile, Pi 4B의 Headless Profile, ESP32이며 AI Native OS 사용은 필수다.
 
 ## 센서
 
 | 센서 | 부품 | 인터페이스 | 용도 |
 |---|---|---|---|
-| ToF 8×8 | VL53L5CX | I2C, 15Hz | 재실 · 자세 · (보조) 호흡 |
+| ToF 54×42 | VL53L9CX | Pi 4 MIPI CSI-2 우선 검증, 실패 시 ESP32 I2C 축소 | 재실·자세·모션·노딩 |
+| ToF 시험용 | VL53L0X | Pi 5 I2C `0x29` | 연결·I2C bring-up 전용, 제품 센서 아님 |
 | mmWave | SEN0623 (C1001) | UART, 115200bps | 재실 · 정지/활동 · 호흡/심박 보조, ToF 교차 검증 |
 | CO₂ · 온습도 | SEN0536 (SCD41) | I2C `0x62` | 환경 맥락 · 환기 트리거 |
 | 조도 | SZH-EK070 (BH1750 GY-302) | I2C | 조명 제어 · 환경 맥락 |
 | 공기질 | ENS160 | I2C | (선택) 환경 맥락 |
-| I2C 멀티플렉서 | TCA9548A | — | ToF 2개 이상 시 주소 충돌 해소 |
+| I2C 멀티플렉서 | TCA9548A | — | I2C 경로에서 동일 주소 센서가 2개 이상일 때 검토 |
 
-드라이버 참조: `pimoroni/vl53l5cx-python` (Pi 용 Python 바인딩)
+VL53L9CX의 실제 호스트 인터페이스·드라이버·처리율은 1일 연결 spike에서 확정한다. 정상 운영은 특징값만 사용하고 축소 depth map은 디버그/UI 모드에서 최대 2Hz로 제한한다.
 
 ## 장비 수령 체크리스트 (2026-07-30)
 
 1차 기술 교육에서 장비 수령 시 **즉시 확인**한다.
 
-- [ ] Pi 5 전원 어댑터가 **27W USB-C PD** 인지 (Pi Zero 용 2.5A 일 수 있음)
+- [ ] Pi 5 전원 어댑터가 **27W USB-C PD** 인지
 - [ ] Pi 5 **액티브 쿨러** 포함 여부 — 상시 추론 시 발열 스로틀링 직결
 - [ ] SD 카드 용량 (16GB 는 협소)
 - [ ] 디스플레이 케이블 규격 · 수량 (Pi 5 는 micro-HDMI)
@@ -41,9 +43,9 @@
 
 | 제품 | 출처 | 가격 |
 |---|---|---|
-| ToF (VL53L5CX / L8) | element14 Korea | 94,946 |
+| ToF (VL53L9CX) | 구매 내역 확인 필요 | 확인 필요 |
 | 온습도 (AM2302/DHT22) | 디바이스마트 | 5,230 |
-| **소계** | | **100,176** |
+| **소계** | | **VL53L9CX 구매 내역 확인 후 재산정** |
 
 ### 추가 선발주 권장
 

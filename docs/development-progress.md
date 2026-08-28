@@ -1,6 +1,6 @@
 # DESKMATE 개발 진행 현황
 
-> 기준일: 2026-08-27  
+> 기준일: 2026-08-28
 > 목적: 제품 방향, 현재 구현 상태, 다음 의존성을 한 화면에서 관리한다. 개인 이름과 담당자 표기는 이 문서에서 제외한다.
 
 ## 1. 제품 지향점
@@ -11,16 +11,16 @@
 - **양방향 가전 연동**: 명령 전송뿐 아니라 가전 상태(예: 온도·동작 상태)와 사용자 피드백을 받아 다음 판단에 반영한다.
 - **사용자 주도 자동화**: 불확실한 판정은 display에서 제안·확인·정정을 받고, 피드백을 개인화 데이터로 축적한다.
 
-## 2. 가장 먼저 결정할 것 — ATLAS 보드 배치
+## 2. ATLAS 보드 배치
 
 ### 결정
 
-**ATLAS 보드는 Raspberry Pi 5 display 단말에 둔다.**
+**Raspberry Pi 5(8GB)의 LG AI Native OS Video Profile에서 ATLAS display 앱을 실행한다.** Raspberry Pi 4는 FSM hub 역할을 유지하되 실제 OS와 Python 배포 가능 여부는 별도로 확인한다.
 
 | 구분 | Raspberry Pi 4 hub | Raspberry Pi 5 display + ATLAS |
 |---|---|---|
-| 주 역할 | MQTT broker, 센서 수집, 전처리 결과 통합, 센서 퓨전, FSM, 제어 판단 | 터치 UI, 제안·정정 입력, 스피커 알림, 상태/리포트 표시 |
-| 우선 기술 | Python 서비스, Mosquitto, 로컬 추론 | Atlas Flutter 앱, display 장치 API |
+| 주 역할 | 통신 broker/adapter 후보, 센서 수집, 전처리 결과 통합, 센서 퓨전, FSM, 제어 판단 | 터치 UI, 제안·정정 입력, 스피커 알림, 상태/리포트 표시 |
+| 우선 기술 | Python 서비스 우선, AI Native OS Headless일 경우 native bridge 검토, MQTT 최우선 후보 | AI Native OS Video Profile, Atlas Flutter 앱, D-Bus display 장치 API |
 | 장애 영향 | 센서·판정·제어의 핵심 경로 | 화면·사용자 상호작용만 제한, hub의 안전한 기본 동작은 유지 |
 
 ### 결정 근거
@@ -28,14 +28,14 @@
 1. ATLAS Flutter 샘플과 Docker 개발환경은 사용자 대면 앱을 빠르게 구현하는 데 적합하다.
 2. display에는 터치와 스피커가 있어, 불확실한 졸음/리듬 동작을 질문하고 수락·거절·정정받는 제품 경험을 완성할 수 있다.
 3. Pi 4의 센서 융합·FSM을 ATLAS UI와 분리하면 UI 오류·업데이트가 실시간 판정 경로에 영향을 주지 않는다.
-4. MQTT를 경계로 두면 Pi 5 display를 교체하거나 확장해도 hub의 통신·추론 계약을 유지할 수 있다.
+4. LG 기술교육 자료는 Pi 5 Video Profile의 Atlas Flutter·D-Bus 앱 개발과 Pi 4 Headless Profile 구성을 공식 제공 경로로 설명한다.
 
 ### 이 결정으로 확정되는 인터페이스
 
 - **Pi 4 → Pi 5**: `deskmate/state/phase`, 제안 카드, 알림·리포트 데이터
 - **Pi 5 → Pi 4**: `deskmate/feedback/user`의 수락·거절·정정, 터치 기반 세션 제어
 - **Pi 5 내부**: Atlas Flutter UI와 스피커·터치 장치 연동
-- **Pi 4 내부**: 센서 입력 유효성·순서·시간 판정, 융합, FSM, 제어 명령 결정. 애플리케이션 CRC는 미결정
+- **Pi 4 내부**: 센서 입력 유효성·순서·시간 판정, 융합, FSM, 제어 명령 결정. UART 사용 구간만 CRC-16, MQTT JSON CRC 미사용
 
 ### 바로 할 일
 
@@ -43,7 +43,7 @@
 - [ ] display 제안 카드의 수락·거절·정정 결과를 `feedback/user`로 발행한다.
 - [ ] Pi 4 hub는 display가 꺼져도 FSM과 안전한 기본 제어를 계속 수행하도록 통합 테스트한다.
 
-> **보류 조건:** 대회 제공 ATLAS 런타임이 Pi 5가 아닌 특정 보드에만 설치되는 경우에는, 위 역할 분리는 유지하되 ATLAS 실행 단말만 제공 보드로 바꾼다. 이 호환성은 장비 수령 시 가장 먼저 확인한다.
+> **확인 근거:** LG 기술교육 자료의 제공 기기 구성은 Raspberry Pi 5(8GB)+AI Native OS Video Profile, Raspberry Pi 4B+Headless Profile, ESP32이며 Flutter 앱은 Pi 5 Video Profile에서 개발한다. 프로젝트 Pi 4에 실제 설치된 OS와 Python 지원 여부는 별도 확인 대상이다.
 
 ## 3. 시스템 흐름
 
@@ -60,11 +60,11 @@ LG 가전 상태 <── 양방향 MQTT/API ───> └── 제어 명령 �
 
 | 분야 | 확정 방향 | 현재 상태 | 다음 산출물 / 의존성 |
 |---|---|---|---|
-| 보드 간 통신 | 논리 데이터 계약과 전송 기술을 분리 | MQTT·envelope·CRC는 후보 초안, 미구현 | Pi 4↔Pi 5 양방향 최소 통신으로 채택 여부 검증 |
-| 센서 통신·전처리 | Raw는 노드에서 특징으로 변환, denoise 후 전달 | ToF·mmWave·환경·키 특징/단위/유효성 명세 완료 | 전처리 파이프라인과 샘플 로그 구현 |
+| 보드 간 통신 | 논리 데이터 계약과 전송 기술을 분리 | MQTT 최우선 후보, UART/MQTT/혼합 최종 결정 대기 | Pi 4↔Pi 5 양방향 최소 통신으로 채택 여부 검증 |
+| 센서 통신·전처리 | 운영은 특징값, 디버그는 축소 depth map 최대 2Hz | VL53L9CX·mmWave·환경·키 특징/단위/유효성 명세 | Pi 4 MIPI CSI-2 1일 spike, 실패 시 ESP32 I2C 축소 경로 |
 | 센서 보정·퓨전 | ToF와 mmWave, 환경 센서를 맥락별로 융합 | SEN0623·SEN0536·SZH-EK070 역할, baseline, 졸음/리듬 규칙 명세 완료 | 실제 거치 데이터 E2E 리플레이 검증 |
 | FSM·불확실성 처리 | FSM 우선, 불확실하면 사용자 확인 | 18상태 FSM, 신뢰도 게이트, 사용자 feedback 토픽·테스트 존재 | 불확실도 기준과 제안 카드 UX, 정정 라벨 스키마, 실제 센서 리플레이 검증 |
-| 개인화·AI | 개인 baseline·시간대 패턴을 이용한 단계적 개인화 | 2단계 TFLite 및 RL은 선택적 설계 단계 | 개인화 feature/label·보존 기간·동의 흐름, 로컬 DB 또는 Node-RED 역할 결정 |
+| 개인화·AI | 개인 baseline·시간대 패턴을 이용한 단계적 개인화 | 2단계 TFLite 및 RL은 선택적 설계 단계 | 개인화 feature/label·보존 기간·동의 흐름, 로컬 DB 결정 |
 | 가전 연동 | 제어와 상태 수신을 모두 반영 | hub→control 명령 토픽 초안 존재 | ThinQ/API 분석 결과, 가전 상태 수신 schema, 실패·재시도·수동 복구 정책 |
 | display·UI | 제안·확인·정정·상태 리포트가 제품의 중심 | 화면 요구사항 문서와 Atlas Docker 개발 골격 존재 | Flutter 앱 골격, MQTT client, 제안/정정 UI, 스피커 알림 정책 |
 | PC 연동 | 키 입력 내용은 수집하지 않고 타이밍 특징만 사용 | 키스트로크 payload 계약 존재 | collector 구현, PC 상태 UI/Stream Deck 연동 범위 및 권한 모델 |
@@ -83,18 +83,18 @@ LG 가전 상태 <── 양방향 MQTT/API ───> └── 제어 명령 �
 
 | 항목 | 선택지 / 확인할 내용 | 결정 기준 |
 |---|---|---|
-| CRC 적용 위치 | ESP32 payload 자체 / MQTT envelope / 둘 다 | 구현 복잡도와 오류 추적성 |
 | mmWave 역할 분담 | 졸음 동작·환경 감지에 사용할 모듈별 신호와 신뢰도 | ToF와 중복되지 않는 정보량 |
-| Node-RED 역할 | 미사용 / 개발 모니터링·로깅 / 운영 경로 | Pi 4 자원, 디버깅 편의, FSM 장애 격리 |
+| 보드 간 물리 통신 | ESP32↔Pi 4 및 Pi 4↔Pi 5의 UART / MQTT / 혼합 | #3 팀 결정 대기. MQTT는 최우선 후보 |
+| Pi 4 FSM 런타임 | Raspberry Pi OS Python / AI Native OS Headless native bridge | 실물 OS·Python 지원·배포 방식 |
 | 개인화 저장소 | 로컬 파일·SQLite·Node-RED DB | 개인정보 최소화, 백업·삭제 가능성 |
 | 마이크 기능 | 제외 유지 / 명시적 활성화형 보조 입력 | 프라이버시와 데모 효과 |
 | 가전 상태 수신 | ThinQ API·로컬 브리지·스마트 플러그 중 PoC 대상 | 실제 접근 가능 API와 데모 안정성 |
-| Pi 5 UI 플랫폼 | Atlas Flutter 우선 | 제공 플랫폼 호환성과 터치 UI 개발성 |
 
 ## 7. 완료 기준
 
-- 센서 패킷은 스키마 버전·시퀀스·타임스탬프로 유효성을 판정하고, 오류·중복·지연을 로그로 남긴다. CRC는 채택 시 추가한다.
-- Raw 개인 데이터와 실제 키 입력은 전송·저장하지 않는다.
+- 센서 패킷은 스키마 버전·시퀀스·타임스탬프로 유효성을 판정하고 오류·중복·지연을 로그로 남긴다. UART frame은 CRC-16, MQTT JSON은 별도 CRC 없이 검증한다.
+- Raw 개인 데이터와 실제 키 입력은 운영 중 전송·저장하지 않는다. 축소 depth map은 명시적 디버그/UI 모드에서 최대 2Hz로만 사용한다.
+- Node-RED는 개발 모니터링·센서값 주입·로깅에만 사용하며 중단되어도 핵심 경로가 동작한다.
 - 센서 융합 결과가 불확실하면 자동 제어 대신 display에서 사용자 확인을 받는다.
 - 가전 제어는 명령 발행, 실행 결과 수신, 실패 시 안전한 복구까지 하나의 시나리오로 검증한다.
 - 개인화 기능은 opt-in, 데이터 보존 기간, 삭제 방법이 정해진 뒤에만 활성화한다.
@@ -106,3 +106,5 @@ LG 가전 상태 <── 양방향 MQTT/API ───> └── 제어 명령 �
 - FSM 구현 계획: [fsm-dev-plan.md](fsm-dev-plan.md)
 - 하드웨어·열 설계 참고: [hardware.md](hardware.md)
 - Pi 5 Atlas 개발 환경: [../display/atlas/README.md](../display/atlas/README.md)
+- LG 스마트 가전 기술교육: 저장소 외부 로컬 `개발자료/스마트 가전_기술교육 (1).pdf` (Git 미포함)
+- 전년도 수상팀 공개자료: 저장소 외부 로컬 `개발자료/제23회ESWC_동방예의지국_발표자료_공개용 (1) (1).pdf` (Git 미포함)

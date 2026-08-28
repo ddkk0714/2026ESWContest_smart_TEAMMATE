@@ -3,7 +3,7 @@
 **제24회 임베디드SW경진대회 · 스마트 가전 부문 · 팀 TEAMMATE**
 
 ToF 거리 센서, 키스트로크 타이밍, 환경 센서를 융합해 책상 작업 상태를
-**시작 · 몰입 · 피로 · 종료** 네 단계로 추론하고, 판단 신뢰도에 따라
+VER5 18개 내부 상태로 추론하고, 사용자 화면에는 여섯 phase로 축약한다. 판단 신뢰도에 따라
 조명 · 환기 · 휴식 알림을 자동 실행하거나 제안하는 비침습 워크스페이스 가전.
 
 카메라와 마이크를 사용하지 않고, 센싱 · 추론 · 제어를 모두 로컬 장치에서 수행한다.
@@ -16,14 +16,14 @@ ToF 거리 센서, 키스트로크 타이밍, 환경 센서를 융합해 책상 
                   [ 센싱 ]                [ 추론 ]            [ 출력 · 제어 ]
 
   ESP32 노드 ──┐
-   ToF(VL53L5CX)│                      Raspberry Pi 4        Raspberry Pi 5
-   CO2/온습도   ├── MQTT + CRC ──────►  중앙 추론 허브  ─────►  ATLAS 디스플레이
-   조도         │                      FSM + TFLite          상태·제안·리포트
+   mmWave       │                      Raspberry Pi 4        Raspberry Pi 5
+   CO2/온습도   ├── 통신 후보 ───────►  중앙 추론 허브  ─────►  AI Native OS Video Profile
+   조도         │   UART / MQTT        FSM + TFLite          ATLAS 상태·제안·리포트
                 │                            │                피드백 입력
-  PC 수집기 ───┘                            │
+  PC 수집기 ───┤                            │
    키스트로크 타이밍                        ▼
-                                      ThinQ API / 스마트 플러그
-                                      조명 · 환기팬
+  VL53L9CX ────┘ Pi4 MIPI CSI-2 우선  ThinQ D-Bus/API adapter
+                                      스마트 플러그 · 조명 · 환기팬
 ```
 
 | 계층 | 장치 | 디렉터리 |
@@ -34,13 +34,12 @@ ToF 거리 센서, 키스트로크 타이밍, 환경 센서를 융합해 책상 
 | 출력 | Raspberry Pi 5 + ATLAS (디스플레이 단말) | [`display/`](display/) |
 | 학습 | PC (모델 학습 → TFLite) | [`ml/`](ml/) |
 
-> 개발계획서 기준 출력 단말은 Raspberry Pi Zero였으나, 대회 지원 장비가
-> **Raspberry Pi 5** 로 대체되었다. 가산점 요건(3종 HW 연동)을 위해
-> ESP32 · Pi 4 · Pi 5 **3종 구성을 유지**한다.
+> LG 기술교육 제공 구성에 따라 Raspberry Pi 5(8GB)의 AI Native OS Video Profile을
+> 출력 단말로 사용한다. 가산점 요건을 위해 ESP32·Pi 4·Pi 5 **3종 구성을 유지**한다.
 
-> **ATLAS 배치 결정:** ATLAS 런타임은 Pi 5 display에 둔다. Pi 4는 MQTT·센서 융합·FSM·제어 판단을 맡고,
-> Pi 5는 Atlas Flutter 기반 터치 UI·스피커 알림·사용자 수락/거절/정정을 맡는다. 두 장치는 MQTT로 결합하므로
-> display가 중단되어도 hub의 안전한 기본 판정과 제어는 유지한다.
+> **ATLAS 배치 결정:** ATLAS 런타임은 Pi 5 Video Profile display에 둔다. Pi 4는 센서 융합·FSM·제어 판단을 맡고,
+> Pi 5는 Atlas Flutter 기반 터치 UI·스피커 알림·사용자 수락/거절/정정을 맡는다. 보드 간 통신은 MQTT가
+> 최우선 후보지만 아직 확정하지 않았으며, 어떤 방식을 택해도 display 중단 중 hub의 기본 판정과 제어는 유지한다.
 
 ---
 
@@ -50,9 +49,9 @@ ToF 거리 센서, 키스트로크 타이밍, 환경 센서를 융합해 책상 
 ├── docs/          설계 문서 · 아키텍처 · MQTT 토픽 · FSM 사양 · 제출 서류
 ├── firmware/      ESP32 센서 노드 펌웨어
 ├── collector/     PC 키스트로크 타이밍 수집기
-├── hub/           Raspberry Pi 4 중앙 추론 허브 (Python)
+├── hub/           Raspberry Pi 4 중앙 추론 허브 (Python 우선, 실물 OS 확인 필요)
 │   └── deskmate_hub/
-│       ├── ingest/      MQTT 구독 · 시간 동기화
+│       ├── ingest/      통신 adapter · 시간 동기화
 │       ├── features/    ToF · 키스트로크 · 환경 특징 추출
 │       ├── inference/   규칙 기반 FSM (1단계) · 경량 분류기 (2단계) · 신뢰도 게이트
 │       ├── control/     ThinQ API · 스마트 플러그 제어
@@ -74,8 +73,8 @@ ToF 거리 센서, 키스트로크 타이밍, 환경 센서를 융합해 책상 
    확실한 동작이 우선이다. 2단계 경량 분류기는 이를 보완 · 검증하는 역할이다.
 2. **호흡 측정은 보조 신호다.** 재실 · 자세를 주력으로 하고,
    호흡 실패가 전체 상태 판정을 흔들지 않도록 설계한다.
-3. **ToF raw 배열을 MQTT 로 보내지 않는다.** ESP32 노드에서 1차 전처리 후
-   특징값만 발행한다. ([`docs/mqtt-topics.md`](docs/mqtt-topics.md))
+3. **ToF 원본 54×42 배열을 운영 경로로 보내지 않는다.** 센서 host에서 특징값을 만들고,
+   축소 depth map은 명시적 디버그/UI 모드에서만 최대 2Hz로 허용한다. ([`docs/data-spec.md`](docs/data-spec.md))
 4. **프라이버시** — 키 값은 수집하지 않고 타임스탬프만 다룬다.
    카메라 · 마이크 미사용. 자가기록 라벨은 저장소에 커밋하지 않는다.
 5. **불확실성은 사용자에게 확인한다.** 센서 신호가 충돌하면 자동 제어 대신 display에서

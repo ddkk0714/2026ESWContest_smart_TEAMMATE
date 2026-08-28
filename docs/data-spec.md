@@ -27,7 +27,7 @@ L0 물리 raw → L1 표준 샘플 → L2 window 특징 → L3 FSM SensorFrame
 
 | 계층 | 원칙 |
 |---|---|
-| L0 raw | 노드 메모리에서 순간 처리. 보정 전용 명시적 모드 외 전송·저장 금지. |
+| L0 raw | 센서 호스트 메모리에서 순간 처리. 보정 전용 명시적 모드 외 전송·저장 금지. 축소 depth map은 디버그/UI 모드에서만 최대 2Hz 허용. |
 | L1/L2 | 운영 전송·장애 분석 가능. 키 내용·원시 키 시퀀스 금지. |
 | L3/L4 | Pi 4 추론·UI·제어 인터페이스. 재현을 위한 근거 코드 포함. |
 | L5 | 세션 요약·정정 라벨. opt-in·보존 정책 확정 전에는 임시 로그만 사용. |
@@ -71,14 +71,14 @@ L0 물리 raw → L1 표준 샘플 → L2 window 특징 → L3 FSM SensorFrame
 
 | 소스 | 부품·신호 | 연결 | 목표 취득 | 특징 갱신 | 역할 |
 |---|---|---|---|---|---|
-| ToF | VL53L5CX 8×8 | I2C | 15Hz | 1Hz/L2 30s | 재실·자세·모션·노딩, 호흡 실험 |
+| ToF | VL53L9CX 54×42 | Pi 4 MIPI CSI-2 우선, 실패 시 ESP32 I2C 축소 경로 | 연결 spike에서 결정, 최대 100Hz 사양 | 특징 30Hz 목표/L2 30s | 재실·자세·모션·노딩 |
 | mmWave | SEN0623/C1001 60GHz | UART | 1Hz 초기 | 1Hz/L2 30s | 재실·still/active·호흡/심박 보조 |
 | 환경 | SEN0536/SCD41 | I2C `0x62` | 5s periodic | 0.2Hz/L2 5m | CO₂·온도·습도 |
 | 조도 | SZH-EK070/BH1750 | I2C | 2~5Hz 가능 | 0.2Hz/L2 5m | 조도·추세 |
 | PC 입력 | OS 키 이벤트 | OS API | event | 1Hz/L2 60s | 키 내용 없는 통계 |
 | PC 전원/활성 | 플러그 또는 PC 수집기 | 미결정 | 0.2~1Hz | L2 15m | `pc_ratio`, 세션 경계 |
 
-VL53L5CX는 8×8 multizone·15Hz 운영이 가능하다. SEN0623의 sleep 출력은 책상 졸음의 정답이 아니며 실제 거치 후 보정한다. SEN0536은 mmWave가 아닌 SCD41 기반 CO₂·온습도 센서이다.
+VL53L9CX는 54×42(2,268 zone) ToF 센서이며 실제 운영률은 Pi 4 MIPI CSI-2 직접 연결 1일 spike에서 드라이버·처리율을 측정해 정한다. 직접 연결이 실패하면 ESP32 I2C에서 해상도·주기를 낮춘 축소 경로로 전환한다. SEN0623의 sleep 출력은 책상 졸음의 정답이 아니며 실제 거치 후 보정한다. SEN0536은 mmWave가 아닌 SCD41 기반 CO₂·온습도 센서이다. VL53L0X는 Pi 5 I2C 연결 확인용 시험 센서이며 제품 데이터 소스가 아니다.
 
 ## 6. L1 표준 샘플
 
@@ -91,10 +91,24 @@ VL53L5CX는 8×8 multizone·15Hz 운영이 가능하다. SEN0623의 sleep 출력
 | `motion_score` | float, 0..1 | zone 거리 변화율. |
 | `head_delta_mm` | float/null, mm | baseline 대비 머리·상체 거리 변화. |
 | `nod_rate_hz` | float/null, Hz | 반복 숙임 주기. |
-| `valid_zones` | uint8, 0..64 | 유효 zone 수. |
+| `valid_zones` | uint16, 0..2268 | 유효 zone 수. 축소 경로에서는 실제 전송 grid 크기를 함께 기록한다. |
+| `grid_width` | uint8 | 처리에 사용한 zone grid 너비. 원본은 54. |
+| `grid_height` | uint8 | 처리에 사용한 zone grid 높이. 원본은 42. |
 | `coverage_ratio` | float, 0..1 | 유효 상체 영역 비율. |
 
-ToF raw 64-zone 배열은 L0이며 기본 운영 스키마에 포함하지 않는다.
+ToF 원본 2,268-zone 배열은 L0이며 기본 운영 스키마에 포함하지 않는다. 디버그/UI 모드에서는 `debug_depth_map` 별도 스키마로 축소 grid를 최대 2Hz 전송할 수 있고, 활성화 여부·원본 grid·축소 grid·보존 만료 시각을 반드시 기록한다.
+
+### 6.1.1 `debug_depth_map`
+
+| 필드 | 타입·단위 | 정의 |
+|---|---|---|
+| `enabled` | boolean | 사용자가 명시적으로 디버그 모드를 켰는지 여부. 항상 `true`. |
+| `source_grid_width` / `source_grid_height` | uint8 | 원본 grid. VL53L9CX는 54×42. |
+| `grid_width` / `grid_height` | uint8 | 축소 후 실제 payload grid 크기. |
+| `distance_mm` | uint16/null[] | row-major 축소 거리 배열. 길이는 `grid_width*grid_height`. |
+| `expires_ts_ms` | int64 | 메모리·임시 로그에서 삭제해야 하는 시각. |
+
+이 스키마는 FSM 입력과 영구 로그에 사용할 수 없고 MQTT를 채택해도 retain하지 않는다.
 
 ### 6.2 `mmwave_feature`
 
@@ -261,7 +275,8 @@ baseline은 절대 자세·타이핑 속도가 아닌 상대 변화를 만든다
 
 | 데이터 | 운영 저장 | Git | 초기 정책 |
 |---|---|---|---|
-| ToF raw 8×8 | 금지, 보정 모드 예외 | 금지 | 즉시 폐기 |
+| ToF raw 54×42 | 금지, 명시적 보정 모드 예외 | 금지 | 특징 생성 후 즉시 폐기 |
+| ToF 축소 depth map | 디버그/UI 모드에서 최대 2Hz | 금지 | 시험 종료 후 삭제 |
 | 키 내용·원시 이벤트 | 금지 | 금지 | 특징 생성 후 폐기 |
 | L1/L2 특징 | 실험·리플레이용 가능 | 금지 | 보존 기간 미결정 |
 | FSM·제어 | 세션 리포트용 가능 | 샘플만 | 세션 단위 초기 보존 |
@@ -275,8 +290,9 @@ baseline은 절대 자세·타이핑 속도가 아닌 상대 변화를 만든다
 MQTT 사용 시 본 레코드를 JSON/UTF-8로 매핑하고 topic·QoS·retain·ACL은 [`mqtt-topics.md`](mqtt-topics.md)에서 정의한다. Node-RED를 사용해도 논리 스키마를 변경하지 않고 Pi 4 hub를 판정의 단일 기준으로 둔다.
 
 - `schema_version`, `source_id`, `boot_id`, `sequence`, 시간 검증은 통신 방식과 무관하게 필요.
-- 애플리케이션 CRC는 **미결정**. MQTT/TCP·센서 버스 CRC 외 실제 효익을 검증한다.
-- CRC 채택 시 알고리즘·직렬화·제외 필드·test vector를 먼저 고정한다. CRC-16/CCITT-FALSE는 후보이지 확정이 아니다.
+- UART binary frame을 쓰는 구간은 CRC-16으로 검증한다. 상세 다항식·초깃값·바이트 순서와 test vector는 UART 어댑터 구현 전에 고정한다.
+- MQTT/TCP JSON에는 별도 애플리케이션 CRC를 넣지 않는다. `schema_version`, `boot_id`, `sequence`, timestamp와 TCP 무결성을 사용한다.
+- Node-RED는 개발 모니터링·센서값 주입·로깅용 선택 어댑터이며 FSM의 운영 의존성이 아니다.
 
 ## 14. 버전 규칙
 
@@ -304,8 +320,8 @@ MQTT 사용 시 본 레코드를 JSON/UTF-8로 매핑하고 topic·QoS·retain·
 | ID | 항목 | 필요 결정 |
 |---|---|---|
 | DATA-DEC-001 | `C_focus` | 큰 값=집중 저하 증거 유지 / 집중도로 부호 변경 |
-| DATA-DEC-002 | 통신 envelope | MQTT/HTTP 선택 후 JSON 매핑·필수 메타데이터 |
-| DATA-DEC-003 | CRC | 적용 계층·알고리즘·canonicalization·test vector |
+| DATA-DEC-002 | 통신 envelope | ESP32↔Pi 4 및 Pi 4↔Pi 5의 UART/MQTT/혼합 최종 결정 후 매핑 |
+| DATA-DEC-003 | UART CRC 세부값 | CRC-16 다항식·초깃값·바이트 순서·test vector |
 | DATA-DEC-004 | freshness·샘플링 | 실제 ESP32·LAN 지연 분포로 보정 |
 | DATA-DEC-005 | 특징 정규화 | baseline→`phi/delta` 수식·clip·결측 규칙 |
 | DATA-DEC-006 | 개인화 보존 | 저장소·보존·삭제·opt-in UI |
@@ -314,7 +330,7 @@ MQTT 사용 시 본 레코드를 JSON/UTF-8로 매핑하고 topic·QoS·retain·
 ## 17. 참고 자료
 
 - 개발계획서: [`plan/02_2026ESWContest_스마트가전_팀명_개발계획서_v2.docx`](plan/02_2026ESWContest_스마트가전_팀명_개발계획서_v2.docx)
-- ST VL53L5CX: https://www.st.com/en/imaging-and-photonics-solutions/vl53l5cx.html
+- ST VL53L9CX: https://www.st.com/en/imaging-and-photonics-solutions/vl53l9cx.html
 - DFRobot SEN0623/C1001: https://wiki.dfrobot.com/sen0623/
 - DFRobot SEN0536/SCD41: https://wiki.dfrobot.com/sen0536/
 - SZH-EK070/BH1750: https://www.devicemart.co.kr/goods/view?no=1289977
