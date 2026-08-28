@@ -198,4 +198,3 @@ display → hub: `deskmate/feedback/user`
 - DFRobot SEN0623/C1001 제조사 예제: https://wiki.dfrobot.com/sen0623/docs/21573
 - DFRobot SEN0536/SCD41 제조사 명세: https://wiki.dfrobot.com/sen0536/docs/21655
 - SZH-EK070/BH1750 판매 정보: https://www.devicemart.co.kr/goods/view?no=1289977
-
