@@ -96,9 +96,9 @@ VER5 18개 내부 상태로 추론하고, 사용자 화면에는 여섯 phase로
 | [`docs/fsm-spec.md`](docs/fsm-spec.md) | VER5 18상태 전이 · 임계값 · 이중 신뢰도 공식 | 유지보수 중 |
 | [`docs/mqtt-topics.md`](docs/mqtt-topics.md) | MQTT 채택 시 topic · payload 매핑 초안 | 통신 확정 대기 |
 
-**AI CLI 로 개발하기 전에** [`docs/agent-briefing.md`](docs/agent-briefing.md) 를 읽히고,
-[`docs/agent-kickoff-prompt.md`](docs/agent-kickoff-prompt.md) 의 공통 문구를 세션 첫 입력으로 넣는다.
-Claude Code · Codex 어느 쪽이든 동일한 기준으로 작업하게 하기 위한 단일 출처다.
+**AI CLI 로 개발한다면** [`docs/agent-briefing.md`](docs/agent-briefing.md) 를 읽히고,
+[`docs/agent-kickoff-prompt.md`](docs/agent-kickoff-prompt.md) 의 예시 문구를 첫 입력으로 넣으면 편하다.
+**개발 방식은 각자 자유다.** 다만 확정·미결정 사항과 프라이버시 제약만은 누가 작업하든 같아야 해서 한곳에 모아뒀다.
 
 **아직 미결정이므로 코드·문서에 확정으로 못 박지 않는다:** 보드 간 물리 통신(MQTT 최우선 후보),
 `C_focus` 부호, Pi 4 FSM 배포 런타임, 개인화 저장소, 호흡 go/no-go.

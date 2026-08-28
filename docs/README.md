@@ -2,8 +2,8 @@
 
 | 문서 | 내용 | 담당 |
 |---|---|---|
-| [`agent-briefing.md`](agent-briefing.md) | AI 개발 공통 브리핑 · 확정/미결정 사항 · 절대 규칙 (Claude·Codex 공통) | 공통 |
-| [`agent-kickoff-prompt.md`](agent-kickoff-prompt.md) | CLI 세션 시작 시 붙여넣는 공통 문구 | 공통 |
+| [`agent-briefing.md`](agent-briefing.md) | AI 개발 참고 브리핑 · 확정/미결정 사항 · 프로젝트 제약 | 공통 |
+| [`agent-kickoff-prompt.md`](agent-kickoff-prompt.md) | CLI 세션 시작 문구 예시 | 공통 |
 | [`architecture.md`](architecture.md) | 계층 구조 · 신호 층위 · 성능 목표 · 리스크 | 공통 |
 | [`development-progress.md`](development-progress.md) | 제품 방향 · 분야별 현황 · 우선순위 · 결정 필요 항목 | 공통 |
 | [`requirements-spec.md`](requirements-spec.md) | MVP 기능·비기능 요구사항 · 수용 기준 | 조명희 |
@@ -20,6 +20,6 @@
 `requirements-spec.md`, `data-spec.md`, `mqtt-topics.md`, `fsm-spec.md` 는 **모듈 간 계약**이다.
 구현을 바꾸기 전에 문서를 먼저 바꾸고, 같은 PR 에 포함한다.
 
-AI CLI(Claude Code · Codex)로 개발할 때는 세션 시작 시
-[`agent-kickoff-prompt.md`](agent-kickoff-prompt.md) 의 공통 문구를 넣고 [`agent-briefing.md`](agent-briefing.md) 를 읽힌다.
-에이전트 운영 규칙이 바뀌면 `agent-briefing.md` 를 먼저 고친다. 이 문서가 팀 공용 단일 출처다.
+AI CLI(Claude Code · Codex)로 개발한다면 세션 시작 시
+[`agent-kickoff-prompt.md`](agent-kickoff-prompt.md) 의 예시 문구를 넣고 [`agent-briefing.md`](agent-briefing.md) 를 읽히면 편하다.
+`agent-briefing.md` 는 프로젝트 확정·미결정 사항과 제약을 모아둔 **참고 자료**다. 개발 방식은 각자 자유이며, 확정 사항이 바뀌면 이 문서를 고친다.
