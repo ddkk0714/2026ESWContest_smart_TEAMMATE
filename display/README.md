@@ -1,5 +1,9 @@
 # display — Raspberry Pi 5 디스플레이 단말
 
+## 개발 환경
+
+Atlas Flutter 기반 구현과 크로스 빌드는 [atlas/README.md](atlas/README.md)의 Docker Compose 환경에서 수행한다. Docker가 사용하는 공급사 자산은 레포 내부의 gitignore된 `atlas/vendor/`에 준비하며, 외부 경로를 Docker 설정에 사용하지 않는다.
+
 담당: 최민경
 
 책상 위 디스플레이형 가전의 출력 단말. `deskmate/state/phase` 를 구독해

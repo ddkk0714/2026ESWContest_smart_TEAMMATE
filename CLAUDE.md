@@ -1,5 +1,7 @@
 # DESKMATE — 프로젝트 개발 가이드
 
+> 프로젝트 확정·미결정 사항과 제약은 [docs/agent-briefing.md](docs/agent-briefing.md)에 정리돼 있다. 세션 시작 문구 예시는 [docs/agent-kickoff-prompt.md](docs/agent-kickoff-prompt.md).
+
 > 제24회 임베디드SW경진대회 · 스마트 가전 부문 · 팀 TEAMMATE
 > ToF·키스트로크·환경 센서를 융합해 작업 상태(시작·몰입·피로·종료)를 추론하고
 > 조명·환기·휴식을 자동 실행/제안하는 비침습 워크스페이스 가전.
@@ -8,6 +10,8 @@
 이 문서는 팀 전체가 보는 **러프 개발 로드맵 + 모듈 현황 + 결정사항**이다.
 상세 설계는 `docs/` 참조. (`README.md`=소개, `docs/architecture.md`, `docs/fsm-spec.md`,
 `docs/mqtt-topics.md`, `docs/hardware.md`)
+
+> **개발 방식은 각자 자유다.** 어떤 CLI 로 어떻게 작업하든 상관없다. 다만 push 나 파괴적 Git 작업은 명시적으로 요청할 때만 하게 해두는 편이 안전하다.
 
 ---
 
@@ -138,3 +142,5 @@ PC (키스트로크 타이밍) ──────┘        FSM(1단계)+TFLite(
 - 데이터셋·학습 모델·자격증명 커밋 금지(`.gitignore`). `secrets.yaml` 은 환경변수/gitignore.
 - FSM 상태 전이는 합성 입력으로 단위 테스트(실기기 없이 검증 가능한 유일한 부분).
 - 임계값 바꿀 땐 코드가 아니라 `config/*.yaml` 만 수정.
+- 푸시·브랜치 전환·병합·리베이스·stash·reset 은 명시적으로 요청할 때만 하게 해두면 사고가 줄어든다. (권장)
+- 프로젝트 확정·미결정 사항은 [`docs/agent-briefing.md`](docs/agent-briefing.md) 에 모아뒀다. 바뀌면 그 문서를 고친다.

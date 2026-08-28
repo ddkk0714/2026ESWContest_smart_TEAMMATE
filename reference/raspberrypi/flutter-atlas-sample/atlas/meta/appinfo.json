@@ -1,0 +1,23 @@
+{
+    "id": "com.atlas.app.smart_kitchen_app",
+    "type": "flutter",
+    "name": "smart_kitchen_app",
+    "description": "Test flutter apps",
+    "entry": "smart_kitchen_app --bundle=./ --fullscreen -a com.atlas.app.smart_kitchen_app",
+    "version": "1.0.1",
+    "required_permissions": {
+        "privileged": [
+            "com.atlas.permission.privileged.app_query",
+            "com.atlas.permission.privileged.bluetooth_admin",
+            "com.atlas.permission.privileged.mediacontrol",
+            "com.atlas.permission.privileged.mediasession",
+            "com.atlas.permission.privileged.permission_agent"
+        ],
+        "user_consent": [
+            "com.atlas.permission.user_consent.contacts",
+            "com.atlas.permission.user_consent.bluetooth_connect",
+            "com.atlas.permission.user_consent.bluetooth_scan",
+            "com.atlas.permission.user_consent.mediaplayer"
+        ]
+    }
+}

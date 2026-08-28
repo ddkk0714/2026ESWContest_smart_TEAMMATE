@@ -1,0 +1,32 @@
+name: smart_kitchen_app
+description: "AI Native OS Flutter sample app for Atlas platform."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.6.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  dbus: ^0.7.12
+
+  # audioplayers plugin — Atlas platform implementation (requires Atlas SDK Docker environment)
+  audioplayers: ^6.0.0
+  audioplayers_atlas:
+    path: /opt/flutter-atlas-plugins/packages/flutter-plugin-atlas-audioplayers
+
+  # video_player plugin — Atlas platform implementation (requires Atlas SDK Docker environment)
+  video_player: ^2.6.1
+  video_player_atlas:
+    path: /opt/flutter-atlas-plugins/packages/flutter-plugin-atlas-video-player
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

@@ -43,10 +43,10 @@
 
 | 요건 | 안내사항 규정 | FSM 개발 관점 함의 |
 |---|---|---|
-| 개발 플랫폼 | **LG 제공 임베디드 SW 플랫폼**이 RPi4·RPi Zero에 사전 탑재. 추가 장비는 제한 없음 | FSM은 **RPi4(허브)**에서 동작 → LG 플랫폼과 **공존** 필요. 결선팀은 플랫폼 **비밀유지 서약** |
+| 개발 플랫폼 | RPi5(8GB)는 **AI Native OS Video Profile**, RPi4B는 **Headless Profile** 제공 | FSM은 **RPi4 허브**에 두되 Python 지원 여부를 실물에서 확인. 미지원 시 native service·bridge로 분리 |
 | 개발 언어 | 앱: Flutter/React, 서비스: Node.js, **기타 구성요소 제한 없음** | FSM 엔진 **Python 허용**. 단 LG 플랫폼 서비스가 Node 기반이면 FSM을 **독립 프로세스/서비스**로 노출해 연동 |
-| 필수 HW | **ESP32 · RPi4 · RPi Zero 사용 필수** | 프로젝트는 출력단말을 Pi5로 대체 → **3종 HW 가산점 정합성 확인 필요** (아래 결정사항) |
-| 통신 | 권장 스택에 **Eclipse Mosquitto(MQTT)**, Node-RED, Home Assistant | 현행 MQTT 설계와 정합. Mosquitto 브로커 채택 유지 |
+| 필수 HW | 기술교육 제공 구성은 **ESP32 · RPi4 · RPi5** | Pi4 FSM + Pi5 Video Profile UI + ESP32 센싱 역할 분리 |
+| 통신 | 기기 내 D-Bus, 기기 간 MQTT/BLE/WebSocket/RTSP 등을 지원 | MQTT는 최우선 후보지만 미확정. Node-RED는 개발 모니터링·주입·로깅에만 사용 |
 | AI 추론 | **TensorFlow Lite**, ONNX, Edge Impulse 등 권장 | 2단계 경량 분류기 TFLite 방향과 정합 |
 | 소스코드 | 수상 시 **GitHub Public 유지**(핵심 부분 포함), 오픈소스 라이선스 준수 | FSM 코어를 **공개 범위에 포함** 전제로 설계(config·시크릿 분리 필수) |
 | 배점 | 결선 **완성도 60점**, 가산점 최대 10점(3종 HW 연동 / 멀티모달 센서 융합) | **규칙 FSM의 확실한 동작 = 완성도 직결**. ToF+키스트로크+환경 다중센서 융합 → 멀티모달 가산점 대상 |
@@ -66,7 +66,7 @@ FSM 엔진은 Raspberry Pi 4 허브 내부에 위치하며, 특징 벡터를 입
 [features/]  특징 벡터            [inference/ = FSM 엔진]           [control/ · display/]
  ToF 자세·재실·호흡  ──┐                                          ┌──► ThinQ API (조명·환기)
  키스트로크 타이밍     ├──► C_fatigue / C_focus 계산 ──► 상태 전이 ├──► 스마트 플러그
- 환경(CO₂·조도·온습도) ┤        (30s 주기)              개입 라우팅 ├──► RasPi Zero 디스플레이
+ 환경(CO₂·조도·온습도) ┤        (30s 주기)              개입 라우팅 ├──► RasPi 5 Atlas 디스플레이
  PC_ratio(전원·타이핑) ┘                                RL 정책 갱신 └──► ESM 라벨 로깅
 ```
 
@@ -318,8 +318,8 @@ inference/
 ## 11. 결정 필요 사항 (P0에서 확정)
 
 ### 11.1 플랫폼·요건 관련 (팀 전체 확인 — 우선순위 높음)
-1. **3종 HW 가산점 정합성** — 안내사항은 `ESP32·RPi4·RPi Zero 필수`를 명시. 프로젝트는 출력단말을 Pi5로 대체했다. "3가지 *종류*"로 충족되는지 vs Pi Zero를 반드시 포함해야 하는지 **사무국/컨설팅으로 조기 확인**. FSM 출력(디스플레이 상태 카드)의 타깃 단말 결정에 직결.
-2. **FSM ↔ LG 플랫폼 공존 방식** — RPi4의 LG 제공 플랫폼 위에서 Python FSM을 어떻게 띄울지(독립 systemd 서비스 / 플랫폼이 호출하는 서비스 / MQTT로만 결합). 플랫폼 실체는 **7~9월 장비 수령·기술교육 시점**에 확정 → 그전까지 **MQTT 경계로 느슨히 결합**해 종속성 최소화.
+1. **보드 간 물리 통신** — ESP32↔Pi4 및 Pi4↔Pi5를 UART/MQTT/혼합 중 무엇으로 구성할지 팀 결정 대기. 논리 `SensorFrame` 계약은 독립적으로 유지한다.
+2. **FSM ↔ LG 플랫폼 결합 방식** — 실물 RPi4의 OS와 Python 지원 여부를 먼저 확인한다. Raspberry Pi OS면 Python FSM을 독립 서비스로 실행하고, AI Native OS Headless면 native service·bridge와 Python FSM의 배치를 결정한다. Pi5 Video Profile 내부 API는 D-Bus를 사용하고 기기 간 통신은 MQTT를 최우선 후보로 검증한다.
 3. **소스코드 공개 범위** — FSM 코어는 Public 공개 전제. 임계값·시크릿·자가기록 라벨이 코드에 섞이지 않도록 `config/`·`secrets.yaml`(gitignore) 분리를 P1부터 강제.
 
 ### 11.2 FSM 내부 설계 관련
