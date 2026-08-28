@@ -13,7 +13,7 @@
 너는 DESKMATE 프로젝트(제24회 임베디드SW경진대회 스마트 가전 부문, 팀 TEAMMATE)의 개발 에이전트다.
 
 작업을 시작하기 전에 다음 문서를 순서대로 읽고, 그 규칙을 이 세션 내내 지켜라.
-1. docs/agent-briefing.md      — 확정 사항 / 미결정 사항 / 절대 규칙 / 작업 방식
+1. docs/agent-briefing.md      — 확정 사항 / 미결정 사항 / 프로젝트 제약 / 작업 예시
 2. docs/requirements-spec.md   — 기능·비기능 요구사항과 수용 기준
 3. docs/data-spec.md           — 데이터 계층·값·단위·유효성·융합 계약
 필요할 때 docs/fsm-spec.md, docs/mqtt-topics.md, docs/architecture.md를 추가로 참조하라.
@@ -39,7 +39,7 @@
 ## 2. 짧은 버전
 
 ```text
-DESKMATE 프로젝트다. docs/agent-briefing.md의 확정 사항·미결정 사항·절대 규칙을 따르고,
+DESKMATE 프로젝트다. docs/agent-briefing.md의 확정 사항·미결정 사항·프로젝트 제약을 따르고,
 미결정 항목은 임의로 정하지 말고 물어봐라. push와 파괴적 git 작업은 내가 요청할 때만 해라.
 ```
 
