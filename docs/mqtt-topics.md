@@ -1,13 +1,16 @@
 # MQTT 토픽 규약
 
+> **후보 초안:** MQTT·envelope·애플리케이션 CRC 채택은 아직 미결정이다.
+> 논리 데이터 계약은 [`data-spec.md`](data-spec.md)를 우선하며, MQTT를 채택할 때 본 문서를 확정한다.
+
 담당: 이민혁 · 변경 시 PR 로 이 문서를 함께 수정한다.
 
-브로커는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한다.
+채택 시 브로커는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용하는 안을 우선 검증한다.
 필드 단위·유효성·보정 규칙은 [`data-spec.md`](data-spec.md)를 따른다.
 
 ## 공통 필드
 
-모든 페이로드는 다음 envelope를 사용한다.
+현재 후보 envelope는 다음과 같다.
 
 ```json
 {
@@ -20,7 +23,7 @@
 - `ts` — 샘플 생성 Unix epoch seconds. 노드는 부팅 시 NTP 동기화한다.
 - `node` — 발행 장치 식별자.
 - `boot_id` + `seq` — 재부팅, 중복, 유실, 역순 패킷 판정.
-- `crc16` — 센서 패킷 `data`의 CRC-16/CCITT-FALSE. hub/display 출력은 `null` 허용.
+- `crc16` — 선택 후보. 채택 시 센서 패킷 `data`의 CRC-16/CCITT-FALSE, hub/display 출력은 `null` 허용.
 
 ## 토픽 목록
 
