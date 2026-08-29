@@ -57,6 +57,7 @@ VL53L9CX ─────┘            │
 | C10 | **호흡은 보조 신호**다. 8월 go/no-go 통과 전까지 `respiration_enabled: false`. 호흡 실패가 전체 판정을 흔들면 안 된다. |
 | C11 | **임계값·가중치·타이머는 코드에 하드코딩하지 않는다.** 전부 `hub/deskmate_hub/config/*.yaml`. |
 | C12 | 판정 사이클 ≤ 500ms, 신뢰도 계산 주기 30s, PC/MIXED/NPC 맥락 판정 윈도우 15분. |
+| C13 | **Pi 5 앱은 Docker 안에서 실행되지 않는다.** Docker 컨테이너는 개발 PC의 크로스 빌드 환경이고, 산출물 `.ipk`가 Pi 5의 AI Native OS에 설치되어 네이티브로 실행된다. Pi 5에 Docker를 올리지 않는다. ([`../display/atlas/README.md`](../display/atlas/README.md)) |
 
 ---
 
@@ -118,7 +119,7 @@ VL53L9CX ─────┘            │
 
 ### 참조 자산
 - `reference/raspberrypi/` 아래 LG 제공 샘플은 **직접 수정하지 않는다.** 기능 코드로 옮겨 검토·수정한 뒤 쓴다.
-- Atlas 빌드는 `display/atlas/compose.yaml`의 Docker 안에서 하고, Docker 설정이 레포 외부 경로를 참조하지 않게 한다.
+- Atlas 빌드는 `display/atlas/compose.yaml`의 Docker(개발 PC) 안에서 하고, Docker 설정이 레포 외부 경로를 참조하지 않게 한다. 배포는 `flutter-atlas build atlas --ipk` → `flutter-atlas run -d <device_id>`로 Pi 5에 업로드·설치·실행한다.
 
 ---
 

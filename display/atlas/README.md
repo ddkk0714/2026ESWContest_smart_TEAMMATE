@@ -28,14 +28,38 @@ source "$ATLAS_FLUTTER_NDK_ENV"
 cd /workspace/display/atlas/app
 flutter pub get
 flutter test
-flutter-atlas build atlas --release \
+flutter-atlas build atlas --ipk --release \
   --dart-define=DESKMATE_HUB_URL=http://192.168.0.40:8765
 ```
 
 `192.168.0.40`은 예시이므로 Pi 4의 실제 고정/예약 IP로 바꾼다. URL을 빼고 빌드하면
-Pi 4 없이도 화면 내장 데모가 실행된다. 공급사 도구 버전에 따라 build 명령 옵션이 다르면
-컨테이너에서 `flutter-atlas build --help`를 먼저 확인한다. Atlas 패키징·설치 명령은 제공된
-교육 버전의 CLI 안내를 따르며, 생성된 SDK·bundle·패키지는 Git에 넣지 않는다.
+Pi 4 없이도 화면 내장 데모가 실행된다. `--ipk`를 붙이면 Pi 5에 설치할
+`com.atlas.app.<앱ID>.ipk` 패키지가 만들어진다. 공급사 도구 버전에 따라 옵션이 다르면
+컨테이너에서 `flutter-atlas build --help`를 먼저 확인한다. 생성된 SDK·bundle·ipk는 Git에 넣지 않는다.
+
+## Pi 5 설치와 실행
+
+**Docker 컨테이너는 개발 PC에서만 돈다.** Atlas SDK가 x86_64 호스트에서 arm64를 겨냥하는
+크로스 툴체인(`atlas-sdk-x86_64-…-generic_arm64-toolchain`)이라 컨테이너는 빌드 전용이다.
+Pi 5에는 Docker를 올리지 않는다. 만들어진 `.ipk`는 Pi 5의 AI Native OS에 설치되어
+**컨테이너 밖에서 네이티브로** 실행된다. `.ipk`는 Yocto/OpenWrt 계열 opkg 패키지 형식이며
+Windows `.exe`가 아니라 `.deb`·`.apk`에 가깝다.
+
+Pi 5를 SSH 대상 장치로 한 번 등록해두면 업로드·설치·실행이 한 명령으로 끝난다.
+
+```bash
+# 최초 1회: Pi 5를 custom device로 등록 (id, IP, ssh 포트, 개인키 경로를 물어본다)
+flutter-atlas custom-devices add
+
+# 이후: 빌드된 ipk를 업로드 → 설치 → 실행 (hot reload 연결까지)
+flutter-atlas run -d <device_id> --release
+```
+
+`run`이 내부적으로 기존 앱 uninstall → ipk upload → install → run 순으로 수행하므로
+`.ipk`를 손으로 복사할 필요가 없다. debug/profile 모드로 실행하면 콘솔에 DevTools URL이 나온다.
+
+Flutter가 아닌 Native C/C++ 앱·서비스는 `arc` CLI를 쓴다. `arc doctor`로 환경을 확인한 뒤
+`arc build && arc install`로 빌드와 장치 설치를 함께 수행한다.
 
 작업을 끝내면 다음으로 컨테이너를 정리한다.
 
