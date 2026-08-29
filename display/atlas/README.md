@@ -29,6 +29,14 @@ docker version
 docker compose version
 ```
 
+이 프로젝트의 Windows 준비 스크립트는 관리자 PowerShell에서 WSL2 필수 기능을 활성화하고
+대용량 도구용 D 드라이브 폴더를 만든다.
+
+```powershell
+PowerShell -ExecutionPolicy Bypass -File .\display\atlas\scripts\setup-windows-prerequisites.ps1 `
+  -ToolRoot 'D:\SW임베디드경진대회_LG\Toolchains'
+```
+
 Ubuntu의 Docker Engine 설치는 LG 원본을 보존한
 [`reference/raspberrypi/atlas-docker-env-guide.md`](../../reference/raspberrypi/atlas-docker-env-guide.md)를 참고한다.
 
@@ -173,5 +181,6 @@ DESKMATE display는 Flutter 앱이므로 `flutter-atlas`가 기준이다.
 
 - LG 공식 SDK 원본과 vendor import 스크립트: 확보
 - Flutter 앱·Atlas 러너: 구현
-- 이 Windows PC의 Docker/WSL2: 설치 전
+- 이 Windows PC의 WSL2 기능과 Docker Desktop(D 드라이브): 설치, 재부팅 후 초기화 대기
 - 첫 release `.ipk` 생성, Pi 5 SSH 등록, 실기 실행 로그: 미검증
+- 재부팅 인계: [`../../docs/atlas-build-handoff.md`](../../docs/atlas-build-handoff.md)
