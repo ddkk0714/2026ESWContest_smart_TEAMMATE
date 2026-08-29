@@ -4,6 +4,10 @@
 
 Atlas Flutter 기반 구현과 크로스 빌드는 [atlas/README.md](atlas/README.md)의 Docker Compose 환경에서 수행한다. Docker가 사용하는 공급사 자산은 레포 내부의 gitignore된 `atlas/vendor/`에 준비하며, 외부 경로를 Docker 설정에 사용하지 않는다.
 
+실제 반복 단위는 `개발 PC에서 코드 수정·Docker 크로스 빌드 → SSH로 Pi 5 설치·실행 →
+run 콘솔/DevTools 로그 확인 → 코드 수정`이다. Pi 5는 AI Native OS에서 `.ipk` 앱을
+네이티브로 실행하며 Docker를 실행하지 않는다.
+
 담당: 최민경
 
 책상 위 디스플레이형 가전의 출력 단말. `deskmate/state/phase` 를 구독해
@@ -37,6 +41,13 @@ DESKMATE 전용 앱 ID와 최소 권한으로 분리했다.
 - 허브 URL 미지정: 화면 내장 데모가 5개 대표 상태를 순환한다.
 - `DESKMATE_HUB_URL` 지정: Pi 4 미리보기 API를 1초 간격으로 조회하고 수락·거절을 되돌린다.
 - 현재 HTTP는 개발용 어댑터이며 MQTT를 확정한 것이 아니다.
+
+## 현재 배포 상태
+
+- Atlas Flutter 앱 소스와 플랫폼 러너: 구현됨
+- Pi 4 합성 FSM 상태·피드백 연결: 구현됨
+- 개발 PC Atlas SDK import 절차: 구현됨, 자산은 Git 제외
+- 첫 release `.ipk` 생성과 Pi 5 설치·터치 검증: 대기
 
 > Pi 5 는 27W PD 어댑터와 액티브 쿨러가 사실상 필수다. 상시 화면 출력 +
 > 발열 조건에서 스로틀링이 나면 장시간 구동 안정성에 직결된다.

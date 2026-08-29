@@ -99,6 +99,24 @@ VER5 18개 내부 상태로 추론하고, 사용자 화면에는 여섯 phase로
 현재 합성 입력으로 `Pi 4 FSM → Pi 5 Atlas 화면 → 사용자 피드백`을 시험할 수 있다.
 실행 순서와 하드웨어 연결은 [`docs/hardware-bringup.md`](docs/hardware-bringup.md)를 따른다.
 
+### Pi 5 Atlas 실제 개발·배포 흐름
+
+```text
+개발 PC (x86_64)                                      Raspberry Pi 5 (arm64)
+┌─ Docker: deskmate-atlas-dev ─────────────────┐      ┌─ AI Native OS ──────────┐
+│ 코드 수정 → Flutter 테스트 → Atlas 크로스 빌드 │ SSH  │ .ipk 설치 → 앱 실행      │
+│       ↑                 ↓                    ├─────►│ 터치·화면 확인 → 실행 로그 │
+│       └──── 로그를 보고 다시 수정             │      └────────────────────────┘
+└───────────────────────────────────────────────┘
+```
+
+- Docker와 Atlas SDK는 **개발 PC에서만** 사용한다. Pi 5에 Docker를 설치하지 않는다.
+- `flutter-atlas build atlas --ipk --release`가 arm64용 설치 패키지를 만든다.
+- `flutter-atlas run -d <device_id> --release`가 SSH로 기존 앱 제거, 업로드, 설치, 실행을 처리한다.
+- 개발 중에는 debug 실행과 hot reload로 반복하고, 인계·시연 후보는 release `.ipk`로 고정한다.
+
+전체 준비·빌드·배포·로그 확인 명령은 [Pi 5 Atlas 개발 가이드](display/atlas/README.md)에 있다.
+
 **AI CLI 로 개발한다면** [`docs/agent-briefing.md`](docs/agent-briefing.md) 를 읽히고,
 [`docs/agent-kickoff-prompt.md`](docs/agent-kickoff-prompt.md) 의 예시 문구를 첫 입력으로 넣으면 편하다.
 **개발 방식은 각자 자유다.** 다만 확정·미결정 사항과 프라이버시 제약만은 누가 작업하든 같아야 해서 한곳에 모아뒀다.

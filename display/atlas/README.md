@@ -1,19 +1,61 @@
-# Pi 5 Atlas Docker 개발 환경
+# Pi 5 Atlas 개발·빌드·배포 가이드
 
-이 환경은 Docker 설정과 작업 소스를 모두 이 레포 안에 둔다. 공급사 Atlas SDK·엔진·플러그인·toolchain은 용량과 배포 조건상 Git에 저장하지 않으며, 각 개발자가 제공받은 공식 Atlas 패키지에서 레포 내부 `display/atlas/vendor/`로 준비한다. Docker는 외부 경로를 참조하지 않는다.
+이 문서가 DESKMATE Atlas 앱의 **준비 → 테스트 → `.ipk` 빌드 → Pi 5 설치·실행 → 로그 확인**
+절차의 기준이다. Docker 설정과 앱 소스는 저장소에 두고, 공급사 SDK는 Git에서 제외한다.
 
-## 최초 1회 준비
-
-공식 Atlas 패키지를 확보한 뒤 아래 명령을 저장소 루트에서 실행한다.
-
-```powershell
-.\display\atlas\scripts\import-atlas-vendor.ps1 -SourcePath '공식 Atlas 패키지를 푼 폴더'
-.\display\atlas\scripts\verify-atlas-vendor.ps1
+```text
+개발 PC (x86_64)                                  Raspberry Pi 5 (arm64)
+┌─ Docker 컨테이너 ─────────────────────────┐ SSH  ┌─ AI Native OS ───────────┐
+│ Flutter 소스 → 테스트 → Atlas 크로스 빌드  ├────►│ .ipk 설치 → 네이티브 실행 │
+│      ↑                    ↓               │      │ 화면·터치·로그 확인        │
+│      └──────── 로그 기반 수정              │◄────┤                          │
+└────────────────────────────────────────────┘      └─────────────────────────┘
 ```
 
-`vendor/`는 `.gitignore` 대상이다. 다른 컴퓨터에서도 동일한 공식 패키지로 위 준비 과정을 한 번 실행하면 같은 Docker 빌드 입력을 사용한다.
+Docker는 빌드 PC에서만 실행한다. Pi 5에 Docker를 설치하거나 컨테이너 안에서 앱을 실행하는
+구성이 아니다. `.ipk`는 실행 파일 그 자체가 아니라 AI Native OS에 설치하는 opkg 패키지다.
 
-## 빌드와 접속
+## 0. 선행 조건
+
+- x86_64 개발 PC: Docker Engine + Docker Compose V2
+- Windows 개발 PC: WSL2 backend를 사용하는 Docker Desktop 권장
+- Pi 5: LG AI Native OS Video Profile, 전원·화면·네트워크 연결, SSH 접근 가능
+- 개발 PC, Pi 4, Pi 5: 같은 개발 LAN 권장
+
+다음 명령이 모두 성공해야 한다.
+
+```powershell
+docker version
+docker compose version
+```
+
+Ubuntu의 Docker Engine 설치는 LG 원본을 보존한
+[`reference/raspberrypi/atlas-docker-env-guide.md`](../../reference/raspberrypi/atlas-docker-env-guide.md)를 참고한다.
+
+## 1. 공급사 자산 준비 — 최초 1회
+
+공식 Atlas 패키지를 확보한 뒤 저장소 루트에서 실행한다.
+
+```powershell
+PowerShell -ExecutionPolicy Bypass -File .\display\atlas\scripts\import-atlas-vendor.ps1 `
+  -SourcePath '<공식 Atlas 패키지를 푼 폴더>'
+PowerShell -ExecutionPolicy Bypass -File .\display\atlas\scripts\verify-atlas-vendor.ps1
+```
+
+`vendor/`는 `.gitignore` 대상이다. 다른 PC에서도 같은 공식 패키지로 위 과정을 반복한다.
+
+```text
+display/atlas/vendor/
+├── atlas_engine/
+├── flutter-atlas-plugins/
+├── flutter-elinux-atlas/
+├── arc-0.5.0.tgz
+└── atlas-sdk-x86_64-armv8a-generic_arm64-toolchain-*.sh
+```
+
+## 2. 개발 컨테이너 준비
+
+호스트 PowerShell에서 실행한다.
 
 ```powershell
 docker compose -f display/atlas/compose.yaml build atlas-dev
@@ -21,7 +63,20 @@ docker compose -f display/atlas/compose.yaml up -d
 docker compose -f display/atlas/compose.yaml exec atlas-dev bash
 ```
 
-컨테이너의 `/workspace`는 이 레포 루트이며 기본 작업 위치는 `/workspace/display`다. Atlas SDK 환경을 사용하기 전 다음을 실행한다.
+컨테이너의 `/workspace`는 저장소 루트와 연결된다. 호스트에서 코드를 수정하면 컨테이너에도
+즉시 반영되므로 소스를 따로 복사하지 않는다.
+
+컨테이너 셸에서 도구체인을 확인한다.
+
+```bash
+source "$ATLAS_FLUTTER_NDK_ENV"
+flutter --version
+flutter-atlas doctor -v
+```
+
+## 3. Flutter 테스트와 release IPK 빌드
+
+Pi 4의 실제 IP를 먼저 정하고 컨테이너에서 실행한다.
 
 ```bash
 source "$ATLAS_FLUTTER_NDK_ENV"
@@ -29,42 +84,94 @@ cd /workspace/display/atlas/app
 flutter pub get
 flutter test
 flutter-atlas build atlas --ipk --release \
-  --dart-define=DESKMATE_HUB_URL=http://192.168.0.40:8765
+  --dart-define=DESKMATE_HUB_URL=http://<Pi4-IP>:8765
+
+find build -type f -name '*.ipk' -print
 ```
 
-`192.168.0.40`은 예시이므로 Pi 4의 실제 고정/예약 IP로 바꾼다. URL을 빼고 빌드하면
-Pi 4 없이도 화면 내장 데모가 실행된다. `--ipk`를 붙이면 Pi 5에 설치할
-`com.atlas.app.<앱ID>.ipk` 패키지가 만들어진다. 공급사 도구 버전에 따라 옵션이 다르면
-컨테이너에서 `flutter-atlas build --help`를 먼저 확인한다. 생성된 SDK·bundle·ipk는 Git에 넣지 않는다.
+URL을 빼고 빌드하면 Pi 4 없이 화면 내장 데모가 순환한다. URL을 넣으면 **실행 중인 Pi 5가**
+Pi 4에 직접 접속한다. 빌드 컨테이너가 Pi 4 상태 API를 대신 중계하지 않는다.
 
-## Pi 5 설치와 실행
+성공 기준은 테스트 통과, build 명령 exit code 0, `find` 결과에
+`com.atlas.app.deskmate_display`의 `.ipk`가 존재하는 것이다. SDK·bundle·`.ipk`는 Git에 넣지 않는다.
+공급사 도구 버전이 다르면 먼저 `flutter-atlas build atlas --help`로 `--ipk` 지원을 확인한다.
 
-**Docker 컨테이너는 개발 PC에서만 돈다.** Atlas SDK가 x86_64 호스트에서 arm64를 겨냥하는
-크로스 툴체인(`atlas-sdk-x86_64-…-generic_arm64-toolchain`)이라 컨테이너는 빌드 전용이다.
-Pi 5에는 Docker를 올리지 않는다. 만들어진 `.ipk`는 Pi 5의 AI Native OS에 설치되어
-**컨테이너 밖에서 네이티브로** 실행된다. `.ipk`는 Yocto/OpenWrt 계열 opkg 패키지 형식이며
-Windows `.exe`가 아니라 `.deb`·`.apk`에 가깝다.
+## 4. Pi 5를 SSH 장치로 등록 — 최초 1회
 
-Pi 5를 SSH 대상 장치로 한 번 등록해두면 업로드·설치·실행이 한 명령으로 끝난다.
+컨테이너에서 다음을 실행하고 장치 ID, Pi 5 IP, SSH 포트, 개인키 경로를 입력한다.
 
 ```bash
-# 최초 1회: Pi 5를 custom device로 등록 (id, IP, ssh 포트, 개인키 경로를 물어본다)
 flutter-atlas custom-devices add
-
-# 이후: 빌드된 ipk를 업로드 → 설치 → 실행 (hot reload 연결까지)
-flutter-atlas run -d <device_id> --release
+flutter-atlas devices
 ```
 
-`run`이 내부적으로 기존 앱 uninstall → ipk upload → install → run 순으로 수행하므로
-`.ipk`를 손으로 복사할 필요가 없다. debug/profile 모드로 실행하면 콘솔에 DevTools URL이 나온다.
+장치 ID는 공백 없이 예를 들어 `deskmate_pi5`로 둔다. 개인키를 쓸 경우 저장소 밖의 경로를
+등록하고 키 파일을 Git에 넣지 않는다. 컨테이너에서 Pi 5의 SSH 포트에 접근할 수 있어야 한다.
 
-Flutter가 아닌 Native C/C++ 앱·서비스는 `arc` CLI를 쓴다. `arc doctor`로 환경을 확인한 뒤
-`arc build && arc install`로 빌드와 장치 설치를 함께 수행한다.
+## 5. 설치·실행·로그 확인
 
-작업을 끝내면 다음으로 컨테이너를 정리한다.
+빠른 개발 반복은 debug 모드를 사용한다.
+
+```bash
+cd /workspace/display/atlas/app
+flutter-atlas run -d deskmate_pi5 --debug \
+  --dart-define=DESKMATE_HUB_URL=http://<Pi4-IP>:8765
+```
+
+`run` 콘솔에서 앱 표준 출력, 오류, DevTools URL을 확인한다. 콘솔 키는 다음과 같다.
+
+- `r`: hot reload
+- `R`: hot restart
+- `d`: CLI만 분리하고 Pi 5 앱은 계속 실행
+- `q`: Pi 5 앱까지 종료
+
+시연 후보를 고정할 때는 release로 다시 빌드·실행한다.
+
+```bash
+flutter-atlas build atlas --ipk --release \
+  --dart-define=DESKMATE_HUB_URL=http://<Pi4-IP>:8765
+flutter-atlas run -d deskmate_pi5 --release \
+  --dart-define=DESKMATE_HUB_URL=http://<Pi4-IP>:8765
+```
+
+`run`은 공식 가이드 기준으로 기존 앱 uninstall → `.ipk` upload → install → run 순서를 수행한다.
+정상 경로에서는 `.ipk`를 손으로 복사하거나 Pi 5에서 직접 `opkg` 명령을 실행하지 않는다.
+
+## 6. 수정 반복
+
+```text
+1. 개발 PC에서 display/atlas/app/lib 수정
+2. flutter test
+3. flutter-atlas run --debug
+4. Pi 5 화면·터치와 run 콘솔/DevTools 확인
+5. 수정 후 hot reload 또는 재실행
+6. 통과하면 --ipk --release 빌드
+```
+
+화면만 확인할 때는 내장 데모로 시작하고, 그다음 Pi 4 HTTP 미리보기, 마지막에 최종 통신
+어댑터 순으로 연결한다. UI 문제와 보드 통신 문제를 한 번에 섞지 않는다.
+
+## 7. 종료와 산출물 관리
+
+작업을 끝내면 호스트 PowerShell에서 컨테이너를 정리한다.
 
 ```powershell
 docker compose -f display/atlas/compose.yaml down
 ```
 
-Docker Desktop이 없는 현재 PC에서는 Compose 검증·이미지 빌드를 실행할 수 없다. Windows Docker Desktop에서 host network 제약이 있으므로 MQTT·실장치 통신 검증은 Raspberry Pi 또는 WSL/Linux에서 수행한다.
+다음 항목은 커밋하지 않는다.
+
+- `display/atlas/vendor/`
+- `display/atlas/app/build/`와 생성된 `.ipk`
+- Flutter/Atlas 캐시와 SDK
+- Pi 5 SSH 개인키, 실행 로그, 사용자 데이터
+
+Flutter가 아닌 Native C/C++ 앱·서비스만 `arc doctor`와 `arc build && arc install` 경로를 쓴다.
+DESKMATE display는 Flutter 앱이므로 `flutter-atlas`가 기준이다.
+
+## 8. 현재 확인 상태
+
+- LG 공식 SDK 원본과 vendor import 스크립트: 확보
+- Flutter 앱·Atlas 러너: 구현
+- 이 Windows PC의 Docker/WSL2: 설치 전
+- 첫 release `.ipk` 생성, Pi 5 SSH 등록, 실기 실행 로그: 미검증

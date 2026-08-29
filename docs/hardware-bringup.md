@@ -3,6 +3,17 @@
 > 목표: 센서를 연결하기 전에 합성 입력으로 두 보드·화면·터치를 먼저 검증한다.
 > 보드 간 최종 통신은 미정이며, 이 단계의 TCP 8765 HTTP는 개발용 미리보기 어댑터다.
 
+## 0. 배포 경로
+
+Pi 5 앱은 Pi 5에서 소스 빌드하거나 Docker로 실행하지 않는다.
+
+```text
+개발 PC Docker → flutter-atlas build atlas --ipk → SSH → Pi 5 AI Native OS 설치·실행
+```
+
+개발 PC에서 [Atlas 개발 가이드](../display/atlas/README.md)에 따라 `.ipk`를 만든 후 Pi 5를
+custom device로 등록한다. `flutter-atlas run` 콘솔과 Pi 5 화면을 함께 보면서 검증한다.
+
 ## 1. 지금 연결할 것
 
 | 순서 | 장치 | 연결 |
@@ -39,12 +50,14 @@ PC나 Pi 5에서 `curl http://<Pi4-IP>:8765/health`가 `status: ok`를 반환해
 Pi 4 IP를 DHCP 예약하고, 방화벽을 쓰는 경우 같은 LAN에서 TCP 8765만 허용한다. 인터넷 공개나
 공유기 포트 포워딩은 하지 않는다.
 
-## 3. Pi 5 Atlas 화면 실행
+## 3. Pi 5 Atlas 화면 배포·실행
 
-1. 먼저 `DESKMATE_HUB_URL` 없이 앱을 빌드·실행해 내장 데모와 터치가 보이는지 확인한다.
-2. 다음 빌드에서 `--dart-define=DESKMATE_HUB_URL=http://<Pi4-IP>:8765`를 넣는다.
-3. 헤더가 `화면 내장 데모`에서 Pi 4 IP로 바뀌고, Pi 4 터미널의 FSM 상태와 화면 상태가 같으면 성공이다.
-4. 피로 화면에서 `진행` 또는 `아니요`를 눌러 Pi 4가 다음 tick에서 피드백을 소비하는지 확인한다.
+1. 개발 PC Docker에서 URL 없이 debug 실행해 Pi 5의 내장 데모와 터치를 확인한다.
+2. `DESKMATE_HUB_URL=http://<Pi4-IP>:8765`를 넣어 debug 실행한다.
+3. 헤더가 `화면 내장 데모`에서 Pi 4 IP로 바뀌고 FSM 상태와 화면 상태가 같아야 한다.
+4. 피로 화면에서 `진행`/`아니요`를 눌러 Pi 4 콘솔에 feedback이 표시되는지 확인한다.
+5. 통과한 소스로 `flutter-atlas build atlas --ipk --release`를 실행해 시연 후보를 고정한다.
+6. `flutter-atlas run -d <device_id> --release`로 release 패키지를 다시 설치·실행한다.
 
 Atlas 개발·빌드 명령은 [`../display/atlas/README.md`](../display/atlas/README.md)를 따른다.
 
@@ -66,8 +79,12 @@ GPIO 번호와 공급 전압은 ESP32 보드 모델 및 각 breakout 제품명�
 ## 5. 통과 기준
 
 - [ ] Pi 4 `/health`, `/api/state` 응답
+- [ ] 개발 PC에서 `flutter test` 통과
+- [ ] release `.ipk` 생성 및 Git 미추적 확인
+- [ ] `flutter-atlas run`으로 Pi 5 자동 업로드·설치·실행
 - [ ] Pi 5에서 내장 데모 5상태 순환
 - [ ] Pi 5에서 실제 Pi 4의 18상태 중 대표 경로 표시
 - [ ] 수락·거절 터치가 Pi 4로 전달
 - [ ] Pi 5 화면을 종료해도 Pi 4 FSM 순환 지속
 - [ ] 센서·가전·인터넷 없이 위 항목 모두 동작
+- [ ] 실행 오류와 DevTools URL을 run 콘솔에서 확인하고 결과 기록
