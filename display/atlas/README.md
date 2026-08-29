@@ -25,7 +25,17 @@ docker compose -f display/atlas/compose.yaml exec atlas-dev bash
 
 ```bash
 source "$ATLAS_FLUTTER_NDK_ENV"
+cd /workspace/display/atlas/app
+flutter pub get
+flutter test
+flutter-atlas build atlas --release \
+  --dart-define=DESKMATE_HUB_URL=http://192.168.0.40:8765
 ```
+
+`192.168.0.40`은 예시이므로 Pi 4의 실제 고정/예약 IP로 바꾼다. URL을 빼고 빌드하면
+Pi 4 없이도 화면 내장 데모가 실행된다. 공급사 도구 버전에 따라 build 명령 옵션이 다르면
+컨테이너에서 `flutter-atlas build --help`를 먼저 확인한다. Atlas 패키징·설치 명령은 제공된
+교육 버전의 CLI 안내를 따르며, 생성된 SDK·bundle·패키지는 Git에 넣지 않는다.
 
 작업을 끝내면 다음으로 컨테이너를 정리한다.
 

@@ -96,6 +96,9 @@ VER5 18개 내부 상태로 추론하고, 사용자 화면에는 여섯 phase로
 | [`docs/fsm-spec.md`](docs/fsm-spec.md) | VER5 18상태 전이 · 임계값 · 이중 신뢰도 공식 | 유지보수 중 |
 | [`docs/mqtt-topics.md`](docs/mqtt-topics.md) | MQTT 채택 시 topic · payload 매핑 초안 | 통신 확정 대기 |
 
+현재 합성 입력으로 `Pi 4 FSM → Pi 5 Atlas 화면 → 사용자 피드백`을 시험할 수 있다.
+실행 순서와 하드웨어 연결은 [`docs/hardware-bringup.md`](docs/hardware-bringup.md)를 따른다.
+
 **AI CLI 로 개발한다면** [`docs/agent-briefing.md`](docs/agent-briefing.md) 를 읽히고,
 [`docs/agent-kickoff-prompt.md`](docs/agent-kickoff-prompt.md) 의 예시 문구를 첫 입력으로 넣으면 편하다.
 **개발 방식은 각자 자유다.** 다만 확정·미결정 사항과 프라이버시 제약만은 누가 작업하든 같아야 해서 한곳에 모아뒀다.

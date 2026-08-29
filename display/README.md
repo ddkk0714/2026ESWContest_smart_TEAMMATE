@@ -30,9 +30,13 @@ Atlas Flutter 기반 구현과 크로스 빌드는 [atlas/README.md](atlas/READM
 
 ## 기술 선택
 
-Pi 5 + 터치 디스플레이. 프레임워크는 팀 논의 후 확정한다.
-- 후보 A: Python + PyQt / Kivy — 허브와 언어 통일, MQTT 클라이언트 재사용
-- 후보 B: 웹(로컬 서버 + 키오스크 브라우저) — 리포트 시각화가 쉬움
+Pi 5 AI Native OS Video Profile의 **Atlas Flutter**로 확정했다. 앱 소스는
+[`atlas/app/`](atlas/app/)에 있으며, LG 제공 샘플에서 검토한 Atlas 플랫폼 러너를 복사한 뒤
+DESKMATE 전용 앱 ID와 최소 권한으로 분리했다.
+
+- 허브 URL 미지정: 화면 내장 데모가 5개 대표 상태를 순환한다.
+- `DESKMATE_HUB_URL` 지정: Pi 4 미리보기 API를 1초 간격으로 조회하고 수락·거절을 되돌린다.
+- 현재 HTTP는 개발용 어댑터이며 MQTT를 확정한 것이 아니다.
 
 > Pi 5 는 27W PD 어댑터와 액티브 쿨러가 사실상 필수다. 상시 화면 출력 +
 > 발열 조건에서 스로틀링이 나면 장시간 구동 안정성에 직결된다.
