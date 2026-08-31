@@ -1,4 +1,4 @@
-"""실센서 없이 Pi4 FSM과 Pi5 화면을 함께 검증하는 결정적 데모 시나리오."""
+"""Deterministic demo inputs for replay and the Atlas preview API."""
 from __future__ import annotations
 
 import threading
@@ -50,6 +50,42 @@ def demo_steps() -> Iterator[DemoStep]:
     yield DemoStep(922, "작업 종료", end_touch=True, signals=calm)
 
 
+def _frame(now: float, signals: dict[str, dict[str, float]], **flags: object) -> SensorFrame:
+    return SensorFrame(
+        now=now,
+        present=True,
+        pc_ratio=0.9,
+        signals={name: Signal(**values) for name, values in signals.items()},
+        **flags,
+    )
+
+
+def demo_frames() -> list[SensorFrame]:
+    """Return the longer replay smoke path used by hub regression tests."""
+    calm = {
+        "posture": {"delta": 0.10, "phi": 0.10},
+        "elapsed": {"delta": 0.10, "phi": 0.10},
+        "keystroke": {"delta": 0.10, "phi": 0.10},
+        "environment": {"delta": 0.10},
+    }
+    high = {
+        "posture": {"delta": 0.90},
+        "elapsed": {"delta": 0.90},
+        "keystroke": {"delta": 0.85},
+        "environment": {"delta": 0.80},
+    }
+    frames = [_frame(0, calm, touch=True)]
+    frames += [_frame(now, calm) for now in range(30, 331, 30)]
+    frames += [_frame(360, calm), _frame(390, calm)]
+    frames += [_frame(now, high) for now in range(420, 601, 30)]
+    frames += [_frame(now, high) for now in range(630, 811, 30)]
+    frames += [_frame(840, high), _frame(870, high)]
+    frames += [_frame(900, high, action_done=True)]
+    frames += [_frame(now, calm) for now in range(930, 1051, 30)]
+    frames += [_frame(1080, calm, end_touch=True)]
+    return frames
+
+
 def run_demo(host: str, port: int, interval: float, cycles: int) -> None:
     store = PreviewStateStore()
     server = make_server(host, port, store)
@@ -76,21 +112,23 @@ def run_demo(host: str, port: int, interval: float, cycles: int) -> None:
                     touch=step.touch,
                     end_touch=step.end_touch,
                     action_done=step.action_done or verdict == "correct",
-                    break_accepted=True if verdict == "accept" else False if verdict == "reject" else None,
+                    break_accepted=(True if verdict == "accept" else False if verdict == "reject" else None),
                 )
                 result = engine.tick(frame)
-                store.publish(state_envelope(
-                    result,
-                    boot_id=boot_id,
-                    seq=seq,
-                    sensor_summary={
-                        "present": True,
-                        "co2_ppm": 720 if result.scores.c_fatigue < 0.7 else 1180,
-                        "lux": 410,
-                        "valid": True,
-                        "scenario": step.label,
-                    },
-                ))
+                store.publish(
+                    state_envelope(
+                        result,
+                        boot_id=boot_id,
+                        seq=seq,
+                        sensor_summary={
+                            "present": True,
+                            "co2_ppm": 720 if result.scores.c_fatigue < 0.7 else 1180,
+                            "lux": 410,
+                            "valid": True,
+                            "scenario": step.label,
+                        },
+                    )
+                )
                 print(f"[{seq:03d}] {step.label}: {result.state.value}")
                 seq += 1
                 time.sleep(interval)

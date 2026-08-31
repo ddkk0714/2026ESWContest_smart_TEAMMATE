@@ -130,7 +130,8 @@ PC (키스트로크 타이밍) ──────┘        FSM(1단계)+TFLite(
 - ⬜ `features`(김태환) 입력 계약 확정 후 실신호 연결.
 - ⬜ `control`(조명희) ACTION_* → 실제 제어 명령 발행.
 - ⬜ 2단계 TFLite 분류기 확신도 → 신뢰도 게이트 융합.
-- ⬜ 로그 리플레이 하네스(`python -m deskmate_hub --replay`)로 8월 데이터 튜닝.
+- ✅ 로그 리플레이 하네스 — `python -m deskmate_hub --replay <log.jsonl>` / `--demo`.
+  실기기 없이 임계값 튜닝. 8월 실측 로그를 JSONL 로 저장해 반복 실험.
 
 ---
 
