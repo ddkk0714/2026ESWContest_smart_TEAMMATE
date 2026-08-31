@@ -1,7 +1,7 @@
 # DESKMATE AI 개발 브리핑 (참고용)
 
 > 대상: Claude Code · Codex 등 AI CLI 로 이 저장소를 다루는 팀원
-> 기준일: 2026-08-28
+> 기준일: 2026-08-31
 
 **이 문서는 참고 자료다. 개발 방식과 도구 사용법은 각자 자유다.**
 누가 어떤 CLI 를 어떻게 쓰든 상관없고, 이 문서가 그걸 정하지 않는다.
@@ -172,3 +172,21 @@ VL53L9CX ─────┘            │
 - TFLite import를 hub 시작 경로의 필수 의존으로 만드는 것 → §2 C9 와 어긋남
 - 요청받지 않은 push·브랜치 전환·reset 을 수행하는 것 → 사고 나기 쉬운 지점
 - 문서를 고치지 않고 계약(토픽·스키마·상태)만 바꾸는 것 → §4 와 어긋남
+
+---
+
+## 8. 현재 Atlas Pi 5 개발 상태 — 작업 재개용
+
+- 브랜치 `feat/atlas-display-env`에서 Docker/WSL2 크로스 빌드, Flutter 테스트, release `.ipk` 생성,
+  Pi 5 SSH 설치·실행까지 검증했다. 최신 상세 상태와 재현 명령은
+  [`atlas-build-handoff.md`](atlas-build-handoff.md)를 기준으로 한다.
+- 앱은 내장 데모와 Pi 4 HTTP 개발 어댑터를 지원한다. 내장 데모의 `자동 순환: ON/OFF` 버튼은
+  터치 확인용이며 실제 Hub 연결 빌드에는 표시되지 않는다.
+- Pi 5 주소는 DHCP이므로 문서의 마지막 IP를 고정값으로 가정하지 않는다. 자격증명·로컬 SSH 설정·
+  Flutter custom device 설정은 저장소에 넣지 않는다.
+- 현재 화면의 USB `0416:c168` `TSTP MTouch`는 부팅 때 열거된 뒤 `xhci-hcd.0` 오류로 분리되어
+  input event 노드를 만들지 못한다. 이는 Flutter 버튼 문제로 확인된 것이 아니며, 화면 모델·전원·USB
+  배선 확인이 먼저다. [`hardware-bringup.md`](hardware-bringup.md)의 안전 주의와 진단 순서를 따른다.
+- 정확한 화면 배선도를 확인하기 전 별도 `5V+GND`와 USB VBUS를 동시에 연결하거나 반복 재연결하지 않는다.
+- Pi 5 재부팅 뒤 DESKMATE 앱은 자동 실행되지 않는다. 자동 시작 등록 전에는
+  `flutter-atlas run -d deskmate_pi5 --release`로 다시 실행한다.

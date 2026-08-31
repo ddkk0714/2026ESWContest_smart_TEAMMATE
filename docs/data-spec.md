@@ -3,6 +3,7 @@
 > 논리 스키마: `1.0-draft`
 > 범위: ESP32·PC 수집, Pi 4 융합·FSM, Pi 5 UI, 제어·로깅
 > 원칙: MQTT·Node-RED·HTTP 등 전송 기술과 독립적인 데이터 계약을 먼저 정의한다.
+> 구현 확인: 2026-08-31
 
 ## 1. 목적·우선순위
 
@@ -241,6 +242,9 @@ baseline은 절대 자세·타이핑 속도가 아닌 상대 변화를 만든다
 | `user_feedback` | `request_id`, `verdict(accept/reject/correct/unsure/timeout)`, `answer_code`, `corrected_state`, `response_ms`, `input_method` |
 
 `timeout`은 `reject`가 아니며 `unsure`는 틀린 라벨이 아니다. 개인화·수용률에서 분리한다.
+터치 장치가 없거나 input event가 생성되지 않은 경우 앱은 사용자 응답을 추정하거나 합성하지 않는다.
+실제 UI 이벤트가 없으면 `user_feedback`을 만들지 않고, 유효한 요청의 만료만 `timeout`으로 기록한다.
+USB 열거·xHCI 같은 하드웨어 진단 로그는 이 논리 스키마 밖의 운영 진단이며 ESM/개인화 데이터로 사용하지 않는다.
 
 ## 10. 제어 계약
 
@@ -314,6 +318,7 @@ MQTT 사용 시 본 레코드를 JSON/UTF-8로 매핑하고 topic·QoS·retain·
 | DAT-T07 | 제어 재전송 | 동일 `command_id` 중복 실행 방지. |
 | DAT-T08 | 어댑터 교체 | 합성·리플레이·실시간 입력이 동일 `sensor_frame` 생성. |
 | DAT-T09 | 금지 데이터 검사 | 키 내용·ToF raw·자격증명이 운영 로그에 없음. |
+| DAT-T10 | 터치 입력 장치 단절 | 가짜 수락·거절을 만들지 않고 유효한 요청 만료만 `timeout`으로 기록. |
 
 ## 16. 미결정 항목
 
