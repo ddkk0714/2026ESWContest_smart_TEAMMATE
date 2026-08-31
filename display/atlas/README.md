@@ -71,6 +71,7 @@ docker compose -f display/atlas/compose.yaml up -d
 docker compose -f display/atlas/compose.yaml exec atlas-dev bash
 ```
 
+이미지 빌드 과정에서 Flutter SDK까지 초기화하므로 새 컨테이너의 첫 실행 때 SDK를 다시 내려받지 않는다.
 컨테이너의 `/workspace`는 저장소 루트와 연결된다. 호스트에서 코드를 수정하면 컨테이너에도
 즉시 반영되므로 소스를 따로 복사하지 않는다.
 
@@ -97,8 +98,21 @@ flutter-atlas build atlas --ipk --release \
 find build -type f -name '*.ipk' -print
 ```
 
+같은 작업 트리에서 debug 실행 후 release IPK를 만들 때는 먼저 `flutter clean`을 실행한다.
+공급사 도구가 기존 bundle을 완전히 비우지 않아 `kernel_blob.bin`과 snapshot 같은 debug 산출물이
+release IPK에 섞일 수 있다. clean release IPK에는 해당 파일들이 없어야 한다.
+
 URL을 빼고 빌드하면 Pi 4 없이 화면 내장 데모가 순환한다. URL을 넣으면 **실행 중인 Pi 5가**
 Pi 4에 직접 접속한다. 빌드 컨테이너가 Pi 4 상태 API를 대신 중계하지 않는다.
+
+내장 데모는 화면과 상태별 UI를 빠르게 확인하기 위해 1초마다
+`START → FOCUS_PC → FATIGUE_SUSPECT → ACTION_ENV → RECOVERY`를 갱신하고 5초마다 반복한다.
+따라서 화면 수치·문구·색상이 계속 바뀌는 것은 정상이다. 실제 Hub URL을 넣은 빌드에서는
+1초마다 `/api/state`를 조회하며, 화면은 Hub가 반환한 상태에 따라 갱신된다.
+
+내장 데모 화면 하단의 `자동 순환: ON/OFF` 버튼은 터치 확인용이다. OFF로 바꾸면 현재 데모
+상태에서 멈추고 스낵바가 표시되며, ON으로 바꾸면 즉시 상태 갱신을 재개한다. 실제 Hub 연결
+빌드에는 이 데모 전용 버튼이 표시되지 않는다.
 
 성공 기준은 테스트 통과, build 명령 exit code 0, `find` 결과에
 `com.atlas.app.deskmate_display`의 `.ipk`가 존재하는 것이다. SDK·bundle·`.ipk`는 Git에 넣지 않는다.
@@ -109,12 +123,24 @@ Pi 4에 직접 접속한다. 빌드 컨테이너가 Pi 4 상태 API를 대신 �
 컨테이너에서 다음을 실행하고 장치 ID, Pi 5 IP, SSH 포트, 개인키 경로를 입력한다.
 
 ```bash
+flutter config --enable-custom-devices
 flutter-atlas custom-devices add
 flutter-atlas devices
 ```
 
 장치 ID는 공백 없이 예를 들어 `deskmate_pi5`로 둔다. 개인키를 쓸 경우 저장소 밖의 경로를
 등록하고 키 파일을 Git에 넣지 않는다. 컨테이너에서 Pi 5의 SSH 포트에 접근할 수 있어야 한다.
+현재 Compose는 `/root/.config/flutter`를 영속 볼륨으로 두지 않으므로 컨테이너를 재생성하면
+custom device 등록도 다시 해야 한다. IP와 로컬 인증 설정이 든 이 파일을 저장소에 커밋하지 않는다.
+
+보드 주소가 DHCP라면 저장소에 적힌 마지막 IP를 고정값으로 간주하지 않는다. 공유·교내 LAN에서
+보드에 임의의 정적 IP를 지정하면 충돌할 수 있으므로, 가능하면 보드 유선 MAC을 기준으로 DHCP
+예약을 요청한다. 개발 PC의 `~/.ssh/config` 별명은 편리한 로컬 설정일 뿐 다른 개발자에게 자동으로
+공유되지 않는다.
+
+개인키 경로를 비워도 접속되는 개발 이미지가 있을 수 있지만, 빈 비밀번호로 root 로그인을
+허용하는 보드는 신뢰할 수 있는 격리 개발망에서만 사용한다. 외부 또는 공용망에 연결하기 전에
+공급사 정책에 맞춰 키 인증과 접근 제한을 적용한다.
 
 ## 5. 설치·실행·로그 확인
 
@@ -181,6 +207,9 @@ DESKMATE display는 Flutter 앱이므로 `flutter-atlas`가 기준이다.
 
 - LG 공식 SDK 원본과 vendor import 스크립트: 확보
 - Flutter 앱·Atlas 러너: 구현
-- 이 Windows PC의 WSL2 기능과 Docker Desktop(D 드라이브): 설치, 재부팅 후 초기화 대기
-- 첫 release `.ipk` 생성, Pi 5 SSH 등록, 실기 실행 로그: 미검증
-- 재부팅 인계: [`../../docs/atlas-build-handoff.md`](../../docs/atlas-build-handoff.md)
+- 이 Windows PC의 WSL2 기능과 Docker Desktop(D 드라이브): 설치·초기화·재현 빌드 확인
+- Flutter 테스트와 내장 데모 release `.ipk`: 통과·생성 확인
+- Pi 5 SSH 도달성과 `deskmate_pi5` 장치 등록: 확인
+- Pi 5 터치 확인용 자동 순환 ON/OFF 버튼 포함 release 앱 교체 설치·fullscreen 실행: 확인
+- Pi 5 버튼 터치 육안 확인: USB MTouch가 input event 생성 전에 xHCI 오류로 분리되어 하드웨어 점검 대기
+- 최신 진행 인계: [`../../docs/atlas-build-handoff.md`](../../docs/atlas-build-handoff.md)

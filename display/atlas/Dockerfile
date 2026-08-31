@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y \
     libsdl2-dev python3 python3-pip python3-pexpect python3-git python3-jinja2 \
     python-is-python3 ca-certificates gnupg git openssh-client \
     && mkdir -p /etc/apt/keyrings \
-    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
     && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
     && apt-get update && apt-get install -y nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -32,5 +32,7 @@ RUN chmod +x /opt/flutter-elinux-atlas/bin/flutter-atlas \
 ENV PATH="/opt/flutter-elinux-atlas/bin:/opt/flutter-elinux-atlas/flutter/bin:${PATH}"
 ENV ATLAS_FLUTTER_NDK_ENV=/opt/atlas-sdk-x86_64/environment-setup-armv8a-atlas-linux
 ENV ATLAS_ENGINE_BASE_LOCAL_DIRECTORY=/opt/atlas_engine/
+
+RUN flutter-atlas --version
 
 WORKDIR /workspace/display

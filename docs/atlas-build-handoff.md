@@ -1,7 +1,7 @@
-# Atlas IPK 빌드 재시작 인계
+# Atlas IPK 빌드 진행 인계
 
-> 작성: 2026-08-29, Windows 재부팅 직전
-> 재시작 문구: `docs/atlas-build-handoff.md와 AGENTS.md를 읽고 Atlas IPK 빌드를 이어서 진행해줘.`
+> 갱신: 2026-08-31, clean release IPK 재현 검증 완료
+> 재시작 문구: `docs/atlas-build-handoff.md와 AGENTS.md를 읽고 Atlas Pi 5 실기 배포를 이어서 진행해줘.`
 
 ## 완료된 작업
 
@@ -12,54 +12,73 @@
 - Docker Desktop 공식 설치 파일을 내려받고 Docker Inc Authenticode 서명이 `Valid`임을 확인했다.
 - Docker Desktop 프로그램을 `D:\SW임베디드경진대회_LG\Toolchains\DockerDesktop`에 설치했다.
 - Docker WSL 데이터 경로는 `D:\SW임베디드경진대회_LG\Toolchains\DockerData`로 지정했다.
+- Docker Desktop 4.88.1, Docker Engine 29.7.2, Compose 5.4.0과 WSL2 동작을 확인했다.
+- NodeSource의 현재 GPG 키 URL을 사용하도록 Dockerfile을 수정했다.
+- 이미지 빌드 중 `flutter-atlas --version`을 실행해 Flutter SDK가 새 컨테이너에서도 즉시 준비되게 했다.
+- 새 이미지를 처음부터 다시 빌드하고 새 컨테이너로 교체해 Flutter 3.27.4, Dart 3.6.2,
+  Node 22.23.2, Atlas SDK 26.06.0, arc 0.5.0을 확인했다.
+- 앱 테스트 2개가 모두 통과했고 Pi 4 URL 없는 내장 데모 release `.ipk`를 두 차례 빌드했다.
+- Notion MCP OAuth 재인증을 완료했다. 현재 Codex 세션에서 계속 경고가 보이면 세션을 한 번 새로 연다.
+- Pi 5에 SSH로 접속해 Raspberry Pi 5 Model B Rev 1.1과 ATLAS Platform
+  26.06.0-246.scarthgap.s6를 확인했다.
+- 컨테이너에서 custom devices 기능을 켜고 Pi 5를 `deskmate_pi5`로 등록했다.
+- 내장 데모 debug IPK를 Pi 5에 업로드·설치·실행했고 Dart VM 연결과 앱 프로세스를 확인했다.
+- debug 빌드 뒤 곧바로 release 빌드하면 debug bundle 파일이 섞이는 현상을 확인했다. `flutter clean`
+  후 테스트와 release 빌드를 다시 수행해 정상 패키지를 생성했다.
+- 기존 debug 앱을 제거하고 clean release IPK를 Pi 5에 업로드·설치·실행했다. 콘솔 분리 후에도
+  `com.atlas.app.deskmate_display` fullscreen 프로세스가 계속 실행되는 것을 확인했다.
+- 내장 데모 자동 순환을 화면 하단 버튼으로 멈추고 재개할 수 있게 했으며 widget test를 포함한
+  전체 테스트 3개를 통과했다. 새 release 앱을 Pi 5에 교체 설치하고 프로세스를 확인했다.
 
-## 현재 중단 지점
+## 현재 상태
 
-- Windows 기능 적용을 위한 **재부팅 직전**이다.
-- `.ipk`는 아직 생성하지 않았다.
-- Pi 5 SSH 장치 등록과 실기 로그 확인도 아직 하지 않았다.
-- 설치 파일 SHA-256:
-  `89FE3D80A326A2AD521DE09B5A89EF04D10C60593604B344F11F433CA7F1F6F0`
+- 개발 이미지와 내장 데모 `.ipk`의 로컬 재현 검증까지 완료했다.
+- 산출물: `display/atlas/app/build/atlas/arm64/release/ipk/com.atlas.app.deskmate_display.ipk`
+- 크기: `6,941,142 bytes`
+- SHA-256: `7594839A8E03B37F0DC557217771B859EF5557726C9620D207373463504AD8B1`
+- 패키지 내부 실행 파일과 `libapp.so`가 AArch64임을 확인했다.
+- Pi 5 release 앱의 화면·터치 육안 확인과 장시간 실기 로그 확인은 아직 남아 있다.
+- Pi 4 주소와 최종 통신 방식은 미결정 상태이므로 내장 데모 IPK에는 Hub URL을 넣지 않았다.
+- Pi 5를 재부팅하면 DESKMATE 앱이 자동 실행되지 않는다. 현재 배포 검증은
+  `flutter-atlas run -d deskmate_pi5 --release`로 다시 설치·실행하는 방식이며, 자동 시작 등록은 별도 후속 작업이다.
 
-## 재부팅 직후 할 일
+### 현재 터치 장애 (2026-08-31 재현)
 
-1. Docker Desktop을 한 번 실행하고 WSL2 backend 초기화를 완료한다.
-2. Docker CLI가 PATH에 없다면 아래 세션 경로를 임시로 추가한다.
+- 화면의 USB 터치 컨트롤러는 `0416:c168`, `TSTP MTouch`, serial `CMTP_1.0`으로 식별됐다.
+- 부팅 약 3초에 `usb 1-1`/`xhci-hcd.0`에서 열거되지만 Linux input event 노드를 만들지 못한다.
+- 부팅 약 13초에 `xHCI host controller not responding, assume dead`와 `HC died; cleaning up`이 발생해
+  해당 컨트롤러와 MTouch가 분리된다. 재부팅 후에도 같은 순서로 재현됐다.
+- 현재 `lsusb`와 `/proc/bus/input/devices`에는 MTouch가 없으므로 Flutter 앱까지 전달되는 터치 이벤트도 없다.
+- 키보드 `046d:c34b`는 별도 `xhci-hcd.1`/`usb 3-1`에서 정상 동작한다. 따라서 앱의 버튼 구현보다
+  화면 전원·USB 배선, 케이블 또는 터치 컨트롤러 쪽을 먼저 확인해야 한다.
+- 커널 로그에는 명시적인 `under-voltage`/`over-current` 문구가 없었지만 전기적 원인을 배제한 것은 아니다.
+  정확한 화면 모델과 배선도를 확인하기 전 화면의 `5V+GND` 전원과 USB VBUS를 동시에 연결하거나
+  반복 재연결하지 않는다.
 
-   ```powershell
-   $env:PATH = 'D:\SW임베디드경진대회_LG\Toolchains\DockerDesktop\resources\bin;' + $env:PATH
-   ```
+### 현재 Pi 5 접속 메모
 
-3. 설치 상태를 확인한다.
+- 마지막 확인 주소: `172.16.34.197/24`, SSH 22, 사용자 `root`
+- 유선 MAC: `88:A2:9E:3C:CC:CA`
+- 보드 호스트명: `atlas`
+- 이 PC의 로컬 SSH 별명: `atlas-pi5`, `pi5`, `deskmate-pi5`
+- ConnMan 설정은 `IPv4.method=dhcp`이며 `.197`은 마지막 DHCP 주소다.
+- 현재 공급 이미지의 Dropbear는 root 빈 비밀번호 로그인을 허용한다. 정상 배포 인증으로 간주해
+  의존하지 말고, 신뢰할 수 있는 개발망 밖에 연결하기 전 키 인증과 접근 제한을 적용한다.
+- 교내 LAN에서 `.197`을 보드에 강제 고정하지 않는다. 고정이 필요하면 네트워크 관리자에게 위 MAC의
+  DHCP 예약을 요청한다.
 
-   ```powershell
-   wsl --status
-   docker version
-   docker compose version
-   PowerShell -ExecutionPolicy Bypass -File .\display\atlas\scripts\verify-atlas-vendor.ps1
-   ```
+## 다음 할 일
 
-4. Atlas 개발 이미지를 빌드한다.
+1. 화면 뒷면 모델명, 전원 입력 표기, `5V+GND`와 `5V+Touch(USB)` 단자 사진 또는 제조사 배선도를 확보한다.
+2. Pi 5와 화면 전원을 끈 상태에서 단일 전원 경로와 데이터 케이블을 확정한 뒤 다시 연결한다.
+3. 재부팅 후 `lsusb`, `/proc/bus/input/devices`, `dmesg`에서 MTouch와 input event 노드가 유지되는지 확인한다.
+4. DESKMATE를 다시 실행하고 화면 하단 `자동 순환: ON/OFF` 버튼으로 순환 정지·재개와 스낵바를 육안 확인한다.
+5. Pi 4 주소가 정해지면 `DESKMATE_HUB_URL`을 넣어 실제 Hub 연동을 검증한다.
+6. 실기 검증이 끝난 상태를 release `.ipk`로 다시 고정한다.
 
-   ```powershell
-   docker compose -f display/atlas/compose.yaml build atlas-dev
-   docker compose -f display/atlas/compose.yaml up -d
-   docker compose -f display/atlas/compose.yaml exec atlas-dev bash
-   ```
-
-5. 컨테이너에서 우선 Pi 4 URL 없이 내장 데모 release `.ipk`를 만든다.
-
-   ```bash
-   source "$ATLAS_FLUTTER_NDK_ENV"
-   cd /workspace/display/atlas/app
-   flutter pub get
-   flutter test
-   flutter-atlas build atlas --ipk --release
-   find build -type f -name '*.ipk' -print
-   ```
-
-6. Pi 4 IP가 정해지면 `DESKMATE_HUB_URL`을 넣어 다시 빌드한다.
-7. Pi 5의 IP·SSH 포트·인증 방식이 준비되면 `flutter-atlas custom-devices add` 후 `flutter-atlas run`으로 설치·실행한다.
+WSL 파일 시스템 성능 최적화는 별도 후속 작업이다. 현재 저장소는 D 드라이브 bind mount라서
+작은 파일 I/O가 많은 Flutter 빌드가 느릴 수 있다. 장기적으로 WSL ext4 내부에 저장소를 두는 편이
+유리하지만, 현재 빌드·배포 경로는 정상 동작하므로 Pi 5 실기 검증을 먼저 끝낸다.
 
 ## 사용자에게 받을 정보
 

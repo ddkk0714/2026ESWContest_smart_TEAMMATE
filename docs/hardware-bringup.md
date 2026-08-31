@@ -30,6 +30,17 @@ custom device로 등록한다. `flutter-atlas run` 콘솔과 Pi 5 화면을 함�
 - HDMI+USB 터치 화면이면 Pi 5 micro-HDMI→화면 HDMI와 화면의 USB 터치 케이블을 모두 연결한다.
 - 두 방식의 전원·리본 연결법을 섞지 않는다. 모델명이 확인되지 않은 화면에 GPIO 5V를 임의로 넣지 않는다.
 
+### 현재 보유 화면의 USB 터치 관찰값
+
+- 터치 컨트롤러는 USB `0416:c168`, 제품 문자열 `TSTP MTouch`로 열거된다.
+- Pi 5 부팅 시 `usb 1-1`의 `xhci-hcd.0`에서 장치를 찾지만 입력 event 노드를 만들지 못한다.
+- 약 10초 뒤 `xHCI host controller not responding, assume dead`가 발생하고 장치가 분리된다.
+- 재부팅해도 같은 순서로 재현됐다. 현재 상태에서는 터치 이벤트가 앱까지 전달되지 않는다.
+- 같은 부팅에서 Logitech 키보드는 별도 `xhci-hcd.1` 컨트롤러에 남아 정상 동작했다.
+- 커널 로그에는 명시적인 저전압·과전류 경고가 없었지만, 이 사실만으로 전원·역급전 문제를 배제하지 않는다.
+- 정확한 화면 모델과 전원·USB 배선도를 확인하기 전 `5V+GND`와 USB의 5V를 동시에 연결하거나
+  반복 재연결하지 않는다. 우선 알려진 정상 USB 포트/데이터 케이블과 단일 전원 경로를 확인한다.
+
 ## 2. Pi 4에서 FSM 데모 실행
 
 Pi 4 런타임에 Python 3가 있는지 먼저 확인한다. AI Native OS Headless Profile에 Python/pip가
