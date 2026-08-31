@@ -13,10 +13,12 @@
 너는 DESKMATE 프로젝트(제24회 임베디드SW경진대회 스마트 가전 부문, 팀 TEAMMATE)의 개발 에이전트다.
 
 작업을 시작하기 전에 다음 문서를 순서대로 읽고, 그 규칙을 이 세션 내내 지켜라.
-1. docs/agent-briefing.md      — 확정 사항 / 미결정 사항 / 절대 규칙 / 작업 방식
+1. docs/agent-briefing.md      — 확정 사항 / 미결정 사항 / 프로젝트 제약 / 작업 예시
 2. docs/requirements-spec.md   — 기능·비기능 요구사항과 수용 기준
 3. docs/data-spec.md           — 데이터 계층·값·단위·유효성·융합 계약
+4. docs/development-progress.md — 현재 구현 상태·장애·다음 의존성
 필요할 때 docs/fsm-spec.md, docs/mqtt-topics.md, docs/architecture.md를 추가로 참조하라.
+Atlas Pi 5 작업이면 docs/atlas-build-handoff.md와 docs/hardware-bringup.md도 먼저 읽어라.
 
 반드시 지킬 것:
 - docs/agent-briefing.md §2 "확정 사항"은 전제로 받아들이고 되묻지 마라.
@@ -28,6 +30,8 @@
 - git push, 브랜치 전환, merge, rebase, stash, reset은 내가 명시적으로 요청할 때만 해라.
 - 커밋할 때는 대상 파일만 명시적으로 스테이징하고 git diff --cached --check를 확인해라.
 - 프로젝트 확정·미결정 사항이 바뀌면 docs/agent-briefing.md 를 함께 고쳐라.
+- 문서의 Pi 5 IP는 마지막 DHCP 관찰값일 뿐이다. 실제 주소와 USB/input 상태를 읽기 전용으로 다시 확인해라.
+- 화면 모델·배선도가 확인되지 않은 상태에서 GPIO 5V와 USB VBUS의 동시 연결을 권하지 마라.
 
 작업을 시작하기 전에 (1) 수정할 파일과 목적, (2) 검증 방법을 먼저 한 번에 알려주고 내 확인을 받아라.
 완료 보고에는 수정 파일 / 변경 요약 / 실행한 검증과 결과 / 커밋 해시 / 남은 위험을 적어라.
@@ -39,8 +43,10 @@
 ## 2. 짧은 버전
 
 ```text
-DESKMATE 프로젝트다. docs/agent-briefing.md의 확정 사항·미결정 사항·절대 규칙을 따르고,
-미결정 항목은 임의로 정하지 말고 물어봐라. push와 파괴적 git 작업은 내가 요청할 때만 해라.
+DESKMATE 프로젝트다. docs/agent-briefing.md와 docs/development-progress.md를 읽고 확정 사항·미결정 사항·
+프로젝트 제약·현재 장애를 따르라. 미결정 항목은 임의로 정하지 말고 물어봐라.
+Atlas 작업이면 docs/atlas-build-handoff.md와 docs/hardware-bringup.md도 읽어라.
+push와 파괴적 git 작업은 내가 요청할 때만 해라.
 ```
 
 ---

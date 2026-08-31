@@ -1,6 +1,6 @@
 # DESKMATE 요구사항 명세서
 
-> 기준: 개발계획서 v2, `DESKMATE_FSM-VER5`, 저장소 현황(2026-08-28)
+> 기준: 개발계획서 v2, `DESKMATE_FSM-VER5`, 저장소 현황(2026-08-31)
 > 목적: 개발·통합·시험의 단일 요구사항 기준
 
 ## 1. 문서 규칙
@@ -36,7 +36,7 @@ DESKMATE는 ToF, mmWave, 키스트로크 타이밍, 환경, 작업 시간 신호
 | ESP32 | 센서 취득·1차 전처리 | **확정**, 펌웨어 미구현 |
 | PC 수집기 | 키 내용 없는 타이밍·PC 활성 | **확정**, 미구현 |
 | Raspberry Pi 4 | 중앙 수집·융합·FSM·제어 판단 | **확정**, FSM 코어·합성 테스트만 존재 |
-| Raspberry Pi 5 | AI Native OS Video Profile·Atlas Flutter UI·스피커·터치 | **확정**, LG 기술교육 제공 구성. DESKMATE UI 미구현 |
+| Raspberry Pi 5 | AI Native OS Video Profile·Atlas Flutter UI·스피커·터치 | **확정**. 대시보드·내장 데모·HTTP 개발 어댑터·release IPK 배포 완료. USB 터치는 xHCI 장애로 실기 입력 검증 대기 |
 | TFLite | FSM 보완·검증 | **선택**, 미구현 |
 | 스마트 플러그·LED·환기팬 | 기본 제어 시연 | **잠정** |
 | ThinQ API | 실가전 양방향 제어 | **선택** |
@@ -139,6 +139,7 @@ DESKMATE는 ToF, mmWave, 키스트로크 타이밍, 환경, 작업 시간 신호
 | VAL-005 | 제안→확인→명령→결과→MONITOR→회복/격상 E2E |
 | VAL-006 | 8시간 버퍼·메모리·로그·재시작 검증 |
 | VAL-007 | 금지 데이터 미수집·자격증명 스캔 |
+| VAL-008 | Pi 5 재부팅 후 USB 터치 input event 유지·버튼 입력·앱 재실행/자동 시작 검증 |
 
 ## 8. 개발 단계
 

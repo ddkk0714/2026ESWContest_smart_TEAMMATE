@@ -125,10 +125,17 @@ ToF 원본 54×42 배열은 전송하지 않는다. 운영 경로는 특징값�
   "source": "fsm",             // fsm | classifier | fused
   "gate": "auto",              // auto | suggest | none
   "cause": "environment",
-  "reasons": ["posture_stable", "typing_rhythm_slow", "co2_rising"]
+  "reasons": ["posture_stable", "typing_rhythm_slow", "co2_rising"],
+  "sensor_summary": {           // 선택: 화면 표시용 특징 요약. 센서 원본 금지
+    "present": true, "co2_ppm": 812, "lux": 310, "valid": true
+  }
   }
 }
 ```
+
+`sensor_summary`는 display가 별도 센서 topic을 조합하지 않아도 AOD를 그릴 수 있게 하는 선택 필드다.
+ToF raw 54×42 배열이나 키 내용은 이 필드에 넣지 않는다. 현재 미리보기 HTTP API도 이와 동일한
+envelope를 사용하므로 최종 전송 어댑터를 바꿔도 display 모델은 유지한다.
 
 ### `deskmate/interaction/request`
 

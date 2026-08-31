@@ -35,7 +35,7 @@
 - FSM 상태·전이·임계값을 바꾸면 `docs/fsm-spec.md`와 해당 테스트를 함께 갱신한다. 임계값은 코드에 하드코딩하지 않고 `hub/deskmate_hub/config/`의 YAML에 둔다.
 - Pi 4 hub는 2단계 TFLite 모델을 불러오지 못해도 1단계 FSM으로 안전하게 동작해야 한다.
 - Pi 5 display 구현은 `reference/raspberrypi/flutter-atlas-sample/`을 참고하되, 샘플 코드는 기능 코드로 옮겨 검토·수정한 뒤 사용한다. 참조본을 직접 수정하지 않는다.
-- Pi 5 Atlas 빌드는 `display/atlas/compose.yaml`을 통해 Docker 안에서 수행한다. Docker 빌드 자산은 레포 내부의 gitignore된 `display/atlas/vendor/`에 공식 Atlas 패키지에서 준비하며, Docker 설정은 외부 경로를 참조하지 않는다.
+- Pi 5 Atlas 빌드는 `display/atlas/compose.yaml`을 통해 개발 PC의 Docker 안에서 수행한다(크로스 컴파일). Docker 빌드 자산은 레포 내부의 gitignore된 `display/atlas/vendor/`에 공식 Atlas 패키지에서 준비하며, Docker 설정은 외부 경로를 참조하지 않는다. 산출된 `.ipk`는 Pi 5의 AI Native OS에 설치되어 컨테이너 밖에서 실행되므로, Pi 5에 Docker를 올리는 구성을 전제하지 않는다.
 - SDK, 빌드 산출물, 데이터셋, 모델 파일, 로그, 자격증명은 커밋하지 않는다. 비밀값은 `.env` 또는 gitignore된 `secrets.yaml`만 사용한다.
 
 ## 5. Raspberry Pi Atlas 참조 자산

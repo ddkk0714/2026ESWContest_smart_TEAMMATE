@@ -1,6 +1,6 @@
 # DESKMATE 개발 진행 현황
 
-> 기준일: 2026-08-28
+> 기준일: 2026-08-31
 > 목적: 제품 방향, 현재 구현 상태, 다음 의존성을 한 화면에서 관리한다. 개인 이름과 담당자 표기는 이 문서에서 제외한다.
 
 ## 1. 제품 지향점
@@ -39,9 +39,14 @@
 
 ### 바로 할 일
 
-- [ ] `display/`에 Atlas Flutter 앱 골격을 만들고 `state/phase` 구독을 연결한다.
-- [ ] display 제안 카드의 수락·거절·정정 결과를 `feedback/user`로 발행한다.
-- [ ] Pi 4 hub는 display가 꺼져도 FSM과 안전한 기본 제어를 계속 수행하도록 통합 테스트한다.
+- [x] `display/atlas/app/`에 Atlas Flutter 앱 골격과 `state/phase` 호환 모델을 구현한다.
+- [x] 개발용 HTTP 어댑터로 display 수락·거절을 Pi 4 FSM 실행기에 되돌린다.
+- [x] 개발 PC Docker에서 Flutter 테스트와 clean release `.ipk` 빌드를 완료한다.
+- [x] Pi 5를 SSH custom device로 등록하고 debug/release 설치·실행 로그를 확보한다.
+- [x] 내장 데모 자동 순환을 멈추고 재개하는 터치 확인용 UI와 widget test를 추가한다.
+- [ ] USB MTouch의 xHCI 장애를 해결하고 실제 버튼 터치를 확인한다.
+- [ ] Pi 5 재부팅 후 DESKMATE 자동 시작 방식을 정하고 검증한다.
+- [ ] 실기기에서 display가 꺼져도 Pi 4 hub가 계속 동작하는지 통합 테스트한다.
 
 > **확인 근거:** LG 기술교육 자료의 제공 기기 구성은 Raspberry Pi 5(8GB)+AI Native OS Video Profile, Raspberry Pi 4B+Headless Profile, ESP32이며 Flutter 앱은 Pi 5 Video Profile에서 개발한다. 프로젝트 Pi 4에 실제 설치된 OS와 Python 지원 여부는 별도 확인 대상이다.
 
@@ -66,18 +71,18 @@ LG 가전 상태 <── 양방향 MQTT/API ───> └── 제어 명령 �
 | FSM·불확실성 처리 | FSM 우선, 불확실하면 사용자 확인 | 18상태 FSM, 신뢰도 게이트, 사용자 feedback 토픽·테스트 존재 | 불확실도 기준과 제안 카드 UX, 정정 라벨 스키마, 실제 센서 리플레이 검증 |
 | 개인화·AI | 개인 baseline·시간대 패턴을 이용한 단계적 개인화 | 2단계 TFLite 및 RL은 선택적 설계 단계 | 개인화 feature/label·보존 기간·동의 흐름, 로컬 DB 결정 |
 | 가전 연동 | 제어와 상태 수신을 모두 반영 | hub→control 명령 토픽 초안 존재 | ThinQ/API 분석 결과, 가전 상태 수신 schema, 실패·재시도·수동 복구 정책 |
-| display·UI | 제안·확인·정정·상태 리포트가 제품의 중심 | 화면 요구사항 문서와 Atlas Docker 개발 골격 존재 | Flutter 앱 골격, MQTT client, 제안/정정 UI, 스피커 알림 정책 |
+| display·UI | 개발 PC Docker에서 arm64 `.ipk` 크로스 빌드 후 Pi 5 AI Native OS에서 네이티브 실행 | Flutter 테스트 3개 통과, clean release IPK 생성, Pi 5 설치·fullscreen 실행 완료. MTouch는 xHCI 오류로 input event 생성 전 분리 | 화면 모델·단일 전원/USB 배선 확인, 터치 실기 검증, 재부팅 자동 시작, 정정 UI, 최종 통신 adapter |
 | PC 연동 | 키 입력 내용은 수집하지 않고 타이밍 특징만 사용 | 키스트로크 payload 계약 존재 | collector 구현, PC 상태 UI/Stream Deck 연동 범위 및 권한 모델 |
 | CAD·브랜딩 | 접이식 힌지·데스크테리어형 제품 경험 | 저장소 내 구현 산출물 없음 | 패키징 치수·열 설계·ToF 배치 제약, Figma UI 흐름, 프로토타입 사진 |
 | 명세·품질 | 요구사항과 데이터 계약을 구현보다 먼저 고정 | 요구사항 명세서·데이터 명세서 작성 완료, MQTT·FSM 명세 존재 | 시험 시나리오·수용 기준 구체화, 미결정 항목 해소 |
 
 ## 5. 이번 우선순위
 
-1. **논리 계약 검토**: 요구사항·데이터 명세의 미결정 항목과 `C_focus` 의미를 결정한다.
-2. **Pi 4↔Pi 5 최소 데모**: 합성 입력→FSM→상태 UI→피드백을 연결하고 MQTT 채택 여부를 검증한다.
-3. **불확실성 UX 연결**: `FATIGUE_SUSPECT` 또는 충돌 신호에서 display가 질문하고 `feedback/user`가 FSM에 반영되는 최소 흐름을 구현한다.
-4. **Pi 5 UI MVP**: Docker 기반 Atlas 환경에서 display 앱을 시작하고 MQTT 상태·제안·피드백을 연결한다.
-5. **양방향 제어 PoC**: 제어 명령 1종과 가전 상태 수신 1종을 끝까지 연결하고 실패 시나리오를 시험한다.
+1. **Pi 5 터치 하드웨어 복구**: 화면 모델·전원·USB 배선도를 확보하고 단일 전원 경로에서 MTouch input event가 유지되는지 확인한다.
+2. **Pi 5 UI 실기 완료**: DESKMATE를 실행해 자동 순환 ON/OFF와 스낵바를 실제 터치로 검증하고 재부팅 자동 시작을 결정한다.
+3. **논리 계약 검토**: 요구사항·데이터 명세의 미결정 항목과 `C_focus` 의미를 결정한다.
+4. **Pi 4↔Pi 5 최소 데모**: 합성 입력→FSM→HTTP 미리보기→상태 UI→피드백을 실기기에서 검증하고 MQTT 채택 여부를 판단한다.
+5. **불확실성 UX·양방향 제어**: 충돌 신호 질문과 feedback 반영, 제어 명령·상태 수신·실패 복구를 연결한다.
 
 ## 6. 결정이 필요한 항목
 
@@ -110,5 +115,6 @@ LG 가전 상태 <── 양방향 MQTT/API ───> └── 제어 명령 �
 - FSM 구현 계획: [fsm-dev-plan.md](fsm-dev-plan.md)
 - 하드웨어·열 설계 참고: [hardware.md](hardware.md)
 - Pi 5 Atlas 개발 환경: [../display/atlas/README.md](../display/atlas/README.md)
+- Pi 4→Pi 5 실기 연결 순서: [hardware-bringup.md](hardware-bringup.md)
 - LG 스마트 가전 기술교육: 저장소 외부 로컬 `개발자료/스마트 가전_기술교육 (1).pdf` (Git 미포함)
 - 전년도 수상팀 공개자료: 저장소 외부 로컬 `개발자료/제23회ESWC_동방예의지국_발표자료_공개용 (1) (1).pdf` (Git 미포함)

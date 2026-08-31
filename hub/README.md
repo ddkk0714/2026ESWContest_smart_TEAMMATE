@@ -29,12 +29,21 @@ ESP32 노드와 PC 수집기가 발행한 센서 스트림을 구독해 슬라�
 cd hub
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python -m deskmate_hub            # 허브 기동
-python -m deskmate_hub --replay logs/2026-08-01.jsonl   # 로그 리플레이
+python -m deskmate_hub demo --host 0.0.0.0 --port 8765
 ```
 
-로그 리플레이는 실기기 없이 FSM 임계값을 튜닝하기 위한 것이다. 초기에 만들어 두면
-8월 데이터 수집 이후 반복 실험이 훨씬 빨라진다.
+위 명령은 합성 센서 입력을 FSM에 넣고 상태를 1초마다 순환한다. Pi 5 display는
+`http://<Pi4-IP>:8765/api/state`에서 상태를 읽고 `/api/feedback`으로 수락·거절을 돌려준다.
+이 HTTP API는 **최종 통신을 정하기 전 보드 간 화면 검증용 어댑터**다. MQTT 채택 여부와
+무관하게 FSM·화면 계약은 유지하고 어댑터만 교체한다.
+
+```bash
+curl http://127.0.0.1:8765/health
+curl http://127.0.0.1:8765/api/state
+```
+
+`python -m deskmate_hub`도 현재는 같은 데모를 기본 실행한다. 실센서 ingest와 로그 리플레이는
+아직 연결되지 않았으므로 실행 가능하다고 오해하지 않도록 별도 구현 후 이 문서를 갱신한다.
 
 ## 테스트
 

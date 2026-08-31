@@ -1,10 +1,11 @@
-"""DESKMATE 허브 진입점.
+"""DESKMATE Pi 4 hub command line entry point.
 
-    python -m deskmate_hub --replay logs/2026-08-01.jsonl   # 로그 리플레이(임계값 튜닝)
-    python -m deskmate_hub --demo                            # 합성 세션 스모크
-    python -m deskmate_hub --replay log.jsonl --quiet        # 요약만
+    python -m deskmate_hub --replay logs/session.jsonl
+    python -m deskmate_hub --demo
+    python -m deskmate_hub demo --host 0.0.0.0 --port 8765
 
-실시간 허브 모드(MQTT ingest → engine → control)는 ingest 연결 후 구현한다.
+The positional ``demo`` command runs the Atlas preview API. ``--demo`` keeps
+the deterministic replay smoke test provided by the hub replay workflow.
 """
 from __future__ import annotations
 
@@ -15,32 +16,52 @@ from .inference import load_config
 from .replay import format_report, iter_frames, replay
 
 
+def _run_preview(argv: list[str]) -> int:
+    from .demo import run_demo
+
+    parser = argparse.ArgumentParser(
+        prog="deskmate_hub demo",
+        description="합성 센서 입력으로 FSM과 Atlas 화면 API 실행",
+    )
+    parser.add_argument("--host", default="0.0.0.0", help="수신 주소 (기본: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=8765, help="미리보기 API 포트")
+    parser.add_argument("--interval", type=float, default=1.0, help="상태 간 실제 대기 초")
+    parser.add_argument("--cycles", type=int, default=0, help="반복 횟수, 0은 무한 반복")
+    args = parser.parse_args(argv)
+    run_demo(args.host, args.port, args.interval, args.cycles)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="deskmate_hub", description="DESKMATE 중앙 추론 허브")
-    src = p.add_mutually_exclusive_group()
-    src.add_argument("--replay", metavar="LOG.jsonl", help="JSONL 센서 로그를 리플레이")
-    src.add_argument("--demo", action="store_true", help="합성 세션으로 전체 경로 스모크 실행")
-    p.add_argument("--config", metavar="fsm.yaml", help="FSM 설정 경로(기본: 패키지 config)")
-    p.add_argument("--quiet", action="store_true", help="전이 트레이스 생략, 요약만 출력")
-    args = p.parse_args(argv)
+    command_args = list(sys.argv[1:] if argv is None else argv)
+    if command_args[:1] == ["demo"]:
+        return _run_preview(command_args[1:])
 
-    cfg = load_config(args.config) if args.config else None
+    parser = argparse.ArgumentParser(prog="deskmate_hub", description="DESKMATE 중앙 추론 허브")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--replay", metavar="LOG.jsonl", help="JSONL 센서 로그를 리플레이")
+    source.add_argument("--demo", action="store_true", help="합성 세션으로 전체 경로 스모크 실행")
+    parser.add_argument("--config", metavar="fsm.yaml", help="FSM 설정 경로(기본: 패키지 config)")
+    parser.add_argument("--quiet", action="store_true", help="전이 트레이스 생략, 요약만 출력")
+    args = parser.parse_args(command_args)
 
+    config = load_config(args.config) if args.config else None
     if args.demo:
         from .demo import demo_frames
+
         frames = demo_frames()
     elif args.replay:
         try:
-            with open(args.replay, encoding="utf-8") as fh:
-                frames = list(iter_frames(fh))
-        except (OSError, ValueError) as e:
-            print(f"리플레이 실패: {e}", file=sys.stderr)
+            with open(args.replay, encoding="utf-8") as handle:
+                frames = list(iter_frames(handle))
+        except (OSError, ValueError) as exc:
+            print(f"리플레이 실패: {exc}", file=sys.stderr)
             return 1
     else:
-        p.error("--replay 또는 --demo 중 하나가 필요하다 (실시간 허브 모드는 이후 구현)")
+        parser.error("--replay, --demo 또는 demo 명령 중 하나가 필요하다")
         return 2
 
-    print(format_report(replay(frames, cfg), quiet=args.quiet))
+    print(format_report(replay(frames, config), quiet=args.quiet))
     return 0
 
 
