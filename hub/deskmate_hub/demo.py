@@ -6,7 +6,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Iterator
+from typing import Any, Iterator
 
 from .inference import FSMEngine, SensorFrame, Signal
 from .presentation import state_envelope
@@ -126,6 +126,54 @@ def demo_frames() -> list[SensorFrame]:
     return frames
 
 
+def _test_signals(payload: dict[str, Any]) -> dict[str, Signal]:
+    return {
+        name: Signal(
+            phi=float(values["phi"]),
+            delta=float(values["delta"]),
+            available=bool(values.get("available", True)),
+        )
+        for name, values in payload["signals"].items()
+    }
+
+
+def _test_frame(
+    payload: dict[str, Any],
+    now: float,
+    *,
+    touch: bool = False,
+    feedback: str | None = None,
+) -> SensorFrame:
+    event = payload.get("event")
+    return SensorFrame(
+        now=now,
+        present=bool(payload["present"]),
+        pc_ratio=float(payload["pc_ratio"]),
+        signals=_test_signals(payload),
+        touch=touch,
+        end_touch=event == "end",
+        action_done=event == "action_done" or feedback == "correct",
+        break_accepted=(
+            True if feedback == "accept" else False if feedback == "reject" else None
+        ),
+    )
+
+
+def _test_summary(payload: dict[str, Any], now: float, seq: int) -> dict[str, object]:
+    signals = _test_signals(payload)
+    return {
+        "present": bool(payload["present"]),
+        "valid": True,
+        "scenario": "센서 슬라이더 테스트",
+        "keystroke": keystroke_summary(signals.get("keystroke"), time.time(), seq=seq),
+        "test_input": {
+            "pc_ratio": float(payload["pc_ratio"]),
+            "signals": payload["signals"],
+            "virtual_time_sec": now,
+        },
+    }
+
+
 def run_demo(host: str, port: int, interval: float, cycles: int) -> None:
     store = PreviewStateStore()
     server = make_server(host, port, store)
@@ -136,10 +184,53 @@ def run_demo(host: str, port: int, interval: float, cycles: int) -> None:
     boot_id = uuid.uuid4().hex[:8]
     seq = 0
     completed = 0
+    interactive = False
+    test_engine = FSMEngine()
+    test_now = 0.0
     try:
         while cycles == 0 or completed < cycles:
             engine = FSMEngine()
             for step in demo_steps():
+                test_payload = store.pop_test_frame()
+                if test_payload is not None:
+                    interactive = True
+                    feedback = store.pop_feedback()
+                    verdict = feedback.get("verdict") if feedback else None
+                    signals = _test_signals(test_payload)
+                    if test_payload["command"] == "reset":
+                        # Test-only fast start: use the real configured baseline duration,
+                        # then enter the detected focus state. No threshold is duplicated.
+                        test_engine = FSMEngine()
+                        test_now = 0.0
+                        test_engine.tick(_test_frame(test_payload, test_now, touch=True))
+                        test_now = float(test_engine.tm["baseline_sec"]) + 1.0
+                        test_engine.tick(_test_frame(test_payload, test_now))
+                        test_now += 1.0
+                        result = test_engine.tick(_test_frame(test_payload, test_now))
+                    else:
+                        test_now += float(test_payload["advance_sec"])
+                        result = test_engine.tick(
+                            _test_frame(test_payload, test_now, feedback=verdict)
+                        )
+                    store.publish(
+                        state_envelope(
+                            result,
+                            boot_id=boot_id,
+                            seq=seq,
+                            sensor_summary=_test_summary(test_payload, test_now, seq),
+                        )
+                    )
+                    print(f"[{seq:03d}] sensor test: {result.state.value} t={test_now:.0f}s")
+                    seq += 1
+                    time.sleep(interval)
+                    continue
+
+                if interactive:
+                    # Keep the last state stable until the tester changes a slider
+                    # or explicitly advances virtual time.
+                    time.sleep(interval)
+                    continue
+
                 feedback = store.pop_feedback()
                 verdict = feedback.get("verdict") if feedback else None
                 if verdict:

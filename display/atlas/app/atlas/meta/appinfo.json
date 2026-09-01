@@ -6,7 +6,13 @@
     "entry": "deskmate_display --bundle=./ --fullscreen -a com.atlas.app.deskmate_display",
     "version": "0.1.0",
     "required_permissions": {
-        "privileged": [],
-        "user_consent": []
+        "privileged": [
+            "com.atlas.permission.privileged.mediacontrol",
+            "com.atlas.permission.privileged.mediasession",
+            "com.atlas.permission.privileged.permission_agent"
+        ],
+        "user_consent": [
+            "com.atlas.permission.user_consent.mediaplayer"
+        ]
     }
 }

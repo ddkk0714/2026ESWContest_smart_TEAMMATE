@@ -44,6 +44,8 @@
 - [x] 개발 PC Docker에서 Flutter 테스트와 clean release `.ipk` 빌드를 완료한다.
 - [x] Pi 5를 SSH custom device로 등록하고 debug/release 설치·실행 로그를 확보한다.
 - [x] 내장 데모 자동 순환을 멈추고 재개하는 터치 확인용 UI와 widget test를 추가한다.
+- [x] 앱 종료, Pi 4 실제 FSM 센서 기여도 테스트, VER5 18상태 전체 전이 시각화 UI를 추가한다.
+- [x] Atlas 오디오 플러그인으로 패키지 내 테스트 음원 반복 재생 ON/OFF UI를 추가한다.
 - [ ] USB MTouch의 xHCI 장애를 해결하고 실제 버튼 터치를 확인한다.
 - [ ] Pi 5 재부팅 후 DESKMATE 자동 시작 방식을 정하고 검증한다.
 - [ ] 실기기에서 display가 꺼져도 Pi 4 hub가 계속 동작하는지 통합 테스트한다.

@@ -1,6 +1,6 @@
 # Atlas IPK 빌드 진행 인계
 
-> 갱신: 2026-08-31, clean release IPK 재현 검증 완료
+> 갱신: 2026-09-01, 센서 FSM 테스트·18상태 시각화 clean release IPK 검증 완료
 > 재시작 문구: `docs/atlas-build-handoff.md와 AGENTS.md를 읽고 Atlas Pi 5 실기 배포를 이어서 진행해줘.`
 
 ## 완료된 작업
@@ -29,13 +29,20 @@
   `com.atlas.app.deskmate_display` fullscreen 프로세스가 계속 실행되는 것을 확인했다.
 - 내장 데모 자동 순환을 화면 하단 버튼으로 멈추고 재개할 수 있게 했으며 widget test를 포함한
   전체 테스트 3개를 통과했다. 새 release 앱을 Pi 5에 교체 설치하고 프로세스를 확인했다.
+- 우측 상단 종료 확인 버튼, 정규화 센서 기여도 슬라이더, 30초/3분 가상 진행,
+  VER5 18상태 전체 그래프와 현재/다음 전이 강조를 추가했다.
+- 센서 테스트는 Flutter 임계값 복제본이 아니라 Pi 4의 `/api/test-frame` 개발 API를 통해
+  실제 `FSMEngine`·`config/fsm.yaml`을 사용한다. IPK에 URL을 고정하지 않고 앱에서 임시 입력할 수 있다.
+- Flutter 분석 무경고, Flutter 테스트 22개, Hub 테스트 37개를 통과했다.
+- 제공된 MP3를 앱 asset으로 포함하고 `audioplayers_atlas` 반복 재생 ON/OFF 버튼을 추가했다.
+  IPK 내 MP3와 `libaudioplayers_atlas_plugin.so` 포함을 확인했다.
 
 ## 현재 상태
 
 - 개발 이미지와 내장 데모 `.ipk`의 로컬 재현 검증까지 완료했다.
 - 산출물: `display/atlas/app/build/atlas/arm64/release/ipk/com.atlas.app.deskmate_display.ipk`
-- 크기: `6,941,142 bytes`
-- SHA-256: `7594839A8E03B37F0DC557217771B859EF5557726C9620D207373463504AD8B1`
+- 크기: `9,165,442 bytes`
+- SHA-256: `A77C537F2327C725DDA196F4964D722B9FFD51864D04F7BD608FB3DBF76E8FD3`
 - 패키지 내부 실행 파일과 `libapp.so`가 AArch64임을 확인했다.
 - Pi 5 release 앱의 화면·터치 육안 확인과 장시간 실기 로그 확인은 아직 남아 있다.
 - Pi 4 주소와 최종 통신 방식은 미결정 상태이므로 내장 데모 IPK에는 Hub URL을 넣지 않았다.

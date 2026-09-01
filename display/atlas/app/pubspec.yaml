@@ -9,6 +9,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  audioplayers: ^6.0.0
+  dbus: ^0.7.12
+  audioplayers_atlas:
+    path: /opt/flutter-atlas-plugins/packages/flutter-plugin-atlas-audioplayers
 
 dev_dependencies:
   flutter_test:
@@ -17,3 +21,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/audio/deskmate_test_music.mp3

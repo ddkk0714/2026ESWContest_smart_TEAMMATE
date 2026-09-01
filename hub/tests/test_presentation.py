@@ -5,7 +5,7 @@ import threading
 import urllib.request
 
 from deskmate_hub.inference import FSMEngine, SensorFrame, State
-from deskmate_hub.demo import demo_steps, keystroke_summary
+from deskmate_hub.demo import _test_frame, demo_steps, keystroke_summary
 from deskmate_hub.presentation import state_envelope
 from deskmate_hub.preview_api import PreviewStateStore, make_server
 
@@ -41,10 +41,55 @@ def test_preview_api_serves_state_and_accepts_feedback():
         with urllib.request.urlopen(request) as response:
             assert response.status == 202
         assert store.pop_feedback()["verdict"] == "accept"
+
+        test_frame = {
+            "command": "reset",
+            "advance_sec": 0,
+            "present": True,
+            "pc_ratio": 0.9,
+            "signals": {
+                key: {"phi": 0.1, "delta": 0.1, "available": True}
+                for key in ("keystroke", "posture", "environment", "elapsed")
+            },
+        }
+        request = urllib.request.Request(
+            f"{base}/api/test-frame",
+            data=json.dumps(test_frame).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request) as response:
+            assert response.status == 202
+        assert store.pop_test_frame() == test_frame
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_sensor_test_frames_drive_the_real_configured_fsm():
+    payload = {
+        "command": "reset",
+        "advance_sec": 0,
+        "present": True,
+        "pc_ratio": 0.9,
+        "signals": {
+            key: {"phi": 0.1, "delta": 0.1, "available": True}
+            for key in ("keystroke", "posture", "environment", "elapsed")
+        },
+    }
+    engine = FSMEngine()
+    engine.tick(_test_frame(payload, 0, touch=True))
+    engine.tick(_test_frame(payload, engine.tm["baseline_sec"] + 1))
+    result = engine.tick(_test_frame(payload, engine.tm["baseline_sec"] + 2))
+    assert result.state is State.FOCUS_PC
+
+    for signal in payload["signals"].values():
+        signal["delta"] = 0.95
+    now = engine.tm["baseline_sec"] + 32
+    engine.tick(_test_frame(payload, now))
+    result = engine.tick(_test_frame(payload, now + engine.tm["fatigue_elevated_hold_sec"]))
+    assert result.state is State.FATIGUE_SUSPECT
 
 
 def test_demo_drives_representative_fsm_path():

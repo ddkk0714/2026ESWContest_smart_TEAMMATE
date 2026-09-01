@@ -1,10 +1,14 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'display_state.dart';
+import 'fsm_graph.dart';
 import 'keystroke_capture.dart';
+import 'music_playback.dart';
+import 'sensor_test_page.dart';
 import 'state_source.dart';
 
 const _hubUrl = String.fromEnvironment('DESKMATE_HUB_URL');
@@ -12,7 +16,9 @@ const _hubUrl = String.fromEnvironment('DESKMATE_HUB_URL');
 void main() => runApp(const DeskmateApp());
 
 class DeskmateApp extends StatelessWidget {
-  const DeskmateApp({super.key});
+  const DeskmateApp({super.key, this.music});
+
+  final MusicPlayback? music;
 
   @override
   Widget build(BuildContext context) {
@@ -28,25 +34,31 @@ class DeskmateApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const DashboardPage(),
+      home: DashboardPage(music: music),
     );
   }
 }
 
 class DashboardPage extends StatefulWidget {
-  const DashboardPage({super.key});
+  const DashboardPage({super.key, this.music});
+
+  final MusicPlayback? music;
 
   @override
   State<DashboardPage> createState() => _DashboardPageState();
 }
 
 class _DashboardPageState extends State<DashboardPage> {
-  late final StateSource _source;
+  late StateSource _source;
   Timer? _timer;
   DisplayState? _state;
   String? _error;
   bool _busy = false;
   bool _demoCyclingEnabled = true;
+  _AppView _view = _AppView.dashboard;
+  late final MusicPlayback _music;
+  bool _musicOn = false;
+  bool _musicBusy = false;
 
   // 보드에 꽂힌 키보드를 앱이 직접 잡는다. hub 가 주는 collector 지표보다 이걸 우선한다.
   final _capture = KeystrokeCapture();
@@ -61,6 +73,8 @@ class _DashboardPageState extends State<DashboardPage> {
   void initState() {
     super.initState();
     _clock.start();
+    _music = widget.music ?? AtlasMusicPlayback();
+    _musicOn = _music.isPlaying;
     HardwareKeyboard.instance.addHandler(_onKey);
     _source =
         _hubUrl.trim().isEmpty ? DemoStateSource() : HttpStateSource(_hubUrl);
@@ -74,7 +88,10 @@ class _DashboardPageState extends State<DashboardPage> {
   /// 키 이벤트는 소비하지 않는다(항상 false). 타건 수만 즉시 반영해 화면이 살아 보이게 한다.
   bool _onKey(KeyEvent event) {
     final counted = _capture.handle(event, _now);
-    if (counted && mounted) setState(() => _liveKeys = _capture.pressTotal);
+    // A key press must stay cheap: rebuilding the whole dashboard for every
+    // key can starve pointer, network, and media callbacks during fast typing.
+    // The independent 1 Hz sampler below publishes the accumulated value.
+    if (counted) _liveKeys = _capture.pressTotal;
     return false;
   }
 
@@ -90,11 +107,12 @@ class _DashboardPageState extends State<DashboardPage> {
     _busy = true;
     try {
       final next = await _source.fetch();
-      if (mounted)
+      if (mounted) {
         setState(() {
           _state = next;
           _error = null;
         });
+      }
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
     } finally {
@@ -113,9 +131,52 @@ class _DashboardPageState extends State<DashboardPage> {
         );
       }
     } catch (error) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text('전송 실패: $error')));
+      }
+    }
+  }
+
+  Future<void> _connectHub(String value) async {
+    final text = value.trim();
+    final uri = Uri.tryParse(text);
+    if (uri == null ||
+        !uri.hasAuthority ||
+        !{'http', 'https'}.contains(uri.scheme)) {
+      throw const FormatException('http://<Pi4-IP>:8765 형식으로 입력하세요.');
+    }
+    final nextSource = HttpStateSource(uri.toString());
+    try {
+      final nextState = await nextSource.fetch();
+      _source.close();
+      if (mounted) {
+        setState(() {
+          _source = nextSource;
+          _state = nextState;
+          _error = null;
+        });
+      }
+    } catch (_) {
+      nextSource.close();
+      rethrow;
+    }
+  }
+
+  Future<void> _toggleMusic() async {
+    if (_musicBusy) return;
+    setState(() => _musicBusy = true);
+    try {
+      final playing = await _music.toggle();
+      if (mounted) setState(() => _musicOn = playing);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('음악 재생 실패: $error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _musicBusy = false);
     }
   }
 
@@ -133,12 +194,33 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
+  Future<void> _confirmExit() async {
+    final shouldExit = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('DESKMATE 종료'),
+            content: const Text('앱을 종료할까요?'),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('취소')),
+              FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('종료')),
+            ],
+          ),
+        ) ??
+        false;
+    if (shouldExit) exit(0);
+  }
+
   @override
   void dispose() {
     _timer?.cancel();
     HardwareKeyboard.instance.removeHandler(_onKey);
     _clock.stop();
     _source.close();
+    unawaited(_music.dispose());
     super.dispose();
   }
 
@@ -157,46 +239,66 @@ class _DashboardPageState extends State<DashboardPage> {
                     _Header(
                         source: _source.label,
                         online: _error == null,
-                        sequence: state.sequence),
+                        sequence: state.sequence,
+                        view: _view,
+                        onViewChanged: (view) => setState(() => _view = view),
+                        musicOn: _musicOn,
+                        musicBusy: _musicBusy,
+                        onMusic: _toggleMusic,
+                        onExit: _confirmExit),
                     const SizedBox(height: 18),
                     Expanded(
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Expanded(flex: 6, child: _PhasePanel(state: state)),
-                          const SizedBox(width: 18),
-                          Expanded(
+                        child: switch (_view) {
+                      _AppView.dashboard => Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Expanded(flex: 6, child: _PhasePanel(state: state)),
+                            const SizedBox(width: 18),
+                            Expanded(
+                                flex: 4,
+                                child: Column(
+                                  children: [
+                                    Expanded(child: _ScorePanel(state: state)),
+                                    const SizedBox(height: 18),
+                                    Expanded(child: _SensorPanel(state: state)),
+                                  ],
+                                )),
+                            const SizedBox(width: 18),
+                            Expanded(
                               flex: 4,
-                              child: Column(
-                                children: [
-                                  Expanded(child: _ScorePanel(state: state)),
-                                  const SizedBox(height: 18),
-                                  Expanded(child: _SensorPanel(state: state)),
-                                ],
-                              )),
-                          const SizedBox(width: 18),
-                          Expanded(
-                            flex: 4,
-                            child: _KeystrokePanel(
-                              // 보드 키보드가 잡히면 그걸 쓰고, 없으면 hub 가 준 collector 지표를 쓴다.
-                              metrics: _localKeystroke ?? state.keystroke,
-                              reference: _localKeystroke != null
-                                  ? DateTime.now()
-                                  : state.timestamp,
-                              liveKeys: _localKeystroke != null ? _liveKeys : null,
+                              child: _KeystrokePanel(
+                                // 보드 키보드가 잡히면 그걸 쓰고, 없으면 hub 가 준 collector 지표를 쓴다.
+                                metrics: _localKeystroke ?? state.keystroke,
+                                reference: _localKeystroke != null
+                                    ? DateTime.now()
+                                    : state.timestamp,
+                                liveKeys:
+                                    _localKeystroke != null ? _liveKeys : null,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
+                      _AppView.sensorTest => SensorTestPage(
+                          source: _source,
+                          state: state,
+                          onConnect: _connectHub,
+                          onStateChanged: (next) {
+                            if (mounted) setState(() => _state = next);
+                          },
+                        ),
+                      _AppView.fsmGraph =>
+                        FsmGraphPage(currentState: state.fsmState),
+                    }),
+                    if (_view == _AppView.dashboard) ...[
+                      const SizedBox(height: 18),
+                      _ActionBar(
+                        state: state,
+                        onFeedback: _feedback,
+                        showDemoControl: _source is DemoStateSource,
+                        demoCyclingEnabled: _demoCyclingEnabled,
+                        onToggleDemoCycling: _toggleDemoCycling,
                       ),
-                    ),
-                    const SizedBox(height: 18),
-                    _ActionBar(
-                      state: state,
-                      onFeedback: _feedback,
-                      showDemoControl: _source is DemoStateSource,
-                      demoCyclingEnabled: _demoCyclingEnabled,
-                      onToggleDemoCycling: _toggleDemoCycling,
-                    ),
+                    ],
                   ],
                 ),
         ),
@@ -205,12 +307,28 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 }
 
+enum _AppView { dashboard, sensorTest, fsmGraph }
+
 class _Header extends StatelessWidget {
   const _Header(
-      {required this.source, required this.online, required this.sequence});
+      {required this.source,
+      required this.online,
+      required this.sequence,
+      required this.view,
+      required this.onViewChanged,
+      required this.musicOn,
+      required this.musicBusy,
+      required this.onMusic,
+      required this.onExit});
   final String source;
   final bool online;
   final int sequence;
+  final _AppView view;
+  final ValueChanged<_AppView> onViewChanged;
+  final bool musicOn;
+  final bool musicBusy;
+  final VoidCallback onMusic;
+  final VoidCallback onExit;
 
   @override
   Widget build(BuildContext context) => Row(children: [
@@ -221,22 +339,98 @@ class _Header extends StatelessWidget {
             style: TextStyle(
                 fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
         const Spacer(),
+        _HeaderNav(
+            selected: view == _AppView.dashboard,
+            icon: Icons.dashboard_outlined,
+            label: '상태',
+            onTap: () => onViewChanged(_AppView.dashboard)),
+        _HeaderNav(
+            selected: view == _AppView.sensorTest,
+            icon: Icons.tune,
+            label: '센서 테스트',
+            onTap: () => onViewChanged(_AppView.sensorTest)),
+        _HeaderNav(
+            selected: view == _AppView.fsmGraph,
+            icon: Icons.account_tree_outlined,
+            label: 'FSM 전체',
+            onTap: () => onViewChanged(_AppView.fsmGraph)),
+        const SizedBox(width: 10),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           decoration: BoxDecoration(
               color: (online ? const Color(0xFF52D6C7) : Colors.redAccent)
-                  .withOpacity(.12),
+                  .withValues(alpha: .12),
               borderRadius: BorderRadius.circular(99)),
           child: Row(children: [
             Icon(Icons.circle,
                 size: 10,
                 color: online ? const Color(0xFF52D6C7) : Colors.redAccent),
-            const SizedBox(width: 8),
-            Text('$source · #$sequence',
-                style: const TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(width: 6),
+            Tooltip(
+              message: source,
+              child: Text('#$sequence',
+                  style: const TextStyle(fontWeight: FontWeight.w600)),
+            ),
           ]),
         ),
+        const SizedBox(width: 8),
+        TextButton.icon(
+          key: const ValueKey('music-toggle'),
+          onPressed: musicBusy ? null : onMusic,
+          style: TextButton.styleFrom(
+            foregroundColor:
+                musicOn ? const Color(0xFF52D6C7) : const Color(0xFF9DABC2),
+            backgroundColor:
+                musicOn ? const Color(0x1F52D6C7) : Colors.transparent,
+          ),
+          icon: musicBusy
+              ? const SizedBox(
+                  width: 17,
+                  height: 17,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : Icon(
+                  musicOn ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+                  size: 20),
+          label: Text(musicOn ? 'ON' : 'OFF'),
+        ),
+        const SizedBox(width: 4),
+        IconButton(
+          key: const ValueKey('app-exit'),
+          tooltip: '앱 종료',
+          onPressed: onExit,
+          color: const Color(0xFFFF7B7B),
+          icon: const Icon(Icons.power_settings_new),
+        ),
       ]);
+}
+
+class _HeaderNav extends StatelessWidget {
+  const _HeaderNav({
+    required this.selected,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+  final bool selected;
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(left: 4),
+        child: IconButton(
+          tooltip: label,
+          onPressed: onTap,
+          style: IconButton.styleFrom(
+            foregroundColor:
+                selected ? const Color(0xFF52D6C7) : const Color(0xFF9DABC2),
+            backgroundColor:
+                selected ? const Color(0x1F52D6C7) : Colors.transparent,
+          ),
+          icon: Icon(icon, size: 21),
+        ),
+      );
 }
 
 class _PhasePanel extends StatelessWidget {
@@ -552,8 +746,7 @@ class _KeystrokePanel extends StatelessWidget {
         ),
         _KsRow(
           label: '리듬 불규칙',
-          value:
-              ks?.flightCv == null ? '--' : ks!.flightCv!.toStringAsFixed(2),
+          value: ks?.flightCv == null ? '--' : ks!.flightCv!.toStringAsFixed(2),
           warn: (ks?.flightCv ?? 0) >= _ksWarnCv,
           live: live,
         ),
@@ -565,8 +758,9 @@ class _KeystrokePanel extends StatelessWidget {
         ),
         _KsRow(
           label: '오타 교정',
-          value:
-              ks?.correctionRate == null ? '--' : '${_pct(ks!.correctionRate)}%',
+          value: ks?.correctionRate == null
+              ? '--'
+              : '${_pct(ks!.correctionRate)}%',
           warn: (ks?.correctionRate ?? 0) >= _ksWarnCorrection,
           live: live,
         ),
@@ -647,7 +841,7 @@ String _ksMeta(
   return [
     metrics.node ?? 'collector',
     if (metrics.windowS != null) '${metrics.windowS}초 윈도',
-    if (liveKeys != null) '${liveKeys}타',
+    if (liveKeys != null) '$liveKeys타',
     if (live) '수신 중' else if (age != null) '${age.inSeconds}초 전',
   ].join(' · ');
 }
