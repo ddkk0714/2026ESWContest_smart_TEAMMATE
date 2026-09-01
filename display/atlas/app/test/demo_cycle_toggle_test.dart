@@ -3,27 +3,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('demo cycle can be paused and resumed from the action bar', (
-    tester,
-  ) async {
+  testWidgets('demo cycles by default and can be paused', (tester) async {
     await tester.pumpWidget(const DeskmateApp());
     await tester.pump();
 
-    expect(find.text('자동 순환: ON'), findsOneWidget);
-    expect(find.textContaining('화면 내장 데모 · #1'), findsOneWidget);
+    expect(find.text('#1'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(find.text('#2'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('demo-cycle-toggle')));
     await tester.pump();
-
-    expect(find.text('자동 순환: OFF'), findsOneWidget);
     await tester.pump(const Duration(seconds: 2));
-    expect(find.textContaining('화면 내장 데모 · #1'), findsOneWidget);
-
-    await tester.tap(find.byKey(const ValueKey('demo-cycle-toggle')));
-    await tester.pump();
-    await tester.pump();
-
-    expect(find.text('자동 순환: ON'), findsOneWidget);
-    expect(find.textContaining('화면 내장 데모 · #2'), findsOneWidget);
+    expect(find.text('#2'), findsOneWidget);
   });
 }

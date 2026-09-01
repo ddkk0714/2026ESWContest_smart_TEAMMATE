@@ -31,6 +31,8 @@ env/
 .ipynb_checkpoints/
 .dart_tool/
 .packages
+.flutter-plugins
+.flutter-plugins-dependencies
 display/atlas/vendor/
 display/**/atlas/flutter/ephemeral/
 

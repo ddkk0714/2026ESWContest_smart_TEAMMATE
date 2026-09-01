@@ -42,6 +42,12 @@ curl http://127.0.0.1:8765/health
 curl http://127.0.0.1:8765/api/state
 ```
 
+Atlas 앱의 **센서 테스트** 화면이 `/api/test-frame`에 입력을 보내면 자동 순환을 멈추고
+같은 `FSMEngine`·`config/fsm.yaml`로 가상 시간을 진행한다. 입력은 원시 센서값이 아닌
+baseline 대비 `phi`·`delta` 정규화 기여도이며 운영 입력으로 저장하지 않는 개발 전용 API다.
+`reset`은 설정된 baseline 시간을 가상으로 진행해 몰입 상태로 빠르게 진입하고,
+`tick`은 앱에서 지정한 30초 또는 3분만큼 진행한다.
+
 `python -m deskmate_hub`도 현재는 같은 데모를 기본 실행한다. 실센서 ingest와 로그 리플레이는
 아직 연결되지 않았으므로 실행 가능하다고 오해하지 않도록 별도 구현 후 이 문서를 갱신한다.
 

@@ -6,9 +6,45 @@ import 'display_state.dart';
 
 abstract interface class StateSource {
   String get label;
+  bool get supportsSensorTest;
   Future<DisplayState> fetch();
   Future<void> feedback(String verdict);
+  Future<void> sendTestFrame(TestSensorInput input,
+      {required String command, int advanceSeconds = 30, String? event});
   void close();
+}
+
+class TestSignalInput {
+  const TestSignalInput(
+      {this.focus = 0.1, this.fatigue = 0.1, this.available = true});
+
+  final double focus;
+  final double fatigue;
+  final bool available;
+
+  Map<String, Object> toJson() => {
+        'phi': focus.clamp(0.0, 1.0),
+        'delta': fatigue.clamp(0.0, 1.0),
+        'available': available,
+      };
+}
+
+class TestSensorInput {
+  const TestSensorInput({
+    this.present = true,
+    this.pcRatio = 0.9,
+    required this.signals,
+  });
+
+  final bool present;
+  final double pcRatio;
+  final Map<String, TestSignalInput> signals;
+
+  Map<String, Object> toJson() => {
+        'present': present,
+        'pc_ratio': pcRatio.clamp(0.0, 1.0),
+        'signals': signals.map((key, value) => MapEntry(key, value.toJson())),
+      };
 }
 
 class HttpStateSource implements StateSource {
@@ -21,6 +57,9 @@ class HttpStateSource implements StateSource {
 
   @override
   String get label => _base.host;
+
+  @override
+  bool get supportsSensorTest => true;
 
   @override
   Future<DisplayState> fetch() async {
@@ -51,7 +90,30 @@ class HttpStateSource implements StateSource {
     final response = await request.close().timeout(const Duration(seconds: 2));
     await response.drain<void>();
     if (response.statusCode != HttpStatus.accepted) {
-      throw HttpException('feedback API ${response.statusCode}', uri: request.uri);
+      throw HttpException('feedback API ${response.statusCode}',
+          uri: request.uri);
+    }
+  }
+
+  @override
+  Future<void> sendTestFrame(TestSensorInput input,
+      {required String command, int advanceSeconds = 30, String? event}) async {
+    final request = await _client.postUrl(_base.resolve('/api/test-frame'));
+    request.headers.contentType = ContentType.json;
+    final body = <String, Object?>{
+      ...input.toJson(),
+      'command': command,
+      'advance_sec': advanceSeconds,
+      if (event != null) 'event': event,
+    };
+    final payload = utf8.encode(jsonEncode(body));
+    request.contentLength = payload.length;
+    request.add(payload);
+    final response = await request.close().timeout(const Duration(seconds: 2));
+    await response.drain<void>();
+    if (response.statusCode != HttpStatus.accepted) {
+      throw HttpException('test-frame API ${response.statusCode}',
+          uri: request.uri);
     }
   }
 
@@ -161,6 +223,9 @@ class DemoStateSource implements StateSource {
   String get label => '화면 내장 데모';
 
   @override
+  bool get supportsSensorTest => false;
+
+  @override
   Future<DisplayState> fetch() async {
     final item = _states[_index++ % _states.length];
     final now = DateTime.now();
@@ -200,6 +265,12 @@ class DemoStateSource implements StateSource {
 
   @override
   Future<void> feedback(String verdict) async {}
+
+  @override
+  Future<void> sendTestFrame(TestSensorInput input,
+      {required String command, int advanceSeconds = 30, String? event}) {
+    throw UnsupportedError('Hub 연결 빌드에서만 센서 테스트를 사용할 수 있습니다.');
+  }
 
   @override
   void close() {}
