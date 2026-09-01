@@ -36,7 +36,24 @@ custom device로 등록한다. `flutter-atlas run` 콘솔과 Pi 5 화면을 함�
 - Pi 5 부팅 시 `usb 1-1`의 `xhci-hcd.0`에서 장치를 찾지만 입력 event 노드를 만들지 못한다.
 - 약 10초 뒤 `xHCI host controller not responding, assume dead`가 발생하고 장치가 분리된다.
 - 재부팅해도 같은 순서로 재현됐다. 현재 상태에서는 터치 이벤트가 앱까지 전달되지 않는다.
-- 같은 부팅에서 Logitech 키보드는 별도 `xhci-hcd.1` 컨트롤러에 남아 정상 동작했다.
+- **정정(2026-09-01 실측):** 키보드는 별도 컨트롤러가 아니다. 터치와 **같은** `xhci-hcd.1` 에 물려 있고
+  컨트롤러가 죽을 때 함께 떨어진다. `dmesg` 상 순서는 다음과 같다.
+
+  ```
+  [ 3.654] input: Logitech USB Keyboard ... xhci-hcd.1/usb3/3-1
+  [ 4.174] usb 3-2: Product: MTouch            (터치, 같은 컨트롤러)
+  [14.996] xhci-hcd.1: xHCI host not responding to stop endpoint command
+  [15.023] xhci-hcd.1: xHCI host controller not responding, assume dead
+  [15.031] xhci-hcd.1: HC died; cleaning up
+  [15.036] usb 3-1: USB disconnect              ← 키보드
+  [15.304] usb 3-2: USB disconnect              ← 터치
+  ```
+
+  즉 **터치만의 문제가 아니라 `xhci-hcd.1` 컨트롤러 전체가 부팅 15초 뒤 죽는 문제**다.
+  살아남는 Logitech 마우스는 다른 컨트롤러(`xhci-hcd.0`)에 있다. 죽은 뒤에는 그 컨트롤러
+  포트에 무엇을 꽂아도 `dmesg` 에 아무 줄도 남지 않는다 — 이게 죽었는지 판별하는 기준이다.
+  전원 문제로 보고 있으며, 확인 전까지 그 컨트롤러 포트에 장치를 늘리지 않는다.
+  당장 키보드가 필요하면 마우스와 같은 컨트롤러 쪽 포트를 쓴다.
 - 커널 로그에는 명시적인 저전압·과전류 경고가 없었지만, 이 사실만으로 전원·역급전 문제를 배제하지 않는다.
 - 정확한 화면 모델과 전원·USB 배선도를 확인하기 전 `5V+GND`와 USB의 5V를 동시에 연결하거나
   반복 재연결하지 않는다. 우선 알려진 정상 USB 포트/데이터 케이블과 단일 전원 경로를 확인한다.
