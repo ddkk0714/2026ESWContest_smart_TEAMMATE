@@ -38,11 +38,16 @@ class HttpStateSource implements StateSource {
   Future<void> feedback(String verdict) async {
     final request = await _client.postUrl(_base.resolve('/api/feedback'));
     request.headers.contentType = ContentType.json;
-    request.write(jsonEncode({
+    final payload = utf8.encode(jsonEncode({
       'request_id': 'atlas-display',
       'verdict': verdict,
       'response_ms': 0,
     }));
+    // contentLength 를 안 정하면 Dart 는 chunked 로 보낸다. 허브의 preview_api 는
+    // Content-Length 를 필수로 읽어서 없으면 400 invalid_feedback 으로 떨어진다.
+    // 실기에서 '진행' 을 눌러도 hub 가 못 받던 원인이라 명시적으로 지정한다.
+    request.contentLength = payload.length;
+    request.add(payload);
     final response = await request.close().timeout(const Duration(seconds: 2));
     await response.drain<void>();
     if (response.statusCode != HttpStatus.accepted) {
