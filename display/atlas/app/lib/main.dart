@@ -1,8 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'display_state.dart';
+import 'keystroke_capture.dart';
 import 'state_source.dart';
 
 const _hubUrl = String.fromEnvironment('DESKMATE_HUB_URL');
@@ -46,15 +48,41 @@ class _DashboardPageState extends State<DashboardPage> {
   bool _busy = false;
   bool _demoCyclingEnabled = true;
 
+  // 보드에 꽂힌 키보드를 앱이 직접 잡는다. hub 가 주는 collector 지표보다 이걸 우선한다.
+  final _capture = KeystrokeCapture();
+  // 벽시계는 뒤로 갈 수 있어 이벤트 간격 계산에 쓰지 않는다.
+  final _clock = Stopwatch();
+  KeystrokeMetrics? _localKeystroke;
+  int _liveKeys = 0;
+
+  double get _now => _clock.elapsedMicroseconds / 1e6;
+
   @override
   void initState() {
     super.initState();
+    _clock.start();
+    HardwareKeyboard.instance.addHandler(_onKey);
     _source =
         _hubUrl.trim().isEmpty ? DemoStateSource() : HttpStateSource(_hubUrl);
     _refresh();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (_source is! DemoStateSource || _demoCyclingEnabled) _refresh();
+      _sampleKeystroke();
     });
+  }
+
+  /// 키 이벤트는 소비하지 않는다(항상 false). 타건 수만 즉시 반영해 화면이 살아 보이게 한다.
+  bool _onKey(KeyEvent event) {
+    final counted = _capture.handle(event, _now);
+    if (counted && mounted) setState(() => _liveKeys = _capture.pressTotal);
+    return false;
+  }
+
+  /// collector 규약과 같은 1Hz 로 창을 뽑는다.
+  void _sampleKeystroke() {
+    if (!_capture.hasData) return;
+    final sample = _capture.extract(_now);
+    if (mounted) setState(() => _localKeystroke = sample);
   }
 
   Future<void> _refresh() async {
@@ -108,6 +136,8 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void dispose() {
     _timer?.cancel();
+    HardwareKeyboard.instance.removeHandler(_onKey);
+    _clock.stop();
     _source.close();
     super.dispose();
   }
@@ -144,6 +174,18 @@ class _DashboardPageState extends State<DashboardPage> {
                                   Expanded(child: _SensorPanel(state: state)),
                                 ],
                               )),
+                          const SizedBox(width: 18),
+                          Expanded(
+                            flex: 4,
+                            child: _KeystrokePanel(
+                              // 보드 키보드가 잡히면 그걸 쓰고, 없으면 hub 가 준 collector 지표를 쓴다.
+                              metrics: _localKeystroke ?? state.keystroke,
+                              reference: _localKeystroke != null
+                                  ? DateTime.now()
+                                  : state.timestamp,
+                              liveKeys: _localKeystroke != null ? _liveKeys : null,
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -446,3 +488,183 @@ IconData _phaseIcon(String phase) =>
       'end': Icons.flag_outlined
     }[phase] ??
     Icons.insights;
+
+/// 화면 강조용 경계값. FSM 판정 임계값이 아니라 색만 바꾸는 힌트다.
+/// 판정 임계값은 hub/deskmate_hub/config/*.yaml 에만 둔다.
+const _ksWarnCv = 0.55;
+const _ksWarnIdle = 0.35;
+const _ksWarnCorrection = 0.09;
+
+/// collector 표본이 이보다 묵으면 값을 흐리고 '수신 끊김' 으로 표시한다.
+/// collector 가 죽어도 hub 는 국면을 계속 내보내므로 이게 없으면
+/// 마지막 값이 화면에 그대로 굳는다.
+const _ksStaleAfter = Duration(seconds: 5);
+
+/// 화면이 7인치라 세로가 귀하다. 카드 격자 대신 _SensorPanel 과 같은
+/// 세로 목록으로 두고 가로 한 칸을 차지한다.
+class _KeystrokePanel extends StatelessWidget {
+  const _KeystrokePanel({
+    required this.metrics,
+    required this.reference,
+    this.liveKeys,
+  });
+
+  final KeystrokeMetrics? metrics;
+
+  /// 신선도를 재는 기준 시각. hub 지표면 envelope 의 ts, 보드 캡처면 지금이다.
+  final DateTime reference;
+
+  /// 보드 키보드를 직접 잡는 중일 때의 누적 타건 수. hub 지표면 null.
+  final int? liveKeys;
+
+  @override
+  Widget build(BuildContext context) {
+    final ks = metrics;
+    final age = ks?.ageFrom(reference);
+    final stale = ks == null || age == null || age > _ksStaleAfter;
+    final live = !stale && (ks.valid ?? true);
+
+    return _Panel(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // 3열 배치라 이 칸이 좁다. 800px 화면에서는 제목+칩이 폭을 넘겨서
+        // 잘리는 대신 통째로 줄어들게 둔다.
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Row(children: [
+            const Text('키스트로크',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+            const SizedBox(width: 10),
+            _KsStatusChip(metrics: ks, live: live),
+          ]),
+        ),
+        const Spacer(),
+        _KsRow(
+          label: '체류',
+          value: ks?.dwellMeanMs == null ? '--' : '${_ms(ks!.dwellMeanMs)} ms',
+          live: live,
+        ),
+        _KsRow(
+          label: '비행',
+          value:
+              ks?.flightMeanMs == null ? '--' : '${_ms(ks!.flightMeanMs)} ms',
+          live: live,
+        ),
+        _KsRow(
+          label: '리듬 불규칙',
+          value:
+              ks?.flightCv == null ? '--' : ks!.flightCv!.toStringAsFixed(2),
+          warn: (ks?.flightCv ?? 0) >= _ksWarnCv,
+          live: live,
+        ),
+        _KsRow(
+          label: '입력 공백',
+          value: ks?.idleRatio == null ? '--' : '${_pct(ks!.idleRatio)}%',
+          warn: (ks?.idleRatio ?? 0) >= _ksWarnIdle,
+          live: live,
+        ),
+        _KsRow(
+          label: '오타 교정',
+          value:
+              ks?.correctionRate == null ? '--' : '${_pct(ks!.correctionRate)}%',
+          warn: (ks?.correctionRate ?? 0) >= _ksWarnCorrection,
+          live: live,
+        ),
+        const Spacer(),
+        Text(_ksMeta(ks, age, live, liveKeys),
+            style: const TextStyle(fontSize: 11, color: Color(0xFF6B7C96))),
+      ]),
+    );
+  }
+}
+
+class _KsStatusChip extends StatelessWidget {
+  const _KsStatusChip({required this.metrics, required this.live});
+  final KeystrokeMetrics? metrics;
+  final bool live;
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, color) = switch ((live, metrics?.typingActive)) {
+      (false, _) => ('수신 끊김', const Color(0xFFFF7B7B)),
+      (true, true) => ('타이핑 중', const Color(0xFF52D6C7)),
+      (true, false) => ('입력 없음', const Color(0xFF9DABC2)),
+      // typing_active 는 규약 추가분이라 안 올 수 있다. 그때는 수신만 알린다.
+      (true, null) => ('수신 중', const Color(0xFF69A9FF)),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(label,
+          style: TextStyle(
+              fontSize: 11, color: color, fontWeight: FontWeight.w700)),
+    );
+  }
+}
+
+class _KsRow extends StatelessWidget {
+  const _KsRow({
+    required this.label,
+    required this.value,
+    required this.live,
+    this.warn = false,
+  });
+
+  final String label;
+  final String value;
+  final bool live;
+  final bool warn;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        child: Row(children: [
+          Text(label, style: const TextStyle(color: Color(0xFF9DABC2))),
+          const Spacer(),
+          Text(value,
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                color: !live
+                    ? const Color(0xFF6B7C96)
+                    : warn
+                        ? const Color(0xFFFFB45E)
+                        : Colors.white,
+              )),
+        ]),
+      );
+}
+
+String _ms(double? value) => value == null ? '--' : value.round().toString();
+String _pct(double? value) =>
+    value == null ? '--' : (value * 100).round().toString();
+
+String _ksMeta(
+    KeystrokeMetrics? metrics, Duration? age, bool live, int? liveKeys) {
+  if (metrics == null) return 'collector 대기';
+  return [
+    metrics.node ?? 'collector',
+    if (metrics.windowS != null) '${metrics.windowS}초 윈도',
+    if (liveKeys != null) '${liveKeys}타',
+    if (live) '수신 중' else if (age != null) '${age.inSeconds}초 전',
+  ].join(' · ');
+}
+
+/// 테스트에서 키스트로크 패널만 따로 띄우기 위한 통로.
+/// 패널 자체는 비공개로 두고 노출은 이 한 줄로 제한한다.
+class KeystrokePanelForTest extends StatelessWidget {
+  const KeystrokePanelForTest({
+    super.key,
+    required this.metrics,
+    required this.reference,
+    this.liveKeys,
+  });
+  final KeystrokeMetrics? metrics;
+  final DateTime reference;
+  final int? liveKeys;
+  @override
+  Widget build(BuildContext context) => _KeystrokePanel(
+      metrics: metrics, reference: reference, liveKeys: liveKeys);
+}
