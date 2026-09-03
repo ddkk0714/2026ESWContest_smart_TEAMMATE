@@ -60,6 +60,35 @@ custom device로 등록한다. `flutter-atlas run` 콘솔과 Pi 5 화면을 함�
 
 ## 2. Pi 4에서 FSM 데모 실행
 
+### IP 변경에 대비한 SSH 접속
+
+Pi 4 Headless 보드는 DHCP를 사용한다. 마지막 확인값은 다음과 같으며, 고정 주소가 필요하면
+보드에 임의의 정적 IP를 넣지 말고 네트워크 관리자에게 유선 MAC 기준 DHCP 예약을 요청한다.
+
+- 보드: Raspberry Pi 4 Model B Rev 1.2
+- 유선 MAC: `DC:A6:32:85:F3:72`
+- 마지막 확인 IP: `172.16.34.146/24` (DHCP이므로 고정값이 아님)
+- 로컬 SSH 별칭: `atlas`, `rpi4`, `deskmate-pi4`
+
+개발 PC에서 주소를 다시 찾고 SSH 설정을 갱신하려면 저장소 루트에서 실행한다. 스크립트는
+현재 연결된 사설 `/24` 대역과 기존 `172.16.34.0/24`에서 SSH 장치를 찾고, 원격의
+`/proc/device-tree/model`이 실제 Raspberry Pi 4인지 확인한 뒤에만 별칭을 갱신한다.
+
+```powershell
+PowerShell -ExecutionPolicy Bypass -File .\tools\connect-deskmate-pi4.ps1
+ssh rpi4
+```
+
+개발 PC의 PowerShell 프로필에 래퍼가 등록돼 있으면 다음 한 줄로 탐색·갱신·접속한다.
+
+```powershell
+rpi4
+```
+
+`.local` mDNS 이름은 같은 브로드캐스트 구간에서만 동작하며 학교의 라우팅 LAN이나 VPN/WARP를
+통과하지 않을 수 있으므로 유일한 접속 방법으로 사용하지 않는다. 검색 범위를 추가해야 하면
+`-KnownSubnets '192.168.10.0/24'`처럼 명시한다. 인터넷 공인 대역은 검색하지 않는다.
+
 Pi 4 런타임에 Python 3가 있는지 먼저 확인한다. AI Native OS Headless Profile에 Python/pip가
 없다면 이 명령을 억지로 설치하지 말고, 우선 Raspberry Pi OS 개발 카드에서 검증하거나 제공된
 Headless SDK의 애플리케이션 배포 방식으로 포팅한다.
