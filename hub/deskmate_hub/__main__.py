@@ -34,6 +34,11 @@ def _run_preview(argv: list[str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     command_args = list(sys.argv[1:] if argv is None else argv)
+    if command_args[:1] == ["bridge"]:
+        from .service_bridge import run_bridge
+
+        run_bridge()
+        return 0
     if command_args[:1] == ["demo"]:
         return _run_preview(command_args[1:])
 

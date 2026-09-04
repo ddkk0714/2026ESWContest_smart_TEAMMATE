@@ -1,0 +1,8 @@
+{
+  "id": "com.deskmate.hub1",
+  "description": "DESKMATE Raspberry Pi 4 FSM Hub",
+  "name": "deskmate_hub_service",
+  "type": "native",
+  "entry": "deskmate_hub_service",
+  "version": "0.1.0"
+}

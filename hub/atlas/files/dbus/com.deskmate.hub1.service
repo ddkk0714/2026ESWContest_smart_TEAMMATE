@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=com.deskmate.hub1
+Exec=/data/share/usr/atlas/services/com.deskmate.hub1/deskmate_hub_service

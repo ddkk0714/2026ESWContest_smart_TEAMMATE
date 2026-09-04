@@ -14,6 +14,8 @@ import 'sensor_test_page.dart';
 import 'state_source.dart';
 
 const _hubUrl = String.fromEnvironment('DESKMATE_HUB_URL');
+const _mqttHost = String.fromEnvironment('DESKMATE_MQTT_HOST');
+const _mqttPort = int.fromEnvironment('DESKMATE_MQTT_PORT', defaultValue: 1883);
 
 void main() => runApp(const DeskmateApp());
 
@@ -71,8 +73,11 @@ class _DashboardPageState extends State<DashboardPage> {
     _music = widget.music ?? AtlasMusicPlayback();
     _musicOn = _music.isPlaying;
     HardwareKeyboard.instance.addHandler(_onKey);
-    _source =
-        _hubUrl.trim().isEmpty ? DemoStateSource() : HttpStateSource(_hubUrl);
+    _source = _mqttHost.trim().isNotEmpty
+        ? MqttStateSource(_mqttHost.trim(), port: _mqttPort)
+        : _hubUrl.trim().isEmpty
+            ? DemoStateSource()
+            : HttpStateSource(_hubUrl);
     _refresh();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (_source is! DemoStateSource || _demoCyclingEnabled) _refresh();
@@ -246,6 +251,7 @@ class _DashboardPageState extends State<DashboardPage> {
                         child: switch (_view) {
                       _AppView.dashboard => DashboardView(
                           state: state,
+                          displayMessage: _source.displayMessage,
                           keystroke: _localKeystroke ?? state.keystroke,
                           keystrokeReference: _localKeystroke != null
                               ? DateTime.now()

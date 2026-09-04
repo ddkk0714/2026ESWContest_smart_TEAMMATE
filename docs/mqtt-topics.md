@@ -1,11 +1,11 @@
 # MQTT 토픽 규약
 
-> **최우선 후보 초안:** MQTT 채택은 실기기 검증 전까지 미확정이다. MQTT/TCP JSON에는 별도 애플리케이션 CRC를 넣지 않으며, UART를 쓰는 구간의 binary frame만 CRC-16으로 검증한다.
+> **Pi 4↔Pi 5 구간 확정:** 이더넷 직결 MQTT를 사용한다. MQTT/TCP JSON에는 별도 애플리케이션 CRC를 넣지 않으며, UART를 쓰는 구간의 binary frame만 CRC-16으로 검증한다.
 > 논리 데이터 계약은 [`data-spec.md`](data-spec.md)를 우선하며, MQTT를 채택할 때 본 문서를 확정한다.
 
 담당: 이민혁 · 변경 시 PR 로 이 문서를 함께 수정한다.
 
-채택 시 브로커는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용하는 안을 우선 검증한다.
+broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한다.
 필드 단위·유효성·보정 규칙은 [`data-spec.md`](data-spec.md)를 따른다.
 
 ## 공통 필드
@@ -35,6 +35,7 @@
 | `deskmate/sensor/env/<node>` | ESP32 | hub | 0.2Hz | CO₂ · 온습도 · 조도 |
 | `deskmate/sensor/keystroke` | PC 수집기 | hub | 1Hz | 키 입력 타이밍 특징 |
 | `deskmate/state/phase` | hub | display, control | 상태 변화 시 | 추론 결과 + 신뢰도 |
+| `deskmate/display/message` | Node-RED/debug | display | 이벤트 | Pi 5 화면에 일회성 텍스트 표시 |
 | `deskmate/interaction/request` | hub | display | 이벤트 | 불확실한 판정의 사용자 확인 질문 |
 | `deskmate/control/cmd` | hub | control | 이벤트 | 기기 제어 명령 |
 | `deskmate/feedback/user` | display | hub | 이벤트 | 사용자 수락 · 정정 |
@@ -159,6 +160,19 @@ envelope를 사용하므로 최종 전송 어댑터를 바꿔도 display 모델�
 collector 규약 추가분(`typing_active` · `flight_cv` · `mouse_event_rate`)은 오면 쓰고 없으면
 비운다. `flight_cv`가 없으면 display가 `flight_std_ms / flight_mean_ms`로 만들어 쓴다.
 
+### `deskmate/display/message`
+
+Node-RED에서 Pi 5 화면을 확인할 때 쓰는 일회성 안내 문구다. 키 내용·센서 원본·자격증명은
+넣지 않으며, display는 앱 메모리에서만 표시한다. 빈 `text`는 현재 문구를 지운다.
+
+```json
+{
+  "schema_version": "1.0", "ts": 1769000002.5,
+  "node": "node-red", "boot_id": "demo", "seq": 1,
+  "data": { "text": "잠시 스트레칭해 볼까요?" }
+}
+```
+
 ### `deskmate/interaction/request`
 
 ```json
@@ -207,6 +221,7 @@ collector 규약 추가분(`typing_active` · `flight_cv` · `mouse_event_rate`)
 ## QoS · 보존
 
 - 센서 스트림: QoS 0 (유실 허용, 고빈도)
-- `state/phase` · `interaction/request` · `control/cmd` · `feedback/user`: QoS 1
+- `state/phase` · `display/message` · `interaction/request` · `control/cmd` · `feedback/user`: QoS 1
 - `state/phase` 는 retain 을 켜서 디스플레이 재시작 시 즉시 현재 상태를 받는다
+- `display/message` 는 retain 을 끈다. 이전 문구가 재시작 뒤 다시 표시되거나 broker에 남지 않게 한다.
 - 노드는 재연결 시 지수 백오프(1s → 최대 30s)

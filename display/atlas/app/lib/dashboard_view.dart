@@ -9,6 +9,7 @@ class DashboardView extends StatelessWidget {
   const DashboardView({
     super.key,
     required this.state,
+    this.displayMessage,
     required this.keystroke,
     required this.keystrokeReference,
     required this.onFeedback,
@@ -21,6 +22,7 @@ class DashboardView extends StatelessWidget {
   });
 
   final DisplayState state;
+  final String? displayMessage;
   final KeystrokeMetrics? keystroke;
   final DateTime keystrokeReference;
   final int? liveKeys;
@@ -33,31 +35,65 @@ class DashboardView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final Widget content;
     if (showFocusDetail) {
-      return FocusDetailView(
+      content = FocusDetailView(
         state: state,
         onClose: () => onShowFocusDetail(false),
       );
+    } else if (state.phase == 'idle') {
+      content =
+          AmbientView(state: state, onDetail: () => onShowFocusDetail(true));
+    } else if (state.phase == 'end') {
+      content = SessionReportView(state: state);
+    } else if (state.phase == 'fatigue' && state.gate != 'none') {
+      content = SuggestionView(state: state, onFeedback: onFeedback);
+    } else if (state.phase == 'recovery') {
+      content = FocusAmbientView(state: state);
+    } else {
+      content = FocusStatusView(
+        state: state,
+        keystroke: keystroke,
+        keystrokeReference: keystrokeReference,
+        liveKeys: liveKeys,
+        onDetail: () => onShowFocusDetail(true),
+        showDemoControl: showDemoControl,
+        demoCyclingEnabled: demoCyclingEnabled,
+        onToggleDemoCycling: onToggleDemoCycling,
+      );
     }
-    if (state.phase == 'idle') {
-      return AmbientView(state: state, onDetail: () => onShowFocusDetail(true));
-    }
-    if (state.phase == 'end') return SessionReportView(state: state);
-    if (state.phase == 'fatigue' && state.gate != 'none') {
-      return SuggestionView(state: state, onFeedback: onFeedback);
-    }
-    if (state.phase == 'recovery') return FocusAmbientView(state: state);
-    return FocusStatusView(
-      state: state,
-      keystroke: keystroke,
-      keystrokeReference: keystrokeReference,
-      liveKeys: liveKeys,
-      onDetail: () => onShowFocusDetail(true),
-      showDemoControl: showDemoControl,
-      demoCyclingEnabled: demoCyclingEnabled,
-      onToggleDemoCycling: onToggleDemoCycling,
-    );
+    final message = displayMessage;
+    if (message == null || message.isEmpty) return content;
+    return Column(children: [
+      DisplayMessageBanner(message: message),
+      const SizedBox(height: 10),
+      Expanded(child: content),
+    ]);
   }
+}
+
+class DisplayMessageBanner extends StatelessWidget {
+  const DisplayMessageBanner({super.key, required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) => SoftPanel(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 13),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Icon(Icons.chat_bubble_outline_rounded,
+              color: DeskmateColors.accentStrong, size: 19),
+          const SizedBox(width: 10),
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                Text('받은 메시지', style: Theme.of(context).textTheme.labelMedium),
+                const SizedBox(height: 3),
+                Text(message, style: Theme.of(context).textTheme.bodyLarge),
+              ])),
+        ]),
+      );
 }
 
 class AmbientView extends StatelessWidget {

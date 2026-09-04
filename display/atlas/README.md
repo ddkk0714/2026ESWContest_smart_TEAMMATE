@@ -102,8 +102,23 @@ find build -type f -name '*.ipk' -print
 공급사 도구가 기존 bundle을 완전히 비우지 않아 `kernel_blob.bin`과 snapshot 같은 debug 산출물이
 release IPK에 섞일 수 있다. clean release IPK에는 해당 파일들이 없어야 한다.
 
-URL을 빼고 빌드하면 Pi 4 없이 화면 내장 데모가 순환한다. URL을 넣으면 **실행 중인 Pi 5가**
-Pi 4에 직접 접속한다. 빌드 컨테이너가 Pi 4 상태 API를 대신 중계하지 않는다.
+URL을 빼고 빌드하면 Pi 4 없이 화면 내장 데모가 순환한다. `DESKMATE_HUB_URL`을 넣으면
+**실행 중인 Pi 5가** Pi 4 HTTP 개발 API를 직접 조회한다. 빌드 컨테이너가 Pi 4 상태 API를
+대신 중계하지 않는다.
+
+최종 Pi 4↔Pi 5 통신은 HTTP가 아니라 MQTT다. Pi 4 Mosquitto broker가 준비된 뒤에는 아래처럼
+빌드한다. Pi 5는 `deskmate/state/phase`와 `deskmate/interaction/request`를 QoS 1로 구독하고,
+터치 feedback을 `deskmate/feedback/user`로 QoS 1 발행한다. `state/phase`의 retain으로 display
+재시작 직후에도 현재 상태를 받는다.
+
+```bash
+flutter-atlas build atlas --ipk --release \
+  --dart-define=DESKMATE_MQTT_HOST=<Pi4-MQTT-IP> \
+  --dart-define=DESKMATE_MQTT_PORT=1883
+```
+
+`DESKMATE_MQTT_HOST`와 `DESKMATE_HUB_URL`을 동시에 주면 MQTT를 우선한다. HTTP는 센서 테스트와
+화면·Hub 분리 검증을 위한 개발용 fallback으로만 유지한다.
 
 내장 데모는 화면과 상태별 UI를 빠르게 확인하기 위해, 사용자가
 `자동 순환: ON`으로 바꾸면 1초마다
@@ -120,8 +135,9 @@ Pi 4에 직접 접속한다. 빌드 컨테이너가 Pi 4 상태 API를 대신 �
 - **상태**: FSM 상태·점수·센서·키스트로크 지표
 - **센서 테스트**: PC 비율과 키스트로크·ToF 자세·호흡·환경·경과 시간의
   정규화 집중 저하/피로 기여도를 조정해 Pi 4의 실제 FSM을 30초 또는 3분 단위로 진행
-- **FSM 전체**: VER5 18개 상태와 전이를 한 화면에 보여주고, 현재 상태와 다음 가능 상태를
-  각각 노랑·민트로 강조. 터치로 확대·축소·이동 가능
+- **FSM 전체**: VER5 18개 상태와 전이를 계층별 직교선으로 보여주고, 현재 상태와 다음 가능
+  상태를 각각 노랑·민트로 강조. 우측 상단의 `1 전체 / 2 중간 / 3 상세` 스위치 또는 마우스
+  휠로 한 단계씩 확대·축소하며, 드래그로 이동 가능
 
 센서 테스트는 `DESKMATE_HUB_URL`이 있으면 그 주소를 쓰고, 없는 빌드에서는 화면에서
 Pi 4 URL을 임시로 입력해 연결한다. 주소는 저장하지 않는다. Flutter에 FSM 임계값을 복제하지 않고

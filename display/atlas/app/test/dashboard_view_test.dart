@@ -18,6 +18,14 @@ void main() {
 
     await _pump(
       tester,
+      _state(phase: 'focus', fsmState: 'FOCUS_PC'),
+      message: 'Pi 4에서 보낸 안내 문구입니다.',
+    );
+    expect(find.text('받은 메시지'), findsOneWidget);
+    expect(find.text('Pi 4에서 보낸 안내 문구입니다.'), findsOneWidget);
+
+    await _pump(
+      tester,
       _state(
         phase: 'fatigue',
         fsmState: 'ACTION_ENV',
@@ -48,6 +56,7 @@ Future<void> _pump(
   WidgetTester tester,
   DisplayState state, {
   bool detail = false,
+  String? message,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -55,6 +64,7 @@ Future<void> _pump(
       home: Scaffold(
         body: DashboardView(
           state: state,
+          displayMessage: message,
           keystroke: null,
           keystrokeReference: state.timestamp,
           onFeedback: (_) {},

@@ -2,11 +2,15 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:mqtt_client/mqtt_client.dart';
+import 'package:mqtt_client/mqtt_server_client.dart';
+
 import 'display_state.dart';
 
 abstract interface class StateSource {
   String get label;
   bool get supportsSensorTest;
+  String? get displayMessage;
   Future<DisplayState> fetch();
   Future<void> feedback(String verdict);
   Future<void> sendTestFrame(TestSensorInput input,
@@ -60,6 +64,9 @@ class HttpStateSource implements StateSource {
 
   @override
   bool get supportsSensorTest => true;
+
+  @override
+  String? get displayMessage => null;
 
   @override
   Future<DisplayState> fetch() async {
@@ -119,6 +126,160 @@ class HttpStateSource implements StateSource {
 
   @override
   void close() => _client.close(force: true);
+}
+
+/// Pi 4 Mosquitto broker를 직접 구독하는 최종 display 경로다.
+///
+/// HTTP source는 Atlas 앱과 Hub를 따로 검증하기 위한 개발용 대체 수단으로
+/// 남겨 둔다. MQTT가 끊겨도 display는 재연결할 뿐, Pi 4의 FSM에는 영향을
+/// 주지 않는다.
+class MqttStateSource implements StateSource {
+  MqttStateSource(this._host, {required this.port})
+      : _bootId = 'display-${DateTime.now().microsecondsSinceEpoch}',
+        _client = MqttServerClient.withPort(
+          _host,
+          'deskmate-display-${DateTime.now().microsecondsSinceEpoch}',
+          port,
+        ) {
+    _client.logging(on: false);
+    _client.keepAlivePeriod = 30;
+    _client.autoReconnect = true;
+    _client.resubscribeOnAutoReconnect = true;
+    _client.connectionMessage = MqttConnectMessage()
+        .withClientIdentifier(_client.clientIdentifier)
+        .startClean()
+        .withWillQos(MqttQos.atLeastOnce);
+    _updates = _client.updates?.listen(_onUpdates);
+  }
+
+  static const _stateTopic = 'deskmate/state/phase';
+  static const _requestTopic = 'deskmate/interaction/request';
+  static const _messageTopic = 'deskmate/display/message';
+  static const _feedbackTopic = 'deskmate/feedback/user';
+
+  final String _host;
+  final int port;
+  final String _bootId;
+  final MqttServerClient _client;
+  StreamSubscription<List<MqttReceivedMessage<MqttMessage?>>>? _updates;
+  Future<void>? _connection;
+  DisplayState? _latest;
+  String? _displayMessage;
+  String? _pendingRequestId;
+  int _sequence = 0;
+
+  @override
+  String get label => 'MQTT $_host:$port';
+
+  @override
+  bool get supportsSensorTest => false;
+
+  @override
+  String? get displayMessage => _displayMessage;
+
+  @override
+  Future<DisplayState> fetch() async {
+    await _ensureConnected();
+    final state = _latest;
+    if (state == null) {
+      throw StateError('MQTT 상태 메시지를 기다리고 있습니다.');
+    }
+    return state;
+  }
+
+  Future<void> _ensureConnected() {
+    if (_client.connectionStatus?.state == MqttConnectionState.connected) {
+      return Future.value();
+    }
+    return _connection ??= _connect().whenComplete(() => _connection = null);
+  }
+
+  Future<void> _connect() async {
+    try {
+      final response = await _client.connect();
+      if (response?.state != MqttConnectionState.connected) {
+        _client.disconnect();
+        throw StateError('MQTT broker 연결에 실패했습니다.');
+      }
+      _updates ??= _client.updates?.listen(_onUpdates);
+      _client.subscribe(_stateTopic, MqttQos.atLeastOnce);
+      _client.subscribe(_requestTopic, MqttQos.atLeastOnce);
+      _client.subscribe(_messageTopic, MqttQos.atLeastOnce);
+    } catch (_) {
+      _client.disconnect();
+      rethrow;
+    }
+  }
+
+  void _onUpdates(List<MqttReceivedMessage<MqttMessage?>>? messages) {
+    for (final received in messages ?? const []) {
+      final publish = received.payload;
+      if (publish is! MqttPublishMessage) continue;
+      try {
+        final text = MqttPublishPayload.bytesToStringAsString(
+          publish.payload.message,
+        );
+        final envelope = jsonDecode(text) as Map<String, dynamic>;
+        if (received.topic == _stateTopic) {
+          _latest = DisplayState.fromEnvelope(envelope);
+        } else if (received.topic == _requestTopic) {
+          final data = envelope['data'];
+          if (data is Map<String, dynamic>) {
+            final requestId = data['request_id'];
+            if (requestId is String && requestId.isNotEmpty) {
+              _pendingRequestId = requestId;
+            }
+          }
+        } else if (received.topic == _messageTopic) {
+          if (envelope['schema_version'] != '1.0') continue;
+          final data = envelope['data'];
+          if (data is Map<String, dynamic>) {
+            _displayMessage = (data['text'] as String?)?.trim();
+            if (_displayMessage?.isEmpty ?? false) _displayMessage = null;
+          }
+        }
+      } on FormatException {
+        // 손상됐거나 다른 schema의 메시지는 display를 멈추지 않는다.
+      } on TypeError {
+        // JSON envelope가 아닌 토픽 오발행도 같은 방식으로 무시한다.
+      }
+    }
+  }
+
+  @override
+  Future<void> feedback(String verdict) async {
+    await _ensureConnected();
+    final payload = jsonEncode({
+      'schema_version': '1.0',
+      'ts': DateTime.now().millisecondsSinceEpoch / 1000,
+      'node': 'display',
+      'boot_id': _bootId,
+      'seq': ++_sequence,
+      'data': {
+        'request_id': _pendingRequestId ?? 'atlas-display',
+        'verdict': verdict,
+        'response_ms': 0,
+      },
+    });
+    final builder = MqttClientPayloadBuilder()..addString(payload);
+    _client.publishMessage(
+      _feedbackTopic,
+      MqttQos.atLeastOnce,
+      builder.payload!,
+    );
+  }
+
+  @override
+  Future<void> sendTestFrame(TestSensorInput input,
+      {required String command, int advanceSeconds = 30, String? event}) {
+    throw UnsupportedError('MQTT display 연결에서는 Pi 4 센서 테스트 API를 사용하지 않습니다.');
+  }
+
+  @override
+  void close() {
+    _updates?.cancel();
+    _client.disconnect();
+  }
 }
 
 class DemoStateSource implements StateSource {
@@ -224,6 +385,9 @@ class DemoStateSource implements StateSource {
 
   @override
   bool get supportsSensorTest => false;
+
+  @override
+  String? get displayMessage => null;
 
   @override
   Future<DisplayState> fetch() async {

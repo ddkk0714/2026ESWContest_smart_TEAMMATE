@@ -1,7 +1,9 @@
 # DESKMATE 개발 진행 현황
 
-> 기준일: 2026-08-31
+> 기준일: 2026-09-04
 > 목적: 제품 방향, 현재 구현 상태, 다음 의존성을 한 화면에서 관리한다. 개인 이름과 담당자 표기는 이 문서에서 제외한다.
+
+> 2026-09-04 노션 개발 기록을 대조해 반영했다. **Pi 4↔Pi 5는 이더넷 직결+MQTT로 확정**, **ESP32↔Pi 4는 UART2 기반 바이너리 프레임을 잠정 채택·실측 대기**, **VL53L9CX는 ESP32 I2C 1 MHz 경로를 현재 통합 기준으로 둔다.** 이전의 Pi 4 CSI-2 우선 spike는 현 통합 계획에서 제외한다.
 
 ## 1. 제품 지향점
 
@@ -32,8 +34,9 @@
 
 ### 이 결정으로 확정되는 인터페이스
 
-- **Pi 4 → Pi 5**: `deskmate/state/phase`, 제안 카드, 알림·리포트 데이터
-- **Pi 5 → Pi 4**: `deskmate/feedback/user`의 수락·거절·정정, 터치 기반 세션 제어
+- **Pi 4 ↔ Pi 5 물리/전송**: RJ45 이더넷 직결, Pi 4 Mosquitto broker의 MQTT. TCP 1883은 런타임 데이터, TCP 22는 배포·로그 확인용 SSH로 병행한다. USB Ethernet Gadget은 양 보드 USB-C가 전원 전용이므로 사용하지 않는다.
+- **Pi 4 → Pi 5**: MQTT `deskmate/state/phase`, 제안 카드, 알림·리포트 데이터
+- **Pi 5 → Pi 4**: MQTT `deskmate/feedback/user`의 수락·거절·정정, 터치 기반 세션 제어
 - **Pi 5 내부**: Atlas Flutter UI와 스피커·터치 장치 연동
 - **Pi 4 내부**: 센서 입력 유효성·순서·시간 판정, 융합, FSM, 제어 명령 결정. UART 사용 구간만 CRC-16, MQTT JSON CRC 미사용
 
@@ -55,26 +58,26 @@
 ## 3. 시스템 흐름
 
 ```text
-ESP32 센서 노드 ── 통신 후보(MQTT 우선 검증) ──> Pi 4 hub (수집 · 융합 · FSM)
-PC 키보드 타이밍 ──────────────────> │
-                                       ├── 상태/제안 ──> Pi 5 display
+ESP32 센서 노드 ── UART2 잠정(바이너리+CRC-16) ──> Pi 4 hub (수집 · 융합 · FSM)
+PC 키보드 타이밍 ──────────────────────────────> │
+                                                   ├── 이더넷 직결 MQTT ──> Pi 5 display
 LG 가전 상태 <── 양방향 MQTT/API ───> └── 제어 명령 ──> LG 가전·스마트 플러그
-                                                ↑
-                                      사용자 수락·거절·정정 피드백
+                                                    ↑
+                                      사용자 수락·거절·정정 피드백(MQTT)
 ```
 
 ## 4. 분야별 현황
 
 | 분야 | 확정 방향 | 현재 상태 | 다음 산출물 / 의존성 |
 |---|---|---|---|
-| 보드 간 통신 | 논리 데이터 계약과 전송 기술을 분리 | MQTT 최우선 후보, UART/MQTT/혼합 최종 결정 대기 | Pi 4↔Pi 5 양방향 최소 통신으로 채택 여부 검증 |
-| 센서 통신·전처리 | 운영은 특징값, 디버그는 축소 depth map 최대 2Hz | VL53L9CX·mmWave·환경·키 특징/단위/유효성 명세 | Pi 4 MIPI CSI-2 1일 spike, 실패 시 ESP32 I2C 축소 경로 |
-| 센서 보정·퓨전 | ToF와 mmWave, 환경 센서를 맥락별로 융합 | SEN0623·SEN0536·SZH-EK070 역할, baseline, 졸음/리듬 규칙 명세 완료 | 실제 거치 데이터 E2E 리플레이 검증 |
+| 보드 간 통신 | 논리 데이터 계약과 전송 기술을 분리 | **Pi 4↔Pi 5: 이더넷 직결+MQTT 확정.** ESP32↔Pi 4는 UART2(460,800 bps 이상, 921,600 bps 권장) 바이너리 프레임+CRC-16 잠정 | Pi 4↔Pi 5 MQTT 최소 데모 및 ESP32 UART2 실제 배선·유실률 검증 |
+| 센서 통신·전처리 | 운영은 특징값, 디버그는 축소 depth map 최대 2Hz | VL53L9CX는 ESP32 I2C 1 MHz 통합 기준. 풀 depth 18–22 fps 또는 27×21 binning 30 Hz+가 예상되며, 특징 7종·자세 클래스만 운영 전송 | ESP32 I2C 1 MHz 안정성·달성 fps를 풀/binning 각각 실측하고, 디버그 depth map 2 Hz 상한 검증 |
+| 센서 보정·퓨전 | ToF와 mmWave, 환경 센서를 맥락별로 융합 | C1001 파서·5상태 졸음 FSM은 구현됨. mmWave는 체동 중심 보조 신호이며 자세는 VL53L9CX 담당 | mmWave 출력 schema/프레임 TYPE, 실제 거치 데이터 E2E 리플레이 검증 |
 | FSM·불확실성 처리 | FSM 우선, 불확실하면 사용자 확인 | 18상태 FSM, 신뢰도 게이트, 사용자 feedback 토픽·테스트 존재 | 불확실도 기준과 제안 카드 UX, 정정 라벨 스키마, 실제 센서 리플레이 검증 |
 | 개인화·AI | 개인 baseline·시간대 패턴을 이용한 단계적 개인화 | 2단계 TFLite 및 RL은 선택적 설계 단계 | 개인화 feature/label·보존 기간·동의 흐름, 로컬 DB 결정 |
 | 가전 연동 | 제어와 상태 수신을 모두 반영 | hub→control 명령 토픽 초안 존재 | ThinQ/API 분석 결과, 가전 상태 수신 schema, 실패·재시도·수동 복구 정책 |
-| display·UI | 개발 PC Docker에서 arm64 `.ipk` 크로스 빌드 후 Pi 5 AI Native OS에서 네이티브 실행 | Flutter 테스트 3개 통과, clean release IPK 생성, Pi 5 설치·fullscreen 실행 완료. MTouch는 xHCI 오류로 input event 생성 전 분리 | 화면 모델·단일 전원/USB 배선 확인, 터치 실기 검증, 재부팅 자동 시작, 정정 UI, 최종 통신 adapter |
-| PC 연동 | 키 입력 내용은 수집하지 않고 타이밍 특징만 사용 | 키스트로크 payload 계약 존재 | collector 구현, PC 상태 UI/Stream Deck 연동 범위 및 권한 모델 |
+| display·UI | 개발 PC Docker에서 arm64 `.ipk` 크로스 빌드 후 Pi 5 AI Native OS에서 네이티브 실행 | Flutter 테스트 3개 통과, clean release IPK 생성, Pi 5 설치·fullscreen 실행 완료. 이전 실기에서 공식 7인치 DSI 화면+forward 22핀↔15핀 케이블과 VL53L0X I2C `0x29` 검출·거리 측정을 확인했다. MTouch는 xHCI 오류로 input event 생성 전 분리 | 현재 화면 모델·전원/USB 배선 확인, 터치 실기 검증, 재부팅 자동 시작, 정정 UI, MQTT adapter |
+| PC 연동 | 키 입력 내용은 수집하지 않고 타이밍 특징만 사용 | UI에 키스트로크 패널과 demo envelope 요약값은 추가됨 | 집계 창·전송 주기·payload 스키마·미입력 구간을 확정하고 collector 구현 |
 | CAD·브랜딩 | 접이식 힌지·데스크테리어형 제품 경험 | 저장소 내 구현 산출물 없음 | 패키징 치수·열 설계·ToF 배치 제약, Figma UI 흐름, 프로토타입 사진 |
 | 명세·품질 | 요구사항과 데이터 계약을 구현보다 먼저 고정 | 요구사항 명세서·데이터 명세서 작성 완료, MQTT·FSM 명세 존재 | 시험 시나리오·수용 기준 구체화, 미결정 항목 해소 |
 
@@ -82,16 +85,19 @@ LG 가전 상태 <── 양방향 MQTT/API ───> └── 제어 명령 �
 
 1. **Pi 5 터치 하드웨어 복구**: 화면 모델·전원·USB 배선도를 확보하고 단일 전원 경로에서 MTouch input event가 유지되는지 확인한다.
 2. **Pi 5 UI 실기 완료**: DESKMATE를 실행해 자동 순환 ON/OFF와 스낵바를 실제 터치로 검증하고 재부팅 자동 시작을 결정한다.
-3. **논리 계약 검토**: 요구사항·데이터 명세의 미결정 항목과 `C_focus` 의미를 결정한다.
-4. **Pi 4↔Pi 5 최소 데모**: 합성 입력→FSM→HTTP 미리보기→상태 UI→피드백을 실기기에서 검증하고 MQTT 채택 여부를 판단한다.
-5. **불확실성 UX·양방향 제어**: 충돌 신호 질문과 feedback 반영, 제어 명령·상태 수신·실패 복구를 연결한다.
+3. **ESP32 센서 경로 실측**: VL53L9CX I2C 1 MHz의 안정성·fps와 ESP32 UART2→Pi 4 프레임 유실률을 확인한다.
+4. **Pi 4↔Pi 5 MQTT 최소 데모**: 합성 입력→FSM→MQTT 상태 UI→MQTT 피드백을 실기기에서 검증한다.
+5. **센서·키스트로크 계약 확정**: mmWave 프레임 TYPE/출력 schema, SCD41·DHT22 역할, 키스트로크 집계 계약을 정한다.
+6. **불확실성 UX·양방향 제어**: 충돌 신호 질문과 feedback 반영, 제어 명령·상태 수신·실패 복구를 연결한다.
 
 ## 6. 결정이 필요한 항목
 
 | 항목 | 선택지 / 확인할 내용 | 결정 기준 |
 |---|---|---|
-| mmWave 역할 분담 | 졸음 동작·환경 감지에 사용할 모듈별 신호와 신뢰도 | ToF와 중복되지 않는 정보량 |
-| 보드 간 물리 통신 | ESP32↔Pi 4 및 Pi 4↔Pi 5의 UART / MQTT / 혼합 | #3 팀 결정 대기. MQTT는 최우선 후보 |
+| mmWave 역할 분담 | `DrowsyDetector` 출력에 state·evidence만 보낼지, 체동평균·심박중앙값·기준선·거리·락온 요약값까지 보낼지 | 체동 중심 보조 신호로만 사용한다. 순간 호흡/심박, HRV, 내장 수면 판정·`inBed`, 부팅 덤프 파형은 판정 근거에서 제외 |
+| ESP32↔Pi 4 통신 | UART2의 실제 핀·속도와 프레임 TYPE(특히 mmWave)을 확정 | UART0 디버그/log2file을 보존하고, 460,800 bps 이상(921,600 bps 권장)에서 유실률·복구성을 실측 |
+| 키스트로크 계약 | 통계 항목, 집계 창·주기, payload, 미입력 구간 처리 | 키 내용 미수집 원칙을 유지하며, 몰입/피로 판정의 주축 신호가 되도록 Pi 4 입력 계약과 일치 |
+| SCD41·DHT22 역할 | SCD41 온습도와 DHT22 온습도 중복을 정리 | SCD41 T/RH는 CO₂ 보정용, DHT22는 흡기구 실내 환경값으로 분리하는 안 검증 |
 | Pi 4 FSM 런타임 | Raspberry Pi OS Python / AI Native OS Headless native bridge | 실물 OS·Python 지원·배포 방식 |
 | 개인화 저장소 | 로컬 파일·SQLite·Node-RED DB | 개인정보 최소화, 백업·삭제 가능성 |
 | 마이크 기능 | 제외 유지 / 명시적 활성화형 보조 입력 | 프라이버시와 데모 효과 |
@@ -118,5 +124,8 @@ LG 가전 상태 <── 양방향 MQTT/API ───> └── 제어 명령 �
 - 하드웨어·열 설계 참고: [hardware.md](hardware.md)
 - Pi 5 Atlas 개발 환경: [../display/atlas/README.md](../display/atlas/README.md)
 - Pi 4→Pi 5 실기 연결 순서: [hardware-bringup.md](hardware-bringup.md)
+- 노션 통신 아키텍처(2026-08-21): <https://app.notion.com/p/3c22d27b08d38163a31eeba4bdf1bff1>
+- 노션 센서별 데이터·처리·전송 스펙(2026-09-04): <https://app.notion.com/p/3d02d27b08d3816fa189dd73c81b876b>
+- 노션 Pi 5 DSI·VL53L0X 실측 기록(2026-07-27): <https://app.notion.com/p/3aa2d27b08d38125b494f57226cf2352>
 - LG 스마트 가전 기술교육: 저장소 외부 로컬 `개발자료/스마트 가전_기술교육 (1).pdf` (Git 미포함)
 - 전년도 수상팀 공개자료: 저장소 외부 로컬 `개발자료/제23회ESWC_동방예의지국_발표자료_공개용 (1) (1).pdf` (Git 미포함)

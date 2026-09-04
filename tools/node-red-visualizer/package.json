@@ -1,0 +1,12 @@
+{
+  "name": "deskmate-node-red-visualizer",
+  "private": true,
+  "version": "0.1.0",
+  "description": "PC-local Node-RED monitor for DESKMATE development",
+  "scripts": {
+    "start": "node node_modules/node-red/red.js --userDir ."
+  },
+  "dependencies": {
+    "node-red": "latest"
+  }
+}
