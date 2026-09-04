@@ -1,9 +1,9 @@
 {
-    "id": "com.atlas.app.deskmate_display",
+    "id": "com.atlas.app.deskmate_display_ui_test",
     "type": "flutter",
-    "name": "deskmate_display",
+    "name": "DESKMATE UI Test",
     "description": "DESKMATE FSM status and user feedback display",
-    "entry": "deskmate_display --bundle=./ --fullscreen -a com.atlas.app.deskmate_display",
+    "entry": "deskmate_display --bundle=./ --fullscreen -a com.atlas.app.deskmate_display_ui_test",
     "version": "0.1.0",
     "required_permissions": {
         "privileged": [
