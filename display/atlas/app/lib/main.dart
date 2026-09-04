@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'display_state.dart';
+import 'dashboard_view.dart';
+import 'deskmate_theme.dart';
 import 'fsm_graph.dart';
 import 'keystroke_capture.dart';
 import 'music_playback.dart';
@@ -25,15 +27,7 @@ class DeskmateApp extends StatelessWidget {
     return MaterialApp(
       title: 'DESKMATE',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF09111F),
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF52D6C7),
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-      ),
+      theme: buildDeskmateTheme(),
       home: DashboardPage(music: music),
     );
   }
@@ -59,6 +53,7 @@ class _DashboardPageState extends State<DashboardPage> {
   late final MusicPlayback _music;
   bool _musicOn = false;
   bool _musicBusy = false;
+  bool _showFocusDetail = false;
 
   // 보드에 꽂힌 키보드를 앱이 직접 잡는다. hub 가 주는 collector 지표보다 이걸 우선한다.
   final _capture = KeystrokeCapture();
@@ -230,7 +225,7 @@ class _DashboardPageState extends State<DashboardPage> {
     return Scaffold(
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.fromLTRB(44, 24, 44, 28),
           child: state == null
               ? _Loading(error: _error)
               : Column(
@@ -246,37 +241,23 @@ class _DashboardPageState extends State<DashboardPage> {
                         musicBusy: _musicBusy,
                         onMusic: _toggleMusic,
                         onExit: _confirmExit),
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 12),
                     Expanded(
                         child: switch (_view) {
-                      _AppView.dashboard => Row(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Expanded(flex: 6, child: _PhasePanel(state: state)),
-                            const SizedBox(width: 18),
-                            Expanded(
-                                flex: 4,
-                                child: Column(
-                                  children: [
-                                    Expanded(child: _ScorePanel(state: state)),
-                                    const SizedBox(height: 18),
-                                    Expanded(child: _SensorPanel(state: state)),
-                                  ],
-                                )),
-                            const SizedBox(width: 18),
-                            Expanded(
-                              flex: 4,
-                              child: _KeystrokePanel(
-                                // 보드 키보드가 잡히면 그걸 쓰고, 없으면 hub 가 준 collector 지표를 쓴다.
-                                metrics: _localKeystroke ?? state.keystroke,
-                                reference: _localKeystroke != null
-                                    ? DateTime.now()
-                                    : state.timestamp,
-                                liveKeys:
-                                    _localKeystroke != null ? _liveKeys : null,
-                              ),
-                            ),
-                          ],
+                      _AppView.dashboard => DashboardView(
+                          state: state,
+                          keystroke: _localKeystroke ?? state.keystroke,
+                          keystrokeReference: _localKeystroke != null
+                              ? DateTime.now()
+                              : state.timestamp,
+                          liveKeys: _localKeystroke != null ? _liveKeys : null,
+                          onFeedback: _feedback,
+                          showDemoControl: _source is DemoStateSource,
+                          demoCyclingEnabled: _demoCyclingEnabled,
+                          onToggleDemoCycling: _toggleDemoCycling,
+                          showFocusDetail: _showFocusDetail,
+                          onShowFocusDetail: (value) =>
+                              setState(() => _showFocusDetail = value),
                         ),
                       _AppView.sensorTest => SensorTestPage(
                           source: _source,
@@ -289,16 +270,6 @@ class _DashboardPageState extends State<DashboardPage> {
                       _AppView.fsmGraph =>
                         FsmGraphPage(currentState: state.fsmState),
                     }),
-                    if (_view == _AppView.dashboard) ...[
-                      const SizedBox(height: 18),
-                      _ActionBar(
-                        state: state,
-                        onFeedback: _feedback,
-                        showDemoControl: _source is DemoStateSource,
-                        demoCyclingEnabled: _demoCyclingEnabled,
-                        onToggleDemoCycling: _toggleDemoCycling,
-                      ),
-                    ],
                   ],
                 ),
         ),
@@ -332,12 +303,16 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Row(children: [
-        const Icon(Icons.desktop_windows_rounded,
-            color: Color(0xFF52D6C7), size: 30),
-        const SizedBox(width: 12),
+        Container(
+          width: 7,
+          height: 7,
+          decoration: const BoxDecoration(
+              color: DeskmateColors.ink, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 9),
         const Text('DESKMATE',
             style: TextStyle(
-                fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
+                fontSize: 13, fontWeight: FontWeight.w700, letterSpacing: -.2)),
         const Spacer(),
         _HeaderNav(
             selected: view == _AppView.dashboard,
@@ -358,13 +333,15 @@ class _Header extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           decoration: BoxDecoration(
-              color: (online ? const Color(0xFF52D6C7) : Colors.redAccent)
+              color: (online ? DeskmateColors.accent : DeskmateColors.offline)
                   .withValues(alpha: .12),
               borderRadius: BorderRadius.circular(99)),
           child: Row(children: [
             Icon(Icons.circle,
                 size: 10,
-                color: online ? const Color(0xFF52D6C7) : Colors.redAccent),
+                color: online
+                    ? DeskmateColors.accentStrong
+                    : DeskmateColors.offline),
             const SizedBox(width: 6),
             Tooltip(
               message: source,
@@ -379,9 +356,10 @@ class _Header extends StatelessWidget {
           onPressed: musicBusy ? null : onMusic,
           style: TextButton.styleFrom(
             foregroundColor:
-                musicOn ? const Color(0xFF52D6C7) : const Color(0xFF9DABC2),
-            backgroundColor:
-                musicOn ? const Color(0x1F52D6C7) : Colors.transparent,
+                musicOn ? DeskmateColors.accentStrong : DeskmateColors.inkMuted,
+            backgroundColor: musicOn
+                ? DeskmateColors.accent.withValues(alpha: .22)
+                : Colors.transparent,
           ),
           icon: musicBusy
               ? const SizedBox(
@@ -398,7 +376,7 @@ class _Header extends StatelessWidget {
           key: const ValueKey('app-exit'),
           tooltip: '앱 종료',
           onPressed: onExit,
-          color: const Color(0xFFFF7B7B),
+          color: DeskmateColors.inkMuted,
           icon: const Icon(Icons.power_settings_new),
         ),
       ]);
@@ -424,151 +402,13 @@ class _HeaderNav extends StatelessWidget {
           onPressed: onTap,
           style: IconButton.styleFrom(
             foregroundColor:
-                selected ? const Color(0xFF52D6C7) : const Color(0xFF9DABC2),
+                selected ? DeskmateColors.ink : DeskmateColors.inkMuted,
             backgroundColor:
-                selected ? const Color(0x1F52D6C7) : Colors.transparent,
+                selected ? DeskmateColors.surfaceRaised : Colors.transparent,
           ),
           icon: Icon(icon, size: 21),
         ),
       );
-}
-
-class _PhasePanel extends StatelessWidget {
-  const _PhasePanel({required this.state});
-  final DisplayState state;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = _phaseColor(state.phase);
-    return _Panel(
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(_phaseLabel(state.phase),
-            style: TextStyle(
-                color: color, fontSize: 17, fontWeight: FontWeight.w700)),
-        const Spacer(),
-        Icon(_phaseIcon(state.phase), color: color, size: 60),
-        const SizedBox(height: 14),
-        Text(state.fsmState,
-            style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w800)),
-        const SizedBox(height: 8),
-        Text(state.scenario ?? _stateMessage(state),
-            style: const TextStyle(fontSize: 19, color: Color(0xFFB8C4D9))),
-        const Spacer(),
-        Row(children: [
-          _Chip(label: '컨텍스트 ${state.context.toUpperCase()}'),
-          const SizedBox(width: 8),
-          _Chip(label: '게이트 ${state.gate.toUpperCase()}'),
-          if (state.cause != null) ...[
-            const SizedBox(width: 8),
-            _Chip(label: '원인 ${state.cause}')
-          ],
-        ]),
-      ]),
-    );
-  }
-}
-
-class _ScorePanel extends StatelessWidget {
-  const _ScorePanel({required this.state});
-  final DisplayState state;
-  @override
-  Widget build(BuildContext context) => _Panel(
-          child:
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('상태 지표',
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-        const Spacer(),
-        _Meter(
-            label: '집중 저하', value: state.focus, color: const Color(0xFF69A9FF)),
-        const SizedBox(height: 15),
-        _Meter(
-            label: '피로', value: state.fatigue, color: _phaseColor(state.phase)),
-        const Spacer(),
-        Text('판정 신뢰도 ${(state.confidence * 100).round()}%',
-            style: const TextStyle(color: Color(0xFF9DABC2))),
-      ]));
-}
-
-class _SensorPanel extends StatelessWidget {
-  const _SensorPanel({required this.state});
-  final DisplayState state;
-  @override
-  Widget build(BuildContext context) => _Panel(
-          child:
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('센서 요약',
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-        const Spacer(),
-        _ValueRow(
-            label: '재실',
-            value: state.present == null
-                ? '대기'
-                : state.present!
-                    ? '감지'
-                    : '없음'),
-        _ValueRow(
-            label: 'CO₂',
-            value: state.co2Ppm == null ? '대기' : '${state.co2Ppm} ppm'),
-        _ValueRow(
-            label: '조도', value: state.lux == null ? '대기' : '${state.lux} lx'),
-        const Spacer(),
-      ]));
-}
-
-class _ActionBar extends StatelessWidget {
-  const _ActionBar({
-    required this.state,
-    required this.onFeedback,
-    required this.showDemoControl,
-    required this.demoCyclingEnabled,
-    required this.onToggleDemoCycling,
-  });
-  final DisplayState state;
-  final ValueChanged<String> onFeedback;
-  final bool showDemoControl;
-  final bool demoCyclingEnabled;
-  final VoidCallback onToggleDemoCycling;
-  @override
-  Widget build(BuildContext context) {
-    final needsAnswer = state.phase == 'fatigue' && state.gate != 'none';
-    return SizedBox(
-        height: 74,
-        child: _Panel(
-            child: Row(children: [
-          Icon(
-              needsAnswer
-                  ? Icons.notifications_active_outlined
-                  : Icons.check_circle_outline,
-              color: needsAnswer
-                  ? const Color(0xFFFFB45E)
-                  : const Color(0xFF52D6C7)),
-          const SizedBox(width: 12),
-          Expanded(
-              child: Text(
-                  needsAnswer ? '지금 제안한 조치를 진행할까요?' : '상태를 계속 확인하고 있습니다.',
-                  style: const TextStyle(
-                      fontSize: 17, fontWeight: FontWeight.w600))),
-          if (needsAnswer) ...[
-            OutlinedButton(
-                onPressed: () => onFeedback('reject'),
-                child: const Text('아니요')),
-            const SizedBox(width: 10),
-            FilledButton(
-                onPressed: () => onFeedback('accept'), child: const Text('진행')),
-          ],
-          if (showDemoControl) ...[
-            const SizedBox(width: 12),
-            OutlinedButton.icon(
-              key: const ValueKey('demo-cycle-toggle'),
-              onPressed: onToggleDemoCycling,
-              icon: Icon(demoCyclingEnabled
-                  ? Icons.pause_rounded
-                  : Icons.play_arrow_rounded),
-              label: Text('자동 순환: ${demoCyclingEnabled ? 'ON' : 'OFF'}'),
-            ),
-          ],
-        ])));
-  }
 }
 
 class _Panel extends StatelessWidget {
@@ -585,56 +425,6 @@ class _Panel extends StatelessWidget {
       );
 }
 
-class _Meter extends StatelessWidget {
-  const _Meter({required this.label, required this.value, required this.color});
-  final String label;
-  final double value;
-  final Color color;
-  @override
-  Widget build(BuildContext context) => Column(children: [
-        Row(children: [
-          Text(label),
-          const Spacer(),
-          Text('${(value * 100).round()}%',
-              style: TextStyle(color: color, fontWeight: FontWeight.w800))
-        ]),
-        const SizedBox(height: 7),
-        LinearProgressIndicator(
-            value: value,
-            minHeight: 8,
-            borderRadius: BorderRadius.circular(9),
-            color: color,
-            backgroundColor: const Color(0xFF26344A)),
-      ]);
-}
-
-class _ValueRow extends StatelessWidget {
-  const _ValueRow({required this.label, required this.value});
-  final String label;
-  final String value;
-  @override
-  Widget build(BuildContext context) => Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
-      child: Row(children: [
-        Text(label, style: const TextStyle(color: Color(0xFF9DABC2))),
-        const Spacer(),
-        Text(value, style: const TextStyle(fontWeight: FontWeight.w700))
-      ]));
-}
-
-class _Chip extends StatelessWidget {
-  const _Chip({required this.label});
-  final String label;
-  @override
-  Widget build(BuildContext context) => Container(
-      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
-      decoration: BoxDecoration(
-          color: const Color(0xFF1C2A40),
-          borderRadius: BorderRadius.circular(10)),
-      child: Text(label,
-          style: const TextStyle(fontSize: 12, color: Color(0xFFB8C4D9))));
-}
-
 class _Loading extends StatelessWidget {
   const _Loading({this.error});
   final String? error;
@@ -646,42 +436,6 @@ class _Loading extends StatelessWidget {
         Text(error ?? 'FSM 상태를 기다리고 있습니다.')
       ]));
 }
-
-String _phaseLabel(String phase) =>
-    const {
-      'idle': '대기',
-      'start': '시작',
-      'focus': '집중',
-      'fatigue': '피로 감지',
-      'recovery': '회복',
-      'end': '종료'
-    }[phase] ??
-    phase;
-String _stateMessage(DisplayState state) => state.phase == 'fatigue'
-    ? '작업 상태를 확인해 주세요.'
-    : state.phase == 'focus'
-        ? '안정적으로 작업 중입니다.'
-        : '상태를 분석하고 있습니다.';
-Color _phaseColor(String phase) =>
-    const {
-      'idle': Color(0xFF9DABC2),
-      'start': Color(0xFF69A9FF),
-      'focus': Color(0xFF52D6C7),
-      'fatigue': Color(0xFFFFB45E),
-      'recovery': Color(0xFFB58CFF),
-      'end': Color(0xFF9DABC2)
-    }[phase] ??
-    const Color(0xFF52D6C7);
-IconData _phaseIcon(String phase) =>
-    const {
-      'idle': Icons.bedtime_outlined,
-      'start': Icons.tune,
-      'focus': Icons.center_focus_strong,
-      'fatigue': Icons.warning_amber_rounded,
-      'recovery': Icons.spa_outlined,
-      'end': Icons.flag_outlined
-    }[phase] ??
-    Icons.insights;
 
 /// 화면 강조용 경계값. FSM 판정 임계값이 아니라 색만 바꾸는 힌트다.
 /// 판정 임계값은 hub/deskmate_hub/config/*.yaml 에만 둔다.
