@@ -69,6 +69,9 @@ class _FakeSource implements StateSource {
   bool get supportsSensorTest => true;
 
   @override
+  String? get displayMessage => null;
+
+  @override
   Future<DisplayState> fetch() async => _state();
 
   @override

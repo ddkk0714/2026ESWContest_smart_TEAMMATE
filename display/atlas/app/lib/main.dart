@@ -251,6 +251,7 @@ class _DashboardPageState extends State<DashboardPage> {
                         child: switch (_view) {
                       _AppView.dashboard => DashboardView(
                           state: state,
+                          displayMessage: _source.displayMessage,
                           keystroke: _localKeystroke ?? state.keystroke,
                           keystrokeReference: _localKeystroke != null
                               ? DateTime.now()

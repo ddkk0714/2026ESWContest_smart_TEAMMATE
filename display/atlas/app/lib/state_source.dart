@@ -10,6 +10,7 @@ import 'display_state.dart';
 abstract interface class StateSource {
   String get label;
   bool get supportsSensorTest;
+  String? get displayMessage;
   Future<DisplayState> fetch();
   Future<void> feedback(String verdict);
   Future<void> sendTestFrame(TestSensorInput input,
@@ -63,6 +64,9 @@ class HttpStateSource implements StateSource {
 
   @override
   bool get supportsSensorTest => true;
+
+  @override
+  String? get displayMessage => null;
 
   @override
   Future<DisplayState> fetch() async {
@@ -150,6 +154,7 @@ class MqttStateSource implements StateSource {
 
   static const _stateTopic = 'deskmate/state/phase';
   static const _requestTopic = 'deskmate/interaction/request';
+  static const _messageTopic = 'deskmate/display/message';
   static const _feedbackTopic = 'deskmate/feedback/user';
 
   final String _host;
@@ -159,6 +164,7 @@ class MqttStateSource implements StateSource {
   StreamSubscription<List<MqttReceivedMessage<MqttMessage?>>>? _updates;
   Future<void>? _connection;
   DisplayState? _latest;
+  String? _displayMessage;
   String? _pendingRequestId;
   int _sequence = 0;
 
@@ -167,6 +173,9 @@ class MqttStateSource implements StateSource {
 
   @override
   bool get supportsSensorTest => false;
+
+  @override
+  String? get displayMessage => _displayMessage;
 
   @override
   Future<DisplayState> fetch() async {
@@ -195,6 +204,7 @@ class MqttStateSource implements StateSource {
       _updates ??= _client.updates?.listen(_onUpdates);
       _client.subscribe(_stateTopic, MqttQos.atLeastOnce);
       _client.subscribe(_requestTopic, MqttQos.atLeastOnce);
+      _client.subscribe(_messageTopic, MqttQos.atLeastOnce);
     } catch (_) {
       _client.disconnect();
       rethrow;
@@ -219,6 +229,13 @@ class MqttStateSource implements StateSource {
             if (requestId is String && requestId.isNotEmpty) {
               _pendingRequestId = requestId;
             }
+          }
+        } else if (received.topic == _messageTopic) {
+          if (envelope['schema_version'] != '1.0') continue;
+          final data = envelope['data'];
+          if (data is Map<String, dynamic>) {
+            _displayMessage = (data['text'] as String?)?.trim();
+            if (_displayMessage?.isEmpty ?? false) _displayMessage = null;
           }
         }
       } on FormatException {
@@ -368,6 +385,9 @@ class DemoStateSource implements StateSource {
 
   @override
   bool get supportsSensorTest => false;
+
+  @override
+  String? get displayMessage => null;
 
   @override
   Future<DisplayState> fetch() async {
