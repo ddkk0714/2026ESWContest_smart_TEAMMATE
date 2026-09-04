@@ -4,13 +4,12 @@ from __future__ import annotations
 import math
 import threading
 import time
-import uuid
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
 from .inference import FSMEngine, SensorFrame, Signal
 from .presentation import state_envelope
-from .preview_api import PreviewStateStore, make_server
+from .preview_protocol import PreviewStateStore
 
 
 @dataclass(frozen=True)
@@ -174,14 +173,9 @@ def _test_summary(payload: dict[str, Any], now: float, seq: int) -> dict[str, ob
     }
 
 
-def run_demo(host: str, port: int, interval: float, cycles: int) -> None:
-    store = PreviewStateStore()
-    server = make_server(host, port, store)
-    thread = threading.Thread(target=server.serve_forever, name="preview-api", daemon=True)
-    thread.start()
-    print(f"DESKMATE preview API: http://{host}:{server.server_port}/api/state")
-
-    boot_id = uuid.uuid4().hex[:8]
+def run_demo_loop(store: PreviewStateStore, interval: float, cycles: int) -> None:
+    """Run the deterministic FSM loop using a transport-neutral state store."""
+    boot_id = f"{time.time_ns() & 0xFFFFFFFF:08x}"
     seq = 0
     completed = 0
     interactive = False
@@ -269,6 +263,18 @@ def run_demo(host: str, port: int, interval: float, cycles: int) -> None:
             completed += 1
     except KeyboardInterrupt:
         print("\nDESKMATE demo stopped")
+
+
+def run_demo(host: str, port: int, interval: float, cycles: int) -> None:
+    from .preview_api import make_server
+
+    store = PreviewStateStore()
+    server = make_server(host, port, store)
+    thread = threading.Thread(target=server.serve_forever, name="preview-api", daemon=True)
+    thread.start()
+    print(f"DESKMATE preview API: http://{host}:{server.server_port}/api/state")
+    try:
+        run_demo_loop(store, interval, cycles)
     finally:
         server.shutdown()
         server.server_close()

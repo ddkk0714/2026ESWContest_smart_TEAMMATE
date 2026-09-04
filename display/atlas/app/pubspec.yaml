@@ -11,6 +11,9 @@ dependencies:
     sdk: flutter
   audioplayers: ^6.0.0
   dbus: ^0.7.12
+  # Atlas toolchain의 Dart 3.6.2 호환 상한. Dart 3.8 이상을 요구하는
+  # 10.8.1+로 자동 상승하지 않도록 정확한 버전으로 고정한다.
+  mqtt_client: 10.5.1
   audioplayers_atlas:
     path: /opt/flutter-atlas-plugins/packages/flutter-plugin-atlas-audioplayers
 

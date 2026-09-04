@@ -1,11 +1,11 @@
 # MQTT 토픽 규약
 
-> **최우선 후보 초안:** MQTT 채택은 실기기 검증 전까지 미확정이다. MQTT/TCP JSON에는 별도 애플리케이션 CRC를 넣지 않으며, UART를 쓰는 구간의 binary frame만 CRC-16으로 검증한다.
+> **Pi 4↔Pi 5 구간 확정:** 이더넷 직결 MQTT를 사용한다. MQTT/TCP JSON에는 별도 애플리케이션 CRC를 넣지 않으며, UART를 쓰는 구간의 binary frame만 CRC-16으로 검증한다.
 > 논리 데이터 계약은 [`data-spec.md`](data-spec.md)를 우선하며, MQTT를 채택할 때 본 문서를 확정한다.
 
 담당: 이민혁 · 변경 시 PR 로 이 문서를 함께 수정한다.
 
-채택 시 브로커는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용하는 안을 우선 검증한다.
+broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한다.
 필드 단위·유효성·보정 규칙은 [`data-spec.md`](data-spec.md)를 따른다.
 
 ## 공통 필드
