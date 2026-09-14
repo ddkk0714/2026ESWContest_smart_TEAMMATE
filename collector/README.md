@@ -24,15 +24,20 @@
 피로 시 리듬이 느려지고 불규칙해지며 정정이 느는 경향을 포착한다.
 `auto-repeat`(키 꾹 누름)는 한 번의 타건으로 취급해 통계 왜곡을 막는다.
 
-### additive 신호 (규약 추가분 — 이민혁·`docs/mqtt-topics.md` 확정 대기)
+### additive 신호 (2026-09-14 **구현 기준으로 계약 확정**, 세부 튜닝은 이후)
 `typing_active` / `mouse_active` / `input_active` / `flight_cv` / `mouse_event_rate`.
 `input_active` 는 **"마우스 작업(입력 O) vs 글 읽기(입력 전무)"** 를 PC 단에서 구분해
 hub 가 비타이핑 작업과 유휴를 가르는 데 쓴다.
 
-## 발행
+## 발행 (계약 — 2026-09-14 구현 기준 확정)
 
-`deskmate/sensor/keystroke` 로 1Hz, 60초 윈도우 통계 (QoS 0).
-생존 신호는 `deskmate/health/<node>`. 스키마는 [`docs/mqtt-topics.md`](../docs/mqtt-topics.md) 참조.
+`deskmate/sensor/keystroke` 로 **1 Hz, 60 초 슬라이딩 윈도우** 통계 (QoS 0).
+생존 신호는 `deskmate/health/<node>` (LWT online/offline, retain). 스키마는 [`docs/data-spec.md`](../docs/data-spec.md) §6.4 와
+[`docs/mqtt-topics.md`](../docs/mqtt-topics.md) 가 이 구현을 따른다.
+
+- 키 간격 > 2 s 는 리듬 통계(flight)에서 제외, ≥ 3 s 는 idle 로 집계 (`flight_gap_max_s`, `idle_gap_s`)
+- **미입력 구간**: 윈도우에 keydown 이 없으면 `typing_active=false`, `idle_ratio=1.0`, 통계는 0. hub 는 `typing_active=false` 를 키스트로크 신호 **미가용**으로 보고 가중치를 재정규화한다. `input_active` 는 마우스만 있어도 true.
+- 현재 payload 는 평면 구조다. 공통 envelope 필드(`schema_version`·`boot_id`·`seq`)는 hub ingest 구현 시 추가한다(세부 튜닝 항목).
 
 ```json
 {
