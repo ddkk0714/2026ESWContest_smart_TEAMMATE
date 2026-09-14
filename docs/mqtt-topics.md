@@ -34,12 +34,12 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 | `deskmate/sensor/mmwave/<node>` | ESP32 | hub | 1Hz | SEN0623 재실·모션·호흡/심박 보조 특징 |
 | `deskmate/sensor/env/<node>` | ESP32 | hub | 0.2Hz | CO₂ · 온습도 · 조도 |
 | `deskmate/sensor/keystroke` | PC 수집기 | hub | 1Hz | 키 입력 타이밍 특징 |
-| `deskmate/state/phase` | hub | display, control | 상태 변화 시 | 추론 결과 + 신뢰도 |
+| `deskmate/state/phase` | hub | display, control | 10 s 주기(retain) | 추론 결과 + 신뢰도. `python -m deskmate_hub run` 이 발행 |
 | `deskmate/display/message` | Node-RED/debug | display | 이벤트 | Pi 5 화면에 일회성 텍스트 표시 |
 | `deskmate/interaction/request` | hub | display | 이벤트 | 불확실한 판정의 사용자 확인 질문 |
 | `deskmate/control/cmd` | hub | control | 이벤트 | 기기 제어 명령 |
 | `deskmate/feedback/user` | display | hub | 이벤트 | 사용자 수락 · 정정 |
-| `deskmate/health/<node>` | 전 장치 | hub | 0.1Hz | 생존 신호 · RSSI · 재연결 카운트 |
+| `deskmate/health/<node>` | 전 장치 | hub | LWT/retain | `{ts,node,status:online|offline,reconnects}`. hub 는 `deskmate/health/hub` |
 
 ## 페이로드 예시
 
@@ -70,12 +70,18 @@ ToF 원본 54×42 배열은 전송하지 않는다. 운영 경로는 특징값�
   "schema_version": "1.0", "ts": 1769000000.2,
   "node": "esp32-a", "boot_id": "7f2a91c4", "seq": 1043,
   "data": {
-    "present": true, "motion_state": "still", "motion_level": 12,
-    "resp_bpm": 15, "resp_valid": true,
-    "heart_bpm": null, "heart_valid": false, "valid": true
+    "present": true, "motion_state": "still", "motion_level": 12,   // movement 0/1/2 → none/still/active, bodyMove 0..100
+    "distance_cm": 55,
+    "resp_bpm": 15, "resp_valid": true,                               // resp_valid = present && lock && 6..30 bpm
+    "heart_bpm": null, "heart_valid": false,
+    "drowsy_state": "AWAKE",                                          // NOPERSON | NOLOCK | WARMUP | AWAKE | DROWSY
+    "valid": true
   }
 }
 ```
+
+MVP(2026-09-18) 경로: ESP32 USB(UART0) 1 Hz JSON 라인 → `tools/uart_mqtt_bridge.py` 가 위 envelope 로 발행.
+통합 MVP 이후에는 Pi 4 native service 가 UART2 프레임을 디코딩해 같은 토픽으로 발행한다.
 
 ### `deskmate/sensor/env/<node>`
 
@@ -84,9 +90,8 @@ ToF 원본 54×42 배열은 전송하지 않는다. 운영 경로는 특징값�
   "schema_version": "1.0", "ts": 1769000000.5,
   "node": "esp32-b", "boot_id": "315ae820", "seq": 91,
   "data": {
-    "co2_ppm": 812, "temp_c": 26.4, "humidity_pct": 48.2, "lux": 310,
-    "co2_trend_ppm_5m": 74, "lux_trend_5m": -12,
-    "co2_valid": true, "temp_valid": true, "humidity_valid": true, "lux_valid": true
+    "co2_ppm": 812, "temp_c": 26.4, "humidity_pct": 48.2, "lux": 310,   // CO₂=SCD41, T/RH=DHT22, lux=BH1750 (보정 없음)
+    "co2_valid": true, "temp_valid": true, "humidity_valid": true, "lux_valid": true   // 센서 부재 = null + false
   }
 }
 ```

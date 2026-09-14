@@ -111,11 +111,11 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
   - [ ] 토픽별 마지막 수신 시각·seq 갭 표시(유실 확인용)
   - [ ] 전 토픽 JSONL 기록 노드(`logs/` — 커밋 금지) → 리플레이 원천
 - [ ] **목 09-17 — FSM 결과 표시**
-  - [ ] `hub/deskmate_hub/ingest/mqtt_source.py`: 센서 토픽 구독, 10 s 마다 `SensorFrame` 생성. 신호 매핑 초안은 `config/fsm.yaml` 의 임시 스케일(고정 선형)로 두고 baseline 정규화는 4-B §4 에서 교체
+  - [x] `hub/deskmate_hub/ingest/` (cache·mapping·protocol·mqtt_source): 센서 토픽 구독, 10 s 마다 `SensorFrame` 생성 — 09-14 구현, 테스트 12개. 신호 매핑 초안은 `config/fsm.yaml` 의 임시 스케일(고정 선형)로 두고 baseline 정규화는 4-B §4 에서 교체
     - mmWave: `presence` ← presence/거리, `respiration`·모션 증거 ← drowsy_state·body_move 이동평균
     - keystroke: `typing_active=false` → available=false, 그 외 idle_ratio·flight_cv·correction_rate → phi/delta
     - env: co2_ppm 절대 구간 → environment delta
-  - [ ] `python -m deskmate_hub run --broker <ip>`: ingest → `FSMEngine.tick` → `deskmate/state/phase`(retain, QoS 1) 발행. `feedback/user` 구독은 로그만
+  - [x] `python -m deskmate_hub run --broker <ip>`: ingest → `FSMEngine.tick` → `deskmate/state/phase`(retain, QoS 1) 발행, `feedback/user` 수락/거절 반영 — 09-14 구현(브로커 없이 루프·로그 확인, 실브로커 연동은 화요일 확인)
   - [ ] Node-RED 에 FSM 패널: 현재 상태·phase, C_fatigue/C_focus 시계열, `reasons` 텍스트
   - [ ] (보너스) Pi 5 를 `DESKMATE_MQTT_HOST=<broker>` 로 빌드해 같은 상태가 화면에 뜨는지 확인
 - [ ] **금 09-18 — 통합 리허설·기록**

@@ -14,13 +14,14 @@ UART 디코딩(COBS/CRC-16)과 MQTT 클라이언트는 그 C++ 서비스에 두�
 |---|---|---|---|
 | `atlas/` | 공통 | ARC IPK native service. 제한 Python 으로 FSM 실행, HTTP 8765 개발 API | ✅ 실행. UART 수신·MQTT 발행은 미구현 |
 | `mqtt/` | 이민혁 | Pi 4 Mosquitto 설정 | ✅ |
-| `ingest/` | 이민혁 | UART 라인(bridge) · MQTT 키스트로크 → `SensorFrame`, freshness·seq 검증, 로깅 | ⬜ 빈 패키지 — **MVP 09-17: MQTT 센서 토픽 → 10 s SensorFrame**, UART 라인은 이후 |
+| `ingest/` | 이민혁 | MQTT 센서 토픽(mmwave·env·keystroke) → `SensorCache` → 10 s `SensorFrame`(`config/ingest.yaml` 임시 스케일), freshness·seq 갭, `feedback/user` 수신 | 🟡 MVP 경로 구현(09-14). UART 라인 입력은 통합 MVP 에서 같은 캐시에 추가 |
 | `features/` | 김태환 | baseline 캘리브레이션(중앙값·MAD Modified z-score, 시간대별) → `phi/delta` | ⬜ 빈 패키지 |
 | `inference/` | 박소연 | 규칙 기반 FSM(1단계), 신뢰도 공식, 신뢰도 게이트 | ✅ 18상태, 테스트 46개(45 통과·1 xfail) |
 | `inference/` | 조명희 | TFLite 경량 분류기 로딩 · 추론(2단계) | ⬜ 선택적 의존 |
 | `control/` | 조명희 | 스마트 플러그 · 조명 · 환기팬 제어, ThinQ 1기기 | ⬜ 빈 패키지 |
-| `config/` | 공통 | 임계값 · 토픽 · 장치 설정 (YAML) | ✅ `fsm.yaml` |
-| `replay.py` `demo.py` `preview_api.py` `service_bridge.py` | 박소연 | 리플레이 하네스 · 합성 데모 · HTTP 미리보기 · Atlas 라인 브리지 | ✅. `report.py` 는 `feat/fsm-report` 미머지 |
+| `config/` | 공통 | 임계값 · 토픽 · 장치 설정 (YAML) | ✅ `fsm.yaml`, `ingest.yaml`(센서→신호 임시 스케일) |
+| `live.py` | 공통 | `run` 명령: ingest → FSM → `deskmate/state/phase`(retain, QoS 1) 발행, 프레임을 리플레이 호환 JSONL 로 기록 | 🟡 MVP(09-14). 브로커 실연동 검증 대기 |
+| `replay.py` `demo.py` `preview_api.py` `service_bridge.py` | 박소연 | 리플레이 하네스 · 합성 데모 · HTTP 미리보기 · Atlas 라인 브리지 | ✅. `report.py` 는 `feat/merge-pending` PR 로 진입 중 |
 
 ## 설계 규칙
 
@@ -57,13 +58,21 @@ baseline 대비 `phi`·`delta` 정규화 기여도이며 운영 입력으로 저
 `tick`은 앱에서 지정한 30초 또는 3분만큼 진행한다.
 
 `python -m deskmate_hub --demo` / `--replay <log.jsonl>` 는 합성 세션·JSONL 리플레이를 돌린다.
-**실센서 ingest 와 hub 측 MQTT 발행은 아직 없다.** Pi 5 가 MQTT 로 상태를 받는 경로는 지금까지 Node-RED 주입으로만 확인했다.
-다음 순서로 채운다.
 
-1. `atlas/` C++ 서비스: `/dev/serial0` 수신 → COBS 해제 → CRC 검증 → `UART\t<json>` 라인으로 Python 에 전달
-2. `ingest/`: 라인·MQTT 를 `SensorFrame` 으로 변환(seq·ts freshness 검증)
-3. `atlas/` C++ 서비스 또는 Python: `deskmate/state/phase`(retain)·`interaction/request` 발행, `feedback/user` 구독
-4. HTTP 8765 는 센서 테스트·화면 분리 검증용 fallback 으로 유지
+### 실센서 라이브 (MVP 2026-09-18)
+
+```bash
+python -m deskmate_hub run --broker <broker-ip>            # 기본 포트 1883, 로그 logs/
+python -m deskmate_hub run --broker <ip> --ingest-config my-ingest.yaml --log-dir logs
+```
+
+- 구독: `deskmate/sensor/#`(mmwave·env·keystroke — envelope 또는 collector 평면 payload), `deskmate/feedback/user`
+- 발행: `deskmate/state/phase`(retain, QoS 1, 10 s 주기), `deskmate/health/hub`(LWT)
+- 매핑은 `config/ingest.yaml`(freshness, 재실 상승엣지 자동 시작, ACTION 자동 완료, 신호별 선형 스케일). baseline 정규화가 들어오면 교체.
+- `logs/frames-*.jsonl` 은 `--replay` 로 그대로 재생되고, `logs/state-*.jsonl` 은 발행한 envelope 다.
+- 콘솔 한 줄 = 한 tick: 상태·ctx·C_fatigue/C_focus·present·pc_ratio·가용 신호(`ekprs` 첫 글자, `.`=미가용)
+
+남은 것: Pi 4 native service(`atlas/`)에 UART2 디코더(COBS/CRC → 같은 `SensorCache`)와 이 `run` 루프를 얹는 것(통합 MVP 10-05). HTTP 8765 는 센서 테스트·화면 분리 검증용 fallback 으로 유지.
 
 ## 테스트
 

@@ -122,16 +122,23 @@ ToF 원본 2,268-zone 배열은 L0이며 기본 운영 스키마에 포함하지
 | `resp_valid` | boolean | 거리·각도·재실·정지 조건 통과. |
 | `heart_bpm` | float/null, beats/min | 연구·보정용. MVP 가중치 0. |
 | `heart_valid` | boolean | 심박 유효성. |
+| `distance_cm` | int/null, cm | 락온 거리(약 12 cm 양자화). 정상 착석 47~59 cm. |
+| `drowsy_state` | enum | ESP32 `DrowsyDetector` 5상태 `NOPERSON`·`NOLOCK`·`WARMUP`·`AWAKE`·`DROWSY`. hub 는 `DROWSY` 를 posture delta 1.0 증거로 쓴다(2026-09-14 MVP 계약). |
+| `valid` | boolean | 프레임 파싱 성공. |
+
+`motion_state` 는 C1001 movement 0/1/2 → `none`/`still`/`active`, `motion_level` 은 bodyMove 0~100 이다. hub 매핑(`hub/deskmate_hub/config/ingest.yaml`): 정적 지속·`drowsy_state` → `posture.delta`, `motion_level` → `posture.phi`, 재실 중 `resp_valid=false` 지속 → `respiration.delta`.
 
 ### 6.3 `environment_sample`
 
 | 필드 | 타입·단위 | 정의 |
 |---|---|---|
-| `co2_ppm` | float/null, ppm | **SCD41(SEN0536) CO₂.** SCD41 의 자체 T/RH 출력은 전송·저장하지 않는다. |
-| `temperature_c` | float/null, °C | **DHT22(AM2302) 온도.** |
-| `humidity_rh_pct` | float/null, %RH | **DHT22(AM2302) 상대습도.** |
-| `illuminance_lux` | float/null, lux | BH1750(SZH-EK070) 조도. |
-| `*_valid` | boolean | 물리 측정별 유효성(CRC/체크섬·범위). |
+| `co2_ppm` | int/null, ppm | **SCD41(SEN0536) CO₂.** SCD41 의 자체 T/RH 출력은 전송·저장하지 않는다. |
+| `temp_c` | float/null, °C | **DHT22(AM2302) 온도.** |
+| `humidity_pct` | float/null, %RH | **DHT22(AM2302) 상대습도.** |
+| `lux` | float/null, lux | BH1750(SZH-EK070) 조도. |
+| `co2_valid` `temp_valid` `humidity_valid` `lux_valid` | boolean | 물리 측정별 유효성(CRC/체크섬·범위). 센서 부재 = 값 null + false. |
+
+필드명은 `mqtt-topics.md` 의 wire 이름과 같다(2026-09-14 정렬). hub 는 `co2_valid` 인 `co2_ppm` 만 `environment.delta` 로 쓴다.
 
 **2026-09-14 확정 — 보정 없이 단일 센서 측정.** 물리량마다 센서 하나만 쓴다(CO₂=SCD41, T/RH=DHT22, lux=BH1750).
 센서 간 교차 보정(예: SCD41 T/RH 로 CO₂ 온도 보정, DHT22 와 SCD41 온습도 비교)은 하지 않는다.

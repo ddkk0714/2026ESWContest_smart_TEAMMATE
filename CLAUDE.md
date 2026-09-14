@@ -59,7 +59,7 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 |---|---|---|---|
 | `hub/inference/` FSM 1단계 | 박소연 | ✅ | 18상태 엔진, 테스트 46개(45 통과·1 xfail), 리플레이·데모 하네스, 엎드림·노딩 시나리오(PR #11). `score_period_sec: 10`. `report.py`·`--report` 는 `feat/merge-pending` PR 로 진입 중 |
 | `hub/atlas/` Pi 4 native service | 공통 | ✅ | ARC IPK 로 제한 Python 을 감싸 FSM 실행, HTTP 8765 개발 API. **UART 디코더·MQTT 발행은 미구현** |
-| `hub/ingest/` UART·MQTT 수신 | 이민혁 | ⬜ | 빈 패키지. **09-17 MVP 목표** — MQTT 센서 토픽 → 10 s `SensorFrame`, 이후 UART 라인 추가 |
+| `hub/ingest/` + `live.py` | 이민혁·공통 | 🟡 | MQTT 센서 토픽 → `SensorCache` → 10 s `SensorFrame` → FSM → `state/phase` 발행(`run` 명령, 09-14). `config/ingest.yaml` 임시 스케일. 실브로커 연동·UART 라인은 이후 |
 | `hub/features/` baseline 정규화 | 김태환 | ⬜ | 빈 패키지. 중앙값·MAD Modified z-score → `phi/delta` (포스터 G6 전제) |
 | `hub/control/` 플러그·ThinQ | 조명희 | ⬜ | 빈 패키지. 스마트 플러그 기본 라인 |
 | `hub/inference/` TFLite 2단계 | 조명희 | ⬜ | 선택적 의존. 라벨 축적 후 |

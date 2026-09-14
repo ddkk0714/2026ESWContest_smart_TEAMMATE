@@ -3,6 +3,7 @@
     python -m deskmate_hub --replay logs/session.jsonl
     python -m deskmate_hub --demo
     python -m deskmate_hub demo --host 0.0.0.0 --port 8765
+    python -m deskmate_hub run --broker <ip>          # 실센서 MQTT → FSM → state/phase
 
 The positional ``demo`` command runs the Atlas preview API. ``--demo`` keeps
 the deterministic replay smoke test provided by the hub replay workflow.
@@ -32,8 +33,27 @@ def _run_preview(argv: list[str]) -> int:
     return 0
 
 
+def _run_live(argv: list[str]) -> int:
+    from .live import run_live
+
+    parser = argparse.ArgumentParser(
+        prog="deskmate_hub run",
+        description="MQTT 실센서 → SensorFrame → FSM → deskmate/state/phase 발행",
+    )
+    parser.add_argument("--broker", default=__import__("os").environ.get("DESKMATE_BROKER", "localhost"))
+    parser.add_argument("--port", type=int, default=1883)
+    parser.add_argument("--config", metavar="fsm.yaml", help="FSM 설정 경로(기본: 패키지 config)")
+    parser.add_argument("--ingest-config", metavar="ingest.yaml", help="ingest 스케일 설정(기본: 패키지 config)")
+    parser.add_argument("--log-dir", default="logs", help="frames/state JSONL 기록 디렉터리")
+    args = parser.parse_args(argv)
+    return run_live(args.broker, args.port, fsm_config=args.config,
+                    ingest_config=args.ingest_config, log_dir=args.log_dir)
+
+
 def main(argv: list[str] | None = None) -> int:
     command_args = list(sys.argv[1:] if argv is None else argv)
+    if command_args[:1] == ["run"]:
+        return _run_live(command_args[1:])
     if command_args[:1] == ["bridge"]:
         from .service_bridge import run_bridge
 
@@ -63,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"리플레이 실패: {exc}", file=sys.stderr)
             return 1
     else:
-        parser.error("--replay, --demo 또는 demo 명령 중 하나가 필요하다")
+        parser.error("--replay, --demo, demo 또는 run 명령 중 하나가 필요하다")
         return 2
 
     print(format_report(replay(frames, config), quiet=args.quiet))
