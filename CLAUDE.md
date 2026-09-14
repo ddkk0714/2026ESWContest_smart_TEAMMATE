@@ -1,7 +1,7 @@
 # DESKMATE — 프로젝트 개발 가이드
 
 > 프로젝트 확정·미결정 사항과 제약은 [docs/agent-briefing.md](docs/agent-briefing.md)에 정리돼 있다.
-> **결선 목표(포스터 수준)까지의 갭과 주차별 계획은 [docs/roadmap.md](docs/roadmap.md)** 가 기준이다.
+> **결선 목표(포스터 수준)까지의 갭과 실행 체크리스트는 [docs/roadmap.md](docs/roadmap.md)** 가 기준이다.
 
 > 제24회 임베디드SW경진대회 · 스마트 가전 부문 · 팀 TEAMMATE
 > ToF·mmWave·키스트로크·환경 센서를 융합해 작업 상태(시작·몰입·피로·종료)를 추론하고
@@ -59,7 +59,7 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 |---|---|---|---|
 | `hub/inference/` FSM 1단계 | 박소연 | ✅ | 18상태 엔진, 테스트 46개(45 통과·1 xfail), 리플레이·데모 하네스, 엎드림·노딩 시나리오(PR #11). `score_period_sec: 10`. `report.py`·`--report` 는 `feat/merge-pending` PR 로 진입 중 |
 | `hub/atlas/` Pi 4 native service | 공통 | ✅ | ARC IPK 로 제한 Python 을 감싸 FSM 실행, HTTP 8765 개발 API. **UART 디코더·MQTT 발행은 미구현** |
-| `hub/ingest/` UART·MQTT 수신 | 이민혁 | ⬜ | 빈 패키지. W1 최우선 — UART 라인 + MQTT 키스트로크 → `SensorFrame` |
+| `hub/ingest/` UART·MQTT 수신 | 이민혁 | ⬜ | 빈 패키지. **09-17 MVP 목표** — MQTT 센서 토픽 → 10 s `SensorFrame`, 이후 UART 라인 추가 |
 | `hub/features/` baseline 정규화 | 김태환 | ⬜ | 빈 패키지. 중앙값·MAD Modified z-score → `phi/delta` (포스터 G6 전제) |
 | `hub/control/` 플러그·ThinQ | 조명희 | ⬜ | 빈 패키지. 스마트 플러그 기본 라인 |
 | `hub/inference/` TFLite 2단계 | 조명희 | ⬜ | 선택적 의존. 라벨 축적 후 |
@@ -72,24 +72,40 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 
 ---
 
-## 4. 전체 개발 로드맵 (2026-09-14 재기준)
+## 4. 실행 계획 (2026-09-14 재기준)
 
-상세는 [docs/roadmap.md](docs/roadmap.md) §4. 여기서는 주차 목표만.
+주차 표는 두지 않는다. 계획은 [docs/roadmap.md](docs/roadmap.md) §4 의 **체크리스트**가 유일한 기준이다.
 
-| 주차 | 기간 | 목표 | 통과 기준 |
+**4-A. 이번 주 MVP — 마감 09-18(금).** 실센서 값이 MQTT 로 들어와 **Node-RED 에서 시각화**되고, **FSM 을 통과한 결과(상태·C_fatigue·C_focus)가 표시**된다.
+제어·개입·개인화는 범위 밖. 지름길 두 개(ESP32→PC USB 브리지, hub 를 PC Python 으로 실행)를 쓰되 계약은 제품 경로와 같게 지킨다.
+
+| 요일 | 목표 |
+|---|---|
+| 화 09-15 | ESP32 코드 이관 + USB 1 Hz JSON 라인 → `tools/uart_mqtt_bridge.py` → broker. `feat/merge-pending` 머지 후 키스트로크 토픽 확인 |
+| 수 09-16 | Node-RED 대시보드(mmWave·환경·키스트로크 차트, seq 갭, JSONL 로거) |
+| 목 09-17 | `hub/ingest/mqtt_source.py` → 10 s `SensorFrame` → FSM → `state/phase` 발행, Node-RED FSM 패널 (보너스: Pi 5 MQTT 빌드) |
+| 금 09-18 | 시나리오 1회 통과(착석→타이핑→정적→이탈), 리플레이 재현, 노션 기록, PR |
+
+**4-B. 11월 완전 개발 — 개발계획서 11항목 체크리스트.** 마감은 결선 역산: 통합 MVP 10-05 · 시험 평가 10-19 · 서류 10-30 · 발표 11-06.
+
+| # | 개발계획서 항목 | 마감 | 상태 |
 |---|---|---|---|
-| W1 | 09-15~09-21 | **mmWave 수직 슬라이스** — ESP32 코드 이관, Pi 4 UART 디코더, ingest(10 s 프레임), hub MQTT 발행, `feat/merge-pending` PR 머지 | C1001 앞 움직임이 Pi 5 화면에 반영, 정적 지속 시 FATIGUE_SUSPECT 진입 |
-| W2 | 09-22~09-28 | ToF 경로 확정(09-19 spike)·기하 특징 7종, 환경 센서(단일 센서·보정 없음), 키스트로크 연결(확정 계약), 새 화면 배선 기록·자동 시작 | 4 신호 모두 `SensorFrame`·FSM `reasons` 에 등장 |
-| W3 | 09-29~10-05 | 스마트 플러그 제어, 게이트 제안/자동 실동작, UI 4화면(리포트 신규), 자동 시작 | 센서→피로→제안→수락→플러그 ON→회복 1사이클 실기 재현 |
-| W4 | 10-06~10-12 | baseline 정규화, 실측 로그 리플레이 튜닝, 2단계 TFLite(개념 실증), 스켈레톤 오프라인 검증 그림 | 정규화 전후 오판정 비교표 |
-| W5 | 10-13~10-19 | Dock+Head 하우징 조립, 2시간 장시간 시험, 시연 시나리오 고정 | 사이클 ≤ 500ms, 재연결·온도 이상 없음 |
-| W6~7 | 10-20~10-30 | 개발완료보고서·작품소개서·시연영상·저장소 공개 | `docs/submission.md` 체크리스트 |
-| 발표 | 11-06 | 오프라인 발표 심사 | 실기 시연 |
+| 1 | 요구사항 분석·시스템 구조 설계 | 09-19 | 🟡 ToF 경로·UART TYPE·플러그 모델 남음 |
+| 2 | HW 구성·센서 인터페이스 | 09-28 | 🟡 mmWave·화면 완료, 환경·ToF·플러그 배선 남음 |
+| 3 | MQTT 통신·로깅 파이프라인 | 09-28 | 🟡 broker·display 구독 완료, Pi 4 UART 디코더·ingest·hub 발행 남음 |
+| 4 | ToF·환경·키스트로크 특징 추출 | 10-05 | 🟡 키스트로크·mmWave 완료, ToF 7종·환경·baseline 정규화 남음 |
+| 5 | 작업 모드 판단·규칙 FSM 엔진 | 10-12 | ✅ 엔진 완료, 실센서 검증·채터링·충돌 확인 남음 |
+| 6 | 디스플레이 UI·제안 카드·리포트 | 10-12 | 🟡 대시보드 완료, 4화면·자동 알림·리포트·자동 시작 남음 |
+| 7 | 조명·환기팬·플러그 제어 | 10-05 | ⬜ |
+| 8 | 데이터 수집·ESM 라벨링·임계값 보정 | 10-19 | ⬜ |
+| 9 | 통합 MVP | 10-05 | ⬜ (4-A 가 첫 단계) |
+| 10 | 시험 평가·최적화 | 10-19 | ⬜ |
+| 11 | 보고서·소개서·시연 영상 | 10-30 | ⬜ |
 
 **병목·의존성**
-- W1 의 UART 프레임 계약(mmWave TYPE·스키마·CRC test vector)이 `ingest`·`firmware` 착수의 선행조건.
-- ToF Path A/B 결정(09-19)이 W2 전체의 게이트. 실패 시 Path B 자동 확정.
-- Pi 5 터치는 디스플레이 교체로 해소(09-14). 남은 시연 리스크 1순위는 ToF 경로.
+- UART 프레임 계약(mmWave TYPE·스키마·CRC test vector)이 Pi 4 디코더·`ingest`·`firmware` 착수의 선행조건. MVP 는 PC 브리지로 우회.
+- ToF Path A/B 결정(09-19)이 항목 2·4 의 게이트. 실패 시 Path B 자동 확정.
+- 스마트 플러그 모델 선정이 항목 7·9 의 게이트.
 
 ---
 
@@ -112,10 +128,10 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 ### 열려 있는 항목
 1. **[팀·09-19 마감] ToF 연결 경로** — Path A(Pi 4 MIPI CSI-2 풀해상도) vs Path B(ESP32 I2C binning). 1일 spike 후 결정, 실패 시 B.
 2. **[팀] UART 프레임 TYPE·스키마** — mmWave TYPE 신규 배정(실험 펌웨어는 0x01 을 임시 사용 → ToF 디버그와 충돌), DrowsyDetector 출력(state·evidence vs 요약값 포함), 목표 속도 460,800+ 실측.
-3. **[팀] 스마트 플러그 모델** — 로컬 제어 가능 모델(클라우드 의존 없음) 선정·구매. W2 안.
+3. **[팀] 스마트 플러그 모델** — 로컬 제어 가능 모델(클라우드 의존 없음) 선정·구매. 09-28 까지.
 4. **[팀] 새 디스플레이 기록** — 모델명·인터페이스(DSI/HDMI)·전원 경로를 `hardware.md`에 적기.
 5. **[기본값] `C_focus` 부호** — 현재 "큰 값 = 집중 저하 증거". 바꾸려면 알려주기.
-6. **[기본값] 개인화 저장소** — 로컬 파일(JSONL) 잠정. opt-in·삭제 정책은 W4 전.
+6. **[기본값] 개인화 저장소** — 로컬 파일(JSONL) 잠정. opt-in·삭제 정책은 10-19 전.
 7. **[기본값] RL 정책** — 고정 규칙. 로그 축적 후 활성, 세션당 개입 상한.
 8. **[사무국] 소스 공개 범위** — 전체 Public, 시크릿·라벨만 분리(기본값).
 
@@ -137,11 +153,11 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 - 실행: `cd hub && pip install -r requirements.txt && pytest tests/`
 
 진행/예정
-- ⬜ 실센서 `SensorFrame` 연결 — `ingest/`(W1) 와 `features/` baseline(W4) 이 선행.
-- ⬜ hub 측 MQTT 발행(`state/phase` retain, `interaction/request`, `feedback/user` 구독) — W1.
-- 🟡 `report.py` 세션 리포트 — `feat/merge-pending` PR 머지 대기. 이후 리포트 화면(W3)과 계약.
-- ⬜ `control/` ACTION_* → 실제 제어 — W3.
-- ⬜ 2단계 TFLite 확신도 → 게이트 융합 — W4, 선택적.
+- ⬜ 실센서 `SensorFrame` 연결 — `ingest/`(MVP 09-17) 와 `features/` baseline(10-05) 이 선행.
+- ⬜ hub 측 MQTT 발행(`state/phase` retain, `interaction/request`, `feedback/user` 구독) — MVP 09-17.
+- 🟡 `report.py` 세션 리포트 — `feat/merge-pending` PR 머지 대기. 이후 리포트 화면(10-12)과 계약.
+- ⬜ `control/` ACTION_* → 실제 제어 — 10-05.
+- ⬜ 2단계 TFLite 확신도 → 게이트 융합 — 10-19, 선택적.
 - 🚧 MONITOR 의 RL 정책 — 고정 규칙 유지. 로그 축적 후.
 
 ---

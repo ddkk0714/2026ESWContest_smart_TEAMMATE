@@ -52,7 +52,7 @@ Docker는 개발 PC의 빌드 환경일 뿐 보드에서 실행하지 않는다.
 
 | 항목 | 현재 상태 |
 |---|---|
-| UART TYPE·mmWave payload·CRC test vector | W1에서 `data-spec.md`로 확정 |
+| UART TYPE·mmWave payload·CRC test vector | 09-19 까지 `data-spec.md`로 확정 (MVP 는 PC USB 브리지로 우회) |
 | `C_focus`의 부호 | 현재 구현의 “큰 값 = 집중 증거”를 임의 변경하지 않음 |
 | ToF 연결 경로 | Pi 4 CSI-2(Path A) / ESP32 I2C binning(Path B) 중 spike 후 결정 |
 | 개인화 저장소·동의 | 로컬 opt-in 정책과 저장 방식을 결정 전에는 확장하지 않음 |

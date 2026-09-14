@@ -14,7 +14,7 @@ UART 디코딩(COBS/CRC-16)과 MQTT 클라이언트는 그 C++ 서비스에 두�
 |---|---|---|---|
 | `atlas/` | 공통 | ARC IPK native service. 제한 Python 으로 FSM 실행, HTTP 8765 개발 API | ✅ 실행. UART 수신·MQTT 발행은 미구현 |
 | `mqtt/` | 이민혁 | Pi 4 Mosquitto 설정 | ✅ |
-| `ingest/` | 이민혁 | UART 라인(bridge) · MQTT 키스트로크 → `SensorFrame`, freshness·seq 검증, 로깅 | ⬜ 빈 패키지 — **W1 최우선** |
+| `ingest/` | 이민혁 | UART 라인(bridge) · MQTT 키스트로크 → `SensorFrame`, freshness·seq 검증, 로깅 | ⬜ 빈 패키지 — **MVP 09-17: MQTT 센서 토픽 → 10 s SensorFrame**, UART 라인은 이후 |
 | `features/` | 김태환 | baseline 캘리브레이션(중앙값·MAD Modified z-score, 시간대별) → `phi/delta` | ⬜ 빈 패키지 |
 | `inference/` | 박소연 | 규칙 기반 FSM(1단계), 신뢰도 공식, 신뢰도 게이트 | ✅ 18상태, 테스트 46개(45 통과·1 xfail) |
 | `inference/` | 조명희 | TFLite 경량 분류기 로딩 · 추론(2단계) | ⬜ 선택적 의존 |
