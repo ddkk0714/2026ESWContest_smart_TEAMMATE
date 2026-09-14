@@ -64,10 +64,10 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 | `hub/control/` 플러그·ThinQ | 조명희 | ⬜ | 빈 패키지. 스마트 플러그 기본 라인 |
 | `hub/inference/` TFLite 2단계 | 조명희 | ⬜ | 선택적 의존. 라벨 축적 후 |
 | `ml/` 학습→TFLite | 조명희 | ⬜ | 비어 있음 |
-| `firmware/` ESP32 | 이민혁·김태환 | 🟡 | **C1001 파서·DrowsyDetector·UART2 송신이 별도 저장소에 있음** → 이 레포로 이관 필요. 환경 센서 미구현 |
+| `firmware/` ESP32 | 이민혁·김태환 | 🟡 | `esp32_sensor_node/` PlatformIO: DFRobot C1001 + DrowsyDetector, USB 1 Hz JSON(PR #12). `pio run` 미검증, UART2 COBS/CRC 송신·환경 센서 드라이버 미구현 |
 | `display/` Atlas UI | 최민경 | 🟡 | 대시보드·18상태 그래프·키스트로크 패널·오디오·MQTT 구독, release IPK 배포. **디스플레이 교체·터치 정상(09-14)**. 리포트 화면·저자극 토글·자동 시작 없음 |
 | `collector/` 키스트로크 | 최민경 | 🟡 | 구현·테스트 8개. `feat/merge-pending` PR 로 main 진입 중. **계약은 구현 기준 확정(09-14)**. hub 수신 없음 |
-| `tools/` | 공통 | ✅ | Node-RED 모니터(MQTT 주입·관찰), Pi 4 SSH 탐색 스크립트 |
+| `tools/` | 공통 | ✅ | `uart_mqtt_bridge.py`(ESP32 USB→MQTT, 테스트 9), Node-RED 대시보드(센서·FSM 패널·JSONL), Pi 4 SSH 탐색 스크립트 |
 | ToF 파이프라인 | 김태환 | ⬜ | 경로 미결(Path A/B). 스켈레톤(V2V-PoseNet) 채택(09-08)했으나 코드 없음. 기하 특징 7종 폴백 설계만 |
 
 ---

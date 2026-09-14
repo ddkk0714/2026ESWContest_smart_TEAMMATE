@@ -101,22 +101,22 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 **일별 목표**
 
 - [ ] **화 09-15 — 센서가 MQTT 에 보인다**
-  - [ ] 별도 저장소의 ESP32 코드(C1001 파서·DrowsyDetector·UART2 송신)를 `firmware/esp32_sensor_node/` 로 이관, PlatformIO 빌드 통과
-  - [ ] 펌웨어에 UART0(USB) 1 Hz JSON 요약 라인 출력 추가 (`{"ts","presence","movement","body_move","distance_cm","resp_state","drowsy_state"}` + 환경값이 있으면 `co2_ppm/temp_c/rh_pct/lux`)
-  - [ ] `tools/uart_mqtt_bridge.py`: COM 포트 → JSON 파싱 → `deskmate/sensor/mmwave/esp32`·`deskmate/sensor/env/esp32` 발행 (공통 envelope `schema_version/ts/node/boot_id/seq/data`)
+  - [x] `firmware/esp32_sensor_node/` PlatformIO 프로젝트 생성(09-14, PR #12) — 공식 DFRobot C1001 라이브러리 기반 `C1001Passive` + 5상태 `DrowsyDetector`. 원본 저장소 미제공으로 UART2 COBS/CRC 송신은 미이관(핀·baud 초기화만). **`pio run` 빌드는 미검증** — 화요일 실보드에서 확인
+  - [x] 펌웨어 UART0(USB) 1 Hz mmWave JSON + 5 s 환경 스텁 JSON(`{"t":"mmwave"|"env", ...}`) — PR #12
+  - [x] `tools/uart_mqtt_bridge.py`: `{"t":` 라인 → 공통 envelope → `deskmate/sensor/{mmwave,env}/<node>`, health LWT, 백오프, 날짜별 JSONL. 순수 변환 테스트 9개 — PR #12
   - [ ] broker 결정·기동: Pi 4 Mosquitto(`hub/mqtt/`) 우선, 안 되면 PC mosquitto. `mosquitto_sub -t 'deskmate/#'` 로 확인
   - [ ] `feat/merge-pending` PR 머지 → `python -m collector --broker <ip>` 로 키스트로크 토픽 확인
 - [ ] **수 09-16 — Node-RED 시각화**
-  - [ ] `tools/node-red-visualizer/flows.json` 에 대시보드(node-red-dashboard): mmWave 체동·거리·재실 차트, 졸음 state 표시, 환경 게이지(CO₂·T/RH·lux), 키스트로크 dwell/flight/idle 차트
-  - [ ] 토픽별 마지막 수신 시각·seq 갭 표시(유실 확인용)
-  - [ ] 전 토픽 JSONL 기록 노드(`logs/` — 커밋 금지) → 리플레이 원천
+  - [x] `tools/node-red-visualizer/flows.json` 대시보드(node-red-dashboard 3.6.6): mmWave·환경·키스트로크·FSM 패널 — PR #12 (화면 캡처는 실센서 연결 후)
+  - [x] 토픽별 신선도·seq 갭 표시 — PR #12
+  - [x] `deskmate/#` JSONL 기록 노드 — PR #12
 - [ ] **목 09-17 — FSM 결과 표시**
   - [x] `hub/deskmate_hub/ingest/` (cache·mapping·protocol·mqtt_source): 센서 토픽 구독, 10 s 마다 `SensorFrame` 생성 — 09-14 구현, 테스트 12개. 신호 매핑 초안은 `config/fsm.yaml` 의 임시 스케일(고정 선형)로 두고 baseline 정규화는 4-B §4 에서 교체
     - mmWave: `presence` ← presence/거리, `respiration`·모션 증거 ← drowsy_state·body_move 이동평균
     - keystroke: `typing_active=false` → available=false, 그 외 idle_ratio·flight_cv·correction_rate → phi/delta
     - env: co2_ppm 절대 구간 → environment delta
   - [x] `python -m deskmate_hub run --broker <ip>`: ingest → `FSMEngine.tick` → `deskmate/state/phase`(retain, QoS 1) 발행, `feedback/user` 수락/거절 반영 — 09-14 구현. 로컬 amqtt 브로커로 E2E 확인(센서 3토픽 수신 → START 발행 → health LWT · feedback 수신). Pi 4 Mosquitto 실연동은 화요일
-  - [ ] Node-RED 에 FSM 패널: 현재 상태·phase, C_fatigue/C_focus 시계열, `reasons` 텍스트
+  - [x] Node-RED FSM 패널(상태·phase·context·gate, C_fatigue/C_focus 차트, reasons) — PR #12
   - [ ] (보너스) Pi 5 를 `DESKMATE_MQTT_HOST=<broker>` 로 빌드해 같은 상태가 화면에 뜨는지 확인
 - [ ] **금 09-18 — 통합 리허설·기록**
   - [ ] 시나리오 1회 통과: 착석 → 타이핑(FOCUS_PC) → 손 떼고 정적 10분(FATIGUE_SUSPECT 이상) → 자리 비움(IDLE)
