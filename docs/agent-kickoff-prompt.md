@@ -17,6 +17,7 @@
 2. docs/requirements-spec.md   — 기능·비기능 요구사항과 수용 기준
 3. docs/data-spec.md           — 데이터 계층·값·단위·유효성·융합 계약
 4. docs/development-progress.md — 현재 구현 상태·장애·다음 의존성
+5. docs/roadmap.md            — 결선 목표(포스터) 대비 갭, 이번 주차 목표와 통과 기준
 필요할 때 docs/fsm-spec.md, docs/mqtt-topics.md, docs/architecture.md를 추가로 참조하라.
 Atlas Pi 5 작업이면 docs/atlas-build-handoff.md와 docs/hardware-bringup.md도 먼저 읽어라.
 

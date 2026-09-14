@@ -25,23 +25,37 @@ GPIO16/17 은 WROVER 계열에서 PSRAM 용이다. 현재 `esp32dev`(WROOM)라 �
 
 ## 원칙
 
-- **ToF 원본 54×42 배열을 운영 경로로 발행하지 않는다.** 대체 경로에서는 재실·자세·모션·노딩
+- **ToF 원본 54×42 배열을 운영 경로로 발행하지 않는다.** Path B 에서는 재실·자세·모션·노딩
   특징값을 만들고, 축소 depth map은 명시적 디버그/UI 모드에서만 최대 2Hz로 허용한다.
-- 부팅 시 NTP 동기화. 모든 페이로드에 `ts` 를 넣는다.
-- MQTT를 채택하면 Wi-Fi 끊김 시 지수 백오프 재연결(1s → 최대 30s)과 `health` 토픽을 사용한다.
-- UART를 채택하면 binary frame에 CRC-16을 적용한다. MQTT/TCP JSON에는 별도 애플리케이션 CRC를 넣지 않는다.
+- 모든 프레임에 `SEQ`·`TS` 를 넣는다(유실 감지·Pi 4 슬라이딩 윈도 정렬).
+- UART binary frame 에만 CRC-16 을 적용한다. Pi 4 이후 MQTT JSON 에는 별도 애플리케이션 CRC 를 넣지 않는다.
+- mmWave 순간 호흡·심박값은 보내더라도 Pi 4 판정 근거가 아니다. 체동 이동평균(τ=15 s)·심박 중앙값(120 s)·각성 기준선(τ=600 s)·졸음 FSM state/evidence 가 계약 대상이다.
 
-## 구조
+## 프레임 규약 (계약 확정 전 — `docs/data-spec.md` 가 우선)
+
+```
+[SOF 1B][VER 1B][TYPE 1B][SEQ 2B][LEN 2B][TS 4B][PAYLOAD N][CRC16 2B]   → COBS 인코딩 + 끝 0x00
+```
+
+| TYPE | 내용 | 주기 | 상태 |
+|---|---|---|---|
+| 0x01 | (디버그) binning depth map | ≤ 2 Hz | 예약. **실험 펌웨어가 mmWave 에 임시 사용 중 → 충돌, 재배정 필요** |
+| 0x03 / 0x04 | ToF 특징 벡터 / 자세 클래스+신뢰도 | 30 Hz | Path B 시 |
+| 0x10 | 환경 묶음 (SCD41 CO₂ 2B + DHT22 T 2B + RH 2B + BH1750 lux 2B = 8B). SCD41 T/RH 는 보내지 않음(보정 없음·단일 센서, 09-14 확정) | 0.2 Hz | 미구현 |
+| **미배정** | mmWave 졸음 state + evidence + 요약값 (10~16 B) | 1 Hz | **TYPE 배정 필요** |
+| 0xF0 | 상태/하트비트 | 1 Hz | |
+
+## 구조 (목표)
 
 ```
 esp32_sensor_node/
 ├── platformio.ini
-├── include/          설정 헤더 (Wi-Fi · 브로커 · 노드 ID · 임계값)
+├── include/          설정 헤더 (노드 ID · 핀 · 임계값)
 └── src/
     ├── main.cpp
-    ├── sensors/      sen0623 / scd41 / bh1750 및 vl53l9cx 대체 경로 래퍼
+    ├── sensors/      c1001 (파서·DrowsyDetector) / scd41 / bh1750 / dht22 / vl53l9cx(Path B)
     ├── preprocess/   이동평균 · 이상치 제거 · 특징 추출
-    └── transport/    uart · mqtt 후보 adapter · ntp
+    └── transport/    uart2 프레이밍(COBS · CRC-16) · 하트비트
 ```
 
 ## 개발 환경
@@ -49,8 +63,7 @@ esp32_sensor_node/
 PlatformIO (Arduino 프레임워크) 또는 ESP-IDF.
 `platformio.ini` 에 보드 · 라이브러리 의존성을 고정한다.
 
-Wi-Fi SSID · 비밀번호 · 브로커 주소는 커밋하지 않는다.
-`include/secrets.h.example` 를 복사해 `include/secrets.h` 로 쓴다.
+ESP32 는 Pi 4 와 유선이므로 Wi-Fi 자격증명이 기본 경로에 필요 없다. 필요해지면 `include/secrets.h.example` 를 복사해 `include/secrets.h` 로 쓰고 커밋하지 않는다.
 
 ## 통신 계약
 

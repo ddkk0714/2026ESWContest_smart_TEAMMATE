@@ -41,7 +41,7 @@ class Signal:
 
 @dataclass
 class SensorFrame:
-    """한 tick 의 입력. ingest/features 가 30초 주기로 만들어 engine 에 넣는다."""
+    """한 tick 의 입력. ingest/features 가 score_period_sec(기본 10초) 주기로 만들어 engine 에 넣는다."""
     now: float                      # epoch seconds
     present: bool                   # 재실 여부 (ToF)
     pc_ratio: float                 # 15분 윈도우 내 PC/키보드 활성 비율 [0,1]

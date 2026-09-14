@@ -35,7 +35,7 @@ gate:
   conf_suggest: 0.45   # 이상 → 제안, 미만 → 무동작
 
 timers:
-  score_period_sec: 30           # 신뢰도 계산 주기
+  score_period_sec: 10           # 신뢰도 계산 주기 (2026-09-14 팀 결정: 30→10. ingest 가 이 주기로 SensorFrame 을 만든다)
   baseline_sec: 300              # START Baseline 측정(5~10분, 초안 5분)
   absent_idle_sec: 600           # 재실 없음 10분 → IDLE
   fatigue_elevated_hold_sec: 180 # FOCUS→FATIGUE_SUSPECT 진입 유지(3분)

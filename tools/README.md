@@ -14,13 +14,10 @@
 
 | 도구 | 용도 | 언제 필요한가 |
 |---|---|---|
-| `mqtt_sim.py` | 가짜 센서 스트림 발행 | ESP32 없이 허브 · 디스플레이 개발. **가장 먼저 필요** |
-| `log_recorder.py` | 전 토픽 JSONL 로 기록 | 8월 데이터 수집 · 리플레이 소스 |
-| `plot_session.py` | 세션 타임라인 시각화 (자세 · 타이핑 · CO₂ · 국면) | 임계값 튜닝, 발표 자료 |
-| `tof_probe.py` | VL53L9CX 54×42 원본·축소 depth map 실시간 확인 | Pi 4 MIPI CSI-2 연결 1일 spike와 자세 특징 검증용 |
-
-`mqtt_sim.py` 를 초반에 만들어 두면 5명이 장비 1세트를 기다리지 않고
-병렬로 작업할 수 있다. 장비 수령이 7/30 이므로 그 전까지는 이게 유일한 개발 경로다.
+| `uart_frame_tool.py` | COBS+CRC-16 프레임 인코딩/디코딩·test vector 생성, PC 시리얼로 Pi 4 디코더 검증 | W1 Pi 4 UART 디코더 개발 |
+| `log_recorder.py` | 전 토픽·UART 라인을 JSONL 로 기록 | 실측 로그 축적 → `--replay` 튜닝 소스 |
+| `plot_session.py` | 세션 타임라인 시각화 (자세 · 체동 · 타이핑 · CO₂ · 국면) | 임계값 튜닝, 보고서 그림 |
+| `tof_probe.py` | VL53L9CX 원본·축소 depth map 실시간 확인 | Path A/B spike 와 자세 특징 검증 |
 
 ## 사용
 

@@ -94,22 +94,23 @@ ToF 원본 54×42 배열은 전송하지 않는다. 운영 경로는 특징값�
 ### `deskmate/sensor/keystroke`
 
 키 값은 절대 포함하지 않는다. 타이밍 통계만 보낸다.
+**2026-09-14 `collector/` 구현 기준으로 확정** — 60 s 윈도우 · 1 Hz · QoS 0. 필드 정의는 [`data-spec.md`](data-spec.md) §6.4.
+현재 구현은 아래처럼 **평면 payload** 를 보낸다. 공통 envelope(`schema_version`·`boot_id`·`seq`·`data`) 로의 래핑은 hub ingest 구현 시 함께 추가한다(세부 튜닝).
 
 ```json
 {
-  "schema_version": "1.0", "ts": 1769000001.0,
-  "node": "pc-collector", "boot_id": "177ae911", "seq": 44,
-  "data": {
-  "window_s": 60,
-  "event_count": 184,
+  "ts": 1769000001.0, "node": "pc-collector", "window_s": 60,
   "dwell_mean_ms": 92.4, "dwell_std_ms": 21.8,
   "flight_mean_ms": 148.2, "flight_std_ms": 63.5,
-  "idle_ratio": 0.18,          // 입력 공백 비율
+  "idle_ratio": 0.18,          // 입력 공백 비율. keydown 없으면 1.0
   "correction_rate": 0.07,     // 백스페이스 빈도
-  "valid": true
-  }
+  "typing_active": true,       // false 면 hub 는 키스트로크 신호 미가용으로 재정규화
+  "mouse_active": true, "input_active": true,
+  "flight_cv": 0.43, "mouse_event_rate": 96.0
 }
 ```
+
+health: `deskmate/health/pc-collector` 에 `{"node","status":"online|offline","reconnects"}` (LWT, retain).
 
 ### `deskmate/state/phase`
 

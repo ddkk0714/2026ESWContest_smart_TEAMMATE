@@ -30,7 +30,9 @@ custom device로 등록한다. `flutter-atlas run` 콘솔과 Pi 5 화면을 함�
 - HDMI+USB 터치 화면이면 Pi 5 micro-HDMI→화면 HDMI와 화면의 USB 터치 케이블을 모두 연결한다.
 - 두 방식의 전원·리본 연결법을 섞지 않는다. 모델명이 확인되지 않은 화면에 GPIO 5V를 임의로 넣지 않는다.
 
-### 현재 보유 화면의 USB 터치 관찰값
+### (이력) 이전 화면의 USB 터치 관찰값
+
+> **2026-09-14: 디스플레이를 교체했고 터치가 정상 동작한다.** 아래 관찰은 교체 전 화면(`TSTP MTouch`)의 기록이며, 같은 증상이 재발할 때 참고용으로만 남긴다. 새 화면의 모델명·전원·데이터 경로를 §1 표에 기록할 것.
 
 - 터치 컨트롤러는 USB `0416:c168`, 제품 문자열 `TSTP MTouch`로 열거된다.
 - Pi 5 부팅 시 `usb 1-1`의 `xhci-hcd.0`에서 장치를 찾지만 입력 event 노드를 만들지 못한다.
@@ -118,17 +120,17 @@ Pi 4 IP를 DHCP 예약하고, 방화벽을 쓰는 경우 같은 LAN에서 TCP 87
 
 Atlas 개발·빌드 명령은 [`../display/atlas/README.md`](../display/atlas/README.md)를 따른다.
 
-## 4. 아직 연결하지 않을 센서
+## 4. 센서 연결 순서
 
-첫 두 보드 데모가 끝날 때까지 ESP32·VL53L9CX·SEN0623·SCD41·BH1750은 연결하지 않는다.
-UI/네트워크 문제와 센서 전기·드라이버 문제를 분리하기 위해서다.
+두 보드 화면 데모와 별개로, **C1001 mmWave → ESP32 UART1 → ESP32 UART2 → Pi 4 `/dev/serial0`** 경로는 2026-09-11 에 실측 통과했다
+(배선·핀은 [`hardware.md`](hardware.md) "보드 간 배선"). Pi 4 에서는 `systemctl stop serial-getty@ttyS0.service` 후
+`dd if=/dev/serial0 bs=26 count=5 | od -An -tx1` 로 끝이 `00` 인 26 B 프레임과 증가하는 sequence 를 확인한다.
 
-화면 데모 완료 뒤에는 다음 순서로 한 종류씩 추가한다.
+이후 한 종류씩 추가한다.
 
-1. ESP32에 SCD41/BH1750 I2C: 공통 GND, SDA/SCL, 각 breakout의 허용 전압을 데이터시트로 확인.
-2. ESP32에 SEN0623 UART: 센서 TX→ESP32 RX, 센서 RX→ESP32 TX, 공통 GND, 공급 전압은 모듈 사양 준수.
-3. VL53L9CX: 보유 보드의 정확한 제품명·호스트 인터페이스·FFC/어댑터를 확인한 뒤 Pi 4 MIPI spike.
-   실패하면 확정된 fallback인 ESP32 I2C 특징값 경로를 시험한다.
+1. ESP32에 SCD41/BH1750 I2C, DHT22 단선: 공통 GND, SDA/SCL, 각 breakout의 허용 전압을 데이터시트로 확인. 0.2 Hz 환경 묶음 프레임.
+2. VL53L9CX: 보유 보드의 정확한 제품명·호스트 인터페이스·FFC/어댑터를 확인한 뒤 09-19 까지 Pi 4 MIPI CSI-2 spike(Path A).
+   실패하면 ESP32 I2C 1 MHz binning 특징값 경로(Path B)로 확정한다.
 
 GPIO 번호와 공급 전압은 ESP32 보드 모델 및 각 breakout 제품명이 확정되기 전에는 고정하지 않는다.
 사진과 제품 링크/실크 인쇄를 확인한 뒤 별도 배선표를 작성하고, 전원 인가 전에 멀티미터로 GND·전압을 확인한다.

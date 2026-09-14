@@ -19,7 +19,8 @@
 
 > **문서 정합성 메모** — 본 계획서는 개발 *계획*(목표·일정·WBS·리스크)을, `fsm-spec.md`는
 > 확정 *구현 사양*(18상태·이중 모니터링·임계값)을 담는다. `fsm-spec.md`는 VER5 기준으로
-> 갱신 완료됐고, 엔진 스켈레톤은 `feat/fsm` 브랜치에 구현되어 있다(§7·현황은 `CLAUDE.md` §6).
+> 갱신 완료됐고, 엔진은 `main` 에 머지되어 테스트 46개(45 통과·1 xfail)가 통과한다(§7·현황은 `CLAUDE.md` §6).
+> 2026-09-14 에 §7 마일스톤과 §11 결정사항을 실측 결과·결선 로드맵([`roadmap.md`](roadmap.md))에 맞춰 재기준했다.
 
 ---
 
@@ -254,23 +255,26 @@ inference/
 
 ---
 
-## 7. 개발 단계 및 마일스톤
+## 7. 개발 단계 및 마일스톤 (2026-09-14 재기준)
 
-프로젝트 일정(개발계획서 항목 5: "작업 모드 판단 및 규칙 기반 FSM 추론 엔진 개발", 8~9월)에 정렬한다.
+전체 주차 계획은 [`roadmap.md`](roadmap.md) §4 를 따른다. 여기서는 FSM 관점의 단계만 적는다.
 
-| 단계 | 기간 | 산출물 |
-|---|---|---|
-| P0. 사양 확정 | ~2026-08-초 | 본 계획서 확정, `docs/fsm-spec.md` VER5 기준 갱신, `config/fsm.yaml` 스키마 |
-| P1. 코어 스켈레톤 | 2026-08 상순 | `engine/states/transitions` 골격, 합성 입력 단위 테스트, 로그 리플레이 하네스 |
-| P2. 이중 신뢰도 | 2026-08 중순 | `scoring.py`·`context.py` 구현, baseline 상대 정규화(김태환 특징 연동) |
-| P3. 판단·후속조치 | 2026-08 하순 | FOCUS_BREAK·FATIGUE·CAUSE_ANALYSIS·개입 라우팅, 신뢰도 게이트 |
-| P4. 제어·출력 통합 | 2026-09 상순 | ACTION_*·REST·END, control(조명희)·display(최민경) 연동, 통합 MVP |
-| P5. RL 정책·튜닝 | 2026-09 하순~10월 | MONITOR 보상·`policy.py`, 8월 실측 로그로 임계값 보정, ESCALATE 시나리오 검증 |
+| 단계 | 상태 | 기간 | 산출물 |
+|---|---|---|---|
+| P0. 사양 확정 | ✅ | ~08 | 본 계획서, `fsm-spec.md` VER5, `config/fsm.yaml` |
+| P1. 코어 스켈레톤 | ✅ | 08 | `engine/states/scoring/context/cause`, 합성 입력 테스트, `--replay/--demo` 하네스 |
+| P2. 이중 신뢰도 | ✅ (합성) | 08 | `scoring.py`·`context.py`. baseline 상대 정규화는 `features/` 미구현이라 **합성 `phi/delta` 로만 검증됨** |
+| P3. 판단·후속조치 | ✅ | 08~09 | FOCUS_BREAK·FATIGUE·CAUSE_ANALYSIS·라우팅·게이트(0.45/0.75), 엎드림·노딩 시나리오 테스트(PR #11) |
+| P4a. 실센서 입력 | ⬜ | W1~W2 (09-15~09-28) | `ingest/` 가 UART 라인(mmWave→환경→ToF 순)·MQTT 키스트로크를 `SensorFrame` 으로 변환. mmWave 졸음 state/evidence → `respiration`/`presence` 신호 매핑 |
+| P4b. 출력·제어 통합 | ⬜ | W1, W3 (09-15~10-05) | hub MQTT 발행(`state/phase` retain·`interaction/request`), `control/` ACTION_ENV → 스마트 플러그, `report.py` 머지 → 리포트 화면 계약 |
+| P5. 정규화·튜닝 | ⬜ | W4 (10-06~10-12) | `features/` 중앙값·MAD Modified z-score baseline, 실측 JSONL 리플레이로 임계값 보정, 신뢰도 주기(10 s/30 s) 결정, ESCALATE 시나리오 |
+| P6. 2단계 융합·RL | ⬜ 선택 | W4~W5 | TFLite 확신도 게이트 융합(import 실패 시 폴백), MONITOR 보상 로그만 축적(정책 학습은 로그 충분 시) |
 
 **의존성 게이트**
-- P2는 김태환의 특징 추출(baseline 캘리브레이션) 출력 규격 확정에 의존.
-- 호흡 가중치 상향은 **8월 ToF 호흡 go/no-go 판단** 통과 시에만 진행(미통과 시 가중치 0 유지).
-- P4는 조명희 ThinQ 연동·최민경 디스플레이 스키마와 MQTT 토픽(`docs/mqtt-topics.md`) 합의 필요.
+- P4a 는 UART 프레임 TYPE·mmWave 출력 스키마(DEC-009)와 ToF 경로(DEC-010, 09-19) 확정에 의존.
+- P5 baseline 정규화(DATA-DEC-005)가 없으면 실센서 값이 `phi/delta` [0,1] 로 들어오지 않는다 — P4a 초기에는 고정 스케일 임시 변환을 config 로 두고 P5 에서 교체.
+- 호흡 가중치는 계속 0(`respiration_enabled: false`). mmWave 호흡은 "소실 여부" 증거로만 검토.
+- P4b 는 스마트 플러그 모델 선정(DEC 미결)과 `mqtt-topics.md` 의 `control/cmd` 스키마에 의존.
 
 ---
 
@@ -318,9 +322,10 @@ inference/
 ## 11. 결정 필요 사항 (P0에서 확정)
 
 ### 11.1 플랫폼·요건 관련 (팀 전체 확인 — 우선순위 높음)
-1. **보드 간 물리 통신** — ESP32↔Pi4 및 Pi4↔Pi5를 UART/MQTT/혼합 중 무엇으로 구성할지 팀 결정 대기. 논리 `SensorFrame` 계약은 독립적으로 유지한다.
-2. **FSM ↔ LG 플랫폼 결합 방식** — 실물 RPi4의 OS와 Python 지원 여부를 먼저 확인한다. Raspberry Pi OS면 Python FSM을 독립 서비스로 실행하고, AI Native OS Headless면 native service·bridge와 Python FSM의 배치를 결정한다. Pi5 Video Profile 내부 API는 D-Bus를 사용하고 기기 간 통신은 MQTT를 최우선 후보로 검증한다.
+1. ~~**보드 간 물리 통신**~~ — **해소(09-11)**: ESP32↔Pi4 UART2(COBS+CRC-16), Pi4↔Pi5 이더넷+MQTT. 남은 것은 UART 프레임 TYPE·mmWave 스키마(DEC-009).
+2. ~~**FSM ↔ LG 플랫폼 결합 방식**~~ — **해소**: Pi4 는 AI Native OS Headless. `hub/atlas` native service(C++)가 제한 Python 으로 FSM 을 실행하고 라인 브리지로 통신. UART 디코더·MQTT 는 C++ 측.
 3. **소스코드 공개 범위** — FSM 코어는 Public 공개 전제. 임계값·시크릿·자가기록 라벨이 코드에 섞이지 않도록 `config/`·`secrets.yaml`(gitignore) 분리를 P1부터 강제.
+3-1. **신뢰도 계산 주기** — 포스터 "10초" vs `score_period_sec: 30`. 실센서 채터링 확인 전 30 유지, 보고서 서술을 맞추는 쪽 권장.
 
 ### 11.2 FSM 내부 설계 관련
 4. **`ACTIVE` 슈퍼상태 도입 여부** — FOCUS_PC/MIXED/NPC의 공통 판단·후속조치 전이를 슈퍼상태로 묶어 중복 제거할지.

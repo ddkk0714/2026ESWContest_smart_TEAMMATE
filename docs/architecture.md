@@ -3,29 +3,34 @@
 ## 1. 계층 구조
 
 ### 센싱 레이어
-- **VL53L9CX ToF** — 54×42 zone에서 재실·자세·모션·노딩 특징을 만든다. Pi 4 MIPI CSI-2 직접 연결을 1일 spike로 우선 검증하고, 드라이버·처리율이 부족하면 ESP32 I2C 축소 경로로 전환한다.
-- **ESP32 노드** — 책상 주변에 분산 배치. mmWave·환경 센서를 읽고 1차 전처리(이동평균·이상치 제거)를 수행한다. ESP32↔Pi 4 물리 통신은 UART/MQTT 중 미정이며 MQTT가 최우선 후보다.
-  - `SEN0623` 60GHz mmWave — 재실·still/active·호흡 보조
-  - `SCD41` CO₂·온습도, `BH1750` 조도
-- **PC 수집기** — 키 입력 **타임스탬프만** 추출. 키 값은 수집하지 않는다.
+- **VL53L9CX ToF** — 54×42 zone. **주 경로: 스켈레톤 트래킹**(depth → V2V-PoseNet → 상체 관절 좌표 → 관절 각도·무게중심으로 엎드림·깊게 기대기·턱 괴기 판별, 2026-09-08 채택).
+  **폴백·온보드 실시간 경로: 기하 특징 7종**(`presence_count` `centroid_depth` `head_row_index` `shoulder_tilt` `motion_indicator` `posture_change_rate` `baseline_deviation`).
+  V2V-PoseNet 은 Pi 4 CPU 실시간이 어려워 결선에서는 PC 오프라인 검증 결과로 제시하고 온보드는 기하 특징으로 동작한다.
+  연결 경로는 Path A(Pi 4 MIPI CSI-2 풀해상도) / Path B(ESP32 I2C 1 MHz binning) 중 09-19 결정.
+- **ESP32 노드** — 도크 내부 1대. mmWave·환경 센서를 읽고 1차 전처리 후 **UART2 바이너리 프레임(COBS + CRC-16)** 으로 Pi 4 에 보낸다(09-11 실측).
+  - `C1001(SEN0623)` 60GHz mmWave — 재실·정지/활동·체동·거리. 5상태 졸음 FSM(NOPERSON/NOLOCK/WARMUP/AWAKE/DROWSY)을 ESP32 에서 돌린다. 호흡·심박 순간값은 쓰지 않는다
+  - `SCD41` CO₂ 전용, `DHT22` 온습도, `BH1750` 조도 — 0.2 Hz 환경 묶음. 센서 간 보정 없음(물리량당 센서 하나)
+- **PC 수집기** — 키 입력 **타임스탬프만** 추출. 키 값은 수집하지 않는다. Wi-Fi/MQTT 로 Pi 4 에 직접 들어온다(기기 외부 경계).
 
-전처리: ToF 유효 zone 처리·중앙값 필터·기하 특징 추출, mmWave 호흡 유효성 처리,
+전처리: ToF 유효 zone 처리·중앙값 필터·기하 특징 추출, mmWave 체동 이동평균·심박 중앙값·각성 기준선,
 dwell·flight 타이밍 파싱. 운영 경로는 특징값만 전달하고 디버그/UI 모드에서만 축소 depth map을 최대 2Hz로 허용한다.
 
-### 추론 레이어 (Raspberry Pi 4)
+### 추론 레이어 (Raspberry Pi 4, AI Native OS Headless)
+- **런타임**: ATLAS 이미지에 Python·컴파일러가 없으므로 `hub/atlas` native service(C++, ARC IPK)가 `/restricted/python3` 로 FSM 을 실행한다.
+  UART 디코딩(COBS/CRC)·MQTT 클라이언트는 C++ 서비스 측, 융합·FSM 은 Python 측. 둘은 라인 프로토콜로 통신한다.
 - **1단계 — 규칙 기반 FSM**: 자세 클래스, 모션 변화율, 타이핑 공백 빈도를
-  임계값으로 조합해 VER5 18개 내부 상태를 판별하고 이중 증거 점수를 산출한다. UI에는 `idle/start/focus/fatigue/recovery/end` phase로 축약한다.
+  임계값으로 조합해 VER5 18개 내부 상태를 판별하고 C_fatigue/C_focus 이중 점수를 산출한다. UI에는 `idle/start/focus/fatigue/recovery/end` phase로 축약한다.
   완전 오프라인 동작. **완성도의 축.**
-- **2단계 — 경량 분류기**: 자가기록 ESM 라벨로 학습한 CNN 2D / MLP 를
-  TFLite 로 변환해 온디바이스 배포. 확신도 점수를 신뢰도 게이트에 입력하여
-  1단계를 보완 · 검증한다.
-- **신뢰도 게이트**: 신뢰도가 높으면 자동 제어, 낮으면 사용자 제안으로 분기.
+- **개인 기준선 정규화**: 세션 초기 + 시간대별 중앙값·MAD Modified z-score 로 모든 특징을 평소 대비 상대값(`phi/delta`)으로 바꾼다. 체격·타이핑 습관 같은 개인차를 판정 전에 제거. (`features/`, 미구현)
+- **2단계 — 경량 분류기**: 공통 1D CNN 백본을 동결하고 개인 헤드만 사용자 로그로 갱신(PC 학습) → TFLite → Pi 4 선택적 적재.
+  확신도 점수를 신뢰도 게이트에 입력하여 1단계를 보완 · 검증한다. import 실패 시 1단계만으로 동작.
+- **신뢰도 게이트**: `< 0.45` 무동작 / `0.45~0.75` 제안 / `≥ 0.75` 가역 동작 자동 실행 + 실행 이유 표시. (`config/fsm.yaml gate`)
 
 ### 출력 · 제어 레이어 (Raspberry Pi 5)
-- LG AI Native OS **Video Profile**과 Atlas Flutter 앱 사용. 기기 내부 시스템 API는 D-Bus로 연동
-- 디스플레이: 현재 국면, 제안 카드, 휴식 알림, 작업 리포트, AOD
-- 사용자 피드백(수락·거절·정정·잘 모름) 입력 → 임계값 보정·재학습 라벨로 환류
-- 제어: ThinQ D-Bus/API adapter, 스마트 플러그, 조명, 환기팬
+- LG AI Native OS **Video Profile**과 Atlas Flutter 앱 사용. Pi 4 와 이더넷 직결, MQTT QoS 1 (`state/phase` retain 구독, `feedback/user` 발행)
+- **상태 적응형 UI**: 대기(시각·환경·재실) / 집중 저자극 화면 / 터치 시 상세(집중 시간·환경·수동 제어) / 제안 확인 인터랙션 / 세션 종료 리포트
+- 사용자 피드백(수락·거절·정정·무응답) 입력 → 임계값 보정·개인화 정책·재학습 라벨로 환류
+- 제어(Pi 4 `control/`): 스마트 플러그(LED 스탠드·환기팬) 기본 라인, ThinQ 1기기 선택 시연
 
 ## 2. 신호 층위
 
@@ -43,8 +48,10 @@ dwell·flight 타이밍 파싱. 운영 경로는 특징값만 전달하고 디�
 | 항목 | 목표 |
 |---|---|
 | 판정 사이클 | 500ms 이하 |
-| ToF 취득 주기 | VL53L9CX 연결 spike에서 결정, 특징 갱신 30Hz 목표 |
-| 호흡수 추출 지연 | 약 30초 (SEN0623 보조 신호 윈도우) |
+| 신뢰도 계산 주기 | 10 s (`score_period_sec`, 2026-09-14 확정) |
+| ToF 취득 주기 | 경로 결정 후. 자세 판정에는 10 Hz 내외면 충분, 특징 갱신 30 Hz 목표 |
+| mmWave 갱신 | 체동 1 s · 거리 2 s · 호흡/심박 3 s. 요약 프레임 1 Hz |
+| UART 대역폭 | 환경 묶음 25 B @0.2 Hz, mmWave 요약 ≈ 200 bps, ToF 특징 12 kbps — 병목 아님 |
 | 모델 크기 | 수십 ~ 수백 KB (참조: ST HPD 5세대, Flash 29KB) |
 | 오프라인 동작 | 1단계 FSM 완전 가능 / 2단계 TFLite 탑재 시 가능 / ThinQ 는 LAN 필요 |
 
@@ -52,7 +59,9 @@ dwell·flight 타이밍 파싱. 운영 경로는 특징값만 전달하고 디�
 
 | # | 리스크 | 대응 |
 |---|---|---|
-| 1 | **VL53L9CX 호스트 연결** — Pi 4 직접 연결 드라이버·처리율 미검증 | 1일 spike 후 성공 시 직접 처리, 실패 시 ESP32 I2C 축소 경로. 호흡은 SEN0623으로 분리 |
+| 1 | **VL53L9CX 호스트 연결** — Path A/B 미결, 스켈레톤 온보드 연산 부하 | 09-19 spike. 실패 시 Path B. 온보드는 기하 특징 7종, 스켈레톤은 오프라인 검증 |
+| 8 | ~~Pi 5 터치 컨트롤러 사망~~ | **해소(09-14)** 디스플레이 교체, 터치 정상 |
+| 9 | **ESP32 코드 분산** — mmWave 펌웨어가 별도 저장소 | W1 에 `firmware/` 로 이관 |
 | 2 | **ESM 라벨 부족** — 2개월 내 충분한 라벨 확보 어렵고 인지상태 정답 자체가 노이즈 | 2단계는 개념 실증으로 프레이밍. 1단계 FSM 이 완성도의 축 |
 | 3 | **자세 → 인지상태 모호성** | 자세는 재실/자세종류 판정에만 제한 사용. 판정 주축은 키스트로크 + 작업시간 + 환경 |
 | 4 | **CO₂ 인과 지연** — 수십 분 단위라 짧은 데모에서 상관 제시 어려움 | 맥락 신호로만 사용. 절대농도 구간(1000ppm 초과) 트리거는 환기 데모용 |

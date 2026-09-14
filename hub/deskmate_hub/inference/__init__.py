@@ -3,7 +3,7 @@
 사용 예:
     from deskmate_hub.inference import FSMEngine, SensorFrame, Signal
     engine = FSMEngine()                 # config/fsm.yaml 로드
-    result = engine.tick(frame)          # 30초 주기 호출
+    result = engine.tick(frame)          # score_period_sec(10초) 주기 호출
 """
 from .config import load_config
 from .engine import FSMEngine
