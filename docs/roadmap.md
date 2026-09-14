@@ -115,7 +115,7 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
     - mmWave: `presence` ← presence/거리, `respiration`·모션 증거 ← drowsy_state·body_move 이동평균
     - keystroke: `typing_active=false` → available=false, 그 외 idle_ratio·flight_cv·correction_rate → phi/delta
     - env: co2_ppm 절대 구간 → environment delta
-  - [x] `python -m deskmate_hub run --broker <ip>`: ingest → `FSMEngine.tick` → `deskmate/state/phase`(retain, QoS 1) 발행, `feedback/user` 수락/거절 반영 — 09-14 구현(브로커 없이 루프·로그 확인, 실브로커 연동은 화요일 확인)
+  - [x] `python -m deskmate_hub run --broker <ip>`: ingest → `FSMEngine.tick` → `deskmate/state/phase`(retain, QoS 1) 발행, `feedback/user` 수락/거절 반영 — 09-14 구현. 로컬 amqtt 브로커로 E2E 확인(센서 3토픽 수신 → START 발행 → health LWT · feedback 수신). Pi 4 Mosquitto 실연동은 화요일
   - [ ] Node-RED 에 FSM 패널: 현재 상태·phase, C_fatigue/C_focus 시계열, `reasons` 텍스트
   - [ ] (보너스) Pi 5 를 `DESKMATE_MQTT_HOST=<broker>` 로 빌드해 같은 상태가 화면에 뜨는지 확인
 - [ ] **금 09-18 — 통합 리허설·기록**
