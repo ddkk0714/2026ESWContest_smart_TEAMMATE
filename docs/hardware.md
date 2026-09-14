@@ -23,7 +23,7 @@
 | ESP32 UART2 TX → Pi 4 | GPIO25 → Pi 4 물리 10번(GPIO15 RX) | 교차 연결 |
 | ESP32 UART2 RX ← Pi 4 | GPIO26 ← Pi 4 물리 8번(GPIO14 TX) | |
 | 공통 GND | ESP32 GND → Pi 4 물리 6번, C1001 GND → Pi 4 물리 9번 | 세 장치 기준 전압 통일 |
-| Pi 4 ↔ Pi 5 | RJ45 직결 (고정 IP 예: 192.168.10.1 / .2) | MQTT 1883 + SSH 22 |
+| Pi 4 ↔ Pi 5 | RJ45 유선 LAN (DHCP 주소 확인) | MQTT 1883 + SSH 22 |
 
 - Pi 4 와 ESP32 의 5V 는 직접 연결하지 않는다. 각 보드는 자기 전원을 쓴다.
 - Pi 4 `/dev/serial0 → ttyS0`. 커널 콘솔·`serial-getty@ttyS0` 가 기본 활성이라 실험 중 `systemctl stop serial-getty@ttyS0.service` 로 중지했다.

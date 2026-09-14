@@ -102,7 +102,8 @@ VER5 18개 내부 상태로 추론하고, 사용자 화면에는 여섯 phase로
 | [`docs/mqtt-topics.md`](docs/mqtt-topics.md) | Pi 4↔Pi 5 MQTT topic · payload 계약 | 확정, UART 프레임 TYPE 은 미확정 |
 
 현재 합성 입력으로 `Pi 4 FSM → Pi 5 Atlas 화면 → 사용자 피드백`을 시험할 수 있다(HTTP 개발 어댑터, MQTT 는 display 측 구독까지).
-실행 순서와 하드웨어 연결은 [`docs/hardware-bringup.md`](docs/hardware-bringup.md)를 따른다.
+실행 순서와 하드웨어 연결은 [`docs/hardware.md`](docs/hardware.md), Pi 5 배포는
+[`docs/atlas-build-handoff.md`](docs/atlas-build-handoff.md)를 따른다.
 실센서는 아직 FSM 에 연결되지 않았다 — mmWave 는 Pi 4 UART 까지 도달을 확인했고, 디코더·ingest 가 다음 작업이다.
 
 ### Pi 5 Atlas 실제 개발·배포 흐름
@@ -123,8 +124,8 @@ VER5 18개 내부 상태로 추론하고, 사용자 화면에는 여섯 phase로
 
 전체 준비·빌드·배포·로그 확인 명령은 [Pi 5 Atlas 개발 가이드](display/atlas/README.md)에 있다.
 
-**AI CLI 로 개발한다면** [`docs/agent-briefing.md`](docs/agent-briefing.md) 를 읽히고,
-[`docs/agent-kickoff-prompt.md`](docs/agent-kickoff-prompt.md) 의 예시 문구를 첫 입력으로 넣으면 편하다.
+**AI CLI 로 개발한다면** [`docs/agent-briefing.md`](docs/agent-briefing.md)와
+[`docs/roadmap.md`](docs/roadmap.md)를 먼저 읽는다.
 **개발 방식은 각자 자유다.** 다만 확정·미결정 사항과 프라이버시 제약만은 누가 작업하든 같아야 해서 한곳에 모아뒀다.
 
 **아직 미결정이므로 코드·문서에 확정으로 못 박지 않는다:** ToF 연결 경로(Path A/B, 09-19 결정), UART 프레임 TYPE·mmWave 출력 스키마,
@@ -171,8 +172,8 @@ VER5 18개 내부 상태로 추론하고, 사용자 화면에는 여섯 phase로
 ## 관련 링크
 
 - 팀 Notion: 임베디드 SW 경진대회 (LG)
-- [AI 개발 공통 브리핑](docs/agent-briefing.md) · [CLI 시작 공통 문구](docs/agent-kickoff-prompt.md)
+- [AI 개발 공통 브리핑](docs/agent-briefing.md) · [문서 지도](docs/README.md)
 - [요구사항 명세서](docs/requirements-spec.md) · [데이터 명세서](docs/data-spec.md)
-- [결선 로드맵 · 갭 분석](docs/roadmap.md) · [개발 진행 현황](docs/development-progress.md)
+- [결선 로드맵 · 갭 분석](docs/roadmap.md) · [Pi 5 배포 인계](docs/atlas-build-handoff.md)
 - [Pi 5 ATLAS Docker 개발 환경](display/atlas/README.md)
 - 시연 영상: (결선 제출 시 추가)

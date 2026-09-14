@@ -3,8 +3,25 @@
 > 기준일: 2026-09-14 · 결선 제출 2026-10-01~10-30 · 오프라인 발표 2026-11-06
 > 목표 기준: 2026 UOS ECE Innovation Fair 출품작 포스터(「DESKMATE : 카메라 없이 읽는 책상 위 인지 상태」)에
 > 서술한 기능 수준. 이 문서는 **그 서술과 현재 구현 사이의 간극**을 관리한다.
-> 현황 상세는 [`development-progress.md`](development-progress.md), FSM 내부 계획은 [`fsm-dev-plan.md`](fsm-dev-plan.md).
 > **2026-09-14 팀 결정 반영**: 신뢰도 주기 10 s · 미머지 브랜치 병합 PR(`feat/merge-pending`) · Pi 5 디스플레이 교체(터치 정상) · 키스트로크 계약 구현 기준 확정 · 환경 센서 보정 없음(단일 센서).
+
+---
+
+## 0. 현재 시스템 스냅샷
+
+```text
+ESP32(mmWave·환경) ── UART2 / COBS + CRC ──> Pi 4 Hub ── MQTT / LAN ──> Pi 5 Atlas UI
+PC 키스트로크 특징 ─────────────── MQTT ────────────┘
+ToF VL53L9CX ── 연결 경로 결정 전 (Pi 4 CSI-2 또는 ESP32 I2C)
+```
+
+- Pi 4는 UART 수신·특징 통합·FSM·제어 판단·Mosquitto를 맡는다. Headless ATLAS native-service
+  IPK에서 제한 Python FSM을 실행하며, UART 디코더와 MQTT 연결은 해당 서비스에 둔다.
+- Pi 5는 MQTT 상태를 구독하는 Atlas Flutter 표시·피드백 장치다. HTTP 8765은 개발 fallback이고,
+  Node-RED는 관찰·테스트 주입용이다.
+- 수직 슬라이스의 목표는 한 센서 신호가 Pi 4 FSM을 통과해 Pi 5 UI와 가역 제어까지 닿는 것이다.
+  미결정 사항과 안전 제약은 [`agent-briefing.md`](agent-briefing.md), 물리 연결은
+  [`hardware.md`](hardware.md)를 기준으로 한다.
 
 ---
 

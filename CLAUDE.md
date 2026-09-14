@@ -1,6 +1,6 @@
 # DESKMATE — 프로젝트 개발 가이드
 
-> 프로젝트 확정·미결정 사항과 제약은 [docs/agent-briefing.md](docs/agent-briefing.md)에 정리돼 있다. 세션 시작 문구 예시는 [docs/agent-kickoff-prompt.md](docs/agent-kickoff-prompt.md).
+> 프로젝트 확정·미결정 사항과 제약은 [docs/agent-briefing.md](docs/agent-briefing.md)에 정리돼 있다.
 > **결선 목표(포스터 수준)까지의 갭과 주차별 계획은 [docs/roadmap.md](docs/roadmap.md)** 가 기준이다.
 
 > 제24회 임베디드SW경진대회 · 스마트 가전 부문 · 팀 TEAMMATE
@@ -9,8 +9,7 @@
 > **카메라·마이크 미사용. 센싱·추론·제어 모두 로컬.**
 
 이 문서는 팀 전체가 보는 **러프 개발 로드맵 + 모듈 현황 + 결정사항**이다. 기준일 **2026-09-14**.
-상세 설계는 `docs/` 참조. (`README.md`=소개, `docs/architecture.md`, `docs/fsm-spec.md`,
-`docs/mqtt-topics.md`, `docs/hardware.md`, `docs/data-spec.md`)
+상세 설계와 현재 계획은 `docs/README.md`의 문서 지도를 참조한다.
 
 > **개발 방식은 각자 자유다.** 어떤 CLI 로 어떻게 작업하든 상관없다. 다만 push 나 파괴적 Git 작업은 명시적으로 요청할 때만 하게 해두는 편이 안전하다.
 
@@ -114,7 +113,7 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 1. **[팀·09-19 마감] ToF 연결 경로** — Path A(Pi 4 MIPI CSI-2 풀해상도) vs Path B(ESP32 I2C binning). 1일 spike 후 결정, 실패 시 B.
 2. **[팀] UART 프레임 TYPE·스키마** — mmWave TYPE 신규 배정(실험 펌웨어는 0x01 을 임시 사용 → ToF 디버그와 충돌), DrowsyDetector 출력(state·evidence vs 요약값 포함), 목표 속도 460,800+ 실측.
 3. **[팀] 스마트 플러그 모델** — 로컬 제어 가능 모델(클라우드 의존 없음) 선정·구매. W2 안.
-4. **[팀] 새 디스플레이 기록** — 모델명·인터페이스(DSI/HDMI)·전원 경로를 `hardware.md`·`hardware-bringup.md` 에 적기.
+4. **[팀] 새 디스플레이 기록** — 모델명·인터페이스(DSI/HDMI)·전원 경로를 `hardware.md`에 적기.
 5. **[기본값] `C_focus` 부호** — 현재 "큰 값 = 집중 저하 증거". 바꾸려면 알려주기.
 6. **[기본값] 개인화 저장소** — 로컬 파일(JSONL) 잠정. opt-in·삭제 정책은 W4 전.
 7. **[기본값] RL 정책** — 고정 규칙. 로그 축적 후 활성, 세션당 개입 상한.

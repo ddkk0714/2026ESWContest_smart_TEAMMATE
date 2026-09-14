@@ -176,6 +176,6 @@ DESKMATE는 ToF, mmWave, 키스트로크 타이밍, 환경, 작업 시간 신호
 - 논리 데이터 계약: [`data-spec.md`](data-spec.md)
 - MQTT 채택 시 매핑 초안: [`mqtt-topics.md`](mqtt-topics.md)
 - 하드웨어: [`hardware.md`](hardware.md)
-- 현재 현황: [`development-progress.md`](development-progress.md)
+- 현재 현황·우선순위: [`roadmap.md`](roadmap.md)
 - LG 기술교육 자료: 저장소 외부 로컬 `개발자료/스마트 가전_기술교육 (1).pdf` (Git 미포함)
 - 전년도 수상팀 공개자료: 저장소 외부 로컬 `개발자료/제23회ESWC_동방예의지국_발표자료_공개용 (1) (1).pdf` (Git 미포함)
