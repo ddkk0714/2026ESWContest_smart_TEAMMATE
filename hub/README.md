@@ -48,8 +48,14 @@ baseline 대비 `phi`·`delta` 정규화 기여도이며 운영 입력으로 저
 `reset`은 설정된 baseline 시간을 가상으로 진행해 몰입 상태로 빠르게 진입하고,
 `tick`은 앱에서 지정한 30초 또는 3분만큼 진행한다.
 
-`python -m deskmate_hub`도 현재는 같은 데모를 기본 실행한다. 실센서 ingest와 로그 리플레이는
-아직 연결되지 않았으므로 실행 가능하다고 오해하지 않도록 별도 구현 후 이 문서를 갱신한다.
+```bash
+python -m deskmate_hub --demo                            # 합성 세션 스모크
+python -m deskmate_hub --replay logs/2026-08-01.jsonl    # 로그 리플레이
+python -m deskmate_hub --demo --report                   # + 세션 작업 리포트
+```
+
+`--report` 는 세션 요약(몰입 시간·피로 에피소드·개입 결과·ESM 라벨)을 함께 출력한다.
+실센서 ingest 는 아직 연결되지 않았다.
 
 ## 테스트
 
