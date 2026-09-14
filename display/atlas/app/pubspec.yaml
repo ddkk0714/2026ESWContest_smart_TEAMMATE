@@ -23,3 +23,6 @@ flutter:
   uses-material-design: true
   assets:
     - assets/audio/deskmate_test_music.mp3
+    - assets/audio/chopin_nocturne_op9_no2.mp3
+    - assets/audio/satie_gymnopedie_no1.mp3
+    - assets/audio/CREDITS.md

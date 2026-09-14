@@ -51,6 +51,7 @@ class _DashboardPageState extends State<DashboardPage> {
   bool _demoCyclingEnabled = true;
   _AppView _view = _AppView.dashboard;
   late final MusicPlayback _music;
+  late final StreamSubscription<bool> _musicChanges;
   bool _musicOn = false;
   bool _musicBusy = false;
   bool _showFocusDetail = false;
@@ -70,6 +71,15 @@ class _DashboardPageState extends State<DashboardPage> {
     _clock.start();
     _music = widget.music ?? AtlasMusicPlayback();
     _musicOn = _music.isPlaying;
+    _musicChanges = _music.playingChanges.listen((playing) {
+      if (mounted) setState(() => _musicOn = playing);
+    }, onError: (Object error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('음악 재생 실패: $error')),
+        );
+      }
+    });
     HardwareKeyboard.instance.addHandler(_onKey);
     _source =
         _hubUrl.trim().isEmpty ? DemoStateSource() : HttpStateSource(_hubUrl);
@@ -175,6 +185,27 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
+  Future<void> _selectMusic(int index) async {
+    if (_musicBusy) return;
+    setState(() => _musicBusy = true);
+    try {
+      await _music.selectTrack(index);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('곡 변경 실패: $error')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _musicOn = _music.isPlaying;
+          _musicBusy = false;
+        });
+      }
+    }
+  }
+
   void _toggleDemoCycling() {
     if (_source is! DemoStateSource) return;
     setState(() => _demoCyclingEnabled = !_demoCyclingEnabled);
@@ -215,6 +246,7 @@ class _DashboardPageState extends State<DashboardPage> {
     HardwareKeyboard.instance.removeHandler(_onKey);
     _clock.stop();
     _source.close();
+    unawaited(_musicChanges.cancel());
     unawaited(_music.dispose());
     super.dispose();
   }
@@ -240,6 +272,8 @@ class _DashboardPageState extends State<DashboardPage> {
                         musicOn: _musicOn,
                         musicBusy: _musicBusy,
                         onMusic: _toggleMusic,
+                        selectedTrack: _music.selectedTrack,
+                        onSelectMusic: _selectMusic,
                         onExit: _confirmExit),
                     const SizedBox(height: 12),
                     Expanded(
@@ -290,6 +324,8 @@ class _Header extends StatelessWidget {
       required this.musicOn,
       required this.musicBusy,
       required this.onMusic,
+      required this.selectedTrack,
+      required this.onSelectMusic,
       required this.onExit});
   final String source;
   final bool online;
@@ -299,6 +335,8 @@ class _Header extends StatelessWidget {
   final bool musicOn;
   final bool musicBusy;
   final VoidCallback onMusic;
+  final int selectedTrack;
+  final ValueChanged<int> onSelectMusic;
   final VoidCallback onExit;
 
   @override
@@ -351,6 +389,35 @@ class _Header extends StatelessWidget {
           ]),
         ),
         const SizedBox(width: 8),
+        PopupMenuButton<int>(
+          key: const ValueKey('music-select'),
+          tooltip: '재생할 곡 선택',
+          enabled: !musicBusy,
+          initialValue: selectedTrack,
+          onSelected: onSelectMusic,
+          itemBuilder: (context) => [
+            for (var i = 0; i < classicalTrackTitles.length; i++)
+              CheckedPopupMenuItem<int>(
+                key: ValueKey('music-track-$i'),
+                value: i,
+                checked: i == selectedTrack,
+                child: Text(classicalTrackTitles[i]),
+              ),
+          ],
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              SizedBox(
+                width: 140,
+                child: Text(classicalTrackTitles[selectedTrack],
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12)),
+              ),
+              const Icon(Icons.arrow_drop_down, size: 18),
+            ]),
+          ),
+        ),
         TextButton.icon(
           key: const ValueKey('music-toggle'),
           onPressed: musicBusy ? null : onMusic,

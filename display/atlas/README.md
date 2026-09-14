@@ -126,8 +126,16 @@ Pi 4에 직접 접속한다. 빌드 컨테이너가 Pi 4 상태 API를 대신 �
 센서 테스트는 `DESKMATE_HUB_URL`이 있으면 그 주소를 쓰고, 없는 빌드에서는 화면에서
 Pi 4 URL을 임시로 입력해 연결한다. 주소는 저장하지 않는다. Flutter에 FSM 임계값을 복제하지 않고
 Hub의 `/api/test-frame` 개발 API와 `config/fsm.yaml`을 사용한다.
-우측 상단 스피커 `ON/OFF` 버튼은 패키지에 포함된 `deskmate_test_music.mp3`를
-`audioplayers_atlas`로 반복 재생·일시정지한다. 전원 아이콘은 확인 대화상자 후 앱 프로세스를 종료한다.
+우측 상단 스피커 `ON/OFF` 버튼은 패키지에 포함된 달빛 → 쇼팽 녹턴 Op.9 No.2 →
+사티 짐노페디 1번을 `audioplayers_atlas`로 자동 순환 재생한다. OFF는 일시정지,
+ON은 현재 곡 이어듣기다. ON/OFF 옆 곡 이름을 누르면 세 곡 중 재생할 곡을 선택한다.
+ON 상태에서는 즉시 선택 곡으로 바뀌고, OFF 상태에서는 다음 ON 때 선택 곡을 시작한다.
+곡이 끝나면 선택 곡의 다음 순서부터 자동 순환한다.
+Atlas의 미디어 서비스는 이미 로드된 플레이어의 음원 교체를 거부(`already loaded`)하므로,
+곡 전환 시 이전 플레이어를 dispose/unload한 뒤 새 플레이어를 생성한다.
+음원 출처·이용 조건은
+[`app/assets/audio/CREDITS.md`](app/assets/audio/CREDITS.md)에 기록하며 앱에도 포함한다.
+전원 아이콘은 확인 대화상자 후 앱 프로세스를 종료한다.
 
 성공 기준은 테스트 통과, build 명령 exit code 0, `find` 결과에
 `com.atlas.app.deskmate_display`의 `.ipk`가 존재하는 것이다. SDK·bundle·`.ipk`는 Git에 넣지 않는다.
@@ -199,6 +207,11 @@ flutter-atlas run -d deskmate_pi5 --release \
 
 화면만 확인할 때는 내장 데모로 시작하고, 그다음 Pi 4 HTTP 미리보기, 마지막에 최종 통신
 어댑터 순으로 연결한다. UI 문제와 보드 통신 문제를 한 번에 섞지 않는다.
+
+현재 공급사 도구의 `run`은 기존 IPK가 있으면 이를 재사용할 수 있다. Dart UI 수정은
+실행 중 `r`로 반영하지만, MP3 같은 패키지 asset을 추가한 경우에는 기존 실행을 `q`로
+종료하고 `flutter-atlas build atlas --ipk --debug` 후 `flutter-atlas run -d <device_id> --debug`로
+다시 적용한다. 새 asset이 IPK에 포함됐는지 확인한다.
 
 ## 7. 종료와 산출물 관리
 
