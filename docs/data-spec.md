@@ -122,31 +122,57 @@ ToF 원본 2,268-zone 배열은 L0이며 기본 운영 스키마에 포함하지
 | `resp_valid` | boolean | 거리·각도·재실·정지 조건 통과. |
 | `heart_bpm` | float/null, beats/min | 연구·보정용. MVP 가중치 0. |
 | `heart_valid` | boolean | 심박 유효성. |
+| `distance_cm` | int/null, cm | 락온 거리(약 12 cm 양자화). 정상 착석 47~59 cm. |
+| `drowsy_state` | enum | ESP32 `DrowsyDetector` 5상태 `NOPERSON`·`NOLOCK`·`WARMUP`·`AWAKE`·`DROWSY`. hub 는 `DROWSY` 를 posture delta 1.0 증거로 쓴다(2026-09-14 MVP 계약). |
+| `valid` | boolean | 프레임 파싱 성공. |
+
+`motion_state` 는 C1001 movement 0/1/2 → `none`/`still`/`active`, `motion_level` 은 bodyMove 0~100 이다. hub 매핑(`hub/deskmate_hub/config/ingest.yaml`): 정적 지속·`drowsy_state` → `posture.delta`, `motion_level` → `posture.phi`, 재실 중 `resp_valid=false` 지속 → `respiration.delta`.
 
 ### 6.3 `environment_sample`
 
 | 필드 | 타입·단위 | 정의 |
 |---|---|---|
-| `co2_ppm` | float/null, ppm | SEN0536 CO₂. |
-| `temperature_c` | float/null, °C | SEN0536 온도. |
-| `humidity_rh_pct` | float/null, %RH | SEN0536 상대습도. |
-| `illuminance_lux` | float/null, lux | SZH-EK070 조도. |
-| `*_valid` | boolean | 물리 측정별 유효성. |
+| `co2_ppm` | int/null, ppm | **SCD41(SEN0536) CO₂.** SCD41 의 자체 T/RH 출력은 전송·저장하지 않는다. |
+| `temp_c` | float/null, °C | **DHT22(AM2302) 온도.** |
+| `humidity_pct` | float/null, %RH | **DHT22(AM2302) 상대습도.** |
+| `lux` | float/null, lux | BH1750(SZH-EK070) 조도. |
+| `co2_valid` `temp_valid` `humidity_valid` `lux_valid` | boolean | 물리 측정별 유효성(CRC/체크섬·범위). 센서 부재 = 값 null + false. |
 
+필드명은 `mqtt-topics.md` 의 wire 이름과 같다(2026-09-14 정렬). hub 는 `co2_valid` 인 `co2_ppm` 만 `environment.delta` 로 쓴다.
+
+**2026-09-14 확정 — 보정 없이 단일 센서 측정.** 물리량마다 센서 하나만 쓴다(CO₂=SCD41, T/RH=DHT22, lux=BH1750).
+센서 간 교차 보정(예: SCD41 T/RH 로 CO₂ 온도 보정, DHT22 와 SCD41 온습도 비교)은 하지 않는다.
 물리 측정 범위와 쾌적·피로 임계값을 구분한다. 전자는 드라이버 검증, 후자는 실측 후 FSM YAML에 둔다.
 
-### 6.4 `keystroke_feature`
+### 6.4 `keystroke_feature` — **2026-09-14 `collector/` 구현 기준 확정** (세부 튜닝은 이후)
+
+발행: `deskmate/sensor/keystroke`, **60 s 슬라이딩 윈도우, 1 Hz, QoS 0**, 노드 `pc-collector`.
+생존: `deskmate/health/<node>` (LWT `online`/`offline`, retain, 재연결 카운트).
+내부 파라미터(`collector/config.py`): `flight_gap_max_s = 2.0`(이보다 큰 키 간격은 flight 통계에서 제외), `idle_gap_s = 3.0`(이 이상 공백은 idle 로 합산).
 
 | 필드 | 타입·단위 | 정의 |
 |---|---|---|
-| `window_ms` | uint32, ms | 초기 60,000ms. |
-| `event_count` | uint32 | window 내 키 이벤트 수. |
-| `dwell_mean_ms`, `dwell_std_ms` | float/null, ms | 누름 유지시간 통계. |
-| `flight_mean_ms`, `flight_std_ms` | float/null, ms | 키 간격 통계. |
-| `idle_ratio`, `correction_rate` | float/null, 0..1 | 입력 공백·정정 비율. |
-| `collector_active` | boolean | OS 권한·훅 상태. |
+| `ts` | float, epoch s | 발행 시각(publisher 가 주입). |
+| `node` | string | `pc-collector` 기본. |
+| `window_s` | int, s | 60. |
+| `dwell_mean_ms`, `dwell_std_ms` | float, ms | 같은 종류 press→release FIFO 매칭 dwell 의 평균·모표준편차(0 < dt < 2000 ms 만). |
+| `flight_mean_ms`, `flight_std_ms` | float, ms | 연속 keydown 간격(≤ 2 s) 의 평균·모표준편차. |
+| `flight_cv` | float | `flight_std / flight_mean` (리듬 불규칙성). mean 0 이면 0. |
+| `idle_ratio` | float, 0..1 | (윈도우 앞뒤 여백 + 3 s 초과 공백 합) / 60. keydown 없으면 **1.0**. |
+| `correction_rate` | float, 0..1 | backspace keydown / 전체 keydown. |
+| `typing_active` | boolean | 윈도우 내 keydown ≥ 1. |
+| `mouse_active` | boolean | 윈도우 내 마우스 move/click/scroll ≥ 1 (좌표·버튼 미수집). |
+| `input_active` | boolean | `typing_active or mouse_active` — "마우스 작업 vs 글 읽기" 구분용. |
+| `mouse_event_rate` | float, /min | 분당 마우스 이벤트 수(move 는 50 ms throttle). |
 
-최소 이벤트 수 미만이면 통계는 null·`degraded`/`missing`이다. 키 값, scan code, 문자, 원시 시퀀스는 정의하지 않는다.
+**미입력 구간 규칙**: keydown 이 없으면 `typing_active=false`, `idle_ratio=1.0`, dwell/flight/correction 통계는 **0**(null 아님).
+hub 는 `typing_active=false` 인 프레임에서 키스트로크 신호를 **미가용(available=false)** 으로 보고 가중치를 재정규화한다.
+`input_active=true`(마우스만) 는 `pc_activity_sample.input_active` 로 흘려 PC_ratio 산출에 쓴다.
+
+키 종류는 `char/space/backspace/enter/other` 로만 메모리 내 분류하고, 키 값·scan code·문자·원시 시퀀스는 전송·저장하지 않는다.
+auto-repeat(키 꾹 누름)는 1타건으로 취급한다. 브로커 미연결 시 로컬 `logs/keystroke.jsonl` 로만 기록한다(튜닝용, 커밋 금지).
+
+> 세부 튜닝 항목(계약 변경 아님): 공통 envelope(`schema_version`·`boot_id`·`seq`) 추가, 최소 이벤트 수 미만 시 `degraded` 표시, `window_s`·gap 파라미터 실측 조정.
 
 ### 6.5 `pc_activity_sample`
 
@@ -325,10 +351,14 @@ MQTT 사용 시 본 레코드를 JSON/UTF-8로 매핑하고 topic·QoS·retain·
 | ID | 항목 | 필요 결정 |
 |---|---|---|
 | DATA-DEC-001 | `C_focus` | 큰 값=집중 저하 증거 유지 / 집중도로 부호 변경 |
-| DATA-DEC-002 | 통신 envelope | ESP32↔Pi 4 및 Pi 4↔Pi 5의 UART/MQTT/혼합 최종 결정 후 매핑 |
-| DATA-DEC-003 | UART CRC 세부값 | CRC-16 다항식·초깃값·바이트 순서·test vector |
+| DATA-DEC-002 | 통신 envelope | **물리 확정(09-11)**: ESP32↔Pi 4 UART2 바이너리 프레임, Pi 4↔Pi 5 MQTT JSON. 남은 것: UART TYPE 표에 mmWave 배정(실험용 0x01 은 ToF 디버그와 충돌), DrowsyDetector 출력 스키마(state·evidence / 요약값), 환경 묶음 0x10 필드 순서 |
+| DATA-DEC-003 | UART CRC 세부값 | 실측 펌웨어는 **COBS 인코딩 + 끝 `0x00` + CRC-16/CCITT-FALSE**. 초깃값·바이트 순서·test vector 를 본 문서 §13 에 기록해야 함 |
+| DATA-DEC-008 | `tof_feature` 관절 좌표 필드 | 스켈레톤 채택(09-08)에 따라 posture enum 외에 상체 관절 좌표(N×xyz) 또는 판별 결과만 보낼지. Path A/B 결정과 연동 |
+| DATA-DEC-009 | mmWave 신호 매핑 | `respiration` 신호를 "호흡 소실 여부 + 체동 이동평균" 로 재정의할지. 순간 호흡·심박·HRV·`inBed` 는 계약에서 제외 |
 | DATA-DEC-004 | freshness·샘플링 | 실제 ESP32·LAN 지연 분포로 보정 |
-| DATA-DEC-005 | 특징 정규화 | baseline→`phi/delta` 수식·clip·결측 규칙 |
+| DATA-DEC-005 | 특징 정규화 | baseline→`phi/delta` 수식·clip·결측 규칙 (중앙값·MAD Modified z-score 방향 확정, 수식 미정) |
+| ~~DATA-DEC-010~~ | ~~키스트로크 계약~~ | **해소(2026-09-14)** §6.4 — `collector/` 구현 기준 |
+| ~~DATA-DEC-011~~ | ~~SCD41/DHT22 역할~~ | **해소(2026-09-14)** §6.3 — 보정 없음, 단일 센서 측정 |
 | DATA-DEC-006 | 개인화 보존 | 저장소·보존·삭제·opt-in UI |
 | DATA-DEC-007 | 평가 라벨 | 상태 정답·피드백 일치율·수용률 계산식 |
 
