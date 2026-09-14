@@ -4,3 +4,7 @@ node-red.log
 node-red-error.log
 flows_cred.json
 flows_*.json
+.flows.json.backup
+.config.*.json
+.config.*.json.backup
+logs/
