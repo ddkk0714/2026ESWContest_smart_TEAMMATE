@@ -130,8 +130,8 @@ void main() {
     expect(music.isPlaying, isTrue);
     player.finish();
     await _flush();
-    expect(music.selectedTrack, 0);
-    expect(player.played.last, classicalPlaylist[0]);
+    expect(music.selectedTrack, 3);
+    expect(player.played.last, classicalPlaylist[3]);
   });
 
   test('invalid selection leaves playback unchanged', () async {
@@ -139,13 +139,89 @@ void main() {
     final music = AtlasMusicPlayback(playerFactory: player.create);
     addTearDown(music.dispose);
     await music.toggle();
-    await expectLater(music.selectTrack(3), throwsRangeError);
+    await expectLater(
+        music.selectTrack(classicalPlaylist.length), throwsRangeError);
     expect(music.selectedTrack, 0);
     expect(music.isPlaying, isTrue);
+  });
+
+  test('volume is applied to the first track and retained across switches',
+      () async {
+    final player = _Player();
+    final music = AtlasMusicPlayback(playerFactory: player.create);
+    addTearDown(music.dispose);
+
+    await music.setVolume(.35);
+    expect(music.volume, .35);
+    expect(player.setVolumes, isEmpty);
+
+    await music.toggle();
+    expect(player.playedVolumes, [.35]);
+
+    await music.setVolume(.6);
+    expect(player.setVolumes, [.6]);
+    await music.selectTrack(2);
+    expect(player.playedVolumes, [.35, .6]);
+    expect(music.volume, .6);
+  });
+
+  test('invalid volume leaves the current volume unchanged', () async {
+    final music = AtlasMusicPlayback(playerFactory: _Player().create);
+    addTearDown(music.dispose);
+
+    await expectLater(music.setVolume(1.1), throwsRangeError);
+    await expectLater(music.setVolume(double.nan), throwsRangeError);
+    expect(music.volume, 1);
+  });
+
+  test('external output changes update the exposed volume', () async {
+    final output = _OutputVolume(.4);
+    final music = AtlasMusicPlayback(
+      playerFactory: _Player().create,
+      outputVolume: output,
+    );
+    addTearDown(music.dispose);
+    final changes = <double>[];
+    final subscription = music.volumeChanges.listen(changes.add);
+    addTearDown(subscription.cancel);
+
+    await _flush();
+    expect(music.volume, .4);
+    output.setExternal(.25);
+    await _flush();
+    expect(music.volume, .25);
+    expect(changes, [.4, .25]);
   });
 }
 
 Future<void> _flush() => Future<void>.delayed(Duration.zero);
+
+class _OutputVolume implements MusicOutputVolume {
+  _OutputVolume(this.value);
+
+  double value;
+  final controller = StreamController<double>.broadcast(sync: true);
+
+  @override
+  Stream<double> get changes => controller.stream;
+
+  @override
+  Future<double> initialize() async => value;
+
+  @override
+  Future<void> setVolume(double value) async {
+    this.value = value;
+    controller.add(value);
+  }
+
+  void setExternal(double value) {
+    this.value = value;
+    controller.add(value);
+  }
+
+  @override
+  Future<void> dispose() => controller.close();
+}
 
 class _Player implements MusicTrackPlayer {
   var events = StreamController<void>.broadcast(sync: true);
@@ -162,6 +238,8 @@ class _Player implements MusicTrackPlayer {
   }
 
   final played = <String>[];
+  final playedVolumes = <double>[];
+  final setVolumes = <double>[];
   int pauses = 0;
   int resumes = 0;
   bool audible = false;
@@ -178,12 +256,13 @@ class _Player implements MusicTrackPlayer {
   Stream<void> get completed => events.stream;
 
   @override
-  Future<void> play(String asset) async {
+  Future<void> play(String asset, {required double volume}) async {
     if (failNext) {
       failNext = false;
       throw StateError('test load failure');
     }
     played.add(asset);
+    playedVolumes.add(volume);
     final pending = nextPlay;
     nextPlay = null;
     if (pending != null) await pending;
@@ -203,6 +282,9 @@ class _Player implements MusicTrackPlayer {
   }
 
   @override
+  Future<void> setVolume(double value) async => setVolumes.add(value);
+
+  @override
   Future<void> dispose() async {
     disposed = true;
     audible = false;
@@ -218,16 +300,18 @@ class _SingleLoadPlayer implements MusicTrackPlayer {
   @override
   Stream<void> get completed => owner.completed;
   @override
-  Future<void> play(String asset) async {
+  Future<void> play(String asset, {required double volume}) async {
     if (loaded) throw StateError('already loaded');
     loaded = true;
-    await owner.play(asset);
+    await owner.play(asset, volume: volume);
   }
 
   @override
   Future<void> pause() => owner.pause();
   @override
   Future<void> resume() => owner.resume();
+  @override
+  Future<void> setVolume(double value) => owner.setVolume(value);
   @override
   Future<void> dispose() => owner.dispose();
 }

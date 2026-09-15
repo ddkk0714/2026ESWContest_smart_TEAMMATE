@@ -1,10 +1,12 @@
+import 'dart:async';
+
 import 'package:deskmate_display/main.dart';
 import 'package:deskmate_display/music_playback.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('music selector offers three tracks and preserves OFF',
+  testWidgets('music selector offers all tracks and preserves OFF',
       (tester) async {
     tester.view.physicalSize = const Size(1024, 600);
     tester.view.devicePixelRatio = 1;
@@ -46,6 +48,35 @@ void main() {
     expect(find.text('OFF'), findsOneWidget);
   });
 
+  testWidgets('volume button opens a slider and updates playback volume',
+      (tester) async {
+    tester.view.physicalSize = const Size(1024, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final music = _FakeMusicPlayback();
+    await tester.pumpWidget(DeskmateApp(music: music));
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('music-volume')));
+    await tester.pumpAndSettle();
+    expect(find.text('음량 조절'), findsOneWidget);
+    expect(find.text('100%'), findsOneWidget);
+
+    final slider = tester.widget<Slider>(
+      find.byKey(const ValueKey('music-volume-slider')),
+    );
+    slider.onChanged!(.35);
+    await tester.pump();
+    expect(music.volume, .35);
+    expect(find.text('35%'), findsOneWidget);
+
+    music.setExternalVolume(.7);
+    await tester.pump();
+    expect(find.text('70%'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('header exposes exit confirmation and the full FSM graph',
       (tester) async {
     await tester.pumpWidget(const DeskmateApp());
@@ -80,12 +111,31 @@ void main() {
 class _FakeMusicPlayback implements MusicPlayback {
   bool _playing = false;
   int _selectedTrack = 0;
+  double _volume = 1;
+  final _volumeChanges = StreamController<double>.broadcast(sync: true);
 
   @override
   int get selectedTrack => _selectedTrack;
 
   @override
+  double get volume => _volume;
+
+  @override
+  Stream<double> get volumeChanges => _volumeChanges.stream;
+
+  @override
   Future<void> selectTrack(int index) async => _selectedTrack = index;
+
+  @override
+  Future<void> setVolume(double value) async {
+    _volume = value;
+    _volumeChanges.add(value);
+  }
+
+  void setExternalVolume(double value) {
+    _volume = value;
+    _volumeChanges.add(value);
+  }
 
   @override
   bool get isPlaying => _playing;
@@ -100,5 +150,5 @@ class _FakeMusicPlayback implements MusicPlayback {
   }
 
   @override
-  Future<void> dispose() async {}
+  Future<void> dispose() => _volumeChanges.close();
 }

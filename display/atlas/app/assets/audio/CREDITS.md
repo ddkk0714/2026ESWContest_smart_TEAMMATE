@@ -1,6 +1,7 @@
 # DESKMATE bundled music
 
-These files are bundled for offline playback. Order: Debussy → Chopin → Satie → repeat.
+These files are bundled for offline playback. Order: Debussy → Chopin → Satie →
+Beethoven → Mozart → Bach → repeat.
 
 ## Debussy — Clair de lune
 
@@ -31,3 +32,34 @@ These files are bundled for offline playback. Order: Debussy → Chopin → Sati
 - Downloaded Wikimedia's MP3 transcode on 2026-09-08 and renamed it; no further
   audio edits were made. Credit and thanks to Robin Alciatore and Musopen.
 - SHA-256: `664bd754fd049c9b80a3f62fd4e4138d22dad83e54eaa04ec253c5ad826af632`
+
+## Beethoven — Für Elise, WoO 59
+
+- File: `beethoven_fur_elise.mp3`
+- Performer and recording: V Gao (Gaodifan), via Wikimedia Commons.
+- Recording dedication: CC0 1.0 / public domain.
+- [Source and permission](https://commons.wikimedia.org/wiki/File:FurElise.ogg)
+- Downloaded Wikimedia's MP3 transcode on 2026-09-15 and renamed it; no further
+  audio edits were made.
+- SHA-256: `b19867f33192b2a6be665571ae5dd5493e977eafd354c279d257be1b6835bd25`
+
+## Mozart — Piano Sonata No. 16 in C major, K. 545: I. Allegro
+
+- File: `mozart_sonata_k545_allegro.mp3`
+- Source: Musopen, via Wikimedia Commons. Wikimedia identifies the recording as
+  public domain and requests attribution to Musopen.
+- [Source and permission](https://commons.wikimedia.org/wiki/File:Wolfgang_Amadeus_Mozart_-_sonata_no._16_in_c_major,_k.545_'sonata_facile'_-_i._allegro.ogg)
+- Downloaded Wikimedia's MP3 transcode on 2026-09-15 and renamed it; no further
+  audio edits were made. Credit and thanks to Musopen.
+- SHA-256: `47f21d5a9613c798a37a3341cd42075b2741f1af447f6d45eaf4880b662fa126`
+
+## Bach — Prelude No. 1 in C major, BWV 846
+
+- File: `bach_prelude_bwv846.mp3`
+- Performer: Kimiko Ishizaka. Source: Open Goldberg Variations project, via
+  Wikimedia Commons.
+- Recording dedication: CC0 1.0 / public domain.
+- [Source and permission](https://commons.wikimedia.org/wiki/File:Kimiko_Ishizaka_-_Bach_-_Well-Tempered_Clavier,_Book_1_-_01_Prelude_No._1_in_C_major,_BWV_846.ogg)
+- Downloaded Wikimedia's MP3 transcode on 2026-09-15 and renamed it; no further
+  audio edits were made.
+- SHA-256: `76b8e5374c9195d3e5dfe90fdeec232e0ce5176c6506735038d84ce1d8d3aab8`

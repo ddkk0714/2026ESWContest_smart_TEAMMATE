@@ -127,10 +127,20 @@ Pi 4에 직접 접속한다. 빌드 컨테이너가 Pi 4 상태 API를 대신 �
 Pi 4 URL을 임시로 입력해 연결한다. 주소는 저장하지 않는다. Flutter에 FSM 임계값을 복제하지 않고
 Hub의 `/api/test-frame` 개발 API와 `config/fsm.yaml`을 사용한다.
 우측 상단 스피커 `ON/OFF` 버튼은 패키지에 포함된 달빛 → 쇼팽 녹턴 Op.9 No.2 →
-사티 짐노페디 1번을 `audioplayers_atlas`로 자동 순환 재생한다. OFF는 일시정지,
-ON은 현재 곡 이어듣기다. ON/OFF 옆 곡 이름을 누르면 세 곡 중 재생할 곡을 선택한다.
+사티 짐노페디 1번 → 베토벤 엘리제를 위하여 → 모차르트 소나타 K.545 1악장 →
+바흐 프렐류드 BWV 846을 `audioplayers_atlas`로 자동 순환 재생한다. OFF는 일시정지,
+ON은 현재 곡 이어듣기다. ON/OFF 옆 곡 이름을 누르면 여섯 곡 중 재생할 곡을 선택한다.
 ON 상태에서는 즉시 선택 곡으로 바뀌고, OFF 상태에서는 다음 ON 때 선택 곡을 시작한다.
 곡이 끝나면 선택 곡의 다음 순서부터 자동 순환한다.
+곡 이름과 ON/OFF 사이의 음량 아이콘을 누르면 0~100% 슬라이더가 열리며, 설정한
+음량은 자동 또는 수동으로 다음 곡이 시작되어 새 플레이어가 만들어져도 유지된다.
+Bluetooth 출력에서는 Atlas player gain이 실제 sink-input에 반영되지 않으므로, 앱은
+`com.atlas.AudioManager1`에서 현재 활성 출력 장치를 조회해 그 장치의 `Volume`을 제어한다.
+장치의 음량 변경 신호도 구독하므로 Bluetooth 스피커 버튼 조작이 UI에 반영된다. 특정
+Bluetooth 장치 주소나 PulseAudio sink-input 번호에는 의존하지 않는다. 앱 manifest에는
+공식 `com.atlas.permission.privileged.audiocontrol` 권한을 선언한다.
+현재 Atlas 버전은 일부 Bluetooth AVRCP 버튼 변경에서 D-Bus 속성 변경 신호를 누락하므로,
+앱은 활성 출력 장치의 음량을 0.5초 간격으로도 확인해 슬라이더를 동기화한다.
 Atlas의 미디어 서비스는 이미 로드된 플레이어의 음원 교체를 거부(`already loaded`)하므로,
 곡 전환 시 이전 플레이어를 dispose/unload한 뒤 새 플레이어를 생성한다.
 음원 출처·이용 조건은
