@@ -1,0 +1,52 @@
+# 실센서 → SensorFrame 변환 설정 (MVP 2026-09-18 임시 스케일)
+# 코드에 임계값을 두지 않는다. baseline 정규화(features/)가 들어오면 이 파일의
+# 선형 스케일은 개인 기준선 대비 Modified z-score 로 교체된다.
+
+# SensorFrame 생성 주기 — fsm.yaml timers.score_period_sec 와 같은 값을 쓴다.
+frame_period_sec: 10
+
+# 이 시간(초) 안에 새 표본이 없으면 해당 신호를 미가용(available=false)으로 둔다.
+freshness_sec:
+  mmwave: 5
+  env: 30
+  keystroke: 5
+
+# MVP 지름길: 디스플레이 터치 대신 재실 상승엣지(IDLE 에서 present false→true)로 세션을 시작한다.
+auto_start_on_presence: true
+# MVP 지름길: 제어 모듈이 없으므로 ACTION_* 상태를 한 tick 뒤 실행 완료로 간주해 MONITOR 로 넘긴다.
+auto_complete_actions: true
+
+# PC_ratio = 최근 window 안에서 input_active=true 인 키스트로크 표본 비율 (표본 없으면 0 → 비PC)
+pc_ratio_window_sec: 900
+
+keystroke:
+  # phi(집중 저하 증거) = clip((idle_ratio - idle_low) / (idle_high - idle_low))
+  idle_ratio_low: 0.10
+  idle_ratio_high: 0.60
+  # delta(피로 증거) = max( clip((flight_cv - cv_low)/(cv_high - cv_low)), clip(correction_rate / correction_high) )
+  flight_cv_low: 0.25
+  flight_cv_high: 0.70
+  correction_rate_high: 0.15
+
+mmwave:
+  # posture 신호(ToF 가 붙기 전 대체): phi = motion_level/100 (안절부절 = 집중 저하 증거)
+  # delta = max( still_seconds/still_full_sec , drowsy_delta[drowsy_state] )
+  still_motion_level_max: 10     # 이 이하 체동이 지속되면 '정적'으로 센다
+  still_full_sec: 600            # 정적 10분이면 delta 1.0
+  drowsy_delta:
+    NOPERSON: 0.0
+    NOLOCK: 0.0
+    WARMUP: 0.1
+    AWAKE: 0.1
+    DROWSY: 1.0
+  # respiration 신호: 재실 중 resp_valid=false 가 이 시간 이상 이어지면 '호흡 소실' delta 1.0
+  resp_lost_sec: 60
+
+environment:
+  # delta = clip((co2_ppm - co2_low) / (co2_high - co2_low))
+  co2_ppm_low: 800
+  co2_ppm_high: 1500
+
+elapsed:
+  # delta = clip(세션 경과초 / full_sec)
+  full_sec: 5400

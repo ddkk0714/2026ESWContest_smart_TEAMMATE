@@ -56,12 +56,15 @@ def replay(
     frames: Iterable[SensorFrame],
     cfg: dict | None = None,
     engine: FSMEngine | None = None,
+    recorder=None,
 ) -> ReplayResult:
     engine = engine or FSMEngine(cfg)
     res = ReplayResult()
     prev = engine.state
     for frame in frames:
         r = engine.tick(frame)
+        if recorder is not None:
+            recorder.observe(frame, r)
         res.ticks += 1
         res.visited[r.state.value] = res.visited.get(r.state.value, 0) + 1
         if r.state is not prev:

@@ -1,5 +1,6 @@
-# 규칙 기반 FSM 설정 — docs/fsm-spec.md (VER5) 대응
-# 8월 실측 후 이 파일의 값만 바꿔 재실험한다. 코드에 하드코딩 금지.
+# 시연·리허설용 프로파일 — fsm.yaml 과 임계값·가중치는 동일하고 **타이머만 짧다**.
+# 운영 기본값이 아니다. `python -m deskmate_hub run --config hub/deskmate_hub/config/fsm.demo.yaml`
+# + `tools/mqtt_scenario_sim.py --scenario short` 로 약 6분 안에 전체 경로를 본다.
 
 # 호흡은 보조 신호다. go/no-go(8월) 통과 전까지 false 로 두면
 # scoring 이 호흡 항을 제외하고 나머지 가중치로 재정규화한다.
@@ -36,13 +37,13 @@ gate:
 
 timers:
   score_period_sec: 10           # 신뢰도 계산 주기 (2026-09-14 팀 결정: 30→10. ingest 가 이 주기로 SensorFrame 을 만든다)
-  baseline_sec: 300              # START Baseline 측정(5~10분, 초안 5분)
-  absent_idle_sec: 600           # 재실 없음 10분 → IDLE
-  fatigue_elevated_hold_sec: 180 # FOCUS→FATIGUE_SUSPECT 진입 유지(3분)
-  fatigue_confirm_hold_sec: 180  # FATIGUE_SUSPECT→FATIGUE 유지(3분)
-  focus_break_poll_sec: 180      # 집중 재유도 관찰(3분)
-  rest_min_sec: 300              # REST 최소 유지 후 회복 판정(≥300s)
-  cmd_cooldown_sec: 300          # 동일 제어 명령 재발행 쿨다운
+  baseline_sec: 30   # 운영 300
+  absent_idle_sec: 60   # 운영 600
+  fatigue_elevated_hold_sec: 30   # 운영 180
+  fatigue_confirm_hold_sec: 30   # 운영 180
+  focus_break_poll_sec: 30   # 운영 180
+  rest_min_sec: 60   # 운영 300
+  cmd_cooldown_sec: 60   # 운영 300
 
 # 개입 라우팅 그룹 (dominant = argmax(wᵢ·δᵢ))
 routing:
