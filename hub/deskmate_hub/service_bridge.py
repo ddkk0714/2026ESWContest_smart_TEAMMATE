@@ -86,7 +86,7 @@ def _run_live_bridge() -> None:
     import time
 
     from .ingest import SensorCache
-    from .ingest.mqtt_lines import MqttLineSource
+    from .ingest.mqtt_lines import MqttLineSource, control_envelope
     from .ingest.uart_source import UartLineSource
     from .live import LiveHub
 
@@ -130,7 +130,14 @@ def _run_live_bridge() -> None:
         if mqtt_source is not None:
             mqtt_source.publish_report(envelope)
 
-    hub = LiveHub(cache, publish=publish, publish_request=publish_request, out=sys.stderr)
+    def publish_control(command: dict[str, Any]) -> None:
+        # 보드(네이티브 MQTT)에서는 C++ 서비스가 CMD 라인을 control/cmd 로 발행한다(retain 없음).
+        store.write_message("CMD\t" + json.dumps(control_envelope(command), ensure_ascii=False, separators=(",", ":")))
+        if mqtt_source is not None:
+            mqtt_source.publish_control(command)
+
+    hub = LiveHub(cache, publish=publish, publish_request=publish_request, publish_control=publish_control,
+                  out=sys.stderr)
     next_tick = time.time()
     # 리포트는 세션 종료를 기다리지 않고 주기 스냅샷으로 낸다. retain 발행이라
     # 나중에 붙는 화면도 바로 최신 요약을 받는다. tick 은 보통 1 s 라 tick 마다

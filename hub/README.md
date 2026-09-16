@@ -18,7 +18,7 @@ UART 디코딩(COBS/CRC-16)과 MQTT 클라이언트는 그 C++ 서비스에 두�
 | `features/` | 김태환 | `baseline.py`: 세션 START 보정 창 → 지표별 median·MAD → Modified z → `phi/delta`, 시간대 버킷 seed, opt-in 저장 | 🟡 09-16 구현(ingest 연동). ToF 기하 특징·환경 추세는 센서 후 |
 | `inference/` | 박소연 | 규칙 기반 FSM(1단계), 신뢰도 공식, 신뢰도 게이트 | ✅ 18상태, 테스트 46개(45 통과·1 xfail) |
 | `inference/` | 조명희 | TFLite 경량 분류기 로딩 · 추론(2단계) | ⬜ 선택적 의존 |
-| `control/` | 조명희 | 스마트 플러그 · 조명 · 환기팬 제어, ThinQ 1기기 | ⬜ 빈 패키지 |
+| `control/` | 조명희 | `dispatcher.py`: ACTION_ENV → `control/cmd`(가역 동작만, 쿨다운, 비가역 자동 금지) → `control/result`/타임아웃 → action_done, 제안 대기·만료, 거절 시 undo. `config/control.yaml`. Mock 어댑터 내장 | 🟡 09-16. 실기 플러그 어댑터는 모델 선정 후 |
 | `config/` | 공통 | 임계값 · 토픽 · 장치 설정 (YAML) | ✅ `fsm.yaml`, `ingest.yaml`(센서→신호 임시 스케일) |
 | `live.py` | 공통 | `run` 명령: ingest → FSM → `deskmate/state/phase`(retain, QoS 1) 발행, 프레임을 리플레이 호환 JSONL 로 기록 | 🟡 MVP(09-14). 로컬 amqtt 브로커 E2E 확인, Pi 4 Mosquitto 실연동 대기 |
 | `ingest/uart_frame.py` `uart_source.py` | 공통 | UART2 프레임 코덱(COBS·CRC-16/CCITT-FALSE·TYPE 구조체)과 `UART\t` 라인/raw 시리얼 소스 | ✅ 09-15, 테스트 14개. C++ 수신부(`atlas/`) 대기 |
@@ -72,7 +72,8 @@ python -m deskmate_hub run --broker <ip> --ingest-config my-ingest.yaml --log-di
 ```
 
 - 구독: `deskmate/sensor/#`(mmwave·env·keystroke — envelope 또는 collector 평면 payload), `deskmate/feedback/user`
-- 발행: `deskmate/state/phase`(retain, QoS 1, 10 s 주기), `deskmate/interaction/request`(제안 게이트로 ACTION_* 진입 시, retain 없음), `deskmate/health/hub`(LWT)
+- 발행: `deskmate/state/phase`(retain, QoS 1, 10 s 주기), `deskmate/interaction/request`(제안 게이트로 ACTION_* 진입 시, retain 없음), `deskmate/control/cmd`(ACTION_ENV, `control.yaml`), `deskmate/health/hub`(LWT). 구독에 `deskmate/control/result` 포함
+- 제어 어댑터가 없으면 명령은 `result_timeout_sec` 뒤 timeout 으로 닫히고 FSM 은 계속 진행한다. 리허설은 `python tools/mock_plug.py --broker <ip>`. `control.yaml adapter: mock` 이면 프로세스 안에서 즉시 성공 처리
 - 매핑은 `config/ingest.yaml`. `normalization: baseline`(기본)이면 START 보정 창에서 만든 개인 기준선(중앙값·MAD Modified z)을 우선 쓰고, 기준선이 없는 지표·보정 전에는 선형 램프로 폴백한다. `baseline.persist.enabled: true` 면 median·MAD·표본 수만 JSON 에 저장(opt-in).
 - `--config deskmate_hub/config/fsm.demo.yaml` 은 임계값은 같고 **타이머만 짧은 시연·리허설 프로파일**(baseline 30 s, 이탈 60 s 등). 운영 기본값이 아니다.
 - `logs/frames-*.jsonl` 은 `--replay` 로 그대로 재생되고, `logs/state-*.jsonl` 은 발행한 envelope 다.

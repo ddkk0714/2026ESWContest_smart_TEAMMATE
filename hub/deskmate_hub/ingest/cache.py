@@ -33,6 +33,7 @@ class SensorCache:
     env: Sample | None = None
     keystroke: Sample | None = None
     feedback: deque = field(default_factory=lambda: deque(maxlen=16))
+    control_results: deque = field(default_factory=lambda: deque(maxlen=64))
     keystroke_history: deque = field(default_factory=lambda: deque(maxlen=1800))
     seq_gaps: dict[str, int] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -53,6 +54,16 @@ class SensorCache:
     def put_feedback(self, payload: dict[str, Any]) -> None:
         with self._lock:
             self.feedback.append(payload)
+
+    def put_control_result(self, payload: dict[str, Any]) -> None:
+        with self._lock:
+            self.control_results.append(payload)
+
+    def pop_control_results(self) -> list[dict[str, Any]]:
+        with self._lock:
+            items = list(self.control_results)
+            self.control_results.clear()
+            return items
 
     # ---- 읽기 (프레임 빌더) ----
     def snapshot(self) -> "CacheView":

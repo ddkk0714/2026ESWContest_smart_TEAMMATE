@@ -77,6 +77,15 @@ def main() -> None:
                 "deskmate_hub/config/ingest.json",
                 json.dumps(ingest_config, ensure_ascii=False, separators=(",", ":")),
             )
+            # control.yaml 도 같은 이유(제한 Python 에 PyYAML 부재)로 JSON 으로 함께 넣는다.
+            control_yaml = args.config.with_name("control.yaml")
+            if control_yaml.exists():
+                with control_yaml.open(encoding="utf-8") as source:
+                    control_config = yaml.safe_load(source)
+                archive.writestr(
+                    "deskmate_hub/config/control.json",
+                    json.dumps(control_config, ensure_ascii=False, separators=(",", ":")),
+                )
         with args.executable.open("ab") as executable, open(payload.name, "rb") as built:
             executable.write(built.read())
 
