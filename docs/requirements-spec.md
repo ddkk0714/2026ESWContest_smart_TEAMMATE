@@ -1,6 +1,6 @@
 # DESKMATE 요구사항 명세서
 
-> 기준: 개발계획서 v2, `DESKMATE_FSM-VER5`, 저장소 현황(2026-08-31)
+> 기준: 개발계획서 v2, `DESKMATE_FSM-VER5`, 저장소 현황(2026-09-14)
 > 목적: 개발·통합·시험의 단일 요구사항 기준
 
 ## 1. 문서 규칙
@@ -33,20 +33,22 @@ DESKMATE는 ToF, mmWave, 키스트로크 타이밍, 환경, 작업 시간 신호
 
 | 구성 | 역할 | 결정·현황 |
 |---|---|---|
-| ESP32 | 센서 취득·1차 전처리 | **확정**, 펌웨어 미구현 |
-| PC 수집기 | 키 내용 없는 타이밍·PC 활성 | **확정**, 미구현 |
-| Raspberry Pi 4 | 중앙 수집·융합·FSM·제어 판단 | **확정**, FSM 코어·합성 테스트만 존재 |
-| Raspberry Pi 5 | AI Native OS Video Profile·Atlas Flutter UI·스피커·터치 | **확정**. 대시보드·내장 데모·HTTP 개발 어댑터·release IPK 배포 완료. USB 터치는 xHCI 장애로 실기 입력 검증 대기 |
-| TFLite | FSM 보완·검증 | **선택**, 미구현 |
-| 스마트 플러그·LED·환기팬 | 기본 제어 시연 | **잠정** |
+| ESP32 | mmWave·환경 센서 취득·1차 전처리, UART2 송신 | **확정**. mmWave 펌웨어는 별도 저장소에 존재(레포 이관 대기), 환경 센서 미구현. UART 물리 링크 09-11 실측 |
+| PC 수집기 | 키 내용 없는 타이밍·PC 활성 | **확정**. `collector/` 구현·테스트 8개, `feat/merge-pending` PR 로 main 진입 중. 계약은 구현 기준 확정 |
+| Raspberry Pi 4 | 중앙 수집·융합·FSM·제어 판단 (AI Native OS Headless, `hub/atlas` native service) | **확정**. FSM 코어·테스트 46개(45 통과·1 xfail)·native service IPK. ingest·features·control 미구현 |
+| Raspberry Pi 5 | AI Native OS Video Profile·Atlas Flutter UI·스피커·터치 | **확정**. 대시보드·MQTT 구독·HTTP 개발 어댑터·release IPK 배포 완료. 디스플레이 교체 후 터치 정상(09-14) |
+| ToF 스켈레톤 | V2V-PoseNet 상체 관절 → 자세 분류 | **확정(09-08 채택)**, 코드 없음. 온보드는 기하 특징 7종, 스켈레톤은 오프라인 검증 |
+| TFLite | FSM 보완·검증(1D CNN 백본 + 개인 헤드) | **선택**, 미구현 |
+| 스마트 플러그·LED·환기팬 | 기본 제어 시연 | **잠정**, 모델 미선정 |
 | ThinQ API | 실가전 양방향 제어 | **선택** |
-| MQTT | 보드 간 전송 | **잠정**, 토픽 문서만 존재 |
+| MQTT | Pi 4↔Pi 5 전송 (이더넷 직결) | **확정**. display 구독 구현, hub 발행 미구현 |
+| UART | ESP32↔Pi 4 전송 (COBS + CRC-16) | **확정**. 프레임 TYPE·mmWave 스키마 미확정 |
 | Node-RED | 개발 모니터링·센서값 주입·로깅 | **확정**, 운영·FSM 필수 구성 아님 |
 
 ## 4. 주요 사용 시나리오
 
 1. **세션 시작**: 사용자 시작 입력 후 5~10분 baseline을 구성한다.
-2. **상태 추정**: Pi 4가 PC/MIXED/NPC 맥락을 선택하고 30초 주기 특징으로 VER5 FSM을 전이한다.
+2. **상태 추정**: Pi 4가 PC/MIXED/NPC 맥락을 선택하고 10초 주기 특징으로 VER5 FSM을 전이한다.
 3. **불확실성 확인**: ToF 숙임과 mmWave active 등 신호 충돌 시 "졸음/리듬 타기/잘 모름"을 묻는다.
 4. **개입**: 환경·자세·인지 원인에 따라 조명·환기·자세·휴식을 제안하고 효과를 검증한다.
 5. **세션 종료**: 상태 타임라인, 환경 추세, 제안·수용률을 요약한다.
@@ -62,11 +64,11 @@ DESKMATE는 ToF, mmWave, 키스트로크 타이밍, 환경, 작업 시간 신호
 | FR-SES-003 | 확정 | 사용자는 언제든 종료할 수 있어야 한다. | `END`와 세션 요약이 생성된다. |
 | FR-SEN-001 | 확정 | VL53L9CX는 재실·상대 자세·모션·노딩 특징을 생성해야 한다. | 54×42 zone의 무효값·튀임이 제거되고 특징별 유효성이 있다. |
 | FR-SEN-002 | 확정 | SEN0623 mmWave는 ToF의 재실·still/active·호흡을 교차 검증해야 한다. | 거치 조건 미충족 호흡·심박은 무효 처리된다. |
-| FR-SEN-003 | 확정 | SEN0536 CO₂·온습도와 SZH-EK070 조도는 환경 맥락·제어 근거를 제공해야 한다. | 순간값·추세·유효성이 구분된다. |
+| FR-SEN-003 | 확정 | SCD41 CO₂, DHT22 온습도, BH1750 조도는 환경 맥락·제어 근거를 제공해야 한다. **물리량당 센서 하나, 센서 간 보정 없음**(2026-09-14). | 순간값·추세·유효성이 구분된다. SCD41 T/RH 는 payload 에 없다. |
 | FR-SEN-004 | 확정 | PC 수집기는 dwell·flight·idle·correction 통계만 생성해야 한다. | 키 값·문자·원시 타임스탬프를 전송·저장하지 않는다. |
 | FR-SEN-005 | 확정 | 호흡은 go/no-go 통과 전까지 보조 신호여야 한다. | 호흡 무효 시에도 FSM이 작동한다. |
 | FR-SEN-006 | 확정 | 일반 운영은 ToF 특징값만 전달하고, 명시적 디버그/UI 모드에서만 축소 depth map을 최대 2Hz로 허용해야 한다. | 운영 패킷·로그에는 원본 zone 배열이 없고 디버그 모드는 별도 플래그·보존 정책을 따른다. |
-| FR-SEN-007 | 잠정 | VL53L9CX는 Pi 4 MIPI CSI-2 직접 연결을 우선 검증하고 실패 시 ESP32 I2C 축소 경로로 전환해야 한다. | 1일 연결 spike에서 드라이버·처리율을 기록하고 성공/전환 조건을 남긴다. |
+| FR-SEN-007 | 미결정 | VL53L9CX 연결은 Path A(Pi 4 MIPI CSI-2) 또는 Path B(ESP32 I2C 1 MHz binning) 중 2026-09-19 spike 로 정한다(DEC-010). 두 경로 모두 특징값 인터페이스는 동일해야 한다. | spike 에서 드라이버·처리율을 기록하고 성공/전환 조건을 남긴다. 실패 시 Path B. |
 
 ### 5.2 융합·FSM
 
@@ -77,7 +79,7 @@ DESKMATE는 ToF, mmWave, 키스트로크 타이밍, 환경, 작업 시간 신호
 | FR-FUS-003 | 확정 | 자세 단독으로 집중·피로·졸음을 확정하지 않아야 한다. | 맥락과 최소 1개 보조 신호가 근거에 포함된다. |
 | FR-FUS-004 | 확정 | 센서 충돌 시 자동 제어 신뢰도를 낮춰야 한다. | ToF 노딩+mmWave active에서 제안·확인으로 간다. |
 | FR-FSM-001 | 확정 | Pi 4에서 VER5 18상태 FSM을 실행해야 한다. | [`fsm-spec.md`](fsm-spec.md)의 전이 테스트가 통과한다. |
-| FR-FSM-002 | 확정 | 30초 주기로 피로·집중 저하 증거 점수를 독립 계산해야 한다. | 점수·가중치·근거가 출력된다. |
+| FR-FSM-002 | 확정 | 10초 주기(`score_period_sec`, 2026-09-14 확정)로 피로·집중 저하 증거 점수를 독립 계산해야 한다. | 점수·가중치·근거가 출력된다. 지속 조건은 초 단위 타이머로 주기와 독립. |
 | FR-FSM-003 | 확정 | 15분 PC 활성 비율로 PC/MIXED/NPC 가중치를 선택해야 한다. | 초기 `>0.70=PC`, `<0.30=NPC`, 그 사이=MIXED. |
 | FR-FSM-004 | 확정 | 지속 시간·히스테리시스·제어 쿨다운을 적용해야 한다. | 임계 근처에서 상태·제어가 진동하지 않는다. |
 | FR-FSM-005 | 확정 | 환경·자세·인지 원인을 라우팅해야 한다. | 지배 기여도와 `ACTION_ENV/POSTURE/BREAK`가 일치한다. |
@@ -155,11 +157,17 @@ DESKMATE는 ToF, mmWave, 키스트로크 타이밍, 환경, 작업 시간 신호
 
 | ID | 항목 | 선택지·기준 |
 |---|---|---|
-| DEC-001 | ESP32↔Pi 4 및 Pi 4↔Pi 5 통신 | UART / MQTT / 혼합; #3 팀 결정 대기. MQTT는 최우선 후보지만 미확정 |
+| DEC-001 | ~~ESP32↔Pi 4 및 Pi 4↔Pi 5 통신~~ | **해소(2026-09-11)**: ESP32↔Pi 4 UART2(COBS+CRC-16), Pi 4↔Pi 5 이더넷+MQTT. 남은 것은 DEC-009 |
 | DEC-004 | `C_focus` 의미 | 집중 저하 증거 유지 / 집중도로 부호 변경 |
 | DEC-006 | 개인화 저장소 | 파일 / SQLite / 기타 로컬 DB; 삭제·보존·복구 |
-| DEC-007 | 호흡 go/no-go | ToF / mmWave / 둘 다 / 비활성; 유효률·참조값 오차·FSM 개선량 |
-| DEC-008 | Pi 4 FSM 배포 런타임 | Raspberry Pi OS Python / AI Native OS Headless native service·bridge; 실물 Pi 4 OS와 Python 지원 확인 |
+| DEC-007 | 호흡 신호 사용 범위 | ToF 호흡 추출 제외(mmWave 이관). mmWave 는 순간값 미사용, 중앙값+기준선·호흡 소실 여부만. `respiration_enabled` 의미 재정의 여부 |
+| DEC-008 | ~~Pi 4 FSM 배포 런타임~~ | **해소**: AI Native OS Headless + `hub/atlas` native service(제한 Python). 보드에 개발 도구 미설치 |
+| DEC-009 | UART 프레임 TYPE·mmWave 출력 스키마 | mmWave TYPE 신규 배정(실험용 0x01 은 ToF 디버그와 충돌); DrowsyDetector state·evidence 만 / 요약값 포함; CRC test vector |
+| DEC-010 | ToF 연결 경로 | Path A(Pi 4 MIPI CSI-2) / Path B(ESP32 I2C 1 MHz binning); **2026-09-19 spike 로 결정**, 실패 시 B |
+| ~~DEC-011~~ | ~~신뢰도 계산 주기~~ | **해소(2026-09-14)**: `score_period_sec: 10` |
+| ~~DEC-012~~ | ~~키스트로크 계약~~ | **해소(2026-09-14)**: `collector/` 구현 기준 확정([`data-spec.md`](data-spec.md) §6.4), 세부 튜닝은 이후 |
+| ~~DEC-013~~ | ~~SCD41·DHT22 역할~~ | **해소(2026-09-14)**: 보정 없음, CO₂=SCD41 · T/RH=DHT22 단일 센서 |
+| ~~DEC-014~~ | ~~Pi 5 터치 화면~~ | **해소(2026-09-14)**: 디스플레이 교체, 터치 정상 |
 
 ## 10. 추적성
 
@@ -168,6 +176,6 @@ DESKMATE는 ToF, mmWave, 키스트로크 타이밍, 환경, 작업 시간 신호
 - 논리 데이터 계약: [`data-spec.md`](data-spec.md)
 - MQTT 채택 시 매핑 초안: [`mqtt-topics.md`](mqtt-topics.md)
 - 하드웨어: [`hardware.md`](hardware.md)
-- 현재 현황: [`development-progress.md`](development-progress.md)
+- 현재 현황·우선순위: [`roadmap.md`](roadmap.md)
 - LG 기술교육 자료: 저장소 외부 로컬 `개발자료/스마트 가전_기술교육 (1).pdf` (Git 미포함)
 - 전년도 수상팀 공개자료: 저장소 외부 로컬 `개발자료/제23회ESWC_동방예의지국_발표자료_공개용 (1) (1).pdf` (Git 미포함)
