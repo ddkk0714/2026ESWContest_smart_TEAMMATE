@@ -14,7 +14,9 @@ VL53L9CX 는 연결 경로(Path A: Pi 4 CSI-2 / Path B: ESP32 I2C 1 MHz binning)
 > `transport/frame.cpp`(헤더·CRC-16/CCITT-FALSE·COBS·`0x00` 종료), `include/frame_types.h`(TYPE 0x20 mmWave 1 Hz ·
 > 0x10 환경 0.2 Hz(스텁이면 valid_bits 0) · 0xF0 하트비트 1 Hz). 빌드 플래그 `-DDESKMATE_UART2_TX=1`(기본 켬),
 > `-DDESKMATE_FIRMWARE_VERSION`. Python 코덱(`hub/deskmate_hub/ingest/uart_frame.py`)과 test vector 로 교차 검증했다.
-> **`pio run` 실빌드와 실보드 UART 검증은 아직 안 했다.** 환경 센서 실제 드라이버(SCD41·BH1750·DHT22)는 미구현.
+> **`pio run` PC 빌드 통과(09-16, espressif32 6.10.0 · RAM 6.6% · Flash 20.7%).** DFRobot 라이브러리는 PIO 레지스트리에 없어 GitHub 커밋(`f98f64e`)으로 고정했다. 실보드 업로드·UART 검증은 아직. 환경 센서 실제 드라이버(SCD41·BH1750·DHT22)는 미구현.
+>
+> PC 에 PlatformIO 가 없으면 `python -m pip install platformio` 후 `python -m platformio run` (첫 실행 시 툴체인 다운로드 수분).
 
 ## 배선·UART 할당 (실측)
 

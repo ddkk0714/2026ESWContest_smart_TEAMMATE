@@ -44,5 +44,16 @@ payload 해석은 Python(`deskmate_hub/ingest/uart_frame.py`)이 한다. 규약�
 Python 브리지를 실센서 모드로 띄우려면 서비스 환경에 `DESKMATE_HUB_MODE=live`(선택: `DESKMATE_MQTT_HOST`)를 준다.
 빌드 시 `paho-mqtt` 가 설치돼 있으면 payload 에 동봉된다(`tools/build_payload.py`).
 
-호스트 테스트: `cmake -DBUILD_TESTING=ON` 후 `ctest` 로 `deskmate_uart_rx_host_test`(CRC check value·COBS·라인 형식).
-**ARC 컨테이너에서의 실컴파일·실보드 UART 검증은 아직 안 했다.**
+호스트 테스트: `cmake -DBUILD_TESTING=ON` 후 `ctest` 로 `deskmate_uart_rx_host_test`(CRC check value·COBS 벡터·프레임 파싱·CRC/LEN 손상 거부·
+Python 코덱 공유 벡터·라인 형식). assert 가 아니라 명시적 check 라 NDEBUG 빌드에서도 검증된다.
+
+PC 에 C++ 컴파일러가 없어도 `ziglang` 으로 크로스 빌드해 WSL 에서 돌릴 수 있다(09-16 통과 확인):
+
+```bash
+python -m pip install ziglang
+python -m ziglang c++ -std=c++17 -target x86_64-linux-musl -static hub/atlas/src/uart_rx.cpp hub/atlas/src/uart_rx_host_test.cpp -o /tmp/t
+wsl -d docker-desktop -- /tmp/t        # 또는 아무 리눅스 환경에서 실행 → "all checks passed"
+python -m ziglang c++ -std=c++17 -target aarch64-linux-gnu -c hub/atlas/src/uart_rx.cpp -o /tmp/uart_rx.o   # Pi 4 타깃 컴파일 확인
+```
+
+`main.cpp` 는 sdbus-c++ 가 필요해 ARC 컨테이너에서만 빌드된다. **ARC 실컴파일·설치·실보드 UART 검증은 아직 안 했다.**

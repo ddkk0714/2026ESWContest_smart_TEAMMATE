@@ -101,7 +101,7 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 **일별 목표**
 
 - [ ] **화 09-15 — 센서가 MQTT 에 보인다**
-  - [x] `firmware/esp32_sensor_node/` PlatformIO 프로젝트 생성(09-14, PR #12) — 공식 DFRobot C1001 라이브러리 기반 `C1001Passive` + 5상태 `DrowsyDetector`. 원본 저장소 미제공으로 UART2 COBS/CRC 송신은 미이관(핀·baud 초기화만). **`pio run` 빌드는 미검증** — 화요일 실보드에서 확인
+  - [x] `firmware/esp32_sensor_node/` PlatformIO 프로젝트(PR #12) + UART2 COBS/CRC 송신(09-16). **`pio run` PC 빌드 통과(09-16)** — 업로드는 실보드에서
   - [x] 펌웨어 UART0(USB) 1 Hz mmWave JSON + 5 s 환경 스텁 JSON(`{"t":"mmwave"|"env", ...}`) — PR #12
   - [x] `tools/uart_mqtt_bridge.py`: `{"t":` 라인 → 공통 envelope → `deskmate/sensor/{mmwave,env}/<node>`, health LWT, 백오프, 날짜별 JSONL. 순수 변환 테스트 9개 — PR #12
   - [ ] broker 결정·기동: Pi 4 Mosquitto(`hub/mqtt/`) 우선, 안 되면 PC mosquitto. `mosquitto_sub -t 'deskmate/#'` 로 확인
@@ -161,8 +161,8 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 
 - [x] Pi 4 Mosquitto 설정, `mqtt-topics.md` 계약, Node-RED 모니터, display MQTT 구독·`feedback/user` 발행
 - [x] Pi 4 native service(`hub/atlas`) IPK 로 제한 Python 실행, HTTP 8765 개발 API
-- [x] ESP32 UART2 프레임 송신 — mmWave 0x20 · 환경 0x10(스텁, valid_bits 0) · 하트비트 0xF0 (`transport/frame.cpp`, 09-16). **`pio run`·실보드 검증 남음**
-- [x] Pi 4 C++ 서비스에 `/dev/serial0` 수신 → COBS 해제 → CRC 검증 → 라인 브리지(`UART\t<json>`) — `hub/atlas/src/uart_rx.cpp`(09-16, 호스트 테스트 포함). **ARC 컴파일·실보드 검증 남음**
+- [x] ESP32 UART2 프레임 송신 — mmWave 0x20 · 환경 0x10(스텁, valid_bits 0) · 하트비트 0xF0 (`transport/frame.cpp`, 09-16). **`pio run` PC 빌드 통과(09-16)**, 실보드 업로드·검증 남음
+- [x] Pi 4 C++ 서비스에 `/dev/serial0` 수신 → COBS 해제 → CRC 검증 → 라인 브리지(`UART\t<json>`) — `hub/atlas/src/uart_rx.cpp`. **호스트 테스트 통과(09-16, zig 크로스 빌드 → WSL 실행, aarch64 컴파일 확인)**. ARC 실컴파일·실보드 검증 남음
 - [x] hub `ingest/`: MQTT 센서·키스트로크 + `UART\t` 라인(`uart_source.py`) → `SensorCache` → `SensorFrame`, freshness·seq 갭 (09-14/15)
 - [x] hub MQTT 발행: `state/phase`(retain)·`health/hub`, `feedback/user` 구독 → FSM 반영 (09-14). `interaction/request` 는 충돌 신호 경로(§5)와 함께
 - [ ] 전 토픽·UART 라인 JSONL 로거(`tools/log_recorder.py`), 리플레이 포맷과 동일
