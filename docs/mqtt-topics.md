@@ -194,6 +194,12 @@ Node-RED에서 Pi 5 화면을 확인할 때 쓰는 일회성 안내 문구다. �
 }
 ```
 
+hub 가 현재 발행하는 종류(2026-09-16, `live.py`): **제안 게이트(0.45~0.75)로 `ACTION_*` 에 새로 들어올 때** 1건.
+`kind` = `break_suggest` | `env_suggest` | `posture_suggest`, `prompt_code` = `take_a_break` | `adjust_environment` | `fix_posture`,
+`options` = `["accept","reject"]`, `expires_in_s` = `timers.focus_break_poll_sec`, `evidence` = FSM `actions`, `cause`, `c_fatigue`.
+자동(≥0.75)은 실행 후 알림이라 질문하지 않는다. retain 하지 않는다. display 는 `request_id` 를 기억해 `feedback/user` 에 실어 보내고,
+hub 는 현재 질문의 `request_id`(또는 `request_id` 생략·`atlas-display`)만 반영한다. 신호 충돌(`state_disambiguation`)은 4-B §5 에서 추가.
+
 ### `deskmate/control/cmd`
 
 ```json

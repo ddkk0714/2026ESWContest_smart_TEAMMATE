@@ -1,7 +1,7 @@
 """엎드림·노딩 시나리오 검증 — ToF posture 신호가 FSM 을 어떻게 움직이는지 고정한다.
 
 ToF(VL53L9CX 54×42)는 자세·재실·노딩 특징을 만들어 posture Signal(phi/delta)로 넘긴다
-(docs/architecture.md). engine 은 그 두 float 만 보므로, 여기 테스트는
+(docs/data-spec.md). engine 은 그 두 float 만 보므로, 여기 테스트는
 "특징 추출이 이런 값을 주면 FSM 이 이렇게 판정한다"는 계약을 고정하는 역할이다.
 
 전제(config/fsm.yaml): fatigue_confirm 0.70, fatigue_focus_low 0.40,
@@ -87,11 +87,11 @@ def test_slump_recovers_to_focus_after_correction():
     assert e.tick(frame(t + 120, sig=fixed)).state is State.FOCUS_PC
 
 
-# ── 자세 단독 판정 금지 (architecture.md 리스크 3) ──────────
+# ── 자세 단독 판정 금지 (데이터·FSM 계약) ───────────────────
 def test_posture_alone_cannot_confirm_fatigue():
     """자세만 나쁘고 다른 근거가 없으면 피로를 확정하지 않는다.
 
-    architecture.md 리스크 3: "자세는 재실/자세종류 판정에만 제한 사용,
+    데이터·FSM 계약: "자세는 재실/자세종류 판정에만 제한 사용,
     판정 주축은 키스트로크 + 작업시간 + 환경". PC 가중치에서 posture 는 0.25 뿐이라
     delta=1.0 이어도 C_fatigue 는 0.55 로 확정선(0.70)에 못 미친다.
     """

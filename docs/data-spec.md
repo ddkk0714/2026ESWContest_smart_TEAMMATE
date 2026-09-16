@@ -320,7 +320,29 @@ USB 열거·xHCI 같은 하드웨어 진단 로그는 이 논리 스키마 밖�
 MQTT 사용 시 본 레코드를 JSON/UTF-8로 매핑하고 topic·QoS·retain·ACL은 [`mqtt-topics.md`](mqtt-topics.md)에서 정의한다. Node-RED를 사용해도 논리 스키마를 변경하지 않고 Pi 4 hub를 판정의 단일 기준으로 둔다.
 
 - `schema_version`, `source_id`, `boot_id`, `sequence`, 시간 검증은 통신 방식과 무관하게 필요.
-- UART binary frame을 쓰는 구간은 CRC-16으로 검증한다. 상세 다항식·초깃값·바이트 순서와 test vector는 UART 어댑터 구현 전에 고정한다.
+- UART binary frame을 쓰는 구간은 CRC-16으로 검증한다. 규약은 아래 §13.1(2026-09-15 잠정, D1 확정 시 TYPE 값만 바뀔 수 있음).
+
+### 13.1 ESP32 → Pi 4 UART2 프레임 (잠정)
+
+구현 기준 코덱: `hub/deskmate_hub/ingest/uart_frame.py` (순수 Python). 검증 도구: `python tools/uart_frame_tool.py vectors`.
+
+```text
+wire   = COBS( header ‖ payload ‖ crc16 ) ‖ 0x00        # 0x00 은 프레임 종료자, 인코딩 내부엔 0x00 없음
+header = SOF 0xA5 · VER 0x01 · TYPE u8 · SEQ u16 · LEN u16(payload 길이) · TS_MS u32(millis)   # little-endian, 11 B
+crc16  = CRC-16/CCITT-FALSE(poly 0x1021, init 0xFFFF, no reflect, xorout 0) over SOF..payload  # '123456789' → 0x29B1
+```
+
+| TYPE | 이름 | 주기 | payload (little-endian) |
+|---|---|---|---|
+| `0x01` | ToF 디버그 depth | ≤ 2 Hz | 예약(디버그 모드만) |
+| `0x03` / `0x04` | ToF 특징 / 자세 클래스 | 30 Hz | Path B 확정 시 정의 |
+| `0x10` | 환경 | 0.2 Hz | `co2_ppm u16 · temp_c_x10 i16 · humidity_pct_x10 u16 · lux u16 · valid_bits u8(b0 co2, b1 temp, b2 hum, b3 lux)` = 9 B |
+| `0x20` | mmWave | 1 Hz | `present u8 · motion_state u8(0 none/1 still/2 active) · motion_level u8 · distance_cm u16(0xFFFF=null) · resp_bpm u8(0xFF=null) · resp_valid u8 · heart_bpm u8(0xFF=null) · heart_valid u8 · drowsy_state u8(0 NOPERSON/1 NOLOCK/2 WARMUP/3 AWAKE/4 DROWSY) · valid u8` = 11 B |
+| `0xF0` | 하트비트 | 1 Hz | `uptime_ms u32 · fw_version u16 · mmwave_ok u8` = 7 B |
+
+test vector (seq 7, ts_ms 1000): mmWave 예시 payload `01010c37000f01ff000301` → wire `05a5012007020b03e803010501010c37040f01ff050301dea100`(26 B).
+Pi 4 C++ 서비스는 COBS 해제·CRC 검증·헤더 파싱까지만 하고 `UART\t{"type","seq","ts_ms","payload_hex"}` 한 줄을 Python 브리지로 넘긴다. payload 해석은 Python(`decode_payload`)이 한다.
+09-11 실험 펌웨어가 쓰던 `TYPE 0x01` 은 ToF 디버그 예약과 충돌하므로 mmWave 는 `0x20` 으로 옮긴다.
 - MQTT/TCP JSON에는 별도 애플리케이션 CRC를 넣지 않는다. `schema_version`, `boot_id`, `sequence`, timestamp와 TCP 무결성을 사용한다.
 - Node-RED는 개발 모니터링·센서값 주입·로깅용 선택 어댑터이며 FSM의 운영 의존성이 아니다.
 

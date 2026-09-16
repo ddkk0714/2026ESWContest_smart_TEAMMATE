@@ -5,7 +5,7 @@ AI CLI(Codex · Claude Code 등)로 이 저장소를 다룰 때 알아두면 좋
 
 작업 전에 [docs/agent-briefing.md](docs/agent-briefing.md)를 읽으면 프로젝트 맥락을 한 번에 잡을 수 있다.
 확정 사항(§2), 아직 정하지 않은 항목(§3), 프라이버시·보안 제약(§5)이 정리돼 있다.
-세션 시작 문구 예시는 [docs/agent-kickoff-prompt.md](docs/agent-kickoff-prompt.md)에 있다.
+결선까지 무엇을 어떤 순서로 만들지는 [docs/roadmap.md](docs/roadmap.md)가 기준이다.
 
 에이전트에게 특히 자주 알려줘야 하는 것:
 

@@ -2,28 +2,31 @@
 
 **제24회 임베디드SW경진대회 · 스마트 가전 부문 · 팀 TEAMMATE**
 
-ToF 거리 센서, 키스트로크 타이밍, 환경 센서를 융합해 책상 작업 상태를
+ToF 거리 센서, 60GHz mmWave, 키스트로크 타이밍, 환경 센서를 융합해 책상 작업 상태를
 VER5 18개 내부 상태로 추론하고, 사용자 화면에는 여섯 phase로 축약한다. 판단 신뢰도에 따라
-조명 · 환기 · 휴식 알림을 자동 실행하거나 제안하는 비침습 워크스페이스 가전.
+조명 · 환기 · 자세 교정 · 휴식 알림을 자동 실행하거나 제안하는 비침습 워크스페이스 가전.
 
 카메라와 마이크를 사용하지 않고, 센싱 · 추론 · 제어를 모두 로컬 장치에서 수행한다.
+
+> **현재 위치(2026-09-14)와 결선까지의 계획은 [`docs/roadmap.md`](docs/roadmap.md)** 에 있다.
 
 ---
 
 ## 시스템 구성
 
 ```
-                  [ 센싱 ]                [ 추론 ]            [ 출력 · 제어 ]
+                  [ 센싱 ]                     [ 추론 ]                 [ 출력 · 제어 ]
 
-  ESP32 노드 ──┐
-   mmWave       │                      Raspberry Pi 4        Raspberry Pi 5
-   CO2/온습도   ├── 통신 후보 ───────►  중앙 추론 허브  ─────►  AI Native OS Video Profile
-   조도         │   UART / MQTT        FSM + TFLite          ATLAS 상태·제안·리포트
-                │                            │                피드백 입력
-  PC 수집기 ───┤                            │
-   키스트로크 타이밍                        ▼
-  VL53L9CX ────┘ Pi4 MIPI CSI-2 우선  ThinQ D-Bus/API adapter
-                                      스마트 플러그 · 조명 · 환기팬
+  ESP32 노드 ──────┐
+   mmWave C1001    │  UART2                 Raspberry Pi 4              Raspberry Pi 5
+   SCD41 CO₂/온습도 ├─ COBS+CRC-16 ───────►  중앙 추론 허브  ─ MQTT ───►  AI Native OS Video Profile
+   BH1750 조도     │  (실측 완료)           AI Native OS Headless      ATLAS 상태·제안·리포트
+   DHT22 온습도    │                        FSM + TFLite                피드백 입력(터치)
+                   │                              │              ◄────  수락 · 거절 · 정정
+  PC 수집기 ── Wi-Fi/MQTT ─┤                      │
+   키스트로크 타이밍        │                      ▼
+  VL53L9CX ToF ────────────┘  경로 미결       스마트 플러그 · 조명 · 환기팬
+   (Pi4 CSI-2 / ESP32 I2C)                   ThinQ (1기기 선택)
 ```
 
 | 계층 | 장치 | 디렉터리 |
@@ -37,9 +40,9 @@ VER5 18개 내부 상태로 추론하고, 사용자 화면에는 여섯 phase로
 > LG 기술교육 제공 구성에 따라 Raspberry Pi 5(8GB)의 AI Native OS Video Profile을
 > 출력 단말로 사용한다. 가산점 요건을 위해 ESP32·Pi 4·Pi 5 **3종 구성을 유지**한다.
 
-> **ATLAS 배치 결정:** ATLAS 런타임은 Pi 5 Video Profile display에 둔다. Pi 4는 센서 융합·FSM·제어 판단을 맡고,
-> Pi 5는 Atlas Flutter 기반 터치 UI·스피커 알림·사용자 수락/거절/정정을 맡는다. 보드 간 통신은 MQTT가
-> 최우선 후보지만 아직 확정하지 않았으며, 어떤 방식을 택해도 display 중단 중 hub의 기본 판정과 제어는 유지한다.
+> **보드 역할·통신(확정):** Pi 4는 AI Native OS Headless 위의 native service(`hub/atlas`)로 UART 디코딩·센서 융합·FSM·제어 판단을 맡고,
+> Pi 5는 Atlas Flutter 기반 터치 UI·스피커 알림·사용자 수락/거절/정정을 맡는다. **Pi 4↔Pi 5는 이더넷 직결 + MQTT**,
+> **ESP32↔Pi 4는 UART2(COBS + CRC-16, 2026-09-11 실측)** 다. display 중단 중에도 hub의 기본 판정과 제어는 유지한다.
 
 ---
 
@@ -49,12 +52,14 @@ VER5 18개 내부 상태로 추론하고, 사용자 화면에는 여섯 phase로
 ├── docs/          설계 문서 · 아키텍처 · MQTT 토픽 · FSM 사양 · 제출 서류
 ├── firmware/      ESP32 센서 노드 펌웨어
 ├── collector/     PC 키스트로크 타이밍 수집기
-├── hub/           Raspberry Pi 4 중앙 추론 허브 (Python 우선, 실물 OS 확인 필요)
+├── hub/           Raspberry Pi 4 중앙 추론 허브
+│   ├── atlas/         AI Native OS Headless 용 native service IPK (제한 Python 으로 FSM 실행, UART 디코더 예정)
+│   ├── mqtt/          Pi 4 Mosquitto 설정
 │   └── deskmate_hub/
-│       ├── ingest/      통신 adapter · 시간 동기화
-│       ├── features/    ToF · 키스트로크 · 환경 특징 추출
+│       ├── ingest/      UART 라인 · MQTT 수신 → SensorFrame (미구현)
+│       ├── features/    baseline 정규화 · 특징 추출 (미구현)
 │       ├── inference/   규칙 기반 FSM (1단계) · 경량 분류기 (2단계) · 신뢰도 게이트
-│       ├── control/     ThinQ API · 스마트 플러그 제어
+│       ├── control/     스마트 플러그 · ThinQ 제어 (미구현)
 │       └── config/      임계값 · 토픽 · 장치 설정
 ├── display/       Raspberry Pi 5 + ATLAS 디스플레이 UI · 사용자 피드백
 │   └── atlas/         Docker 기반 Atlas Flutter 개발 환경
@@ -71,8 +76,8 @@ VER5 18개 내부 상태로 추론하고, 사용자 화면에는 여섯 phase로
 1. **1단계 규칙 기반 FSM 을 완성도의 축으로 둔다.**
    결선 최대 배점이 완성도(60점)이므로, ML 정확도보다 규칙 FSM + 실제 기기 제어의
    확실한 동작이 우선이다. 2단계 경량 분류기는 이를 보완 · 검증하는 역할이다.
-2. **호흡 측정은 보조 신호다.** 재실 · 자세를 주력으로 하고,
-   호흡 실패가 전체 상태 판정을 흔들지 않도록 설계한다.
+2. **호흡 측정은 보조 신호다.** 재실 · 자세를 주력으로 하고, mmWave 순간 호흡·심박값은 판정에 쓰지 않는다
+   (중앙값+기준선, "호흡 소실 여부"만 증거). 호흡 실패가 전체 상태 판정을 흔들지 않도록 설계한다.
 3. **ToF 원본 54×42 배열을 운영 경로로 보내지 않는다.** 센서 host에서 특징값을 만들고,
    축소 depth map은 명시적 디버그/UI 모드에서만 최대 2Hz로 허용한다. ([`docs/data-spec.md`](docs/data-spec.md))
 4. **프라이버시** — 키 값은 수집하지 않고 타임스탬프만 다룬다.
@@ -94,10 +99,12 @@ VER5 18개 내부 상태로 추론하고, 사용자 화면에는 여섯 phase로
 | [`docs/requirements-spec.md`](docs/requirements-spec.md) | MVP 기능 · 비기능 요구사항, 수용 기준, 검증 항목, 미결정 항목 | 작성 완료 |
 | [`docs/data-spec.md`](docs/data-spec.md) | L0~L5 데이터 계층, 값 · 단위 · 유효성 · 시간 · 보정 · 융합 계약 | 작성 완료 |
 | [`docs/fsm-spec.md`](docs/fsm-spec.md) | VER5 18상태 전이 · 임계값 · 이중 신뢰도 공식 | 유지보수 중 |
-| [`docs/mqtt-topics.md`](docs/mqtt-topics.md) | MQTT 채택 시 topic · payload 매핑 초안 | 통신 확정 대기 |
+| [`docs/mqtt-topics.md`](docs/mqtt-topics.md) | Pi 4↔Pi 5 MQTT topic · payload 계약 | 확정, UART 프레임 TYPE 은 미확정 |
 
-현재 합성 입력으로 `Pi 4 FSM → Pi 5 Atlas 화면 → 사용자 피드백`을 시험할 수 있다.
-실행 순서와 하드웨어 연결은 [`docs/hardware-bringup.md`](docs/hardware-bringup.md)를 따른다.
+현재 합성 입력으로 `Pi 4 FSM → Pi 5 Atlas 화면 → 사용자 피드백`을 시험할 수 있다(HTTP 개발 어댑터, MQTT 는 display 측 구독까지).
+실행 순서와 하드웨어 연결은 [`docs/hardware.md`](docs/hardware.md), Pi 5 배포는
+[`docs/atlas-build-handoff.md`](docs/atlas-build-handoff.md)를 따른다.
+실센서는 아직 FSM 에 연결되지 않았다 — mmWave 는 Pi 4 UART 까지 도달을 확인했고, 디코더·ingest 가 다음 작업이다.
 
 ### Pi 5 Atlas 실제 개발·배포 흐름
 
@@ -117,13 +124,13 @@ VER5 18개 내부 상태로 추론하고, 사용자 화면에는 여섯 phase로
 
 전체 준비·빌드·배포·로그 확인 명령은 [Pi 5 Atlas 개발 가이드](display/atlas/README.md)에 있다.
 
-**AI CLI 로 개발한다면** [`docs/agent-briefing.md`](docs/agent-briefing.md) 를 읽히고,
-[`docs/agent-kickoff-prompt.md`](docs/agent-kickoff-prompt.md) 의 예시 문구를 첫 입력으로 넣으면 편하다.
+**AI CLI 로 개발한다면** [`docs/agent-briefing.md`](docs/agent-briefing.md)와
+[`docs/roadmap.md`](docs/roadmap.md)를 먼저 읽는다.
 **개발 방식은 각자 자유다.** 다만 확정·미결정 사항과 프라이버시 제약만은 누가 작업하든 같아야 해서 한곳에 모아뒀다.
 
-**아직 미결정이므로 코드·문서에 확정으로 못 박지 않는다:** 보드 간 물리 통신(MQTT 최우선 후보),
-`C_focus` 부호, Pi 4 FSM 배포 런타임, 개인화 저장소, 호흡 go/no-go.
-전체 목록은 [`docs/requirements-spec.md`](docs/requirements-spec.md) §9 와 [`docs/data-spec.md`](docs/data-spec.md) §16 에 있다.
+**아직 미결정이므로 코드·문서에 확정으로 못 박지 않는다:** ToF 연결 경로(Path A/B, 09-19 결정), UART 프레임 TYPE·mmWave 출력 스키마,
+`C_focus` 부호, 개인화 저장소.
+전체 목록은 [`docs/agent-briefing.md`](docs/agent-briefing.md) §3 에 있다.
 
 ---
 
@@ -145,10 +152,15 @@ VER5 18개 내부 상태로 추론하고, 사용자 화면에는 여섯 phase로
 |---|---|
 | ~ 2026-07-27 | 예선 합격 · 저장소 · 개발 환경 세팅 |
 | 2026-07-30 | 1차 기술 교육 · **장비 수령** (Pi5 27W 어댑터 · SD 용량 확인) |
-| 2026-08 | HW 구성 · MQTT 파이프라인 · 특징 추출 · **ToF 호흡/자세 go-no-go 판단** |
-| 2026-09 | FSM 추론 엔진 · 디스플레이 UI · 제어 모듈 · 통합 MVP |
-| 2026-10-01 ~ 10-30 | 시험 평가 · 최적화 · **결선 서류 제출** |
+| 2026-08 | FSM 엔진 · Pi 5 Atlas 배포 파이프라인 · 명세 문서 · 통신 아키텍처 확정 |
+| 2026-09-11 | **mmWave → ESP32 → Pi 4 UART 물리 링크 실측 통과** |
+| 2026-09-18 | **MVP**: 실센서 → MQTT → Node-RED 시각화 + FSM 결과 표시 |
+| ~ 2026-10-05 | 통합 MVP: 4 신호 · Pi 4 UART 디코더 · 스마트 플러그 제어 · 하우징 |
+| ~ 2026-10-19 | 시험 평가 · 임계값 보정 · 장시간 시험 |
+| ~ 2026-10-30 | **결선 서류 제출**(개발완료보고서 · 작품소개서 · 시연영상) |
 | 2026-11-06 | 오프라인 발표 심사 |
+
+작업별 체크리스트와 통과 기준은 [`docs/roadmap.md`](docs/roadmap.md) §4.
 
 ---
 
@@ -161,8 +173,8 @@ VER5 18개 내부 상태로 추론하고, 사용자 화면에는 여섯 phase로
 ## 관련 링크
 
 - 팀 Notion: 임베디드 SW 경진대회 (LG)
-- [AI 개발 공통 브리핑](docs/agent-briefing.md) · [CLI 시작 공통 문구](docs/agent-kickoff-prompt.md)
+- [AI 개발 공통 브리핑](docs/agent-briefing.md) · [문서 지도](docs/README.md)
 - [요구사항 명세서](docs/requirements-spec.md) · [데이터 명세서](docs/data-spec.md)
-- [개발 진행 현황](docs/development-progress.md)
+- [결선 로드맵 · 갭 분석](docs/roadmap.md) · [Pi 5 배포 인계](docs/atlas-build-handoff.md)
 - [Pi 5 ATLAS Docker 개발 환경](display/atlas/README.md)
 - 시연 영상: (결선 제출 시 추가)

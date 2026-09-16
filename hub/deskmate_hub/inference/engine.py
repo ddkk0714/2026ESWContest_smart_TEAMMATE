@@ -1,6 +1,6 @@
 """규칙 기반 FSM 코어 (1단계 추론 엔진).
 
-- 매 tick 은 30초 주기의 SensorFrame 하나를 받아 상태를 한 단계 전이한다.
+- 매 tick 은 score_period_sec(기본 10초) 주기의 SensorFrame 하나를 받아 상태를 한 단계 전이한다.
   (전이 조건은 docs/fsm-spec.md · config/fsm.yaml)
 - 한 tick 당 최대 한 번 전이한다. 전이가 즉시 이어지는 상태(FATIGUE→CAUSE_ANALYSIS 등)는
   다음 tick 에서 진행된다. 시간 조건은 frame.now(epoch) 로 판정하므로 결정적이다.

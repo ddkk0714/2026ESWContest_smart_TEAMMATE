@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
@@ -57,10 +58,27 @@ def main() -> None:
         with zipfile.ZipFile(payload.name, "w", zipfile.ZIP_DEFLATED) as archive:
             add_pure_stdlib(archive, args.stdlib)
             add_python_tree(archive, args.hub, "deskmate_hub")
+            # paho-mqtt 는 순수 Python 이라 빌드 환경에 설치돼 있으면 그대로 동봉한다(live 모드 MQTT 발행용).
+            # 없으면 bridge 는 MQTT 없이 STATE 라인만으로 동작한다.
+            try:
+                import paho  # noqa: F401
+
+                add_python_tree(archive, Path(paho.__file__).resolve().parent, "paho")
+            except ImportError:
+                print("build_payload: paho-mqtt 미설치 — MQTT 없이 패키징", file=sys.stderr)
             archive.writestr(
                 "deskmate_hub/config/fsm.json",
                 json.dumps(config, ensure_ascii=False, separators=(",", ":")),
             )
+            # ingest.yaml 도 같은 이유(제한 Python 에 PyYAML 의존 모듈 부재)로 JSON 으로 함께 넣는다.
+            ingest_yaml = args.config.with_name("ingest.yaml")
+            if ingest_yaml.exists():
+                with ingest_yaml.open(encoding="utf-8") as source:
+                    ingest = yaml.safe_load(source)
+                archive.writestr(
+                    "deskmate_hub/config/ingest.json",
+                    json.dumps(ingest, ensure_ascii=False, separators=(",", ":")),
+                )
         with args.executable.open("ab") as executable, open(payload.name, "rb") as built:
             executable.write(built.read())
 

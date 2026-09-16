@@ -1,5 +1,7 @@
 #include <sdbus-c++/sdbus-c++.h>
 
+#include "uart_rx.h"
+
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -124,6 +126,12 @@ bool writeAll(int fd, const std::string& data)
         return false;
     }
     return true;
+}
+
+bool writeBridgeInput(int fd, std::mutex& input_mutex, const std::string& data)
+{
+    std::lock_guard<std::mutex> lock(input_mutex);
+    return writeAll(fd, data);
 }
 
 void processBridgeLine(const std::string& line, BridgeState& state)
@@ -261,7 +269,7 @@ void sendResponse(int client, int status, const std::string& body)
     writeAll(client, response.str());
 }
 
-void handleClient(int client, int bridge_input, BridgeState& state,
+void handleClient(int client, int bridge_input, std::mutex& input_mutex, BridgeState& state,
                   std::atomic<unsigned long long>& next_request_id)
 {
     HttpRequest request;
@@ -304,7 +312,7 @@ void handleClient(int client, int bridge_input, BridgeState& state,
         const std::string request_id = std::to_string(next_request_id.fetch_add(1));
         const std::string command =
             "POST\t" + request_id + "\t" + request.path + "\t" + request.body + "\n";
-        if (!writeAll(bridge_input, command)) {
+        if (!writeBridgeInput(bridge_input, input_mutex, command)) {
             sendResponse(client, 503, R"({"error":"bridge_unavailable"})");
             return;
         }
@@ -336,7 +344,7 @@ void handleClient(int client, int bridge_input, BridgeState& state,
     sendResponse(client, 404, R"({"error":"not_found"})");
 }
 
-void runHttpServer(int bridge_input, BridgeState& state,
+void runHttpServer(int bridge_input, std::mutex& input_mutex, BridgeState& state,
                    std::atomic<bool>& http_failed)
 {
     const int server = socket(AF_INET, SOCK_STREAM, 0);
@@ -382,7 +390,7 @@ void runHttpServer(int bridge_input, BridgeState& state,
         timeval timeout = {3, 0};
         setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
         setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-        handleClient(client, bridge_input, state, next_request_id);
+        handleClient(client, bridge_input, input_mutex, state, next_request_id);
         close(client);
     }
     close(server);
@@ -409,8 +417,14 @@ int main()
 
         BridgeState state;
         std::atomic<bool> http_failed{false};
+        std::mutex bridge_input_mutex;
         std::thread reader(readBridge, hub.output_fd, std::ref(state));
-        std::thread http(runHttpServer, hub.input_fd, std::ref(state),
+        deskmate::UartReceiver uart(deskmate::uartRxConfigFromEnvironment(),
+            [&hub, &bridge_input_mutex](const std::string& line) {
+                return writeBridgeInput(hub.input_fd, bridge_input_mutex, line);
+            });
+        uart.start();
+        std::thread http(runHttpServer, hub.input_fd, std::ref(bridge_input_mutex), std::ref(state),
                          std::ref(http_failed));
 
         std::cerr << "DESKMATE Hub service started (child " << hub.pid << ")\n";
@@ -433,12 +447,13 @@ int main()
         }
 
         g_stop_requested = 1;
+        uart.stop();
         if (!child_exited) {
             kill(hub.pid, SIGTERM);
             waitpid(hub.pid, &child_status, 0);
         }
-        close(hub.input_fd);
         http.join();
+        close(hub.input_fd);
         reader.join();
         connection->leaveEventLoop();
 

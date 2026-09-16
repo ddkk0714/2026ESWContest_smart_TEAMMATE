@@ -101,25 +101,25 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 **일별 목표**
 
 - [ ] **화 09-15 — 센서가 MQTT 에 보인다**
-  - [ ] 별도 저장소의 ESP32 코드(C1001 파서·DrowsyDetector·UART2 송신)를 `firmware/esp32_sensor_node/` 로 이관, PlatformIO 빌드 통과
-  - [ ] 펌웨어에 UART0(USB) 1 Hz JSON 요약 라인 출력 추가 (`{"ts","presence","movement","body_move","distance_cm","resp_state","drowsy_state"}` + 환경값이 있으면 `co2_ppm/temp_c/rh_pct/lux`)
-  - [ ] `tools/uart_mqtt_bridge.py`: COM 포트 → JSON 파싱 → `deskmate/sensor/mmwave/esp32`·`deskmate/sensor/env/esp32` 발행 (공통 envelope `schema_version/ts/node/boot_id/seq/data`)
+  - [x] `firmware/esp32_sensor_node/` PlatformIO 프로젝트 생성(09-14, PR #12) — 공식 DFRobot C1001 라이브러리 기반 `C1001Passive` + 5상태 `DrowsyDetector`. 원본 저장소 미제공으로 UART2 COBS/CRC 송신은 미이관(핀·baud 초기화만). **`pio run` 빌드는 미검증** — 화요일 실보드에서 확인
+  - [x] 펌웨어 UART0(USB) 1 Hz mmWave JSON + 5 s 환경 스텁 JSON(`{"t":"mmwave"|"env", ...}`) — PR #12
+  - [x] `tools/uart_mqtt_bridge.py`: `{"t":` 라인 → 공통 envelope → `deskmate/sensor/{mmwave,env}/<node>`, health LWT, 백오프, 날짜별 JSONL. 순수 변환 테스트 9개 — PR #12
   - [ ] broker 결정·기동: Pi 4 Mosquitto(`hub/mqtt/`) 우선, 안 되면 PC mosquitto. `mosquitto_sub -t 'deskmate/#'` 로 확인
   - [ ] `feat/merge-pending` PR 머지 → `python -m collector --broker <ip>` 로 키스트로크 토픽 확인
 - [ ] **수 09-16 — Node-RED 시각화**
-  - [ ] `tools/node-red-visualizer/flows.json` 에 대시보드(node-red-dashboard): mmWave 체동·거리·재실 차트, 졸음 state 표시, 환경 게이지(CO₂·T/RH·lux), 키스트로크 dwell/flight/idle 차트
-  - [ ] 토픽별 마지막 수신 시각·seq 갭 표시(유실 확인용)
-  - [ ] 전 토픽 JSONL 기록 노드(`logs/` — 커밋 금지) → 리플레이 원천
+  - [x] `tools/node-red-visualizer/flows.json` 대시보드(node-red-dashboard 3.6.6): mmWave·환경·키스트로크·FSM 패널 — PR #12 (화면 캡처는 실센서 연결 후)
+  - [x] 토픽별 신선도·seq 갭 표시 — PR #12
+  - [x] `deskmate/#` JSONL 기록 노드 — PR #12
 - [ ] **목 09-17 — FSM 결과 표시**
   - [x] `hub/deskmate_hub/ingest/` (cache·mapping·protocol·mqtt_source): 센서 토픽 구독, 10 s 마다 `SensorFrame` 생성 — 09-14 구현, 테스트 12개. 신호 매핑 초안은 `config/fsm.yaml` 의 임시 스케일(고정 선형)로 두고 baseline 정규화는 4-B §4 에서 교체
     - mmWave: `presence` ← presence/거리, `respiration`·모션 증거 ← drowsy_state·body_move 이동평균
     - keystroke: `typing_active=false` → available=false, 그 외 idle_ratio·flight_cv·correction_rate → phi/delta
     - env: co2_ppm 절대 구간 → environment delta
   - [x] `python -m deskmate_hub run --broker <ip>`: ingest → `FSMEngine.tick` → `deskmate/state/phase`(retain, QoS 1) 발행, `feedback/user` 수락/거절 반영 — 09-14 구현. 로컬 amqtt 브로커로 E2E 확인(센서 3토픽 수신 → START 발행 → health LWT · feedback 수신). Pi 4 Mosquitto 실연동은 화요일
-  - [ ] Node-RED 에 FSM 패널: 현재 상태·phase, C_fatigue/C_focus 시계열, `reasons` 텍스트
+  - [x] Node-RED FSM 패널(상태·phase·context·gate, C_fatigue/C_focus 차트, reasons) — PR #12
   - [ ] (보너스) Pi 5 를 `DESKMATE_MQTT_HOST=<broker>` 로 빌드해 같은 상태가 화면에 뜨는지 확인
 - [ ] **금 09-18 — 통합 리허설·기록**
-  - [ ] 시나리오 1회 통과: 착석 → 타이핑(FOCUS_PC) → 손 떼고 정적 10분(FATIGUE_SUSPECT 이상) → 자리 비움(IDLE)
+  - [ ] 시나리오 1회 통과: 착석 → 타이핑(FOCUS_PC) → 손 떼고 정적 10분(FATIGUE_SUSPECT 이상) → 자리 비움(IDLE) — **합성 sim 으로는 09-16 통과**(`tools/rehearsal_local.py`: START→CONTEXT_DETECT→FOCUS_PC→FATIGUE_SUSPECT→FATIGUE→CAUSE_ANALYSIS→ACTION→MONITOR→RECOVERY). 실센서로 재확인 필요
   - [ ] 위 세션의 JSONL 을 `python -m deskmate_hub --replay` 로 재생해 같은 전이가 나오는지 확인
   - [ ] 노션 SW 페이지에 화면 캡처·발견한 임계값 문제·다음 할 일 기록
   - [ ] MVP 브랜치(`feat/mvp-nodered`) PR 생성
@@ -143,7 +143,7 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 - [x] 보드 역할 확정(ESP32 센서 / Pi 4 hub / Pi 5 display), Pi 4↔Pi 5 이더넷+MQTT, ESP32↔Pi 4 UART2
 - [x] 신뢰도 주기 10 s, 키스트로크 계약, 환경 센서 단일 측정 결정
 - [ ] ToF 연결 경로 Path A/B 결정 (09-19 spike, 실패 시 B)
-- [ ] UART 프레임 TYPE 표 확정(mmWave 신규 TYPE, 0x01 충돌 해소), DrowsyDetector 출력 스키마, CRC-16/CCITT-FALSE test vector 를 `data-spec.md` §13 에 기록
+- [x] UART 프레임 **잠정** 규약 기록(09-15, `data-spec.md` §13.1): mmWave 0x20·env 0x10·heartbeat 0xF0, 헤더·payload 구조체·CRC/COBS test vector. **팀 확정(D1)만 남음** — 값 바꾸려면 `uart_frame.py`·`frame_types.h` 상수만
 - [ ] 스마트 플러그 모델 선정(로컬 제어, 클라우드 의존 없음)·구매
 - [ ] 새 Pi 5 디스플레이 모델·인터페이스·전원 경로 기록
 
@@ -161,10 +161,10 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 
 - [x] Pi 4 Mosquitto 설정, `mqtt-topics.md` 계약, Node-RED 모니터, display MQTT 구독·`feedback/user` 발행
 - [x] Pi 4 native service(`hub/atlas`) IPK 로 제한 Python 실행, HTTP 8765 개발 API
-- [ ] ESP32 펌웨어 레포 이관 + 환경 묶음 프레임(TYPE 0x10, 8 B) + 하트비트(0xF0)
-- [ ] Pi 4 C++ 서비스에 `/dev/serial0` 수신 → COBS 해제 → CRC 검증 → 라인 브리지(`UART\t<json>`)
-- [ ] hub `ingest/`: UART 라인·MQTT 키스트로크 → `SensorFrame`, `seq`·`ts` freshness 검증, 결측 표시
-- [ ] hub MQTT 발행: `state/phase`(retain)·`interaction/request`, `feedback/user` 구독 → FSM 반영
+- [x] ESP32 UART2 프레임 송신 — mmWave 0x20 · 환경 0x10(스텁, valid_bits 0) · 하트비트 0xF0 (`transport/frame.cpp`, 09-16). **`pio run`·실보드 검증 남음**
+- [x] Pi 4 C++ 서비스에 `/dev/serial0` 수신 → COBS 해제 → CRC 검증 → 라인 브리지(`UART\t<json>`) — `hub/atlas/src/uart_rx.cpp`(09-16, 호스트 테스트 포함). **ARC 컴파일·실보드 검증 남음**
+- [x] hub `ingest/`: MQTT 센서·키스트로크 + `UART\t` 라인(`uart_source.py`) → `SensorCache` → `SensorFrame`, freshness·seq 갭 (09-14/15)
+- [x] hub MQTT 발행: `state/phase`(retain)·`health/hub`, `feedback/user` 구독 → FSM 반영 (09-14). `interaction/request` 는 충돌 신호 경로(§5)와 함께
 - [ ] 전 토픽·UART 라인 JSONL 로거(`tools/log_recorder.py`), 리플레이 포맷과 동일
 - [ ] collector payload 에 공통 envelope(`schema_version/boot_id/seq`) 추가 (세부 튜닝)
 - [ ] Node-RED 를 끄고도 운영 경로가 동작하는지 확인
@@ -187,7 +187,7 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 - [ ] 실센서 `SensorFrame` 로 대표 경로 재현: IDLE→START→CONTEXT_DETECT→FOCUS→FATIGUE_SUSPECT→FATIGUE→CAUSE_ANALYSIS→ACTION→MONITOR→RECOVERY→END
 - [ ] 10 s 주기에서 채터링 검증(임계 근방 진동 입력) → 필요 시 최소 유지 시간·히스테리시스 값 조정(yaml)
 - [ ] 자세 해석 분기(PC 숙임+키입력↓=피로, 비PC 숙임+motion↓=집중 등)를 실센서로 확인
-- [ ] 신호 충돌(ToF 노딩 + mmWave active) 시 `interaction/request` 발행 → 사용자 확인 경로
+- [ ] 신호 충돌(ToF 노딩 + mmWave active) 시 `interaction/request` 발행 → 사용자 확인 경로 (제안 게이트 ACTION_* 진입 시 질문 발행·`request_id` 매칭은 09-16 구현)
 - [ ] `C_focus` 부호 최종 결정, 필요 시 문서·테스트 동시 수정
 - [ ] MONITOR 보상 로그 축적(정책 학습은 로그 충분 시, 세션당 개입 상한)
 - [ ] `tick()` ≤ 500 ms Pi 4 실측
@@ -195,7 +195,7 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 #### 6. 디스플레이 UI·제안 카드·작업 리포트 개발 — 마감 10-12
 
 - [x] Atlas Flutter 앱, 대시보드 재설계, 18상태 전이 그래프, 키스트로크 패널, 센서 테스트 화면, 오디오 재생, release IPK 배포, MQTT 구독
-- [x] 제안 카드 수락·거절 → hub 전달
+- [x] 제안 카드 수락·거절 → hub 전달 (MQTT: hub 가 `interaction/request` 로 `request_id` 를 주고 `feedback/user` 에서 매칭, 09-16)
 - [ ] 상태 적응형 4화면: 대기(시각·환경·재실) / 집중 저자극 / 터치 시 상세(집중 시간·환경·수동 제어) / 세션 리포트
 - [ ] 자동 실행 알림(≥ 0.75) + 되돌리기 + 실행 이유 문구
 - [ ] 정정(`correct`) 입력 — 4 국면 중 선택, 무응답 기록
@@ -223,7 +223,7 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 #### 9. 통합 MVP 구현 — 마감 10-05
 
 - [ ] 4-A MVP 통과 (09-18)
-- [ ] Pi 4 native service 에 UART 디코더·MQTT 클라이언트 탑재, PC 브리지 제거
+- [ ] Pi 4 native service 에 UART 디코더·MQTT 클라이언트 탑재, PC 브리지 제거 — 코드는 09-16 준비(uart_rx + bridge live 모드 + paho 동봉), ARC 빌드·설치·실기 확인 남음
 - [ ] 4 신호(ToF·mmWave·환경·키스트로크) 모두 `SensorFrame`·`reasons` 에 등장
 - [ ] 센서 → 피로 판정 → 제안 → 터치 수락 → 플러그 ON → MONITOR → RECOVERY 1사이클 실기 재현
 - [ ] display 를 꺼도 hub 계속 동작, Node-RED 없이 동작, 인터넷 없이 동작
@@ -234,7 +234,7 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 - [ ] 2시간 연속 구동: 판정 사이클 ≤ 500 ms(1,000 tick p95), 메모리·온도, 재연결
 - [ ] 상태 분류 정확도·사용자 피드백 일치율·선제 행동 수용률 산출(평가 프로토콜 정의 포함)
 - [ ] 결측·유실·충돌 시나리오(센서 분리, broker 재시작, display 종료)
-- [ ] 5분 시연 시나리오 고정(시작→몰입→피로→개입→회복→종료 리포트) + 시연용 임계값 프로파일
+- [ ] 5분 시연 시나리오 고정(시작→몰입→피로→개입→회복→종료 리포트) + 시연용 임계값 프로파일 (`config/fsm.demo.yaml` 초안 09-16 — 타이머만 단축)
 - [ ] 금지 데이터 미수집·자격증명 스캔
 
 #### 11. 개발 완료 보고서·작품 소개서·시연 영상 — 마감 10-30, 발표 11-06
