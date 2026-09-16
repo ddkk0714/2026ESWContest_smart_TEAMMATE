@@ -143,7 +143,7 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 - [x] 보드 역할 확정(ESP32 센서 / Pi 4 hub / Pi 5 display), Pi 4↔Pi 5 이더넷+MQTT, ESP32↔Pi 4 UART2
 - [x] 신뢰도 주기 10 s, 키스트로크 계약, 환경 센서 단일 측정 결정
 - [ ] ToF 연결 경로 Path A/B 결정 (09-19 spike, 실패 시 B)
-- [ ] UART 프레임 TYPE 표 확정(mmWave 신규 TYPE, 0x01 충돌 해소), DrowsyDetector 출력 스키마, CRC-16/CCITT-FALSE test vector 를 `data-spec.md` §13 에 기록
+- [x] UART 프레임 **잠정** 규약 기록(09-15, `data-spec.md` §13.1): mmWave 0x20·env 0x10·heartbeat 0xF0, 헤더·payload 구조체·CRC/COBS test vector. **팀 확정(D1)만 남음** — 값 바꾸려면 `uart_frame.py`·`frame_types.h` 상수만
 - [ ] 스마트 플러그 모델 선정(로컬 제어, 클라우드 의존 없음)·구매
 - [ ] 새 Pi 5 디스플레이 모델·인터페이스·전원 경로 기록
 
@@ -162,9 +162,9 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 - [x] Pi 4 Mosquitto 설정, `mqtt-topics.md` 계약, Node-RED 모니터, display MQTT 구독·`feedback/user` 발행
 - [x] Pi 4 native service(`hub/atlas`) IPK 로 제한 Python 실행, HTTP 8765 개발 API
 - [ ] ESP32 펌웨어 레포 이관 + 환경 묶음 프레임(TYPE 0x10, 8 B) + 하트비트(0xF0)
-- [ ] Pi 4 C++ 서비스에 `/dev/serial0` 수신 → COBS 해제 → CRC 검증 → 라인 브리지(`UART\t<json>`)
-- [ ] hub `ingest/`: UART 라인·MQTT 키스트로크 → `SensorFrame`, `seq`·`ts` freshness 검증, 결측 표시
-- [ ] hub MQTT 발행: `state/phase`(retain)·`interaction/request`, `feedback/user` 구독 → FSM 반영
+- [ ] Pi 4 C++ 서비스에 `/dev/serial0` 수신 → COBS 해제 → CRC 검증 → 라인 브리지(`UART\t<json>`) — Python 측 수신(`service_bridge` live 모드)·코덱·test vector 는 준비됨(09-15), C++ 수신부는 Codex 2차
+- [x] hub `ingest/`: MQTT 센서·키스트로크 + `UART\t` 라인(`uart_source.py`) → `SensorCache` → `SensorFrame`, freshness·seq 갭 (09-14/15)
+- [x] hub MQTT 발행: `state/phase`(retain)·`health/hub`, `feedback/user` 구독 → FSM 반영 (09-14). `interaction/request` 는 충돌 신호 경로(§5)와 함께
 - [ ] 전 토픽·UART 라인 JSONL 로거(`tools/log_recorder.py`), 리플레이 포맷과 동일
 - [ ] collector payload 에 공통 envelope(`schema_version/boot_id/seq`) 추가 (세부 튜닝)
 - [ ] Node-RED 를 끄고도 운영 경로가 동작하는지 확인

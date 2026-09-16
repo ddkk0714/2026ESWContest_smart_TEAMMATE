@@ -8,13 +8,13 @@
 |---|---|
 | [`node-red-visualizer/`](node-red-visualizer/README.md) | PC 에서 Pi 4 MQTT broker 를 구독·관찰하고 `state/phase`·`feedback/user`·`display/message` 합성 메시지를 주입. hub MQTT 발행이 생기기 전 화면 경로 확인용 |
 | [`uart_mqtt_bridge.py`](uart_mqtt_bridge.py) | ESP32 USB(UART0) JSON 라인을 MQTT 센서 envelope로 변환하고 날짜별 JSONL로 기록 |
+| [`uart_frame_tool.py`](uart_frame_tool.py) | UART2 바이너리 프레임(COBS+CRC-16) test vector 출력·인코딩·디코딩, USB-TTL 로 ESP32 UART2 직접 읽기. 코덱은 `hub/deskmate_hub/ingest/uart_frame.py` 공유 |
 | `connect-deskmate-pi4.ps1` | DHCP 로 바뀌는 Pi 4 주소를 탐색해 SSH 별칭(`atlas`·`rpi4`·`deskmate-pi4`)을 갱신 |
 
 ## 만들면 유용한 것 (우선순위 순)
 
 | 도구 | 용도 | 언제 필요한가 |
 |---|---|---|
-| `uart_frame_tool.py` | COBS+CRC-16 프레임 인코딩/디코딩·test vector 생성, PC 시리얼로 Pi 4 디코더 검증 | W1 Pi 4 UART 디코더 개발 |
 | `log_recorder.py` | 전 토픽·UART 라인을 JSONL 로 기록 | 실측 로그 축적 → `--replay` 튜닝 소스 |
 | `plot_session.py` | 세션 타임라인 시각화 (자세 · 체동 · 타이핑 · CO₂ · 국면) | 임계값 튜닝, 보고서 그림 |
 | `tof_probe.py` | VL53L9CX 원본·축소 depth map 실시간 확인 | Path A/B spike 와 자세 특징 검증 |

@@ -20,7 +20,8 @@ UART 디코딩(COBS/CRC-16)과 MQTT 클라이언트는 그 C++ 서비스에 두�
 | `inference/` | 조명희 | TFLite 경량 분류기 로딩 · 추론(2단계) | ⬜ 선택적 의존 |
 | `control/` | 조명희 | 스마트 플러그 · 조명 · 환기팬 제어, ThinQ 1기기 | ⬜ 빈 패키지 |
 | `config/` | 공통 | 임계값 · 토픽 · 장치 설정 (YAML) | ✅ `fsm.yaml`, `ingest.yaml`(센서→신호 임시 스케일) |
-| `live.py` | 공통 | `run` 명령: ingest → FSM → `deskmate/state/phase`(retain, QoS 1) 발행, 프레임을 리플레이 호환 JSONL 로 기록 | 🟡 MVP(09-14). 브로커 실연동 검증 대기 |
+| `live.py` | 공통 | `run` 명령: ingest → FSM → `deskmate/state/phase`(retain, QoS 1) 발행, 프레임을 리플레이 호환 JSONL 로 기록 | 🟡 MVP(09-14). 로컬 amqtt 브로커 E2E 확인, Pi 4 Mosquitto 실연동 대기 |
+| `ingest/uart_frame.py` `uart_source.py` | 공통 | UART2 프레임 코덱(COBS·CRC-16/CCITT-FALSE·TYPE 구조체)과 `UART\t` 라인/raw 시리얼 소스 | ✅ 09-15, 테스트 14개. C++ 수신부(`atlas/`) 대기 |
 | `replay.py` `demo.py` `preview_api.py` `service_bridge.py` | 박소연 | 리플레이 하네스 · 합성 데모 · HTTP 미리보기 · Atlas 라인 브리지 | ✅. `report.py` 는 `feat/merge-pending` PR 로 진입 중 |
 
 ## 설계 규칙
@@ -72,7 +73,14 @@ python -m deskmate_hub run --broker <ip> --ingest-config my-ingest.yaml --log-di
 - `logs/frames-*.jsonl` 은 `--replay` 로 그대로 재생되고, `logs/state-*.jsonl` 은 발행한 envelope 다.
 - 콘솔 한 줄 = 한 tick: 상태·ctx·C_fatigue/C_focus·present·pc_ratio·가용 신호(`ekprs` 첫 글자, `.`=미가용)
 
-남은 것: Pi 4 native service(`atlas/`)에 UART2 디코더(COBS/CRC → 같은 `SensorCache`)와 이 `run` 루프를 얹는 것(통합 MVP 10-05). HTTP 8765 는 센서 테스트·화면 분리 검증용 fallback 으로 유지.
+### Pi 4 native service 의 실센서 모드
+
+`hub/atlas` C++ 서비스가 `python -m deskmate_hub bridge` 를 띄운다. 환경변수 `DESKMATE_HUB_MODE=live` 면 데모 순환 대신
+stdin 의 `UART\t{"type","seq","ts_ms","payload_hex"}` 라인(C++ 가 COBS 해제·CRC 검증한 프레임)과, `DESKMATE_MQTT_HOST` 가 있으면
+MQTT 센서 토픽을 함께 `SensorCache` 에 넣고 같은 `LiveHub` 루프를 돈다. 결과는 `STATE\t` 라인(HTTP 8765)과 MQTT `state/phase` 로 나간다.
+프레임 규약·payload 구조는 `ingest/uart_frame.py`(= `docs/data-spec.md` §13.1), PC 검증 도구는 `tools/uart_frame_tool.py`.
+
+남은 것: C++ 쪽 `/dev/serial0` 수신 → COBS/CRC → `UART\t` 라인 출력(통합 MVP 10-05). HTTP 8765 는 센서 테스트·화면 분리 검증용 fallback 으로 유지.
 
 ## 테스트
 
