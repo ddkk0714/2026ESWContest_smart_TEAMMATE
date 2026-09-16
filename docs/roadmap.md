@@ -119,7 +119,7 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
   - [x] Node-RED FSM 패널(상태·phase·context·gate, C_fatigue/C_focus 차트, reasons) — PR #12
   - [ ] (보너스) Pi 5 를 `DESKMATE_MQTT_HOST=<broker>` 로 빌드해 같은 상태가 화면에 뜨는지 확인
 - [ ] **금 09-18 — 통합 리허설·기록**
-  - [ ] 시나리오 1회 통과: 착석 → 타이핑(FOCUS_PC) → 손 떼고 정적 10분(FATIGUE_SUSPECT 이상) → 자리 비움(IDLE)
+  - [ ] 시나리오 1회 통과: 착석 → 타이핑(FOCUS_PC) → 손 떼고 정적 10분(FATIGUE_SUSPECT 이상) → 자리 비움(IDLE) — **합성 sim 으로는 09-16 통과**(`tools/rehearsal_local.py`: START→CONTEXT_DETECT→FOCUS_PC→FATIGUE_SUSPECT→FATIGUE→CAUSE_ANALYSIS→ACTION→MONITOR→RECOVERY). 실센서로 재확인 필요
   - [ ] 위 세션의 JSONL 을 `python -m deskmate_hub --replay` 로 재생해 같은 전이가 나오는지 확인
   - [ ] 노션 SW 페이지에 화면 캡처·발견한 임계값 문제·다음 할 일 기록
   - [ ] MVP 브랜치(`feat/mvp-nodered`) PR 생성
@@ -234,7 +234,7 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 - [ ] 2시간 연속 구동: 판정 사이클 ≤ 500 ms(1,000 tick p95), 메모리·온도, 재연결
 - [ ] 상태 분류 정확도·사용자 피드백 일치율·선제 행동 수용률 산출(평가 프로토콜 정의 포함)
 - [ ] 결측·유실·충돌 시나리오(센서 분리, broker 재시작, display 종료)
-- [ ] 5분 시연 시나리오 고정(시작→몰입→피로→개입→회복→종료 리포트) + 시연용 임계값 프로파일
+- [ ] 5분 시연 시나리오 고정(시작→몰입→피로→개입→회복→종료 리포트) + 시연용 임계값 프로파일 (`config/fsm.demo.yaml` 초안 09-16 — 타이머만 단축)
 - [ ] 금지 데이터 미수집·자격증명 스캔
 
 #### 11. 개발 완료 보고서·작품 소개서·시연 영상 — 마감 10-30, 발표 11-06

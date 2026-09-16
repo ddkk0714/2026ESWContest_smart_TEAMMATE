@@ -1,0 +1,52 @@
+# 시연·리허설용 프로파일 — fsm.yaml 과 임계값·가중치는 동일하고 **타이머만 짧다**.
+# 운영 기본값이 아니다. `python -m deskmate_hub run --config hub/deskmate_hub/config/fsm.demo.yaml`
+# + `tools/mqtt_scenario_sim.py --scenario short` 로 약 6분 안에 전체 경로를 본다.
+
+# 호흡은 보조 신호다. go/no-go(8월) 통과 전까지 false 로 두면
+# scoring 이 호흡 항을 제외하고 나머지 가중치로 재정규화한다.
+respiration_enabled: false
+
+context:
+  pc_ratio_high: 0.70   # 초과 → PC
+  pc_ratio_low: 0.30    # 미만 → 비PC, 그 사이 → MIXED
+  window_sec: 900       # PC_ratio 산출 윈도우 (15분)
+
+# 신호 키: keystroke · posture(ToF) · respiration · environment(CO₂·조도) · elapsed(경과시간)
+weights:
+  focus:
+    pc:  {keystroke: 0.35, posture: 0.25, respiration: 0.15, environment: 0.00, elapsed: 0.20}
+    npc: {keystroke: 0.00, posture: 0.50, respiration: 0.00, environment: 0.25, elapsed: 0.25}
+  fatigue:
+    pc:  {keystroke: 0.35, posture: 0.25, respiration: 0.15, environment: 0.10, elapsed: 0.15}
+    npc: {keystroke: 0.00, posture: 0.40, respiration: 0.25, environment: 0.20, elapsed: 0.15}
+  # MIXED = r·pc + (1-r)·npc (런타임 blend, r = pc_ratio)
+
+thresholds:
+  fatigue_focus_low: 0.40    # 몰입 유지 상한 / 집중저하 판정 시 피로 상한
+  focus_break: 0.30          # C_focus 이 이상이면 집중 저하 감지
+  reengage_success: 0.25     # 재유도 성공 → 몰입 복귀
+  fatigue_suspect_low: 0.40  # 피로 의심 진입
+  fatigue_confirm: 0.70      # 피로 확정
+  natural_recovery: 0.30     # 자연 회복
+  recovery_success: 0.30     # 회복 승인
+  recovery_fail: 0.70        # 회복 실패 → 격상
+
+gate:
+  conf_auto: 0.75      # 이상 → 자동 제어
+  conf_suggest: 0.45   # 이상 → 제안, 미만 → 무동작
+
+timers:
+  score_period_sec: 10           # 신뢰도 계산 주기 (2026-09-14 팀 결정: 30→10. ingest 가 이 주기로 SensorFrame 을 만든다)
+  baseline_sec: 30   # 운영 300
+  absent_idle_sec: 60   # 운영 600
+  fatigue_elevated_hold_sec: 30   # 운영 180
+  fatigue_confirm_hold_sec: 30   # 운영 180
+  focus_break_poll_sec: 30   # 운영 180
+  rest_min_sec: 60   # 운영 300
+  cmd_cooldown_sec: 60   # 운영 300
+
+# 개입 라우팅 그룹 (dominant = argmax(wᵢ·δᵢ))
+routing:
+  environment: [environment]          # 환경성 → ACTION_ENV
+  posture: [posture, respiration]     # 자세성/생리 → ACTION_POSTURE
+  cognitive: [elapsed, keystroke]     # 인지성 → ACTION_BREAK
