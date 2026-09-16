@@ -1,5 +1,7 @@
 #include <sdbus-c++/sdbus-c++.h>
 
+#include "uart_rx.h"
+
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -17,6 +19,7 @@
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <sstream>
@@ -59,6 +62,39 @@ void handleSignal(int)
 std::filesystem::path executableDirectory()
 {
     return std::filesystem::canonical("/proc/self/exe").parent_path();
+}
+
+std::string trim(std::string value)
+{
+    const auto not_space = [](unsigned char value) { return !std::isspace(value); };
+    value.erase(value.begin(), std::find_if(value.begin(), value.end(), not_space));
+    value.erase(std::find_if(value.rbegin(), value.rend(), not_space).base(), value.end());
+    return value;
+}
+
+void loadEnvironmentFile(const std::filesystem::path& path)
+{
+    std::ifstream input(path);
+    if (!input) return;
+
+    std::string line;
+    while (std::getline(input, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        line = trim(line);
+        if (line.empty() || line.front() == '#') continue;
+
+        const std::size_t separator = line.find('=');
+        if (separator == std::string::npos) {
+            std::cerr << "DESKMATE Hub: ignoring invalid environment line\n";
+            continue;
+        }
+
+        const std::string key = trim(line.substr(0, separator));
+        const std::string value = trim(line.substr(separator + 1));
+        if (key.empty() || setenv(key.c_str(), value.c_str(), 0) != 0) {
+            std::cerr << "DESKMATE Hub: failed to load environment entry\n";
+        }
+    }
 }
 
 HubProcess startHub(const std::filesystem::path& service_dir)
@@ -126,6 +162,12 @@ bool writeAll(int fd, const std::string& data)
     return true;
 }
 
+bool writeBridgeInput(int fd, std::mutex& input_mutex, const std::string& data)
+{
+    std::lock_guard<std::mutex> lock(input_mutex);
+    return writeAll(fd, data);
+}
+
 void processBridgeLine(const std::string& line, BridgeState& state)
 {
     if (line.rfind("STATE\t", 0) == 0) {
@@ -174,14 +216,6 @@ void readBridge(int fd, BridgeState& state)
     }
     if (!pending.empty()) processBridgeLine(pending, state);
     close(fd);
-}
-
-std::string trim(std::string value)
-{
-    const auto not_space = [](unsigned char value) { return !std::isspace(value); };
-    value.erase(value.begin(), std::find_if(value.begin(), value.end(), not_space));
-    value.erase(std::find_if(value.rbegin(), value.rend(), not_space).base(), value.end());
-    return value;
 }
 
 bool readRequest(int client, HttpRequest& request)
@@ -261,7 +295,7 @@ void sendResponse(int client, int status, const std::string& body)
     writeAll(client, response.str());
 }
 
-void handleClient(int client, int bridge_input, BridgeState& state,
+void handleClient(int client, int bridge_input, std::mutex& input_mutex, BridgeState& state,
                   std::atomic<unsigned long long>& next_request_id)
 {
     HttpRequest request;
@@ -304,7 +338,7 @@ void handleClient(int client, int bridge_input, BridgeState& state,
         const std::string request_id = std::to_string(next_request_id.fetch_add(1));
         const std::string command =
             "POST\t" + request_id + "\t" + request.path + "\t" + request.body + "\n";
-        if (!writeAll(bridge_input, command)) {
+        if (!writeBridgeInput(bridge_input, input_mutex, command)) {
             sendResponse(client, 503, R"({"error":"bridge_unavailable"})");
             return;
         }
@@ -336,7 +370,7 @@ void handleClient(int client, int bridge_input, BridgeState& state,
     sendResponse(client, 404, R"({"error":"not_found"})");
 }
 
-void runHttpServer(int bridge_input, BridgeState& state,
+void runHttpServer(int bridge_input, std::mutex& input_mutex, BridgeState& state,
                    std::atomic<bool>& http_failed)
 {
     const int server = socket(AF_INET, SOCK_STREAM, 0);
@@ -382,7 +416,7 @@ void runHttpServer(int bridge_input, BridgeState& state,
         timeval timeout = {3, 0};
         setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
         setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-        handleClient(client, bridge_input, state, next_request_id);
+        handleClient(client, bridge_input, input_mutex, state, next_request_id);
         close(client);
     }
     close(server);
@@ -400,17 +434,26 @@ int main()
     signal(SIGPIPE, SIG_IGN);
 
     try {
+        const std::filesystem::path service_dir = executableDirectory();
+        loadEnvironmentFile(service_dir / "hub.env");
+
         auto connection = sdbus::createSystemBusConnection(
             sdbus::ServiceName(kServiceName));
         connection->enterEventLoopAsync();
 
-        HubProcess hub = startHub(executableDirectory());
+        HubProcess hub = startHub(service_dir);
         if (hub.pid < 0) return 1;
 
         BridgeState state;
         std::atomic<bool> http_failed{false};
+        std::mutex bridge_input_mutex;
         std::thread reader(readBridge, hub.output_fd, std::ref(state));
-        std::thread http(runHttpServer, hub.input_fd, std::ref(state),
+        deskmate::UartReceiver uart(deskmate::uartRxConfigFromEnvironment(),
+            [&hub, &bridge_input_mutex](const std::string& line) {
+                return writeBridgeInput(hub.input_fd, bridge_input_mutex, line);
+            });
+        uart.start();
+        std::thread http(runHttpServer, hub.input_fd, std::ref(bridge_input_mutex), std::ref(state),
                          std::ref(http_failed));
 
         std::cerr << "DESKMATE Hub service started (child " << hub.pid << ")\n";
@@ -433,12 +476,13 @@ int main()
         }
 
         g_stop_requested = 1;
+        uart.stop();
         if (!child_exited) {
             kill(hub.pid, SIGTERM);
             waitpid(hub.pid, &child_status, 0);
         }
-        close(hub.input_fd);
         http.join();
+        close(hub.input_fd);
         reader.join();
         connection->leaveEventLoop();
 
