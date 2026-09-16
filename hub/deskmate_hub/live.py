@@ -16,6 +16,7 @@ from typing import Any, TextIO
 
 from .inference import (FSMEngine, GateMode, SensorFrame, SessionRecorder, State,
                         load_config, report_envelope)
+from .features import BaselineStore
 from .ingest import SensorCache, SessionTracker, build_frame, load_ingest_config, sensor_summary
 from .presentation import state_envelope
 
@@ -50,6 +51,12 @@ class LiveHub:
         # 리포트는 세션이 끝나야 나오는 게 아니라 진행 중에도 스냅샷을 낼 수 있어야
         # 한다. 화면의 리포트 탭이 세션 내내 비어 있으면 아무도 안 본다.
         self.recorder = SessionRecorder()
+        if str(self.ingest_cfg.get("normalization", "linear")).lower() == "baseline":
+            bcfg = dict(self.ingest_cfg.get("baseline") or {})
+            persist = bcfg.get("persist") or {}
+            self.tracker.baseline = BaselineStore(
+                bcfg, persist_path=persist.get("path") if persist.get("enabled") else None,
+            )
         self.publish = publish or (lambda envelope: None)
         self.publish_request = publish_request or (lambda envelope: None)
         self.pending_request: dict[str, Any] | None = None
@@ -76,10 +83,12 @@ class LiveHub:
         self.tracker.observe_state(result.state, now)
         self.recorder.observe(frame, result)
 
-        envelope = state_envelope(
-            result, boot_id=self.boot_id, seq=self.seq, ts=now,
-            sensor_summary=sensor_summary(view, now, self.ingest_cfg),
-        )
+        summary = sensor_summary(view, now, self.ingest_cfg)
+        if self.tracker.baseline is not None:
+            snap = self.tracker.baseline.snapshot()
+            summary["baseline"] = {"calibrating": snap["calibrating"], "ready": sorted(snap["session"]),
+                                   "seeded": sorted({m for b in snap["buckets"].values() for m in b})}
+        envelope = state_envelope(result, boot_id=self.boot_id, seq=self.seq, ts=now, sensor_summary=summary)
         self.seq += 1
         self.publish(envelope)
         self._maybe_request(result, prev_state, now)

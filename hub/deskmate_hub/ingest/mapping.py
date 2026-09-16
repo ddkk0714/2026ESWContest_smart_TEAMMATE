@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from ..features import BaselineStore
 from ..inference import SensorFrame, Signal, State
 from .cache import CacheView
 
@@ -33,13 +34,28 @@ class SessionTracker:
     session_started: float | None = None
     pending_feedback: str | None = None     # accept | reject
     last_state: State = State.IDLE
+    baseline: BaselineStore | None = None   # normalization: baseline 일 때만
 
     def observe_state(self, state: State, now: float) -> None:
         if state is State.START and self.session_started is None:
             self.session_started = now
         if state in (State.IDLE, State.END):
             self.session_started = None
+        if self.baseline is not None:
+            # START(기준선 측정) 진입 → 보정 창 시작, START 이탈 → 확정
+            if state is State.START and self.last_state is not State.START:
+                self.baseline.begin_calibration()
+            elif self.last_state is State.START and state is not State.START:
+                self.baseline.end_calibration(now)
         self.last_state = state
+
+    def evidence(self, metric: str, x: float | None, linear: float, *, direction: int = 1, now: float | None = None) -> float:
+        """원지표 x → [0,1] 증거. 기준선이 있으면 Modified z, 없으면 linear 램프 값을 쓴다. 보정 창이면 표본을 모은다."""
+        if self.baseline is None:
+            return linear
+        self.baseline.observe(metric, x)
+        z = self.baseline.normalize(metric, x, direction=direction, now=now)
+        return linear if z is None else z
 
 
 def pc_ratio(view: CacheView, now: float, window_sec: float) -> float:
@@ -81,7 +97,8 @@ def build_frame(
             _clip(still_sec / float(mcfg["still_full_sec"])),
             float(mcfg["drowsy_delta"].get(drowsy, 0.0)),
         )
-        signals["posture"] = Signal(phi=_clip(level / 100.0), delta=delta, available=True)
+        phi = tracker.evidence("motion_level", level, _clip(level / 100.0), now=now)
+        signals["posture"] = Signal(phi=phi, delta=delta, available=True)
 
         # ---- respiration: 재실 중 호흡 소실 지속 ----
         if mm.data.get("resp_valid"):
@@ -103,10 +120,13 @@ def build_frame(
     kcfg = cfg["keystroke"]
     if ks and ks.data.get("typing_active"):
         d = ks.data
-        phi = _ramp(d.get("idle_ratio"), kcfg["idle_ratio_low"], kcfg["idle_ratio_high"])
+        phi = tracker.evidence("idle_ratio", d.get("idle_ratio"),
+                               _ramp(d.get("idle_ratio"), kcfg["idle_ratio_low"], kcfg["idle_ratio_high"]), now=now)
         delta = max(
-            _ramp(d.get("flight_cv"), kcfg["flight_cv_low"], kcfg["flight_cv_high"]),
-            _ramp(d.get("correction_rate"), 0.0, kcfg["correction_rate_high"]),
+            tracker.evidence("flight_cv", d.get("flight_cv"),
+                             _ramp(d.get("flight_cv"), kcfg["flight_cv_low"], kcfg["flight_cv_high"]), now=now),
+            tracker.evidence("correction_rate", d.get("correction_rate"),
+                             _ramp(d.get("correction_rate"), 0.0, kcfg["correction_rate_high"]), now=now),
         )
         signals["keystroke"] = Signal(phi=phi, delta=delta, available=True)
     else:
@@ -115,7 +135,8 @@ def build_frame(
     # ---- environment ----
     ecfg = cfg["environment"]
     if env and env.data.get("co2_valid") and env.data.get("co2_ppm") is not None:
-        delta = _ramp(env.data["co2_ppm"], ecfg["co2_ppm_low"], ecfg["co2_ppm_high"])
+        delta = tracker.evidence("co2_ppm", env.data["co2_ppm"],
+                                 _ramp(env.data["co2_ppm"], ecfg["co2_ppm_low"], ecfg["co2_ppm_high"]), now=now)
         signals["environment"] = Signal(phi=0.0, delta=delta, available=True)
     else:
         signals["environment"] = Signal(available=False)

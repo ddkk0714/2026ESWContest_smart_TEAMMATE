@@ -200,6 +200,7 @@ auto-repeat(키 꾹 누름)는 1타건으로 취급한다. 브로커 미연결 �
 - `valid`, `invalidated_reason(layout_changed/user_changed/insufficient_samples/manual)`
 
 baseline은 절대 자세·타이핑 속도가 아닌 상대 변화를 만든다. 원시 시퀀스 대신 요약 통계를 저장한다.
+구현: `features/baseline.py`(DATA-DEC-005). `state/phase.sensor_summary.baseline = {calibrating, ready[], seeded[]}` 로 상태를 노출한다.
 
 ## 8. L3 FSM 입력 계약
 
@@ -378,7 +379,7 @@ Pi 4 C++ 서비스는 COBS 해제·CRC 검증·헤더 파싱까지만 하고 `UA
 | DATA-DEC-008 | `tof_feature` 관절 좌표 필드 | 스켈레톤 채택(09-08)에 따라 posture enum 외에 상체 관절 좌표(N×xyz) 또는 판별 결과만 보낼지. Path A/B 결정과 연동 |
 | DATA-DEC-009 | mmWave 신호 매핑 | `respiration` 신호를 "호흡 소실 여부 + 체동 이동평균" 로 재정의할지. 순간 호흡·심박·HRV·`inBed` 는 계약에서 제외 |
 | DATA-DEC-004 | freshness·샘플링 | 실제 ESP32·LAN 지연 분포로 보정 |
-| DATA-DEC-005 | 특징 정규화 | baseline→`phi/delta` 수식·clip·결측 규칙 (중앙값·MAD Modified z-score 방향 확정, 수식 미정) |
+| DATA-DEC-005 | 특징 정규화 | **잠정 확정(2026-09-16)** `hub/deskmate_hub/features/baseline.py`: 세션 START(baseline_sec) 표본으로 지표별 median·MAD, `z = 0.6745·(x−median)/max(MAD, mad_floor)`, 증거 = `clip(±z / z_full)`(z_full 3.5), 표본 < min_samples 이거나 기준선 없으면 `ingest.yaml` 선형 램프 폴백, 시간대 버킷(3 h) seed, 저장은 opt-in(median·MAD·표본 수만). 대상 지표: idle_ratio·flight_cv·correction_rate·motion_level·co2_ppm. z_full·floor 값은 실측 후 조정 |
 | ~~DATA-DEC-010~~ | ~~키스트로크 계약~~ | **해소(2026-09-14)** §6.4 — `collector/` 구현 기준 |
 | ~~DATA-DEC-011~~ | ~~SCD41/DHT22 역할~~ | **해소(2026-09-14)** §6.3 — 보정 없음, 단일 센서 측정 |
 | DATA-DEC-006 | 개인화 보존 | 저장소·보존·삭제·opt-in UI |
