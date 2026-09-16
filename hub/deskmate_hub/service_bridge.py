@@ -68,7 +68,31 @@ def _read_commands(store: BridgeStateStore, uart_source=None) -> None:
             store.write_message(f"ACK\t{request_id}\t202")
 
 
+def _apply_bundled_env_defaults() -> None:
+    """payload 에 동봉된 hub.env(hub/atlas/files/hub.env) 를 기본값으로 적용한다. 이미 설정된 환경변수(서비스 디렉터리의
+    hub.env 를 main.cpp 가 먼저 적용)가 우선. 파일이 없으면(소스 트리 실행) 아무것도 하지 않는다."""
+    # importlib.resources 는 tempfile→random→_random(C 확장) 을 끌어와 제한 Python 에서 죽는다. pkgutil 은 zipimport 의
+    # get_data 만 쓴다.
+    try:
+        import pkgutil
+
+        raw = pkgutil.get_data(__package__, "hub.env")
+    except (OSError, ImportError, ValueError):
+        return
+    if not raw:
+        return
+    text = raw.decode("utf-8", errors="replace")
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if "=" not in line:
+            continue
+        key, value = (part.strip() for part in line.split("=", 1))
+        if key:
+            os.environ.setdefault(key, value)
+
+
 def run_bridge(interval: float = 1.0) -> None:
+    _apply_bundled_env_defaults()
     if os.environ.get("DESKMATE_HUB_MODE", "demo").lower() == "live":
         return _run_live_bridge()
     store = BridgeStateStore()
@@ -77,9 +101,26 @@ def run_bridge(interval: float = 1.0) -> None:
     run_demo_loop(store, interval=interval, cycles=0)
 
 
+def _report_runtime_capabilities() -> None:
+    """보드 제한 Python 에서 어떤 모듈이 살아있는지 journal 에 남긴다(C 확장 부재 진단용)."""
+    import importlib
+
+    report = []
+    for name in ("json", "socket", "select", "selectors", "threading", "uuid", "hashlib", "base64", "datetime",
+                 "logging", "struct", "math", "random", "ssl", "paho.mqtt.client"):
+        try:
+            importlib.import_module(name)
+            report.append(name)
+        except Exception as exc:  # noqa: BLE001 — ImportError 외 초기화 예외도 기록
+            report.append(f"{name}!({type(exc).__name__}: {exc})")
+    print("[bridge] python", sys.version.split()[0], "modules:", " ".join(report), file=sys.stderr, flush=True)
+
+
 def _run_live_bridge() -> None:
     """실센서 모드: UART 라인(stdin) + 선택적 MQTT 센서 → LiveHub → STATE 라인(+MQTT)."""
     import time
+
+    _report_runtime_capabilities()
 
     from .ingest import SensorCache
     from .ingest.uart_source import UartLineSource

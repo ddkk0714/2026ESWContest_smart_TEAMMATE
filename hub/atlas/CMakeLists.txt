@@ -54,6 +54,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         --hub ${HUB_SOURCE_DIR}
         --config ${HUB_SOURCE_DIR}/config/fsm.yaml
         --stdlib ${HOST_STDLIB_DIR}
+        --env-file ${CMAKE_CURRENT_SOURCE_DIR}/files/hub.env
     COMMENT "Appending the DESKMATE Python Hub payload")
 
 install(TARGETS ${PROJECT_NAME} DESTINATION ${SERVICE_INSTALL_DIR})

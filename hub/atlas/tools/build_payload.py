@@ -49,6 +49,8 @@ def main() -> None:
     parser.add_argument("--hub", type=Path, required=True)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--stdlib", type=Path, required=True)
+    parser.add_argument("--env-file", type=Path, default=None,
+                        help="hub.env 기본값(ARC 0.5 는 서비스 번들에 실행파일·serviceinfo·dbus 만 넣으므로 payload 에 동봉)")
     args = parser.parse_args()
 
     with args.config.open(encoding="utf-8") as source:
@@ -80,6 +82,8 @@ def main() -> None:
                         f"deskmate_hub/config/{name}.json",
                         json.dumps(extra, ensure_ascii=False, separators=(",", ":")),
                     )
+            if args.env_file is not None and args.env_file.exists():
+                archive.write(args.env_file, "deskmate_hub/hub.env")
         with args.executable.open("ab") as executable, open(payload.name, "rb") as built:
             executable.write(built.read())
 

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import os
-import statistics
 import time
 from collections import deque
 from dataclasses import asdict, dataclass, field
@@ -25,12 +24,22 @@ from typing import Any, Iterable
 MODIFIED_Z_CONST = 0.6745
 
 
+def _median(values) -> float:
+    """statistics.median 대체 — statistics 는 random(_random C 확장) 을 끌어와 보드의 제한 Python 에서 import 불가."""
+    xs = sorted(values)
+    n = len(xs)
+    if n == 0:
+        raise ValueError("no median for empty data")
+    mid = n // 2
+    return float(xs[mid]) if n % 2 else (xs[mid - 1] + xs[mid]) / 2.0
+
+
 def median_mad(values: Iterable[float]) -> tuple[float, float]:
     xs = sorted(float(v) for v in values)
     if not xs:
         raise ValueError("no samples")
-    med = statistics.median(xs)
-    mad = statistics.median(abs(x - med) for x in xs)
+    med = _median(xs)
+    mad = _median([abs(x - med) for x in xs])
     return med, mad
 
 

@@ -19,6 +19,7 @@
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <sstream>
@@ -61,6 +62,32 @@ void handleSignal(int)
 std::filesystem::path executableDirectory()
 {
     return std::filesystem::canonical("/proc/self/exe").parent_path();
+}
+
+// D-Bus activation gives the service no way to receive environment variables, so runtime
+// settings (DESKMATE_HUB_MODE, DESKMATE_MQTT_HOST, DESKMATE_UART_DEV, ...) come from
+// `hub.env` next to the executable: KEY=VALUE per line, '#' comments. Existing variables win.
+void loadHubEnv(const std::filesystem::path& service_dir)
+{
+    std::ifstream file(service_dir / "hub.env");
+    if (!file) return;
+    std::string line;
+    while (std::getline(file, line)) {
+        const auto hash = line.find('#');
+        if (hash != std::string::npos) line.erase(hash);
+        const auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        auto trim = [](std::string value) {
+            const auto begin = value.find_first_not_of(" \t\r");
+            const auto end = value.find_last_not_of(" \t\r");
+            return begin == std::string::npos ? std::string() : value.substr(begin, end - begin + 1);
+        };
+        const std::string key = trim(line.substr(0, eq));
+        const std::string value = trim(line.substr(eq + 1));
+        if (key.empty()) continue;
+        setenv(key.c_str(), value.c_str(), 0);
+        std::cerr << "DESKMATE hub.env " << key << "=" << value << '\n';
+    }
 }
 
 HubProcess startHub(const std::filesystem::path& service_dir)
@@ -412,7 +439,9 @@ int main()
             sdbus::ServiceName(kServiceName));
         connection->enterEventLoopAsync();
 
-        HubProcess hub = startHub(executableDirectory());
+        const std::filesystem::path service_dir = executableDirectory();
+        loadHubEnv(service_dir);
+        HubProcess hub = startHub(service_dir);
         if (hub.pid < 0) return 1;
 
         BridgeState state;
