@@ -359,8 +359,8 @@ class FocusAmbientView extends StatelessWidget {
               style: Theme.of(context).textTheme.labelMedium),
           const SizedBox(height: 54),
           SizedBox(
-            width: 220,
-            height: 220,
+            width: 276,
+            height: 276,
             child: CustomPaint(
               painter: _FocusRingPainter(value: state.confidence),
               child: Center(

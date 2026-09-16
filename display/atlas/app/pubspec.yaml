@@ -26,3 +26,9 @@ flutter:
   uses-material-design: true
   assets:
     - assets/audio/deskmate_test_music.mp3
+    - assets/audio/chopin_nocturne_op9_no2.mp3
+    - assets/audio/satie_gymnopedie_no1.mp3
+    - assets/audio/beethoven_fur_elise.mp3
+    - assets/audio/mozart_sonata_k545_allegro.mp3
+    - assets/audio/bach_prelude_bwv846.mp3
+    - assets/audio/CREDITS.md

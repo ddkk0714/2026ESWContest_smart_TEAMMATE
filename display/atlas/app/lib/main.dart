@@ -53,8 +53,11 @@ class _DashboardPageState extends State<DashboardPage> {
   bool _demoCyclingEnabled = true;
   _AppView _view = _AppView.dashboard;
   late final MusicPlayback _music;
+  late final StreamSubscription<bool> _musicChanges;
+  late final StreamSubscription<double> _musicVolumeChanges;
   bool _musicOn = false;
   bool _musicBusy = false;
+  double _musicVolume = 1;
   bool _showFocusDetail = false;
 
   // 보드에 꽂힌 키보드를 앱이 직접 잡는다. hub 가 주는 collector 지표보다 이걸 우선한다.
@@ -72,6 +75,25 @@ class _DashboardPageState extends State<DashboardPage> {
     _clock.start();
     _music = widget.music ?? AtlasMusicPlayback();
     _musicOn = _music.isPlaying;
+    _musicVolume = _music.volume;
+    _musicChanges = _music.playingChanges.listen((playing) {
+      if (mounted) setState(() => _musicOn = playing);
+    }, onError: (Object error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('음악 재생 실패: $error')),
+        );
+      }
+    });
+    _musicVolumeChanges = _music.volumeChanges.listen((volume) {
+      if (mounted) setState(() => _musicVolume = volume);
+    }, onError: (Object error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('음량 동기화 실패: $error')),
+        );
+      }
+    });
     HardwareKeyboard.instance.addHandler(_onKey);
     _source = _mqttHost.trim().isNotEmpty
         ? MqttStateSource(_mqttHost.trim(), port: _mqttPort)
@@ -180,6 +202,55 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
+  Future<void> _selectMusic(int index) async {
+    if (_musicBusy) return;
+    setState(() => _musicBusy = true);
+    try {
+      await _music.selectTrack(index);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('곡 변경 실패: $error')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _musicOn = _music.isPlaying;
+          _musicBusy = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _setMusicVolume(double value) async {
+    try {
+      await _music.setVolume(value);
+      if (mounted) setState(() => _musicVolume = _music.volume);
+    } catch (error) {
+      if (mounted) {
+        setState(() => _musicVolume = _music.volume);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('음량 변경 실패: $error')),
+        );
+      }
+    }
+  }
+
+  Future<void> _showVolumeControl() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => _MusicVolumeDialog(
+        initialValue: _musicVolume,
+        changes: _music.volumeChanges,
+        onChanged: (value) {
+          if (mounted) setState(() => _musicVolume = value);
+          unawaited(_setMusicVolume(value));
+        },
+      ),
+    );
+  }
+
   void _toggleDemoCycling() {
     if (_source is! DemoStateSource) return;
     setState(() => _demoCyclingEnabled = !_demoCyclingEnabled);
@@ -220,6 +291,8 @@ class _DashboardPageState extends State<DashboardPage> {
     HardwareKeyboard.instance.removeHandler(_onKey);
     _clock.stop();
     _source.close();
+    unawaited(_musicChanges.cancel());
+    unawaited(_musicVolumeChanges.cancel());
     unawaited(_music.dispose());
     super.dispose();
   }
@@ -245,6 +318,10 @@ class _DashboardPageState extends State<DashboardPage> {
                         musicOn: _musicOn,
                         musicBusy: _musicBusy,
                         onMusic: _toggleMusic,
+                        selectedTrack: _music.selectedTrack,
+                        onSelectMusic: _selectMusic,
+                        musicVolume: _musicVolume,
+                        onVolume: _showVolumeControl,
                         onExit: _confirmExit),
                     const SizedBox(height: 12),
                     Expanded(
@@ -286,6 +363,98 @@ class _DashboardPageState extends State<DashboardPage> {
 
 enum _AppView { dashboard, sensorTest, fsmGraph }
 
+class _MusicVolumeDialog extends StatefulWidget {
+  const _MusicVolumeDialog({
+    required this.initialValue,
+    required this.changes,
+    required this.onChanged,
+  });
+
+  final double initialValue;
+  final Stream<double> changes;
+  final ValueChanged<double> onChanged;
+
+  @override
+  State<_MusicVolumeDialog> createState() => _MusicVolumeDialogState();
+}
+
+class _MusicVolumeDialogState extends State<_MusicVolumeDialog> {
+  late double _value;
+  late final StreamSubscription<double> _subscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _value = widget.initialValue;
+    _subscription = widget.changes.listen((value) {
+      if (mounted) setState(() => _value = value);
+    });
+  }
+
+  @override
+  void dispose() {
+    unawaited(_subscription.cancel());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Dialog(
+        child: SizedBox(
+          width: 300,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Row(children: [
+                const Text('음량 조절',
+                    style: TextStyle(fontWeight: FontWeight.w700)),
+                const Spacer(),
+                IconButton(
+                  tooltip: '닫기',
+                  onPressed: () => Navigator.pop(context),
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints.tightFor(width: 32, height: 32),
+                  icon: const Icon(Icons.close_rounded, size: 19),
+                ),
+              ]),
+              const SizedBox(height: 2),
+              Row(children: [
+                Icon(
+                  _value == 0
+                      ? Icons.volume_off_rounded
+                      : _value < .5
+                          ? Icons.volume_down_rounded
+                          : Icons.volume_up_rounded,
+                  size: 20,
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Slider(
+                    key: const ValueKey('music-volume-slider'),
+                    value: _value,
+                    divisions: 20,
+                    label: '${(_value * 100).round()}%',
+                    onChanged: (value) {
+                      setState(() => _value = value);
+                      widget.onChanged(value);
+                    },
+                  ),
+                ),
+                SizedBox(
+                  width: 40,
+                  child: Text(
+                    '${(_value * 100).round()}%',
+                    textAlign: TextAlign.end,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ]),
+            ]),
+          ),
+        ),
+      );
+}
+
 class _Header extends StatelessWidget {
   const _Header(
       {required this.source,
@@ -296,6 +465,10 @@ class _Header extends StatelessWidget {
       required this.musicOn,
       required this.musicBusy,
       required this.onMusic,
+      required this.selectedTrack,
+      required this.onSelectMusic,
+      required this.musicVolume,
+      required this.onVolume,
       required this.onExit});
   final String source;
   final bool online;
@@ -305,6 +478,10 @@ class _Header extends StatelessWidget {
   final bool musicOn;
   final bool musicBusy;
   final VoidCallback onMusic;
+  final int selectedTrack;
+  final ValueChanged<int> onSelectMusic;
+  final double musicVolume;
+  final VoidCallback onVolume;
   final VoidCallback onExit;
 
   @override
@@ -357,6 +534,47 @@ class _Header extends StatelessWidget {
           ]),
         ),
         const SizedBox(width: 8),
+        PopupMenuButton<int>(
+          key: const ValueKey('music-select'),
+          tooltip: '재생할 곡 선택',
+          enabled: !musicBusy,
+          initialValue: selectedTrack,
+          onSelected: onSelectMusic,
+          itemBuilder: (context) => [
+            for (var i = 0; i < classicalTrackTitles.length; i++)
+              CheckedPopupMenuItem<int>(
+                key: ValueKey('music-track-$i'),
+                value: i,
+                checked: i == selectedTrack,
+                child: Text(classicalTrackTitles[i]),
+              ),
+          ],
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              SizedBox(
+                width: 128,
+                child: Text(classicalTrackTitles[selectedTrack],
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12)),
+              ),
+              const Icon(Icons.arrow_drop_down, size: 18),
+            ]),
+          ),
+        ),
+        IconButton(
+          key: const ValueKey('music-volume'),
+          tooltip: '음량 ${(musicVolume * 100).round()}%',
+          onPressed: onVolume,
+          color: DeskmateColors.inkMuted,
+          visualDensity: VisualDensity.compact,
+          icon: Icon(musicVolume == 0
+              ? Icons.volume_off_rounded
+              : musicVolume < .5
+                  ? Icons.volume_down_rounded
+                  : Icons.volume_up_rounded),
+        ),
         TextButton.icon(
           key: const ValueKey('music-toggle'),
           onPressed: musicBusy ? null : onMusic,
