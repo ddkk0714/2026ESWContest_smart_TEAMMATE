@@ -15,6 +15,7 @@ DrowsyDetector drowsy_detector;
 uint32_t last_mmwave_ms = 0;
 uint32_t last_environment_ms = 0;
 uint32_t last_heartbeat_ms = 0;
+uint32_t last_c1001_retry_ms = 0;
 uint16_t mmwave_sequence = 0;
 uint16_t environment_sequence = 0;
 uint16_t heartbeat_sequence = 0;
@@ -95,6 +96,12 @@ void setup() {
 
 void loop() {
   const uint32_t now_ms = millis();
+  // C1001 boots several seconds after power-up and may be plugged in after the ESP32; keep retrying.
+  if (!mmwave_ready && now_ms - last_c1001_retry_ms >= kC1001RetryMs) {
+    last_c1001_retry_ms = now_ms;
+    mmwave_ready = mmwave.begin();
+    if (mmwave_ready) Serial.println(F("C1001 ready (late init)"));
+  }
   if (now_ms - last_mmwave_ms >= kMmwavePeriodMs) {
     last_mmwave_ms = now_ms;
     const MmwaveSample sample = mmwave_ready ? mmwave.read() : MmwaveSample{};

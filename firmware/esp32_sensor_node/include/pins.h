@@ -23,6 +23,7 @@ constexpr int kPi4RxPin = 26;
 
 constexpr uint32_t kMmwavePeriodMs = 1000;
 constexpr uint32_t kEnvironmentPeriodMs = 5000;
+constexpr uint32_t kC1001RetryMs = 10000;
 
 // Supplied by platformio.ini build flags so tuning does not require source edits.
 constexpr uint32_t kWarmupMs = DESKMATE_WARMUP_MS;
