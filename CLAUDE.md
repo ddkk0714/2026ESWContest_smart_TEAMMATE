@@ -61,7 +61,7 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 | `hub/atlas/` Pi 4 native service | 공통 | 🟡 | ARC IPK 로 제한 Python 을 감싸 FSM 실행, HTTP 8765 개발 API. UART2 수신(`uart_rx.cpp`)·bridge live 모드·paho 동봉 코드 준비(09-16), **ARC 컴파일·실보드 검증 남음** |
 | `hub/ingest/` + `live.py` | 이민혁·공통 | 🟡 | MQTT 센서 토픽 → `SensorCache` → 10 s `SensorFrame` → FSM → `state/phase` 발행(`run` 명령, 09-14). `config/ingest.yaml` 임시 스케일. 실브로커 연동·UART 라인은 이후 |
 | `hub/features/` baseline 정규화 | 김태환 | 🟡 | `baseline.py` 중앙값·MAD Modified z-score(세션 보정 창 + 시간대 버킷, opt-in 저장) → `phi/delta`, ingest 연동(09-16). ToF 기하 특징은 센서 후 |
-| `hub/control/` 플러그·ThinQ | 조명희 | ⬜ | 빈 패키지. 스마트 플러그 기본 라인 |
+| `hub/control/` 플러그·ThinQ | 조명희 | 🟡 | 디스패처(ACTION_ENV → `control/cmd`/`result`, 게이트별 즉시·수락 후·만료, undo, 쿨다운, 비가역 금지) + mock 플러그(09-16). 실기 어댑터는 모델 선정 후 |
 | `hub/inference/` TFLite 2단계 | 조명희 | ⬜ | 선택적 의존. 라벨 축적 후 |
 | `ml/` 학습→TFLite | 조명희 | ⬜ | 비어 있음 |
 | `firmware/` ESP32 | 이민혁·김태환 | 🟡 | `esp32_sensor_node/` PlatformIO: DFRobot C1001 + DrowsyDetector, USB 1 Hz JSON(PR #12), UART2 COBS/CRC 송신(09-16). `pio run` 미검증, 환경 센서 드라이버 미구현 |

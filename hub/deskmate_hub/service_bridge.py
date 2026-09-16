@@ -114,7 +114,9 @@ def _run_live_bridge() -> None:
         if mqtt_source is not None:
             mqtt_source.publish_request(envelope)
 
-    hub = LiveHub(cache, publish=publish, publish_request=publish_request, out=sys.stderr)
+    publish_control = mqtt_source.publish_control if mqtt_source is not None else None
+    hub = LiveHub(cache, publish=publish, publish_request=publish_request, publish_control=publish_control,
+                  out=sys.stderr)
     next_tick = time.time()
     try:
         while True:

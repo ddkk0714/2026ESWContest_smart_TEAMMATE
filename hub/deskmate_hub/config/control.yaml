@@ -1,0 +1,16 @@
+# 제어 모듈 설정 (hub/deskmate_hub/control). 임계값·쿨다운·대상은 코드에 두지 않는다.
+# 스마트 플러그 실기 모델은 미선정(agent-briefing D11) — 지금은 MQTT `deskmate/control/cmd` 로 명령을 내보내고
+# `deskmate/control/result` 로 결과를 받는 계약(data-spec §10)만 고정한다. 플러그 어댑터(실기)는 그 토픽을 구독해 구현한다.
+
+enabled: true
+adapter: mqtt            # mqtt = 명령을 토픽으로 발행하고 결과를 기다림 / mock = 프로세스 안에서 즉시 성공(시연·테스트)
+result_timeout_sec: 15   # 이 시간 안에 결과가 없으면 timeout 으로 종료하고 FSM 은 MONITOR 로 진행
+suggest_timeout_sec: 180 # 제안(0.45~0.75)에 사용자 응답이 없으면 expired 로 종료 (interaction/request 의 expires_in_s 와 맞춤)
+cooldown_sec: 300        # 같은 target 에 같은 operation 을 다시 보내기까지 최소 간격 (fsm timers.cmd_cooldown_sec 와 맞춤)
+irreversible_operations: [set_power_off, power_cycle]   # 사용자 확인 없이는 실행하지 않는 동작
+
+# ACTION_ENV 진입 시 원인(cause)별로 내보낼 명령. 가역 동작만 둔다. undo_value 는 자동 실행 후 사용자가 거절했을 때 되돌리는 값.
+actions:
+  environment:
+    - {target_id: vent_fan, operation: set_power, value: "on", undo_value: "off"}
+    - {target_id: desk_lamp, operation: set_brightness, value: 70, undo_value: 40}

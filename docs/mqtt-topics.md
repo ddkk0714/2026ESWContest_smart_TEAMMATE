@@ -37,7 +37,8 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 | `deskmate/state/phase` | hub | display, control | 10 s 주기(retain) | 추론 결과 + 신뢰도. `python -m deskmate_hub run` 이 발행 |
 | `deskmate/display/message` | Node-RED/debug | display | 이벤트 | Pi 5 화면에 일회성 텍스트 표시 |
 | `deskmate/interaction/request` | hub | display | 이벤트 | 불확실한 판정의 사용자 확인 질문 |
-| `deskmate/control/cmd` | hub | control | 이벤트 | 기기 제어 명령 |
+| `deskmate/control/cmd` | hub | control 어댑터(플러그) | 이벤트, QoS 1, retain 없음 | 기기 제어 명령 (`control_command`, data-spec §10) |
+| `deskmate/control/result` | control 어댑터 | hub | 이벤트, QoS 1 | 명령 결과 (`control_result`). hub 는 `command_id` 로 매칭 |
 | `deskmate/feedback/user` | display | hub | 이벤트 | 사용자 수락 · 정정 |
 | `deskmate/health/<node>` | 전 장치 | hub | LWT/retain | `{ts,node,status:online|offline,reconnects}`. hub 는 `deskmate/health/hub` |
 
@@ -202,17 +203,42 @@ hub 는 현재 질문의 `request_id`(또는 `request_id` 생략·`atlas-display
 
 ### `deskmate/control/cmd`
 
+data-spec §10 `control_command` 필드 그대로(2026-09-16, `hub/deskmate_hub/control/`). 발행 조건은 `config/control.yaml`:
+ACTION_ENV 진입 시 원인별 명령 목록, 게이트 auto 면 즉시 · suggest 면 `feedback/user` accept 후 · none 이면 발행 안 함.
+같은 target/operation 은 `cooldown_sec` 안에 재발행하지 않고, `irreversible_operations` 는 자동 실행하지 않는다.
+
 ```json
 {
-  "schema_version": "1.0", "ts": 1769000002.1,
-  "node": "hub", "boot_id": "a8021bf0", "seq": 203,
+  "schema_version": "1.0", "ts": 1769000002.1, "node": "hub",
   "data": {
-  "target": "desk_lamp",       // desk_lamp | vent_fan | air_purifier | plug_1
-  "cmd": "set_brightness", "value": 70,
-  "origin": "phase:fatigue"
+    "command_id": "9f3c1a2b7d4e",          // 멱등 키. result 가 이 값으로 돌아온다
+    "target_id": "vent_fan",               // vent_fan | desk_lamp | air_purifier | plug_1 (control.yaml)
+    "operation": "set_power", "value": "on",
+    "origin_state": "ACTION_ENV", "cause": "environment",
+    "gate": "auto",                        // auto | suggest(수락 후) | undo(자동 실행 뒤 거절 시 되돌리기)
+    "requires_confirmation": false,        // 비가역 동작만 true — 어댑터는 이 명령을 사용자 확인 없이 실행하면 안 된다
+    "expires_ts_ms": 1769000017100         // 이 시각까지 결과가 없으면 hub 는 timeout 처리
   }
 }
 ```
+
+### `deskmate/control/result`
+
+```json
+{
+  "schema_version": "1.0", "ts": 1769000002.7, "node": "mock-plug",
+  "data": {
+    "command_id": "9f3c1a2b7d4e",
+    "status": "succeeded",                 // accepted | executing | succeeded | failed | timeout | cancelled
+    "actual_value": "on", "error_code": null, "error_message": null,
+    "completed_ts_ms": 1769000002700
+  }
+}
+```
+
+모든 명령이 종료(succeeded/failed/timeout)되거나 제안이 만료(`suggest_timeout_sec`)되면 hub 는 `frame.action_done=true` 로
+FSM 을 MONITOR 로 보낸다. `state/phase.sensor_summary.control` 에 진행 중 에피소드(명령·상태)가 실린다.
+어댑터가 없을 때의 리허설: `python tools/mock_plug.py --broker <ip>` (결과 응답 + `deskmate/control/state/<target>` retain).
 
 ### `deskmate/feedback/user`
 

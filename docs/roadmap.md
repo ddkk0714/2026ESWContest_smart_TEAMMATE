@@ -54,7 +54,7 @@ ToF VL53L9CX ── 연결 경로 결정 전 (Pi 4 CSI-2 또는 ESP32 I2C)
 | G4 키스트로크 | 🟡 | `collector/` 수집기·테스트 8개 — `feat/merge-pending` PR 로 main 진입 중. **계약은 구현 기준 확정(09-14)**. hub ingest 없음 |
 | G5 FSM | ✅ | 18상태 엔진, 테스트 46개(45 통과·1 xfail; 병합 PR 기준 54개), `config/fsm.yaml`(`score_period_sec: 10`), 리플레이·데모·`--report` 하네스, 엎드림·노딩 시나리오 |
 | G6 개인화 | ⬜ | `features/` `ml/` 비어 있음 |
-| G7 개입 | 🟡 | 게이트 값(0.45/0.75)은 config 와 일치. `control/` 비어 있음. 제안 카드 수락·거절은 HTTP/MQTT 로 전달됨 |
+| G7 개입 | 🟡 | 게이트 값(0.45/0.75) config 일치. `control/` 디스패처(09-16): ACTION_ENV → `control/cmd`(auto 즉시 / suggest 수락 후) → `control/result`·타임아웃 → MONITOR, 거절 시 undo, 쿨다운·비가역 금지. **실기 플러그 어댑터 없음(모델 미선정)** — mock 으로 리허설 |
 | G8 UI | 🟡 | 대시보드·18상태 그래프·키스트로크 패널·오디오·MQTT 구독 완료, release IPK 배포. **디스플레이 교체 후 터치 정상(09-14)**. 리포트 화면·저자극/상세 토글·자동 시작 없음 |
 | G9 HW | ⬜ | CAD·하우징 산출물 없음. 보드 3종·화면·센서는 보유 |
 | G10 제어 | ⬜ | 스마트 플러그 미구매/미연동 |
@@ -205,10 +205,10 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 
 #### 7. 조명·환기팬·스마트 플러그 제어 모듈 개발 — 마감 10-05
 
-- [ ] 스마트 플러그 로컬 프로토콜 확인·`control/` 어댑터(명령 ID·대상·값·원인·만료)
-- [ ] `ACTION_ENV` → `deskmate/control/cmd` 발행 → 플러그 ON/OFF → 실행 결과 수신 → 실패·타임아웃·재시도·수동 복구
-- [ ] 게이트 연동: 제안(0.45~0.75) 수락 시 실행 / 자동(≥ 0.75) 실행 후 알림, 동일 명령 쿨다운 300 s
-- [ ] 비가역 동작(전원 차단) 사용자 확인 필수 확인
+- [ ] 스마트 플러그 로컬 프로토콜 확인·실기 어댑터 — `control/cmd`·`control/result` 계약(09-16 확정)을 구독·응답하는 프로세스로 구현. 모델 선정 대기
+- [x] `ACTION_ENV` → `deskmate/control/cmd` 발행 → 결과 수신 → 실패·타임아웃 처리 → MONITOR (`control/dispatcher.py`, 09-16, 테스트 10개, mock 플러그 `tools/mock_plug.py`). 재시도·수동 복구 UI 는 남음
+- [x] 게이트 연동: 제안 수락 시 실행 / 자동 즉시 실행 / 거절 시 undo, 동일 명령 쿨다운 300 s, 제안 무응답 180 s 만료 (09-16). 자동 실행 **알림 화면**은 display 쪽 남음
+- [x] 비가역 동작(`irreversible_operations`)은 자동 게이트에서 생략, 제안 수락 시에만 `requires_confirmation=true` 로 발행 (09-16)
 - [ ] ThinQ 1기기(공기청정기 또는 조명) 연동 여부 결정, 되면 어댑터 추가 (선택)
 - [ ] 자격증명은 `.env`/gitignore `secrets.yaml` 만
 

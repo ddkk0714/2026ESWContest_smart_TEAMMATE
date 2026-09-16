@@ -15,6 +15,7 @@ from dataclasses import asdict
 from typing import Any, TextIO
 
 from .inference import FSMEngine, GateMode, SensorFrame, State, load_config
+from .control import ControlDispatcher, MockPlugAdapter, load_control_config
 from .features import BaselineStore
 from .ingest import SensorCache, SessionTracker, build_frame, load_ingest_config, sensor_summary
 from .presentation import state_envelope
@@ -38,6 +39,8 @@ class LiveHub:
         ingest_cfg: dict[str, Any] | None = None,
         publish=None,
         publish_request=None,
+        publish_control=None,
+        control_cfg: dict[str, Any] | None = None,
         frame_log: TextIO | None = None,
         state_log: TextIO | None = None,
         out: TextIO = sys.stdout,
@@ -56,6 +59,17 @@ class LiveHub:
         self.publish = publish or (lambda envelope: None)
         self.publish_request = publish_request or (lambda envelope: None)
         self.pending_request: dict[str, Any] | None = None
+        # 제어: control.yaml enabled 면 ACTION_ENV 를 디스패처가 맡는다(auto_complete 대신). mock 어댑터는 즉시 성공 응답.
+        self.control_cfg = control_cfg if control_cfg is not None else load_control_config()
+        self.control: ControlDispatcher | None = None
+        self.mock_plug: MockPlugAdapter | None = None
+        if self.control_cfg.get("enabled"):
+            log = lambda m: print(m, file=self.out, flush=True)  # noqa: E731
+            if str(self.control_cfg.get("adapter", "mqtt")) == "mock" or publish_control is None:
+                self.mock_plug = MockPlugAdapter(self.cache.put_control_result)
+                self.control = ControlDispatcher(self.control_cfg, publish_cmd=self.mock_plug.handle_command, on_log=log)
+            else:
+                self.control = ControlDispatcher(self.control_cfg, publish_cmd=publish_control, on_log=log)
         self.frame_log, self.state_log, self.out = frame_log, state_log, out
         self.boot_id = f"{time.time_ns() & 0xFFFFFFFF:08x}"
         self.seq = 0
@@ -72,13 +86,32 @@ class LiveHub:
             if rid in (None, "", "atlas-display", current):
                 self.tracker.pending_feedback = feedback["verdict"]
                 self.pending_request = None
+                if self.control is not None:
+                    self.control.on_feedback(feedback["verdict"], now)
+
+        if self.control is not None:
+            if self.mock_plug is not None:
+                self.mock_plug.tick()
+            for res in self.cache.pop_control_results():
+                self.control.on_result(res, now)
 
         frame = build_frame(view, now, self.ingest_cfg, self.tracker, fsm_state=self.engine.state)
+        if self.control is not None and self.engine.state is State.ACTION_ENV:
+            # ACTION_ENV 완료 여부는 제어 결과가 결정한다 (ingest 의 auto_complete 를 덮어쓴다)
+            frame.action_done = self.control.action_done(now)
+            frame.break_accepted = None
         prev_state = self.engine.state
         result = self.engine.tick(frame)
         self.tracker.observe_state(result.state, now)
+        if self.control is not None:
+            if result.state is State.ACTION_ENV and prev_state is not State.ACTION_ENV:
+                self.control.on_enter_action(result.state.value, result.cause, result.gate, now)
+            elif prev_state is State.ACTION_ENV and result.state is not State.ACTION_ENV:
+                self.control.close_episode()
 
         summary = sensor_summary(view, now, self.ingest_cfg)
+        if self.control is not None:
+            summary["control"] = self.control.summary()
         if self.tracker.baseline is not None:
             snap = self.tracker.baseline.snapshot()
             summary["baseline"] = {"calibrating": snap["calibrating"], "ready": sorted(snap["session"]),
@@ -150,6 +183,7 @@ def run_live(broker: str, port: int, *, fsm_config: str | None, ingest_config: s
             ingest_cfg=load_ingest_config(ingest_config) if ingest_config else None,
             publish=source.publish_state,
             publish_request=source.publish_request,
+            publish_control=source.publish_control,
             frame_log=flog, state_log=slog,
         )
         print(f"deskmate hub live — broker {broker}:{port}, period {hub.period:.0f}s, logs {log_dir}/", file=sys.stderr)

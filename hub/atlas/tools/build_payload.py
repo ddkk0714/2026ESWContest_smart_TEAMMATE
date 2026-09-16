@@ -71,14 +71,15 @@ def main() -> None:
                 json.dumps(config, ensure_ascii=False, separators=(",", ":")),
             )
             # ingest.yaml 도 같은 이유(제한 Python 에 PyYAML 의존 모듈 부재)로 JSON 으로 함께 넣는다.
-            ingest_yaml = args.config.with_name("ingest.yaml")
-            if ingest_yaml.exists():
-                with ingest_yaml.open(encoding="utf-8") as source:
-                    ingest = yaml.safe_load(source)
-                archive.writestr(
-                    "deskmate_hub/config/ingest.json",
-                    json.dumps(ingest, ensure_ascii=False, separators=(",", ":")),
-                )
+            for name in ("ingest", "control"):
+                extra_yaml = args.config.with_name(f"{name}.yaml")
+                if extra_yaml.exists():
+                    with extra_yaml.open(encoding="utf-8") as source:
+                        extra = yaml.safe_load(source)
+                    archive.writestr(
+                        f"deskmate_hub/config/{name}.json",
+                        json.dumps(extra, ensure_ascii=False, separators=(",", ":")),
+                    )
         with args.executable.open("ab") as executable, open(payload.name, "rb") as built:
             executable.write(built.read())
 

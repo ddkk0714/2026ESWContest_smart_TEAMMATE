@@ -13,7 +13,10 @@ from typing import Any, Callable
 import paho.mqtt.client as mqtt
 
 from .cache import SensorCache
-from .protocol import TOPIC_FEEDBACK, TOPIC_HEALTH, TOPIC_REQUEST, TOPIC_SENSOR, TOPIC_STATE, parse_sensor_message
+from .protocol import (
+    TOPIC_CONTROL_CMD, TOPIC_CONTROL_RESULT, TOPIC_FEEDBACK, TOPIC_HEALTH, TOPIC_REQUEST, TOPIC_SENSOR, TOPIC_STATE,
+    parse_sensor_message,
+)
 
 class MqttSource:
     """센서·피드백을 구독해 cache 에 넣고, 상태를 발행한다."""
@@ -50,6 +53,12 @@ class MqttSource:
         if self.connected:
             self._client.publish(TOPIC_STATE, json.dumps(envelope, ensure_ascii=False), qos=1, retain=True)
 
+    def publish_control(self, command: dict[str, Any]) -> None:
+        """제어 명령. envelope 로 감싸 QoS 1, retain 없음(재접속한 어댑터가 지난 명령을 재실행하면 안 된다)."""
+        if self.connected:
+            envelope = {"schema_version": "1.0", "ts": round(time.time(), 3), "node": "hub", "data": command}
+            self._client.publish(TOPIC_CONTROL_CMD, json.dumps(envelope, ensure_ascii=False), qos=1, retain=False)
+
     def publish_request(self, envelope: dict[str, Any]) -> None:
         """사용자 확인 질문. retain 하지 않는다(재접속한 화면이 지난 질문을 다시 띄우면 안 된다)."""
         if self.connected:
@@ -61,7 +70,7 @@ class MqttSource:
             self._log(f"[mqtt] connect failed: {reason_code}")
             return
         self.connected = True
-        client.subscribe([(TOPIC_SENSOR, 0), (TOPIC_FEEDBACK, 1)])
+        client.subscribe([(TOPIC_SENSOR, 0), (TOPIC_FEEDBACK, 1), (TOPIC_CONTROL_RESULT, 1)])
         client.publish(TOPIC_HEALTH, json.dumps({"ts": round(time.time(), 3), "node": "hub", "status": "online"}),
                        qos=1, retain=True)
         self._log(f"[mqtt] connected {self.host}:{self.port}")
@@ -72,14 +81,17 @@ class MqttSource:
 
     def _on_message(self, client, userdata, msg) -> None:
         now = time.time()
-        if msg.topic == TOPIC_FEEDBACK:
+        if msg.topic in (TOPIC_FEEDBACK, TOPIC_CONTROL_RESULT):
             try:
                 body = json.loads(msg.payload.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError):
                 return
             data = body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), dict) else body
             if isinstance(data, dict):
-                self.cache.put_feedback(data)
+                if msg.topic == TOPIC_FEEDBACK:
+                    self.cache.put_feedback(data)
+                else:
+                    self.cache.put_control_result(data)
             return
         parsed = parse_sensor_message(msg.topic, msg.payload, now)
         if parsed is not None:
