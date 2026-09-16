@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'app_motion.dart';
 import 'display_state.dart';
 import 'state_source.dart';
 
@@ -107,7 +108,18 @@ class _SensorTestPageState extends State<SensorTestPage> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => AnimatedSwitcher(
+        duration: AppMotion.normal,
+        switchInCurve: AppMotion.standardCurve,
+        switchOutCurve: AppMotion.reverseCurve,
+        transitionBuilder: AppMotion.fadeScaleTransition,
+        child: KeyedSubtree(
+          key: ValueKey(widget.source.supportsSensorTest),
+          child: _buildContent(context),
+        ),
+      );
+
+  Widget _buildContent(BuildContext context) {
     if (!widget.source.supportsSensorTest) {
       return Center(
         child: SizedBox(
@@ -143,11 +155,25 @@ class _SensorTestPageState extends State<SensorTestPage> {
                 icon: const Icon(Icons.link),
                 label: const Text('연결'),
               ),
-              if (_message != null) ...[
-                const SizedBox(height: 10),
-                Text(_message!,
-                    style: const TextStyle(color: Color(0xFFFF7B7B))),
-              ],
+              AnimatedSize(
+                duration: AppMotion.content,
+                curve: AppMotion.standardCurve,
+                child: AnimatedSwitcher(
+                  duration: AppMotion.content,
+                  switchInCurve: AppMotion.standardCurve,
+                  switchOutCurve: AppMotion.reverseCurve,
+                  transitionBuilder: AppMotion.fadeTransition,
+                  child: _message == null
+                      ? const SizedBox.shrink(
+                          key: ValueKey('no-connect-message'))
+                      : Padding(
+                          key: ValueKey(_message),
+                          padding: const EdgeInsets.only(top: 10),
+                          child: Text(_message!,
+                              style: const TextStyle(color: Color(0xFFFF7B7B))),
+                        ),
+                ),
+              ),
             ]),
           ),
         ),
@@ -261,13 +287,43 @@ class _SensorTestPageState extends State<SensorTestPage> {
                       label: const Text('개입 완료'),
                     ),
                     const Spacer(),
-                    if (_busy) const LinearProgressIndicator(),
-                    if (_message != null) ...[
-                      const SizedBox(height: 8),
-                      Text(_message!,
-                          style: const TextStyle(
-                              fontSize: 12, color: Color(0xFF9DABC2))),
-                    ],
+                    AnimatedSize(
+                      duration: AppMotion.content,
+                      curve: AppMotion.standardCurve,
+                      child: AnimatedSwitcher(
+                        duration: AppMotion.content,
+                        switchInCurve: AppMotion.standardCurve,
+                        switchOutCurve: AppMotion.reverseCurve,
+                        transitionBuilder: AppMotion.fadeTransition,
+                        child: _busy
+                            ? const LinearProgressIndicator(
+                                key: ValueKey('sensor-test-busy'))
+                            : const SizedBox.shrink(
+                                key: ValueKey('sensor-test-idle')),
+                      ),
+                    ),
+                    AnimatedSize(
+                      duration: AppMotion.content,
+                      curve: AppMotion.standardCurve,
+                      child: AnimatedSwitcher(
+                        duration: AppMotion.content,
+                        switchInCurve: AppMotion.standardCurve,
+                        switchOutCurve: AppMotion.reverseCurve,
+                        transitionBuilder: AppMotion.fadeTransition,
+                        child: _message == null
+                            ? const SizedBox.shrink(
+                                key: ValueKey('no-sensor-test-message'))
+                            : Padding(
+                                key: ValueKey(_message),
+                                padding: const EdgeInsets.only(top: 8),
+                                child: Text(
+                                  _message!,
+                                  style: const TextStyle(
+                                      fontSize: 12, color: Color(0xFF9DABC2)),
+                                ),
+                              ),
+                      ),
+                    ),
                   ]),
             ),
           ),

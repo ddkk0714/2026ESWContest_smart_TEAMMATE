@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'app_motion.dart';
 import 'display_state.dart';
 import 'dashboard_view.dart';
 import 'deskmate_theme.dart';
@@ -50,6 +51,7 @@ class _DashboardPageState extends State<DashboardPage> {
   bool _busy = false;
   bool _demoCyclingEnabled = true;
   _AppView _view = _AppView.dashboard;
+  final _viewDirection = ValueNotifier<double>(1);
   late final MusicPlayback _music;
   late final StreamSubscription<bool> _musicChanges;
   late final StreamSubscription<double> _musicVolumeChanges;
@@ -260,6 +262,22 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
+  void _changeView(_AppView next) {
+    if (next == _view) return;
+    _viewDirection.value = next.index > _view.index ? 1 : -1;
+    setState(() => _view = next);
+  }
+
+  Widget _buildViewTransition(
+    Widget child,
+    Animation<double> animation,
+  ) =>
+      DirectionalSharedAxisTransition(
+        animation: animation,
+        direction: _viewDirection,
+        child: child,
+      );
+
   Future<void> _confirmExit() async {
     final shouldExit = await showDialog<bool>(
           context: context,
@@ -286,6 +304,7 @@ class _DashboardPageState extends State<DashboardPage> {
     HardwareKeyboard.instance.removeHandler(_onKey);
     _clock.stop();
     _source.close();
+    _viewDirection.dispose();
     unawaited(_musicChanges.cancel());
     unawaited(_musicVolumeChanges.cancel());
     unawaited(_music.dispose());
@@ -309,7 +328,7 @@ class _DashboardPageState extends State<DashboardPage> {
                         online: _error == null,
                         sequence: state.sequence,
                         view: _view,
-                        onViewChanged: (view) => setState(() => _view = view),
+                        onViewChanged: _changeView,
                         musicOn: _musicOn,
                         musicBusy: _musicBusy,
                         onMusic: _toggleMusic,
@@ -320,33 +339,50 @@ class _DashboardPageState extends State<DashboardPage> {
                         onExit: _confirmExit),
                     const SizedBox(height: 12),
                     Expanded(
-                        child: switch (_view) {
-                      _AppView.dashboard => DashboardView(
-                          state: state,
-                          keystroke: _localKeystroke ?? state.keystroke,
-                          keystrokeReference: _localKeystroke != null
-                              ? DateTime.now()
-                              : state.timestamp,
-                          liveKeys: _localKeystroke != null ? _liveKeys : null,
-                          onFeedback: _feedback,
-                          showDemoControl: _source is DemoStateSource,
-                          demoCyclingEnabled: _demoCyclingEnabled,
-                          onToggleDemoCycling: _toggleDemoCycling,
-                          showFocusDetail: _showFocusDetail,
-                          onShowFocusDetail: (value) =>
-                              setState(() => _showFocusDetail = value),
+                      child: AnimatedSwitcher(
+                        duration: AppMotion.page,
+                        transitionBuilder: _buildViewTransition,
+                        layoutBuilder: (currentChild, previousChildren) =>
+                            Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            ...previousChildren,
+                            if (currentChild != null) currentChild,
+                          ],
                         ),
-                      _AppView.sensorTest => SensorTestPage(
-                          source: _source,
-                          state: state,
-                          onConnect: _connectHub,
-                          onStateChanged: (next) {
-                            if (mounted) setState(() => _state = next);
+                        child: KeyedSubtree(
+                          key: ValueKey(_view),
+                          child: switch (_view) {
+                            _AppView.dashboard => DashboardView(
+                                state: state,
+                                keystroke: _localKeystroke ?? state.keystroke,
+                                keystrokeReference: _localKeystroke != null
+                                    ? DateTime.now()
+                                    : state.timestamp,
+                                liveKeys:
+                                    _localKeystroke != null ? _liveKeys : null,
+                                onFeedback: _feedback,
+                                showDemoControl: _source is DemoStateSource,
+                                demoCyclingEnabled: _demoCyclingEnabled,
+                                onToggleDemoCycling: _toggleDemoCycling,
+                                showFocusDetail: _showFocusDetail,
+                                onShowFocusDetail: (value) =>
+                                    setState(() => _showFocusDetail = value),
+                              ),
+                            _AppView.sensorTest => SensorTestPage(
+                                source: _source,
+                                state: state,
+                                onConnect: _connectHub,
+                                onStateChanged: (next) {
+                                  if (mounted) setState(() => _state = next);
+                                },
+                              ),
+                            _AppView.fsmGraph =>
+                              FsmGraphPage(currentState: state.fsmState),
                           },
                         ),
-                      _AppView.fsmGraph =>
-                        FsmGraphPage(currentState: state.fsmState),
-                    }),
+                      ),
+                    ),
                   ],
                 ),
         ),
@@ -491,23 +527,11 @@ class _Header extends StatelessWidget {
             style: TextStyle(
                 fontSize: 13, fontWeight: FontWeight.w700, letterSpacing: -.2)),
         const Spacer(),
-        _HeaderNav(
-            selected: view == _AppView.dashboard,
-            icon: Icons.dashboard_outlined,
-            label: '상태',
-            onTap: () => onViewChanged(_AppView.dashboard)),
-        _HeaderNav(
-            selected: view == _AppView.sensorTest,
-            icon: Icons.tune,
-            label: '센서 테스트',
-            onTap: () => onViewChanged(_AppView.sensorTest)),
-        _HeaderNav(
-            selected: view == _AppView.fsmGraph,
-            icon: Icons.account_tree_outlined,
-            label: 'FSM 전체',
-            onTap: () => onViewChanged(_AppView.fsmGraph)),
+        _HeaderNavigation(view: view, onViewChanged: onViewChanged),
         const SizedBox(width: 10),
-        Container(
+        AnimatedContainer(
+          duration: AppMotion.fast,
+          curve: AppMotion.standardCurve,
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           decoration: BoxDecoration(
               color: (online ? DeskmateColors.accent : DeskmateColors.offline)
@@ -563,11 +587,24 @@ class _Header extends StatelessWidget {
           onPressed: onVolume,
           color: DeskmateColors.inkMuted,
           visualDensity: VisualDensity.compact,
-          icon: Icon(musicVolume == 0
-              ? Icons.volume_off_rounded
-              : musicVolume < .5
-                  ? Icons.volume_down_rounded
-                  : Icons.volume_up_rounded),
+          icon: AnimatedSwitcher(
+            duration: AppMotion.fast,
+            switchInCurve: AppMotion.standardCurve,
+            switchOutCurve: AppMotion.reverseCurve,
+            transitionBuilder: AppMotion.fadeTransition,
+            child: Icon(
+              musicVolume == 0
+                  ? Icons.volume_off_rounded
+                  : musicVolume < .5
+                      ? Icons.volume_down_rounded
+                      : Icons.volume_up_rounded,
+              key: ValueKey(musicVolume == 0
+                  ? 'muted'
+                  : musicVolume < .5
+                      ? 'low'
+                      : 'high'),
+            ),
+          ),
         ),
         TextButton.icon(
           key: const ValueKey('music-toggle'),
@@ -579,14 +616,24 @@ class _Header extends StatelessWidget {
                 ? DeskmateColors.accent.withValues(alpha: .22)
                 : Colors.transparent,
           ),
-          icon: musicBusy
-              ? const SizedBox(
-                  width: 17,
-                  height: 17,
-                  child: CircularProgressIndicator(strokeWidth: 2))
-              : Icon(
-                  musicOn ? Icons.volume_up_rounded : Icons.volume_off_rounded,
-                  size: 20),
+          icon: AnimatedSwitcher(
+            duration: AppMotion.fast,
+            switchInCurve: AppMotion.standardCurve,
+            switchOutCurve: AppMotion.reverseCurve,
+            transitionBuilder: AppMotion.fadeTransition,
+            child: musicBusy
+                ? const SizedBox(
+                    key: ValueKey('music-busy'),
+                    width: 17,
+                    height: 17,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : Icon(
+                    musicOn
+                        ? Icons.volume_up_rounded
+                        : Icons.volume_off_rounded,
+                    key: ValueKey(musicOn ? 'music-on' : 'music-off'),
+                    size: 20),
+          ),
           label: Text(musicOn ? 'ON' : 'OFF'),
         ),
         const SizedBox(width: 4),
@@ -597,6 +644,56 @@ class _Header extends StatelessWidget {
           color: DeskmateColors.inkMuted,
           icon: const Icon(Icons.power_settings_new),
         ),
+      ]);
+}
+
+class _HeaderNavigation extends StatelessWidget {
+  const _HeaderNavigation({required this.view, required this.onViewChanged});
+
+  static const _itemWidth = 52.0;
+  static const _buttonSize = 48.0;
+
+  final _AppView view;
+  final ValueChanged<_AppView> onViewChanged;
+
+  @override
+  Widget build(BuildContext context) => Stack(children: [
+        AnimatedPositioned(
+          duration: AppMotion.indicator,
+          curve: AppMotion.standardCurve,
+          left: view.index * _itemWidth + (_itemWidth - _buttonSize),
+          top: 0,
+          width: _buttonSize,
+          height: _buttonSize,
+          child: IgnorePointer(
+            child: DecoratedBox(
+              decoration: const BoxDecoration(
+                color: DeskmateColors.surfaceRaised,
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
+        ),
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          _HeaderNav(
+            selected: view == _AppView.dashboard,
+            icon: Icons.dashboard_outlined,
+            label: '상태',
+            onTap: () => onViewChanged(_AppView.dashboard),
+          ),
+          _HeaderNav(
+            selected: view == _AppView.sensorTest,
+            icon: Icons.tune,
+            label: '센서 테스트',
+            onTap: () => onViewChanged(_AppView.sensorTest),
+          ),
+          _HeaderNav(
+            selected: view == _AppView.fsmGraph,
+            icon: Icons.account_tree_outlined,
+            label: 'FSM 전체',
+            onTap: () => onViewChanged(_AppView.fsmGraph),
+          ),
+        ]),
       ]);
 }
 
@@ -613,18 +710,23 @@ class _HeaderNav extends StatelessWidget {
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(left: 4),
-        child: IconButton(
-          tooltip: label,
-          onPressed: onTap,
-          style: IconButton.styleFrom(
-            foregroundColor:
-                selected ? DeskmateColors.ink : DeskmateColors.inkMuted,
-            backgroundColor:
-                selected ? DeskmateColors.surfaceRaised : Colors.transparent,
+  Widget build(BuildContext context) => SizedBox(
+        width: _HeaderNavigation._itemWidth,
+        child: Padding(
+          padding: const EdgeInsets.only(left: 4),
+          child: IconButton(
+            tooltip: label,
+            onPressed: onTap,
+            icon: TweenAnimationBuilder<Color?>(
+              duration: AppMotion.indicator,
+              curve: AppMotion.standardCurve,
+              tween: ColorTween(
+                end: selected ? DeskmateColors.ink : DeskmateColors.inkMuted,
+              ),
+              builder: (context, color, child) =>
+                  Icon(icon, size: 21, color: color),
+            ),
           ),
-          icon: Icon(icon, size: 21),
         ),
       );
 }

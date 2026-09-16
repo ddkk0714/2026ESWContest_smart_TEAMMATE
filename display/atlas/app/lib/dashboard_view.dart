@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'app_motion.dart';
 import 'deskmate_theme.dart';
 import 'display_state.dart';
 
@@ -33,29 +34,46 @@ class DashboardView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    late final String transitionKey;
+    late final Widget content;
     if (showFocusDetail) {
-      return FocusDetailView(
+      transitionKey = 'focus-detail';
+      content = FocusDetailView(
         state: state,
         onClose: () => onShowFocusDetail(false),
       );
+    } else if (state.phase == 'idle') {
+      transitionKey = 'idle';
+      content =
+          AmbientView(state: state, onDetail: () => onShowFocusDetail(true));
+    } else if (state.phase == 'end') {
+      transitionKey = 'report';
+      content = SessionReportView(state: state);
+    } else if (state.phase == 'fatigue' && state.gate != 'none') {
+      transitionKey = 'suggestion';
+      content = SuggestionView(state: state, onFeedback: onFeedback);
+    } else if (state.phase == 'recovery') {
+      transitionKey = 'recovery';
+      content = FocusAmbientView(state: state);
+    } else {
+      transitionKey = 'focus';
+      content = FocusStatusView(
+        state: state,
+        keystroke: keystroke,
+        keystrokeReference: keystrokeReference,
+        liveKeys: liveKeys,
+        onDetail: () => onShowFocusDetail(true),
+        showDemoControl: showDemoControl,
+        demoCyclingEnabled: demoCyclingEnabled,
+        onToggleDemoCycling: onToggleDemoCycling,
+      );
     }
-    if (state.phase == 'idle') {
-      return AmbientView(state: state, onDetail: () => onShowFocusDetail(true));
-    }
-    if (state.phase == 'end') return SessionReportView(state: state);
-    if (state.phase == 'fatigue' && state.gate != 'none') {
-      return SuggestionView(state: state, onFeedback: onFeedback);
-    }
-    if (state.phase == 'recovery') return FocusAmbientView(state: state);
-    return FocusStatusView(
-      state: state,
-      keystroke: keystroke,
-      keystrokeReference: keystrokeReference,
-      liveKeys: liveKeys,
-      onDetail: () => onShowFocusDetail(true),
-      showDemoControl: showDemoControl,
-      demoCyclingEnabled: demoCyclingEnabled,
-      onToggleDemoCycling: onToggleDemoCycling,
+    return AnimatedSwitcher(
+      duration: AppMotion.normal,
+      switchInCurve: AppMotion.standardCurve,
+      switchOutCurve: AppMotion.reverseCurve,
+      transitionBuilder: AppMotion.fadeScaleTransition,
+      child: KeyedSubtree(key: ValueKey(transitionKey), child: content),
     );
   }
 }
@@ -239,11 +257,39 @@ class SuggestionView extends StatelessWidget {
                         style: Theme.of(context).textTheme.labelMedium),
                   ]),
                   const SizedBox(height: 14),
-                  Text(_suggestionTitle(state),
-                      style: Theme.of(context).textTheme.headlineMedium),
+                  AnimatedSize(
+                    duration: AppMotion.content,
+                    curve: AppMotion.standardCurve,
+                    alignment: Alignment.topLeft,
+                    child: AnimatedSwitcher(
+                      duration: AppMotion.content,
+                      switchInCurve: AppMotion.standardCurve,
+                      switchOutCurve: AppMotion.reverseCurve,
+                      transitionBuilder: AppMotion.fadeTransition,
+                      child: Text(
+                        _suggestionTitle(state),
+                        key: ValueKey('title-${state.cause}'),
+                        style: Theme.of(context).textTheme.headlineMedium,
+                      ),
+                    ),
+                  ),
                   const Spacer(),
-                  Text(_suggestionBody(state),
-                      style: Theme.of(context).textTheme.bodyLarge),
+                  AnimatedSize(
+                    duration: AppMotion.content,
+                    curve: AppMotion.standardCurve,
+                    alignment: Alignment.topLeft,
+                    child: AnimatedSwitcher(
+                      duration: AppMotion.content,
+                      switchInCurve: AppMotion.standardCurve,
+                      switchOutCurve: AppMotion.reverseCurve,
+                      transitionBuilder: AppMotion.fadeTransition,
+                      child: Text(
+                        _suggestionBody(state),
+                        key: ValueKey('body-${state.cause}'),
+                        style: Theme.of(context).textTheme.bodyLarge,
+                      ),
+                    ),
+                  ),
                   const Spacer(),
                   Text('변경은 사용자가 선택할 때만 적용돼요.',
                       style: Theme.of(context).textTheme.labelMedium),
@@ -325,8 +371,14 @@ class FocusAmbientView extends StatelessWidget {
           SizedBox(
             width: 276,
             height: 276,
-            child: CustomPaint(
-              painter: _FocusRingPainter(value: state.confidence),
+            child: TweenAnimationBuilder<double>(
+              tween: Tween<double>(end: state.confidence),
+              duration: AppMotion.normal,
+              curve: AppMotion.standardCurve,
+              builder: (context, value, child) => CustomPaint(
+                painter: _FocusRingPainter(value: value),
+                child: child,
+              ),
               child: Center(
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
                   Text(_elapsedLabel(state),
@@ -521,8 +573,22 @@ class _CurrentStatePanel extends StatelessWidget {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('현재 상태', style: Theme.of(context).textTheme.labelMedium),
           const SizedBox(height: 14),
-          Text(_stateLabel(state),
-              style: Theme.of(context).textTheme.headlineMedium),
+          AnimatedSize(
+            duration: AppMotion.content,
+            curve: AppMotion.standardCurve,
+            alignment: Alignment.topLeft,
+            child: AnimatedSwitcher(
+              duration: AppMotion.content,
+              switchInCurve: AppMotion.standardCurve,
+              switchOutCurve: AppMotion.reverseCurve,
+              transitionBuilder: AppMotion.fadeTransition,
+              child: Text(
+                _stateLabel(state),
+                key: ValueKey(state.phase),
+                style: Theme.of(context).textTheme.headlineMedium,
+              ),
+            ),
+          ),
           const SizedBox(height: 7),
           Text(state.scenario ?? _focusSubline(state),
               style: Theme.of(context).textTheme.bodyMedium),
@@ -595,11 +661,18 @@ class _SlimMetric extends StatelessWidget {
         borderRadius: BorderRadius.circular(DeskmateRadius.control),
         child: Stack(children: [
           Container(height: 40, color: DeskmateColors.surfaceMuted),
-          FractionallySizedBox(
-            widthFactor: value.clamp(0, 1),
+          TweenAnimationBuilder<double>(
+            tween: Tween<double>(end: value.clamp(0, 1)),
+            duration: AppMotion.normal,
+            curve: AppMotion.standardCurve,
+            builder: (context, animatedValue, child) => FractionallySizedBox(
+              widthFactor: animatedValue,
+              child: child,
+            ),
             child: Container(
-                height: 40,
-                color: DeskmateColors.accent.withValues(alpha: .48)),
+              height: 40,
+              color: DeskmateColors.accent.withValues(alpha: .48),
+            ),
           ),
           Positioned.fill(
             child: Padding(
