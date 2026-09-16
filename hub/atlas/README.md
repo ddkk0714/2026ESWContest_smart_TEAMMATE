@@ -31,4 +31,18 @@ curl http://<PI4_IP>:8765/health
 ```
 
 `busctl` 접근은 D-Bus activation으로 서비스를 시작한다. 8765 HTTP API는 Pi 5
-화면과 보드 간 연동을 확인하는 개발용 어댑터이며 최종 통신 방식은 확정하지 않는다.
+화면과 보드 간 연동을 확인하는 개발용 어댑터다(Pi 4↔Pi 5 제품 경로는 MQTT).
+
+## UART2 수신 (2026-09-16)
+
+`src/uart_rx.cpp` 가 `/dev/serial0`(환경변수 `DESKMATE_UART_DEV`, `DESKMATE_UART_BAUD` 기본 115200)을 raw 모드로 열고,
+`0x00` 경계로 COBS 해제 → CRC-16/CCITT-FALSE·헤더·길이(≤256 B) 검증 → 통과한 프레임만
+`UART\t{"type":32,"seq":..,"ts_ms":..,"payload_hex":".."}` 한 줄로 Python 브리지 stdin 에 쓴다(HTTP 중계와 mutex 로 직렬화).
+장치를 못 열면 10 s 마다 재시도하고 30 s 마다 수신/폐기/CRC 오류 통계를 stderr 에 남긴다 — 센서 없이도 FSM 은 돈다.
+payload 해석은 Python(`deskmate_hub/ingest/uart_frame.py`)이 한다. 규약은 `docs/data-spec.md` §13.1.
+
+Python 브리지를 실센서 모드로 띄우려면 서비스 환경에 `DESKMATE_HUB_MODE=live`(선택: `DESKMATE_MQTT_HOST`)를 준다.
+빌드 시 `paho-mqtt` 가 설치돼 있으면 payload 에 동봉된다(`tools/build_payload.py`).
+
+호스트 테스트: `cmake -DBUILD_TESTING=ON` 후 `ctest` 로 `deskmate_uart_rx_host_test`(CRC check value·COBS·라인 형식).
+**ARC 컨테이너에서의 실컴파일·실보드 UART 검증은 아직 안 했다.**

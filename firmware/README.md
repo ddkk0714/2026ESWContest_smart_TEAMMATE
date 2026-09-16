@@ -8,9 +8,13 @@ VL53L9CX 는 연결 경로(Path A: Pi 4 CSI-2 / Path B: ESP32 I2C 1 MHz binning)
 
 > **현재 상태(2026-09-15):** `esp32_sensor_node/`에 PlatformIO 프로젝트, 공식 DFRobot C1001 라이브러리 기반
 > `C1001Passive`, 5상태 `DrowsyDetector`, UART0(USB) JSON 출력이 들어왔다. 환경 센서는 MVP 스텁이며 5초마다
-> 모든 값을 `null`, valid 플래그를 `false`로 출력한다. 별도 ESP32-mmWave 저장소의 UART2 COBS/CRC 소스는 이
-> 작업 공간에 제공되지 않아 바이너리 송신 로직은 이관하지 못했다. TYPE 계약을 추측하지 않기 위해 UART2는 핀과
-> baud 초기화까지만 유지하며 송신하지 않는다.
+> 모든 값을 `null`, valid 플래그를 `false`로 출력한다.
+>
+> **2026-09-16 추가:** UART2 로 `docs/data-spec.md` §13.1 잠정 규약의 바이너리 프레임을 보낸다 —
+> `transport/frame.cpp`(헤더·CRC-16/CCITT-FALSE·COBS·`0x00` 종료), `include/frame_types.h`(TYPE 0x20 mmWave 1 Hz ·
+> 0x10 환경 0.2 Hz(스텁이면 valid_bits 0) · 0xF0 하트비트 1 Hz). 빌드 플래그 `-DDESKMATE_UART2_TX=1`(기본 켬),
+> `-DDESKMATE_FIRMWARE_VERSION`. Python 코덱(`hub/deskmate_hub/ingest/uart_frame.py`)과 test vector 로 교차 검증했다.
+> **`pio run` 실빌드와 실보드 UART 검증은 아직 안 했다.** 환경 센서 실제 드라이버(SCD41·BH1750·DHT22)는 미구현.
 
 ## 배선·UART 할당 (실측)
 

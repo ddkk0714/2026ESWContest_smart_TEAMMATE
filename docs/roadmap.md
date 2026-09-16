@@ -161,8 +161,8 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 
 - [x] Pi 4 Mosquitto 설정, `mqtt-topics.md` 계약, Node-RED 모니터, display MQTT 구독·`feedback/user` 발행
 - [x] Pi 4 native service(`hub/atlas`) IPK 로 제한 Python 실행, HTTP 8765 개발 API
-- [ ] ESP32 펌웨어 레포 이관 + 환경 묶음 프레임(TYPE 0x10, 8 B) + 하트비트(0xF0)
-- [ ] Pi 4 C++ 서비스에 `/dev/serial0` 수신 → COBS 해제 → CRC 검증 → 라인 브리지(`UART\t<json>`) — Python 측 수신(`service_bridge` live 모드)·코덱·test vector 는 준비됨(09-15), C++ 수신부는 Codex 2차
+- [x] ESP32 UART2 프레임 송신 — mmWave 0x20 · 환경 0x10(스텁, valid_bits 0) · 하트비트 0xF0 (`transport/frame.cpp`, 09-16). **`pio run`·실보드 검증 남음**
+- [x] Pi 4 C++ 서비스에 `/dev/serial0` 수신 → COBS 해제 → CRC 검증 → 라인 브리지(`UART\t<json>`) — `hub/atlas/src/uart_rx.cpp`(09-16, 호스트 테스트 포함). **ARC 컴파일·실보드 검증 남음**
 - [x] hub `ingest/`: MQTT 센서·키스트로크 + `UART\t` 라인(`uart_source.py`) → `SensorCache` → `SensorFrame`, freshness·seq 갭 (09-14/15)
 - [x] hub MQTT 발행: `state/phase`(retain)·`health/hub`, `feedback/user` 구독 → FSM 반영 (09-14). `interaction/request` 는 충돌 신호 경로(§5)와 함께
 - [ ] 전 토픽·UART 라인 JSONL 로거(`tools/log_recorder.py`), 리플레이 포맷과 동일
@@ -223,7 +223,7 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 #### 9. 통합 MVP 구현 — 마감 10-05
 
 - [ ] 4-A MVP 통과 (09-18)
-- [ ] Pi 4 native service 에 UART 디코더·MQTT 클라이언트 탑재, PC 브리지 제거
+- [ ] Pi 4 native service 에 UART 디코더·MQTT 클라이언트 탑재, PC 브리지 제거 — 코드는 09-16 준비(uart_rx + bridge live 모드 + paho 동봉), ARC 빌드·설치·실기 확인 남음
 - [ ] 4 신호(ToF·mmWave·환경·키스트로크) 모두 `SensorFrame`·`reasons` 에 등장
 - [ ] 센서 → 피로 판정 → 제안 → 터치 수락 → 플러그 ON → MONITOR → RECOVERY 1사이클 실기 재현
 - [ ] display 를 꺼도 hub 계속 동작, Node-RED 없이 동작, 인터넷 없이 동작

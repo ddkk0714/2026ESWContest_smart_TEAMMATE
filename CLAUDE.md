@@ -58,13 +58,13 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 | 모듈 | 담당 | 상태 | 메모 |
 |---|---|---|---|
 | `hub/inference/` FSM 1단계 | 박소연 | ✅ | 18상태 엔진, 테스트 46개(45 통과·1 xfail), 리플레이·데모 하네스, 엎드림·노딩 시나리오(PR #11). `score_period_sec: 10`. `report.py`·`--report` 는 `feat/merge-pending` PR 로 진입 중 |
-| `hub/atlas/` Pi 4 native service | 공통 | ✅ | ARC IPK 로 제한 Python 을 감싸 FSM 실행, HTTP 8765 개발 API. **UART 디코더·MQTT 발행은 미구현** |
+| `hub/atlas/` Pi 4 native service | 공통 | 🟡 | ARC IPK 로 제한 Python 을 감싸 FSM 실행, HTTP 8765 개발 API. UART2 수신(`uart_rx.cpp`)·bridge live 모드·paho 동봉 코드 준비(09-16), **ARC 컴파일·실보드 검증 남음** |
 | `hub/ingest/` + `live.py` | 이민혁·공통 | 🟡 | MQTT 센서 토픽 → `SensorCache` → 10 s `SensorFrame` → FSM → `state/phase` 발행(`run` 명령, 09-14). `config/ingest.yaml` 임시 스케일. 실브로커 연동·UART 라인은 이후 |
 | `hub/features/` baseline 정규화 | 김태환 | ⬜ | 빈 패키지. 중앙값·MAD Modified z-score → `phi/delta` (포스터 G6 전제) |
 | `hub/control/` 플러그·ThinQ | 조명희 | ⬜ | 빈 패키지. 스마트 플러그 기본 라인 |
 | `hub/inference/` TFLite 2단계 | 조명희 | ⬜ | 선택적 의존. 라벨 축적 후 |
 | `ml/` 학습→TFLite | 조명희 | ⬜ | 비어 있음 |
-| `firmware/` ESP32 | 이민혁·김태환 | 🟡 | `esp32_sensor_node/` PlatformIO: DFRobot C1001 + DrowsyDetector, USB 1 Hz JSON(PR #12). `pio run` 미검증, UART2 COBS/CRC 송신·환경 센서 드라이버 미구현 |
+| `firmware/` ESP32 | 이민혁·김태환 | 🟡 | `esp32_sensor_node/` PlatformIO: DFRobot C1001 + DrowsyDetector, USB 1 Hz JSON(PR #12), UART2 COBS/CRC 송신(09-16). `pio run` 미검증, 환경 센서 드라이버 미구현 |
 | `display/` Atlas UI | 최민경 | 🟡 | 대시보드·18상태 그래프·키스트로크 패널·오디오·MQTT 구독, release IPK 배포. **디스플레이 교체·터치 정상(09-14)**. 리포트 화면·저자극 토글·자동 시작 없음 |
 | `collector/` 키스트로크 | 최민경 | 🟡 | 구현·테스트 8개. `feat/merge-pending` PR 로 main 진입 중. **계약은 구현 기준 확정(09-14)**. hub 수신 없음 |
 | `tools/` | 공통 | ✅ | `uart_mqtt_bridge.py`(ESP32 USB→MQTT, 테스트 9), Node-RED 대시보드(센서·FSM 패널·JSONL), Pi 4 SSH 탐색 스크립트 |

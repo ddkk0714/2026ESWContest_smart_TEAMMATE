@@ -2,6 +2,14 @@
 
 #include <Arduino.h>
 
+#ifndef DESKMATE_UART2_TX
+#define DESKMATE_UART2_TX 1
+#endif
+
+#ifndef DESKMATE_FIRMWARE_VERSION
+#define DESKMATE_FIRMWARE_VERSION 0x0100
+#endif
+
 namespace deskmate {
 
 constexpr uint32_t kUsbBaud = 115200;
