@@ -15,7 +15,7 @@ UART 디코딩(COBS/CRC-16)과 MQTT 클라이언트는 그 C++ 서비스에 두�
 | `atlas/` | 공통 | ARC IPK native service. 제한 Python 으로 FSM 실행, HTTP 8765 개발 API | ✅ 실행. UART 수신·MQTT 발행은 미구현 |
 | `mqtt/` | 이민혁 | Pi 4 Mosquitto 설정 | ✅ |
 | `ingest/` | 이민혁 | MQTT 센서 토픽(mmwave·env·keystroke) → `SensorCache` → 10 s `SensorFrame`(`config/ingest.yaml` 임시 스케일), freshness·seq 갭, `feedback/user` 수신 | 🟡 MVP 경로 구현(09-14). UART 라인 입력은 통합 MVP 에서 같은 캐시에 추가 |
-| `features/` | 김태환 | baseline 캘리브레이션(중앙값·MAD Modified z-score, 시간대별) → `phi/delta` | ⬜ 빈 패키지 |
+| `features/` | 김태환 | `baseline.py`: 세션 START 보정 창 → 지표별 median·MAD → Modified z → `phi/delta`, 시간대 버킷 seed, opt-in 저장 | 🟡 09-16 구현(ingest 연동). ToF 기하 특징·환경 추세는 센서 후 |
 | `inference/` | 박소연 | 규칙 기반 FSM(1단계), 신뢰도 공식, 신뢰도 게이트 | ✅ 18상태, 테스트 46개(45 통과·1 xfail) |
 | `inference/` | 조명희 | TFLite 경량 분류기 로딩 · 추론(2단계) | ⬜ 선택적 의존 |
 | `control/` | 조명희 | 스마트 플러그 · 조명 · 환기팬 제어, ThinQ 1기기 | ⬜ 빈 패키지 |
@@ -73,7 +73,7 @@ python -m deskmate_hub run --broker <ip> --ingest-config my-ingest.yaml --log-di
 
 - 구독: `deskmate/sensor/#`(mmwave·env·keystroke — envelope 또는 collector 평면 payload), `deskmate/feedback/user`
 - 발행: `deskmate/state/phase`(retain, QoS 1, 10 s 주기), `deskmate/interaction/request`(제안 게이트로 ACTION_* 진입 시, retain 없음), `deskmate/health/hub`(LWT)
-- 매핑은 `config/ingest.yaml`(freshness, 재실 상승엣지 자동 시작, ACTION 자동 완료, 신호별 선형 스케일). baseline 정규화가 들어오면 교체.
+- 매핑은 `config/ingest.yaml`. `normalization: baseline`(기본)이면 START 보정 창에서 만든 개인 기준선(중앙값·MAD Modified z)을 우선 쓰고, 기준선이 없는 지표·보정 전에는 선형 램프로 폴백한다. `baseline.persist.enabled: true` 면 median·MAD·표본 수만 JSON 에 저장(opt-in).
 - `--config deskmate_hub/config/fsm.demo.yaml` 은 임계값은 같고 **타이머만 짧은 시연·리허설 프로파일**(baseline 30 s, 이탈 60 s 등). 운영 기본값이 아니다.
 - `logs/frames-*.jsonl` 은 `--replay` 로 그대로 재생되고, `logs/state-*.jsonl` 은 발행한 envelope 다.
 - 콘솔 한 줄 = 한 tick: 상태·ctx·C_fatigue/C_focus·present·pc_ratio·가용 신호(`ekprs` 첫 글자, `.`=미가용)

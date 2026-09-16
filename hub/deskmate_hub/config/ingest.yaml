@@ -19,6 +19,24 @@ auto_complete_actions: true
 # PC_ratio = 최근 window 안에서 input_active=true 인 키스트로크 표본 비율 (표본 없으면 0 → 비PC)
 pc_ratio_window_sec: 900
 
+# 정규화 방식: linear = 아래 고정 램프만 사용 / baseline = 세션 보정 창(START, fsm baseline_sec)에서 만든
+# 개인 기준선(중앙값·MAD Modified z-score)을 우선 쓰고, 기준선이 없는 지표는 linear 로 폴백한다.
+normalization: baseline
+baseline:
+  min_samples: 20          # 보정 창 안에 이만큼 표본이 모여야 그 지표의 기준선을 확정
+  z_full: 3.5              # |modified z| 가 이 값이면 증거 1.0 (Iglewicz–Hoaglin 이상치 기준)
+  default_mad_floor: 0.001
+  mad_floor:               # 값이 거의 일정해 MAD≈0 일 때 나눗셈 발산 방지 (지표 단위)
+    idle_ratio: 0.02
+    flight_cv: 0.02
+    correction_rate: 0.005
+    motion_level: 2.0
+    co2_ppm: 15.0
+  bucket_hours: 3          # 시간대 버킷 폭. 이전 세션의 같은 시간대 기준선을 seed 로 쓴다
+  persist:
+    enabled: false         # opt-in (agent-briefing D4). true 면 median·MAD·표본 수만 아래 파일에 저장(원시 표본 없음)
+    path: logs/baseline.json
+
 keystroke:
   # phi(집중 저하 증거) = clip((idle_ratio - idle_low) / (idle_high - idle_low))
   idle_ratio_low: 0.10

@@ -175,7 +175,7 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 - [x] mmWave 체동 이동평균·심박 중앙값·각성 기준선·5상태 DrowsyDetector(별도 저장소)
 - [ ] ToF 기하 특징 7종(`presence_count` `centroid_depth` `head_row_index` `shoulder_tilt` `motion_indicator` `posture_change_rate` `baseline_deviation`) → posture enum(`upright/lean_forward/lean_back/slouch/away`)·`motion_score`·`nod_rate_hz`
 - [ ] 환경 특징: CO₂ 절대 구간·시작 대비 누적 상승, 온습도 쾌적 범위 이탈, 조도 구간
-- [ ] `features/` baseline 캘리브레이션: 세션 초기 5분 + 시간대별 중앙값·MAD Modified z-score → `phi/delta` [0,1] (DATA-DEC-005 수식 확정)
+- [x] `features/` baseline 캘리브레이션: 세션 초기(START) + 시간대 버킷 중앙값·MAD Modified z-score → `phi/delta` [0,1], 기준선 없으면 선형 폴백, opt-in 저장 (09-16, `ingest.yaml normalization: baseline`, 테스트 5개). **z_full·mad_floor 는 실측 로그로 조정**
 - [ ] mmWave DrowsyDetector 출력을 FSM `presence`·`respiration`(소실 여부) 신호로 매핑
 - [ ] PC 오프라인: 기록한 depth 로 V2V-PoseNet 스켈레톤 추론 → 기본·엎드림·턱 괴기·기울임 그림(보고서용)
 - [ ] `tools/tof_probe.py`: 축소 depth map 실시간 확인(디버그 ≤ 2 Hz)
