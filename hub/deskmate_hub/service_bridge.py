@@ -109,7 +109,12 @@ def _run_live_bridge() -> None:
         if mqtt_source is not None:
             mqtt_source.publish_state(envelope)
 
-    hub = LiveHub(cache, publish=publish, out=sys.stderr)
+    def publish_request(envelope: dict[str, Any]) -> None:
+        store.write_message("REQUEST\t" + json.dumps(envelope, ensure_ascii=False, separators=(",", ":")))
+        if mqtt_source is not None:
+            mqtt_source.publish_request(envelope)
+
+    hub = LiveHub(cache, publish=publish, publish_request=publish_request, out=sys.stderr)
     next_tick = time.time()
     try:
         while True:

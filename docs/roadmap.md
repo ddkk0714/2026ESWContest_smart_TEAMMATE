@@ -187,7 +187,7 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 - [ ] 실센서 `SensorFrame` 로 대표 경로 재현: IDLE→START→CONTEXT_DETECT→FOCUS→FATIGUE_SUSPECT→FATIGUE→CAUSE_ANALYSIS→ACTION→MONITOR→RECOVERY→END
 - [ ] 10 s 주기에서 채터링 검증(임계 근방 진동 입력) → 필요 시 최소 유지 시간·히스테리시스 값 조정(yaml)
 - [ ] 자세 해석 분기(PC 숙임+키입력↓=피로, 비PC 숙임+motion↓=집중 등)를 실센서로 확인
-- [ ] 신호 충돌(ToF 노딩 + mmWave active) 시 `interaction/request` 발행 → 사용자 확인 경로
+- [ ] 신호 충돌(ToF 노딩 + mmWave active) 시 `interaction/request` 발행 → 사용자 확인 경로 (제안 게이트 ACTION_* 진입 시 질문 발행·`request_id` 매칭은 09-16 구현)
 - [ ] `C_focus` 부호 최종 결정, 필요 시 문서·테스트 동시 수정
 - [ ] MONITOR 보상 로그 축적(정책 학습은 로그 충분 시, 세션당 개입 상한)
 - [ ] `tick()` ≤ 500 ms Pi 4 실측
@@ -195,7 +195,7 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 #### 6. 디스플레이 UI·제안 카드·작업 리포트 개발 — 마감 10-12
 
 - [x] Atlas Flutter 앱, 대시보드 재설계, 18상태 전이 그래프, 키스트로크 패널, 센서 테스트 화면, 오디오 재생, release IPK 배포, MQTT 구독
-- [x] 제안 카드 수락·거절 → hub 전달
+- [x] 제안 카드 수락·거절 → hub 전달 (MQTT: hub 가 `interaction/request` 로 `request_id` 를 주고 `feedback/user` 에서 매칭, 09-16)
 - [ ] 상태 적응형 4화면: 대기(시각·환경·재실) / 집중 저자극 / 터치 시 상세(집중 시간·환경·수동 제어) / 세션 리포트
 - [ ] 자동 실행 알림(≥ 0.75) + 되돌리기 + 실행 이유 문구
 - [ ] 정정(`correct`) 입력 — 4 국면 중 선택, 무응답 기록

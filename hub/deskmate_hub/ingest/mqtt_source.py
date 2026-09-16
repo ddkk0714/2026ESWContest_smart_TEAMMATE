@@ -13,7 +13,7 @@ from typing import Any, Callable
 import paho.mqtt.client as mqtt
 
 from .cache import SensorCache
-from .protocol import TOPIC_FEEDBACK, TOPIC_HEALTH, TOPIC_SENSOR, TOPIC_STATE, parse_sensor_message
+from .protocol import TOPIC_FEEDBACK, TOPIC_HEALTH, TOPIC_REQUEST, TOPIC_SENSOR, TOPIC_STATE, parse_sensor_message
 
 class MqttSource:
     """센서·피드백을 구독해 cache 에 넣고, 상태를 발행한다."""
@@ -49,6 +49,11 @@ class MqttSource:
     def publish_state(self, envelope: dict[str, Any]) -> None:
         if self.connected:
             self._client.publish(TOPIC_STATE, json.dumps(envelope, ensure_ascii=False), qos=1, retain=True)
+
+    def publish_request(self, envelope: dict[str, Any]) -> None:
+        """사용자 확인 질문. retain 하지 않는다(재접속한 화면이 지난 질문을 다시 띄우면 안 된다)."""
+        if self.connected:
+            self._client.publish(TOPIC_REQUEST, json.dumps(envelope, ensure_ascii=False), qos=1, retain=False)
 
     # ---- callbacks ----
     def _on_connect(self, client, userdata, flags, reason_code, properties) -> None:

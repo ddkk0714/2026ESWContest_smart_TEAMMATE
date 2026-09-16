@@ -68,7 +68,7 @@ python -m deskmate_hub run --broker <ip> --ingest-config my-ingest.yaml --log-di
 ```
 
 - 구독: `deskmate/sensor/#`(mmwave·env·keystroke — envelope 또는 collector 평면 payload), `deskmate/feedback/user`
-- 발행: `deskmate/state/phase`(retain, QoS 1, 10 s 주기), `deskmate/health/hub`(LWT)
+- 발행: `deskmate/state/phase`(retain, QoS 1, 10 s 주기), `deskmate/interaction/request`(제안 게이트로 ACTION_* 진입 시, retain 없음), `deskmate/health/hub`(LWT)
 - 매핑은 `config/ingest.yaml`(freshness, 재실 상승엣지 자동 시작, ACTION 자동 완료, 신호별 선형 스케일). baseline 정규화가 들어오면 교체.
 - `logs/frames-*.jsonl` 은 `--replay` 로 그대로 재생되고, `logs/state-*.jsonl` 은 발행한 envelope 다.
 - 콘솔 한 줄 = 한 tick: 상태·ctx·C_fatigue/C_focus·present·pc_ratio·가용 신호(`ekprs` 첫 글자, `.`=미가용)

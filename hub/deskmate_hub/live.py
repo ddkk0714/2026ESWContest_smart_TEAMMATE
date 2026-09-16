@@ -14,7 +14,7 @@ import time
 from dataclasses import asdict
 from typing import Any, TextIO
 
-from .inference import FSMEngine, SensorFrame, load_config
+from .inference import FSMEngine, GateMode, SensorFrame, State, load_config
 from .ingest import SensorCache, SessionTracker, build_frame, load_ingest_config, sensor_summary
 from .presentation import state_envelope
 
@@ -36,6 +36,7 @@ class LiveHub:
         fsm_cfg: dict[str, Any] | None = None,
         ingest_cfg: dict[str, Any] | None = None,
         publish=None,
+        publish_request=None,
         frame_log: TextIO | None = None,
         state_log: TextIO | None = None,
         out: TextIO = sys.stdout,
@@ -46,6 +47,8 @@ class LiveHub:
         self.engine = FSMEngine(self.fsm_cfg)
         self.tracker = SessionTracker()
         self.publish = publish or (lambda envelope: None)
+        self.publish_request = publish_request or (lambda envelope: None)
+        self.pending_request: dict[str, Any] | None = None
         self.frame_log, self.state_log, self.out = frame_log, state_log, out
         self.boot_id = f"{time.time_ns() & 0xFFFFFFFF:08x}"
         self.seq = 0
@@ -56,7 +59,12 @@ class LiveHub:
         view = self.cache.snapshot()
         feedback = self.cache.pop_feedback()
         if feedback and feedback.get("verdict") in ("accept", "reject"):
-            self.tracker.pending_feedback = feedback["verdict"]
+            # request_id 가 오면 현재 질문과 맞는지 본다. 없거나 'atlas-display'(HTTP 시절 기본값)면 그대로 받는다.
+            rid = feedback.get("request_id")
+            current = self.pending_request["data"]["request_id"] if self.pending_request else None
+            if rid in (None, "", "atlas-display", current):
+                self.tracker.pending_feedback = feedback["verdict"]
+                self.pending_request = None
 
         frame = build_frame(view, now, self.ingest_cfg, self.tracker, fsm_state=self.engine.state)
         prev_state = self.engine.state
@@ -69,6 +77,7 @@ class LiveHub:
         )
         self.seq += 1
         self.publish(envelope)
+        self._maybe_request(result, prev_state, now)
 
         if self.frame_log:
             self.frame_log.write(json.dumps(frame_to_dict(frame), ensure_ascii=False) + "\n"); self.frame_log.flush()
@@ -86,6 +95,37 @@ class LiveHub:
         return envelope
 
 
+    _REQUEST_STATES = {
+        State.ACTION_BREAK: ("break_suggest", "take_a_break"),
+        State.ACTION_ENV: ("env_suggest", "adjust_environment"),
+        State.ACTION_POSTURE: ("posture_suggest", "fix_posture"),
+    }
+
+    def _maybe_request(self, result, prev_state, now: float) -> None:
+        """제안 게이트(0.45~0.75)로 ACTION_* 에 새로 들어오면 display 에 확인 질문을 보낸다.
+
+        자동(≥0.75)은 실행 후 알림이므로 질문하지 않고, 무동작(<0.45)은 로그만 남는다.
+        display 는 request_id 를 기억했다가 feedback/user 에 실어 보낸다(display/atlas state_source.dart).
+        """
+        if result.state is prev_state or result.state not in self._REQUEST_STATES:
+            return
+        if result.gate is not GateMode.SUGGEST:
+            self.pending_request = None
+            return
+        kind, prompt = self._REQUEST_STATES[result.state]
+        self.pending_request = {
+            "schema_version": "1.0", "ts": now, "node": "hub", "boot_id": self.boot_id, "seq": self.seq,
+            "data": {
+                "request_id": f"{self.boot_id}-{self.seq}", "kind": kind, "prompt_code": prompt,
+                "options": ["accept", "reject"], "expires_in_s": int(self.fsm_cfg["timers"].get("focus_break_poll_sec", 180)),
+                "evidence": list(result.actions), "cause": result.cause,
+                "c_fatigue": round(float(result.scores.c_fatigue), 4),
+            },
+        }
+        self.seq += 1
+        self.publish_request(self.pending_request)
+
+
 def run_live(broker: str, port: int, *, fsm_config: str | None, ingest_config: str | None, log_dir: str) -> int:
     from .ingest.mqtt_source import MqttSource
 
@@ -100,6 +140,7 @@ def run_live(broker: str, port: int, *, fsm_config: str | None, ingest_config: s
             fsm_cfg=load_config(fsm_config) if fsm_config else None,
             ingest_cfg=load_ingest_config(ingest_config) if ingest_config else None,
             publish=source.publish_state,
+            publish_request=source.publish_request,
             frame_log=flog, state_log=slog,
         )
         print(f"deskmate hub live — broker {broker}:{port}, period {hub.period:.0f}s, logs {log_dir}/", file=sys.stderr)

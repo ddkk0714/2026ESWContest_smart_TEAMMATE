@@ -8,6 +8,7 @@ from .cache import Sample
 TOPIC_SENSOR = "deskmate/sensor/#"
 TOPIC_FEEDBACK = "deskmate/feedback/user"
 TOPIC_STATE = "deskmate/state/phase"
+TOPIC_REQUEST = "deskmate/interaction/request"
 TOPIC_HEALTH = "deskmate/health/hub"
 
 _KIND_BY_TOPIC = {"mmwave": "mmwave", "env": "env", "keystroke": "keystroke"}

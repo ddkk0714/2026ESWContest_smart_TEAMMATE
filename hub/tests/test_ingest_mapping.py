@@ -194,3 +194,38 @@ def test_live_hub_runs_real_sensor_path_to_focus_and_idle(cfg):
     frames = list(iter_frames(io.StringIO(flog.getvalue())))
     assert len(frames) == len(published) and frames[0].touch is True
     assert all("sensor_summary" in e["data"] for e in published)
+
+
+# ── interaction/request (제안 게이트 확인 질문) ─────────────────────────
+
+def test_live_hub_publishes_request_on_suggest_and_matches_feedback(cfg):
+    from deskmate_hub.inference import Context, GateMode, Scores, TickResult
+
+    cache = SensorCache()
+    states, requests = [], []
+    hub = LiveHub(cache, ingest_cfg=cfg, publish=states.append, publish_request=requests.append, out=io.StringIO())
+
+    def result(state, gate):
+        return TickResult(state=state, context=Context.PC, scores=Scores(c_focus=0.2, c_fatigue=0.6, focus_weights={}, fatigue_weights={}),
+                          actions=["break_suggest"], gate=gate, cause="cognitive")
+
+    # 자동 실행(≥0.75)은 질문하지 않는다
+    hub._maybe_request(result(State.ACTION_ENV, GateMode.AUTO), State.CAUSE_ANALYSIS, 100.0)
+    assert requests == [] and hub.pending_request is None
+    # 제안(0.45~0.75)으로 ACTION_BREAK 에 새로 들어오면 질문 1건
+    hub._maybe_request(result(State.ACTION_BREAK, GateMode.SUGGEST), State.CAUSE_ANALYSIS, 100.0)
+    assert len(requests) == 1
+    req = requests[0]["data"]
+    assert req["kind"] == "break_suggest" and req["options"] == ["accept", "reject"] and req["request_id"]
+    # 같은 상태 유지 중에는 다시 묻지 않는다
+    hub._maybe_request(result(State.ACTION_BREAK, GateMode.SUGGEST), State.ACTION_BREAK, 110.0)
+    assert len(requests) == 1
+    # 다른 질문의 응답은 무시, 맞는 request_id(또는 생략)는 반영
+    cache.put_feedback({"verdict": "accept", "request_id": "stale-id"})
+    hub.tick_once(120.0)
+    assert hub.tracker.pending_feedback is None and hub.pending_request is not None
+    hub.pending_request = requests[0]
+    cache.put_feedback({"verdict": "reject", "request_id": req["request_id"]})
+    view_before = hub.tracker.pending_feedback
+    hub.tick_once(130.0)          # tick 안에서 build_frame 이 pending_feedback 을 소비한다(IDLE 상태라 무시)
+    assert view_before is None and hub.pending_request is None
