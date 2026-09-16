@@ -185,12 +185,12 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 - [x] VER5 18상태 엔진, 이중 신뢰도·재정규화, PC/MIXED/비PC 컨텍스트·blend, 원인 라우팅, 게이트(0.45/0.75), 타이머·히스테리시스
 - [x] `config/fsm.yaml` 외부화, 리플레이·데모 하네스, 세션 리포트 `report.py`(병합 PR), 테스트 46개 + 리포트 8개
 - [ ] 실센서 `SensorFrame` 로 대표 경로 재현: IDLE→START→CONTEXT_DETECT→FOCUS→FATIGUE_SUSPECT→FATIGUE→CAUSE_ANALYSIS→ACTION→MONITOR→RECOVERY→END
-- [ ] 10 s 주기에서 채터링 검증(임계 근방 진동 입력) → 필요 시 최소 유지 시간·히스테리시스 값 조정(yaml)
+- [x] 10 s 주기 채터링 검증 — `tests/test_chattering.py`(09-16): 0.38/0.42 진동 30분 동안 FOCUS 유지, SUSPECT 안 0.35/0.45 진동 유지, 0.68/0.72 진동으로 FATIGUE 미확정. 유지 시간·히스테리시스가 주기와 무관함을 확인. 실센서 노이즈 프로파일은 실측 후
 - [ ] 자세 해석 분기(PC 숙임+키입력↓=피로, 비PC 숙임+motion↓=집중 등)를 실센서로 확인
 - [ ] 신호 충돌(ToF 노딩 + mmWave active) 시 `interaction/request` 발행 → 사용자 확인 경로 (제안 게이트 ACTION_* 진입 시 질문 발행·`request_id` 매칭은 09-16 구현)
 - [ ] `C_focus` 부호 최종 결정, 필요 시 문서·테스트 동시 수정
 - [ ] MONITOR 보상 로그 축적(정책 학습은 로그 충분 시, 세션당 개입 상한)
-- [ ] `tick()` ≤ 500 ms Pi 4 실측
+- [ ] `tick()` ≤ 500 ms Pi 4 실측 (PC 참고치: 1,000 tick 평균 ≪ 1 ms, `test_tick_latency_budget`)
 
 #### 6. 디스플레이 UI·제안 카드·작업 리포트 개발 — 마감 10-12
 
@@ -199,7 +199,7 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 - [ ] 상태 적응형 4화면: 대기(시각·환경·재실) / 집중 저자극 / 터치 시 상세(집중 시간·환경·수동 제어) / 세션 리포트
 - [ ] 자동 실행 알림(≥ 0.75) + 되돌리기 + 실행 이유 문구
 - [ ] 정정(`correct`) 입력 — 4 국면 중 선택, 무응답 기록
-- [ ] 세션 리포트 화면: `report.py` 출력(몰입 시간·피로 에피소드·개입 결과·수용률)을 MQTT 로 받아 표시
+- [ ] 세션 리포트 화면: hub 가 세션 종료 시 `deskmate/session/report`(retain) 로 `report_to_dict` 발행(09-16, hub 쪽 완료) → display 가 구독해 표시(남음)
 - [ ] 재부팅 자동 시작(Pi 5 앱 + Pi 4 hub 서비스)
 - [ ] 스피커 알림 음소거·볼륨
 

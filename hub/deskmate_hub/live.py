@@ -14,7 +14,7 @@ import time
 from dataclasses import asdict
 from typing import Any, TextIO
 
-from .inference import FSMEngine, GateMode, SensorFrame, State, load_config
+from .inference import FSMEngine, GateMode, SensorFrame, SessionRecorder, State, load_config, report_to_dict
 from .control import ControlDispatcher, MockPlugAdapter, load_control_config
 from .features import BaselineStore
 from .ingest import SensorCache, SessionTracker, build_frame, load_ingest_config, sensor_summary
@@ -40,6 +40,7 @@ class LiveHub:
         publish=None,
         publish_request=None,
         publish_control=None,
+        publish_report=None,
         control_cfg: dict[str, Any] | None = None,
         frame_log: TextIO | None = None,
         state_log: TextIO | None = None,
@@ -58,7 +59,10 @@ class LiveHub:
             )
         self.publish = publish or (lambda envelope: None)
         self.publish_request = publish_request or (lambda envelope: None)
+        self.publish_report = publish_report or (lambda envelope: None)
         self.pending_request: dict[str, Any] | None = None
+        self.recorder: SessionRecorder | None = None
+        self.last_report: dict[str, Any] | None = None
         # 제어: control.yaml enabled 면 ACTION_ENV 를 디스패처가 맡는다(auto_complete 대신). mock 어댑터는 즉시 성공 응답.
         self.control_cfg = control_cfg if control_cfg is not None else load_control_config()
         self.control: ControlDispatcher | None = None
@@ -103,6 +107,7 @@ class LiveHub:
         prev_state = self.engine.state
         result = self.engine.tick(frame)
         self.tracker.observe_state(result.state, now)
+        self._record_session(frame, result, prev_state, now)
         if self.control is not None:
             if result.state is State.ACTION_ENV and prev_state is not State.ACTION_ENV:
                 self.control.on_enter_action(result.state.value, result.cause, result.gate, now)
@@ -136,6 +141,30 @@ class LiveHub:
         )
         return envelope
 
+
+    def _record_session(self, frame, result, prev_state, now: float) -> None:
+        """세션(START~END/IDLE) 동안 리포트를 누적하고, 세션이 끝나면 `session/report` 로 발행한다."""
+        if self.recorder is None and prev_state is State.IDLE and result.state is State.START:
+            self.recorder = SessionRecorder()
+        if self.recorder is not None:
+            self.recorder.observe(frame, result)
+            ended = result.state is State.END or (result.state is State.IDLE and prev_state is not State.IDLE)
+            if ended:
+                report = report_to_dict(self.recorder.finalize())
+                report["ended_by"] = "end_touch" if result.state is State.END else "absent_timeout"
+                self.last_report = {
+                    "schema_version": "1.0", "ts": now, "node": "hub", "boot_id": self.boot_id, "seq": self.seq,
+                    "data": report,
+                }
+                self.seq += 1
+                self.publish_report(self.last_report)
+                if self.state_log:
+                    self.state_log.write(json.dumps({"session_report": self.last_report}, ensure_ascii=False) + "\n")
+                    self.state_log.flush()
+                print(f"[report] 세션 종료({report['ended_by']}): {report['duration_s']:.0f}s, 몰입 {report['focus_time_s']:.0f}s, "
+                      f"피로 에피소드 {len(report['fatigue_episodes'])}, 개입 {report['intervention_counts']['total']}",
+                      file=self.out, flush=True)
+                self.recorder = None
 
     _REQUEST_STATES = {
         State.ACTION_BREAK: ("break_suggest", "take_a_break"),
@@ -184,6 +213,7 @@ def run_live(broker: str, port: int, *, fsm_config: str | None, ingest_config: s
             publish=source.publish_state,
             publish_request=source.publish_request,
             publish_control=source.publish_control,
+            publish_report=source.publish_report,
             frame_log=flog, state_log=slog,
         )
         print(f"deskmate hub live — broker {broker}:{port}, period {hub.period:.0f}s, logs {log_dir}/", file=sys.stderr)

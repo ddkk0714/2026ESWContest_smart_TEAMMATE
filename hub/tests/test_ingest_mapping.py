@@ -229,3 +229,26 @@ def test_live_hub_publishes_request_on_suggest_and_matches_feedback(cfg):
     view_before = hub.tracker.pending_feedback
     hub.tick_once(130.0)          # tick 안에서 build_frame 이 pending_feedback 을 소비한다(IDLE 상태라 무시)
     assert view_before is None and hub.pending_request is None
+
+
+# ── 세션 리포트 발행 (START~IDLE/END) ─────────────────────────────────
+
+def test_live_hub_publishes_session_report_when_session_ends(cfg):
+    cache = SensorCache()
+    reports = []
+    hub = LiveHub(cache, ingest_cfg=cfg, publish_report=reports.append, out=io.StringIO())
+    period = hub.period
+    baseline = float(hub.fsm_cfg["timers"]["baseline_sec"])
+    absent = float(hub.fsm_cfg["timers"]["absent_idle_sec"])
+    t = 0.0
+    while t <= baseline + 3 * period:
+        cache.put("mmwave", mm(t, level=30)); cache.put("keystroke", ks(t)); hub.tick_once(t); t += period
+    assert hub.recorder is not None and reports == []
+    end = t + absent + 2 * period
+    while t <= end:
+        cache.put("mmwave", mm(t, present=False)); hub.tick_once(t); t += period
+    assert hub.engine.state is State.IDLE and len(reports) == 1 and hub.recorder is None
+    data = reports[0]["data"]
+    assert data["ended_by"] == "absent_timeout" and data["duration_s"] > 0 and data["focus_time_s"] > 0
+    assert "state_durations_s" in data and "intervention_counts" in data
+    assert json.dumps(reports[0])            # JSON 직렬화 가능

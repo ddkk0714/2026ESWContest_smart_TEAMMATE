@@ -12,6 +12,7 @@ TOPIC_REQUEST = "deskmate/interaction/request"
 TOPIC_HEALTH = "deskmate/health/hub"
 TOPIC_CONTROL_CMD = "deskmate/control/cmd"
 TOPIC_CONTROL_RESULT = "deskmate/control/result"
+TOPIC_SESSION_REPORT = "deskmate/session/report"
 
 _KIND_BY_TOPIC = {"mmwave": "mmwave", "env": "env", "keystroke": "keystroke"}
 

@@ -39,6 +39,7 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 | `deskmate/interaction/request` | hub | display | 이벤트 | 불확실한 판정의 사용자 확인 질문 |
 | `deskmate/control/cmd` | hub | control 어댑터(플러그) | 이벤트, QoS 1, retain 없음 | 기기 제어 명령 (`control_command`, data-spec §10) |
 | `deskmate/control/result` | control 어댑터 | hub | 이벤트, QoS 1 | 명령 결과 (`control_result`). hub 는 `command_id` 로 매칭 |
+| `deskmate/session/report` | hub | display | 세션 종료 시(retain, QoS 1) | 세션 요약(`report_to_dict`) — 몰입 시간·상태 체류·피로 에피소드·개입·ESM 라벨 |
 | `deskmate/feedback/user` | display | hub | 이벤트 | 사용자 수락 · 정정 |
 | `deskmate/health/<node>` | 전 장치 | hub | LWT/retain | `{ts,node,status:online|offline,reconnects}`. hub 는 `deskmate/health/hub` |
 
@@ -166,6 +167,28 @@ envelope를 사용하므로 최종 전송 어댑터를 바꿔도 display 모델�
 
 collector 규약 추가분(`typing_active` · `flight_cv` · `mouse_event_rate`)은 오면 쓰고 없으면
 비운다. `flight_cv`가 없으면 display가 `flight_std_ms / flight_mean_ms`로 만들어 쓴다.
+
+### `deskmate/session/report`
+
+세션(START → END 또는 재실 이탈로 IDLE)이 끝나면 hub 가 1건 발행한다. retain 이라 화면이 나중에 켜져도 마지막 리포트를 그린다.
+`hub/deskmate_hub/inference/report.py` `report_to_dict`. 원시 센서값·키 내용은 없다.
+
+```json
+{
+  "schema_version": "1.0", "ts": 1769003600.0, "node": "hub", "boot_id": "a8021bf0", "seq": 410,
+  "data": {
+    "t_start": 1769000000.0, "t_end": 1769003600.0, "duration_s": 3600.0, "ticks": 360,
+    "focus_time_s": 2100.0, "focus_ratio": 0.583,
+    "state_durations_s": {"FOCUS_PC": 1800.0, "START": 300.0, "FATIGUE_SUSPECT": 420.0, "REST": 300.0},
+    "fatigue_episodes": [{"t_onset": 1769001800.0, "t_resolved": 1769002700.0, "peak_fatigue": 0.81, "interventions": 1}],
+    "interventions": [{"t": 1769002100.0, "cause": "cognitive", "action": "ACTION_BREAK", "outcome": "recovered", "accepted": true}],
+    "intervention_counts": {"total": 1, "recovered": 1, "escalated": 0, "rejected": 0},
+    "esm_labels": [{"t": 1769002100.0, "label": "break_accept"}],
+    "break_accept_rate": 1.0,
+    "ended_by": "end_touch"                 // end_touch | absent_timeout
+  }
+}
+```
 
 ### `deskmate/display/message`
 

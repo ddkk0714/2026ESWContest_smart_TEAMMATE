@@ -14,8 +14,8 @@ import paho.mqtt.client as mqtt
 
 from .cache import SensorCache
 from .protocol import (
-    TOPIC_CONTROL_CMD, TOPIC_CONTROL_RESULT, TOPIC_FEEDBACK, TOPIC_HEALTH, TOPIC_REQUEST, TOPIC_SENSOR, TOPIC_STATE,
-    parse_sensor_message,
+    TOPIC_CONTROL_CMD, TOPIC_CONTROL_RESULT, TOPIC_FEEDBACK, TOPIC_HEALTH, TOPIC_REQUEST, TOPIC_SENSOR, TOPIC_SESSION_REPORT,
+    TOPIC_STATE, parse_sensor_message,
 )
 
 class MqttSource:
@@ -58,6 +58,11 @@ class MqttSource:
         if self.connected:
             envelope = {"schema_version": "1.0", "ts": round(time.time(), 3), "node": "hub", "data": command}
             self._client.publish(TOPIC_CONTROL_CMD, json.dumps(envelope, ensure_ascii=False), qos=1, retain=False)
+
+    def publish_report(self, envelope: dict[str, Any]) -> None:
+        """세션 리포트. retain — 화면이 나중에 켜져도 마지막 세션 요약을 보여준다."""
+        if self.connected:
+            self._client.publish(TOPIC_SESSION_REPORT, json.dumps(envelope, ensure_ascii=False), qos=1, retain=True)
 
     def publish_request(self, envelope: dict[str, Any]) -> None:
         """사용자 확인 질문. retain 하지 않는다(재접속한 화면이 지난 질문을 다시 띄우면 안 된다)."""

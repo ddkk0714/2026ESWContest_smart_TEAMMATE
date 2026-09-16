@@ -7,8 +7,8 @@ ESM 라벨은 2단계 분류기(조명희) 학습 데이터로도 쓰인다.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Iterable
+from dataclasses import asdict, dataclass, field
+from typing import Any, Iterable
 
 from .engine import FSMEngine
 from .states import FOCUS_STATES, State
@@ -77,7 +77,8 @@ class SessionRecorder:
 
         if st == "START" and self.r.t_start is None:
             self.r.t_start = now
-        if st == "END":
+        if st == "END" or (st == "IDLE" and self._pstate not in (None, "IDLE")):
+            # 종료 터치 또는 재실 이탈(absent_timeout)로 세션이 끝난 시각
             self.r.t_end = now
 
         if st != self._pstate:
@@ -128,6 +129,34 @@ def build_report(
     for f in frames:
         rec.observe(f, engine.tick(f))
     return rec.finalize()
+
+
+def report_to_dict(r: SessionReport) -> dict[str, Any]:
+    """`deskmate/session/report` payload — 화면·로그용 JSON. 원시 센서값·키 내용은 들어가지 않는다."""
+    dur = r.duration
+    return {
+        "t_start": r.t_start, "t_end": r.t_end, "duration_s": round(dur, 1), "ticks": r.ticks,
+        "focus_time_s": round(r.focus_time, 1),
+        "focus_ratio": round(r.focus_time / dur, 3) if dur > 0 else 0.0,
+        "state_durations_s": {k: round(v, 1) for k, v in sorted(r.durations.items(), key=lambda kv: -kv[1])},
+        "fatigue_episodes": [
+            {"t_onset": e.t_onset, "t_resolved": e.t_resolved, "peak_fatigue": round(e.peak_fatigue, 3),
+             "interventions": len(e.interventions)} for e in r.episodes
+        ],
+        "interventions": [asdict(i) for i in r.interventions],
+        "intervention_counts": {
+            "total": len(r.interventions),
+            "recovered": sum(1 for i in r.interventions if i.outcome == "recovered"),
+            "escalated": sum(1 for i in r.interventions if i.outcome == "escalated"),
+            "rejected": sum(1 for i in r.interventions if i.outcome == "rejected"),
+        },
+        "esm_labels": list(r.esm_labels),
+        "break_accept_rate": (
+            round(sum(1 for l in r.esm_labels if l["label"] == "break_accept")
+                  / max(1, sum(1 for l in r.esm_labels if l["label"] in ("break_accept", "break_reject"))), 3)
+            if any(l["label"] in ("break_accept", "break_reject") for l in r.esm_labels) else None
+        ),
+    }
 
 
 def format_session_report(r: SessionReport) -> str:

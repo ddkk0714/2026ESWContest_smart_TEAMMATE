@@ -14,6 +14,7 @@ from .report import (
     SessionReport,
     build_report,
     format_session_report,
+    report_to_dict,
 )
 from .states import State
 from .types import Context, GateMode, Scores, SensorFrame, Signal, TickResult
@@ -34,4 +35,5 @@ __all__ = [
     "Intervention",
     "build_report",
     "format_session_report",
+    "report_to_dict",
 ]
