@@ -1,7 +1,7 @@
 """DESKMATE Pi 4 hub command line entry point.
 
     python -m deskmate_hub --replay logs/session.jsonl
-    python -m deskmate_hub --demo
+    python -m deskmate_hub --demo [--report]
     python -m deskmate_hub demo --host 0.0.0.0 --port 8765
     python -m deskmate_hub run --broker <ip>          # 실센서 MQTT → FSM → state/phase
 
@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .inference import load_config
+from .inference import SessionRecorder, format_session_report, load_config
 from .replay import format_report, iter_frames, replay
 
 
@@ -68,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--demo", action="store_true", help="합성 세션으로 전체 경로 스모크 실행")
     parser.add_argument("--config", metavar="fsm.yaml", help="FSM 설정 경로(기본: 패키지 config)")
     parser.add_argument("--quiet", action="store_true", help="전이 트레이스 생략, 요약만 출력")
+    parser.add_argument("--report", action="store_true", help="세션 작업 리포트도 출력")
     args = parser.parse_args(command_args)
 
     config = load_config(args.config) if args.config else None
@@ -86,7 +87,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--replay, --demo, demo 또는 run 명령 중 하나가 필요하다")
         return 2
 
-    print(format_report(replay(frames, config), quiet=args.quiet))
+    recorder = SessionRecorder() if args.report else None
+    print(format_report(replay(frames, config, recorder=recorder), quiet=args.quiet))
+    if recorder is not None:
+        print()
+        print(format_session_report(recorder.finalize()))
     return 0
 
 

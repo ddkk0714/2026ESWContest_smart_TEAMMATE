@@ -7,6 +7,14 @@
 """
 from .config import load_config
 from .engine import FSMEngine
+from .report import (
+    FatigueEpisode,
+    Intervention,
+    SessionRecorder,
+    SessionReport,
+    build_report,
+    format_session_report,
+)
 from .states import State
 from .types import Context, GateMode, Scores, SensorFrame, Signal, TickResult
 
@@ -20,4 +28,10 @@ __all__ = [
     "Context",
     "GateMode",
     "load_config",
+    "SessionRecorder",
+    "SessionReport",
+    "FatigueEpisode",
+    "Intervention",
+    "build_report",
+    "format_session_report",
 ]

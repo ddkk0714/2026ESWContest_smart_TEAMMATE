@@ -22,7 +22,7 @@ UART 디코딩(COBS/CRC-16)과 MQTT 클라이언트는 그 C++ 서비스에 두�
 | `config/` | 공통 | 임계값 · 토픽 · 장치 설정 (YAML) | ✅ `fsm.yaml`, `ingest.yaml`(센서→신호 임시 스케일) |
 | `live.py` | 공통 | `run` 명령: ingest → FSM → `deskmate/state/phase`(retain, QoS 1) 발행, 프레임을 리플레이 호환 JSONL 로 기록 | 🟡 MVP(09-14). 로컬 amqtt 브로커 E2E 확인, Pi 4 Mosquitto 실연동 대기 |
 | `ingest/uart_frame.py` `uart_source.py` | 공통 | UART2 프레임 코덱(COBS·CRC-16/CCITT-FALSE·TYPE 구조체)과 `UART\t` 라인/raw 시리얼 소스 | ✅ 09-15, 테스트 14개. C++ 수신부(`atlas/`) 대기 |
-| `replay.py` `demo.py` `preview_api.py` `service_bridge.py` | 박소연 | 리플레이 하네스 · 합성 데모 · HTTP 미리보기 · Atlas 라인 브리지 | ✅. `report.py` 는 `feat/merge-pending` PR 로 진입 중 |
+| `replay.py` `demo.py` `preview_api.py` `service_bridge.py` | 박소연 | 리플레이 하네스 · 합성 데모 · HTTP 미리보기 · Atlas 라인 브리지 | ✅ `report.py`·`--report` 포함 |
 
 ## 설계 규칙
 
@@ -58,7 +58,11 @@ baseline 대비 `phi`·`delta` 정규화 기여도이며 운영 입력으로 저
 `reset`은 설정된 baseline 시간을 가상으로 진행해 몰입 상태로 빠르게 진입하고,
 `tick`은 앱에서 지정한 30초 또는 3분만큼 진행한다.
 
-`python -m deskmate_hub --demo` / `--replay <log.jsonl>` 는 합성 세션·JSONL 리플레이를 돌린다.
+```bash
+python -m deskmate_hub --demo                            # 합성 세션 스모크
+python -m deskmate_hub --replay logs/2026-08-01.jsonl    # 로그 리플레이
+python -m deskmate_hub --demo --report                   # + 세션 작업 리포트(몰입 시간·피로 에피소드·개입 결과·ESM 라벨)
+```
 
 ### 실센서 라이브 (MVP 2026-09-18)
 
