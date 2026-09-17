@@ -13,6 +13,7 @@ import 'deskmate_theme.dart';
 import 'fsm_graph.dart';
 import 'keystroke_capture.dart';
 import 'music_playback.dart';
+import 'posture_status_page.dart';
 import 'sensor_overview_page.dart';
 import 'sensor_test_page.dart';
 import 'session_report.dart';
@@ -307,6 +308,7 @@ class _DashboardPageState extends State<DashboardPage> {
                             unawaited(_feedbackController.apply(next));
                           },
                         ),
+                      _AppView.posture => PostureStatusPage(hubUrl: _hubUrl),
                       _AppView.fsmGraph =>
                         FsmGraphPage(currentState: state.fsmState),
                       _AppView.bluetooth => BluetoothControlPage(
@@ -325,7 +327,7 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 }
 
-enum _AppView { dashboard, sensorOverview, sensorTest, fsmGraph, bluetooth, sessionReport }
+enum _AppView { dashboard, sensorOverview, sensorTest, posture, fsmGraph, bluetooth, sessionReport }
 
 class _Header extends StatelessWidget {
   const _Header(
@@ -378,6 +380,11 @@ class _Header extends StatelessWidget {
             icon: Icons.tune,
             label: '센서 테스트',
             onTap: () => onViewChanged(_AppView.sensorTest)),
+        _HeaderNav(
+            selected: view == _AppView.posture,
+            icon: Icons.chair_alt,
+            label: '자세',
+            onTap: () => onViewChanged(_AppView.posture)),
         _HeaderNav(
             selected: view == _AppView.fsmGraph,
             icon: Icons.account_tree_outlined,

@@ -1,0 +1,8 @@
+{
+  "id": "com.deskmate.camsvc1",
+  "description": "DESKMATE ESP32-CAM posture service",
+  "name": "deskmate_camsvc",
+  "type": "native",
+  "entry": "deskmate_camsvc",
+  "version": "1.0.0"
+}

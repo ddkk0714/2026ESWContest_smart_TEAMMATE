@@ -62,7 +62,7 @@ DHCP 주소는 재부팅하면 바뀔 수 있다.
 
 | 폴더 | 앱 ID |
 |---|---|
-| `display/atlas/app` | `atlas/meta/appinfo.json` 의 `id` |
+| `display/atlas/ui_env_app` | `atlas/meta/appinfo.json` 의 `id` |
 
 앱 ID 는 `appinfo.json` 이 정하고, 빌드 산출물 이름(`<앱 ID>.ipk`)과 설치 대상이 모두 이 값을 따른다.
 ID 가 다른 빌드는 보드에 **나란히 설치**되므로, 기존 앱을 지우지 않고 새 버전을 옆에 올려 비교할 수 있다.
@@ -72,7 +72,7 @@ ID 가 다른 빌드는 보드에 **나란히 설치**되므로, 기존 앱을 �
 기본 대상은 `device.env` 의 `ATLAS_APP_DIR` 이고, 한 번만 바꿔 쓸 때는 `-AppDir` 로 덮어쓴다.
 
 ```powershell
-.\display\atlas\scripts\pi-deploy.ps1 -AppDir display/atlas/app
+.\display\atlas\scripts\pi-deploy.ps1 -AppDir display/atlas/ui_env_app
 ```
 
 ## 파일

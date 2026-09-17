@@ -6,7 +6,7 @@
 #   bash /workspace/display/atlas/scripts/deploy-app.sh --build    # ipk 만 만든다
 #   bash /workspace/display/atlas/scripts/deploy-app.sh --uninstall
 #   bash /workspace/display/atlas/scripts/deploy-app.sh --mode debug --no-test
-#   bash /workspace/display/atlas/scripts/deploy-app.sh --app-dir display/atlas/app
+#   bash /workspace/display/atlas/scripts/deploy-app.sh --app-dir display/atlas/ui_env_app
 #
 # 대상 장치 · 앱 경로 · Hub URL 은 display/atlas/deploy/device.env 에서 읽는다.
 set -euo pipefail
