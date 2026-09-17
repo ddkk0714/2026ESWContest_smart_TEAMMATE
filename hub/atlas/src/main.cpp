@@ -98,6 +98,7 @@ HubProcess startHub(const std::filesystem::path& service_dir)
         setenv("PYTHONHOME", "/restricted/python3/usr", 1);
         setenv("PYTHONPATH", python_path.c_str(), 1);
         setenv("PYTHONUNBUFFERED", "1", 1);
+        setenv("DESKMATE_HUB_MODE", "live", 0);
         if (chdir(service_dir.c_str()) != 0) {
             perror("deskmate-hub chdir");
             _exit(126);
