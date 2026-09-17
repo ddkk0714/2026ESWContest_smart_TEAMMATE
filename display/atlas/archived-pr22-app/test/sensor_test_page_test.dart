@@ -1,6 +1,7 @@
 import 'package:deskmate_display/display_state.dart';
 import 'package:deskmate_display/sensor_test_page.dart';
 import 'package:deskmate_display/state_source.dart';
+import 'package:deskmate_display/session_report.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -66,10 +67,22 @@ class _FakeSource implements StateSource {
   String get label => 'fake';
 
   @override
+  bool get isConnected => true;
+
+  @override
+  String get connectionLabel => 'test';
+
+  @override
   bool get supportsSensorTest => true;
 
   @override
   String? get displayMessage => null;
+
+  @override
+  SessionReport? get sessionReport => null;
+
+  @override
+  bool get hasPendingRequest => false;
 
   @override
   Future<DisplayState> fetch() async => _state();

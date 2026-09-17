@@ -1,4 +1,4 @@
-name: deskmate_ui_env
+name: deskmate_display
 description: DESKMATE Raspberry Pi 5 Atlas status display.
 publish_to: none
 version: 0.1.0+1

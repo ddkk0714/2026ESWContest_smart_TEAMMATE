@@ -50,13 +50,25 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Pause'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
-}
+
+  testWidgets('pending MQTT request opens suggestion controls', (tester) async {
+    tester.view.physicalSize = const Size(1024, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await _pump(
+      tester,
+      _state(phase: 'focus', fsmState: 'FOCUS_PC'),
+      pendingRequest: true,
+    );
+    expect(find.byType(SuggestionView), findsOneWidget);
+  });}
 
 Future<void> _pump(
   WidgetTester tester,
   DisplayState state, {
   bool detail = false,
   String? message,
+  bool pendingRequest = false,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -65,6 +77,7 @@ Future<void> _pump(
         body: DashboardView(
           state: state,
           displayMessage: message,
+          hasPendingRequest: pendingRequest,
           keystroke: null,
           keystrokeReference: state.timestamp,
           onFeedback: (_) {},

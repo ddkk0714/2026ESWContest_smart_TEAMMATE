@@ -37,7 +37,7 @@ run 콘솔/DevTools 로그 확인 → 코드 수정`이다. Pi 5는 AI Native OS
 ## 기술 선택
 
 Pi 5 AI Native OS Video Profile의 **Atlas Flutter**로 확정했다. 앱 소스는
-[`atlas/app/`](atlas/app/)에 있으며, LG 제공 샘플에서 검토한 Atlas 플랫폼 러너를 복사한 뒤
+[`atlas/ui_env_app/`](atlas/ui_env_app/)에 있으며, LG 제공 샘플에서 검토한 Atlas 플랫폼 러너를 복사한 뒤
 DESKMATE 전용 앱 ID와 최소 권한으로 분리했다.
 
 - 허브 URL 미지정: 화면 내장 데모가 5개 대표 상태를 순환한다.

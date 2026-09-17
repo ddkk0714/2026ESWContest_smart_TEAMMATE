@@ -10,10 +10,13 @@
             "com.atlas.permission.privileged.audiocontrol",
             "com.atlas.permission.privileged.mediacontrol",
             "com.atlas.permission.privileged.mediasession",
-            "com.atlas.permission.privileged.permission_agent"
+            "com.atlas.permission.privileged.permission_agent",
+            "com.atlas.permission.privileged.bluetooth_admin"
         ],
         "user_consent": [
-            "com.atlas.permission.user_consent.mediaplayer"
+            "com.atlas.permission.user_consent.mediaplayer",
+            "com.atlas.permission.user_consent.bluetooth_connect",
+            "com.atlas.permission.user_consent.bluetooth_scan"
         ]
     }
 }

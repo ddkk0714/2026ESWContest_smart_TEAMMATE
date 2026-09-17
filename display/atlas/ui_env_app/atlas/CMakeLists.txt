@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.15)
 
-set(ATLAS_APP_ID "com.deskmate.uienv")
+set(ATLAS_APP_ID "com.atlas.app.deskmate_display")
 
 if(NOT DEFINED ENV{FLUTTER_INSTALL_DIR} OR "$ENV{FLUTTER_INSTALL_DIR}" STREQUAL "")
   set(ENV{FLUTTER_INSTALL_DIR} "/data/share/usr/atlas/apps/${ATLAS_APP_ID}")
@@ -10,7 +10,7 @@ endif()
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 project(runner LANGUAGES CXX)
 
-set(BINARY_NAME "deskmate_ui_env")
+set(BINARY_NAME "deskmate_display")
 
 cmake_policy(SET CMP0063 NEW)
 

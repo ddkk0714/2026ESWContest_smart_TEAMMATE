@@ -1,19 +1,22 @@
 {
-    "id": "com.deskmate.uienv",
+    "id": "com.atlas.app.deskmate_display",
     "type": "flutter",
-    "name": "UI ENV",
-    "description": "DESKMATE environment UI development app",
-    "entry": "deskmate_ui_env --bundle=./ --fullscreen -a com.deskmate.uienv",
+    "name": "DESKMATE",
+    "description": "DESKMATE integrated environment, feedback, and session display",
+    "entry": "deskmate_display --bundle=./ --fullscreen -a com.atlas.app.deskmate_display",
     "version": "0.1.0",
     "required_permissions": {
         "privileged": [
             "com.atlas.permission.privileged.audiocontrol",
             "com.atlas.permission.privileged.mediacontrol",
             "com.atlas.permission.privileged.mediasession",
-            "com.atlas.permission.privileged.permission_agent"
+            "com.atlas.permission.privileged.permission_agent",
+            "com.atlas.permission.privileged.bluetooth_admin"
         ],
         "user_consent": [
-            "com.atlas.permission.user_consent.mediaplayer"
+            "com.atlas.permission.user_consent.mediaplayer",
+            "com.atlas.permission.user_consent.bluetooth_connect",
+            "com.atlas.permission.user_consent.bluetooth_scan"
         ]
     }
 }

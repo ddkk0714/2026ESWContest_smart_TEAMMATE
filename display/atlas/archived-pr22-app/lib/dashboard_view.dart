@@ -2,7 +2,6 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import 'app_motion.dart';
 import 'deskmate_theme.dart';
 import 'display_state.dart';
 
@@ -11,6 +10,7 @@ class DashboardView extends StatelessWidget {
     super.key,
     required this.state,
     this.displayMessage,
+    this.hasPendingRequest = false,
     required this.keystroke,
     required this.keystrokeReference,
     required this.onFeedback,
@@ -24,6 +24,7 @@ class DashboardView extends StatelessWidget {
 
   final DisplayState state;
   final String? displayMessage;
+  final bool hasPendingRequest;
   final KeystrokeMetrics? keystroke;
   final DateTime keystrokeReference;
   final int? liveKeys;
@@ -36,29 +37,23 @@ class DashboardView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    late final String transitionKey;
-    late final Widget content;
+    final Widget content;
     if (showFocusDetail) {
-      transitionKey = 'focus-detail';
       content = FocusDetailView(
         state: state,
         onClose: () => onShowFocusDetail(false),
       );
     } else if (state.phase == 'idle') {
-      transitionKey = 'idle';
       content =
           AmbientView(state: state, onDetail: () => onShowFocusDetail(true));
     } else if (state.phase == 'end') {
-      transitionKey = 'report';
       content = SessionReportView(state: state);
-    } else if (state.phase == 'fatigue' && state.gate != 'none') {
-      transitionKey = 'suggestion';
+    } else if (hasPendingRequest ||
+        (state.phase == 'fatigue' && state.gate != 'none')) {
       content = SuggestionView(state: state, onFeedback: onFeedback);
     } else if (state.phase == 'recovery') {
-      transitionKey = 'recovery';
       content = FocusAmbientView(state: state);
     } else {
-      transitionKey = 'focus';
       content = FocusStatusView(
         state: state,
         keystroke: keystroke,
@@ -71,18 +66,11 @@ class DashboardView extends StatelessWidget {
       );
     }
     final message = displayMessage;
-    final animatedContent = AnimatedSwitcher(
-      duration: AppMotion.normal,
-      switchInCurve: AppMotion.standardCurve,
-      switchOutCurve: AppMotion.reverseCurve,
-      transitionBuilder: AppMotion.fadeScaleTransition,
-      child: KeyedSubtree(key: ValueKey(transitionKey), child: content),
-    );
-    if (message == null || message.isEmpty) return animatedContent;
+    if (message == null || message.isEmpty) return content;
     return Column(children: [
       DisplayMessageBanner(message: message),
       const SizedBox(height: 10),
-      Expanded(child: animatedContent),
+      Expanded(child: content),
     ]);
   }
 }
@@ -181,7 +169,6 @@ class FocusStatusView extends StatelessWidget {
   const FocusStatusView({
     super.key,
     required this.state,
-    this.displayMessage,
     required this.keystroke,
     required this.keystrokeReference,
     required this.onDetail,
@@ -191,7 +178,6 @@ class FocusStatusView extends StatelessWidget {
     this.liveKeys,
   });
   final DisplayState state;
-  final String? displayMessage;
   final KeystrokeMetrics? keystroke;
   final DateTime keystrokeReference;
   final int? liveKeys;
@@ -292,39 +278,11 @@ class SuggestionView extends StatelessWidget {
                         style: Theme.of(context).textTheme.labelMedium),
                   ]),
                   const SizedBox(height: 14),
-                  AnimatedSize(
-                    duration: AppMotion.content,
-                    curve: AppMotion.standardCurve,
-                    alignment: Alignment.topLeft,
-                    child: AnimatedSwitcher(
-                      duration: AppMotion.content,
-                      switchInCurve: AppMotion.standardCurve,
-                      switchOutCurve: AppMotion.reverseCurve,
-                      transitionBuilder: AppMotion.fadeTransition,
-                      child: Text(
-                        _suggestionTitle(state),
-                        key: ValueKey('title-${state.cause}'),
-                        style: Theme.of(context).textTheme.headlineMedium,
-                      ),
-                    ),
-                  ),
+                  Text(_suggestionTitle(state),
+                      style: Theme.of(context).textTheme.headlineMedium),
                   const Spacer(),
-                  AnimatedSize(
-                    duration: AppMotion.content,
-                    curve: AppMotion.standardCurve,
-                    alignment: Alignment.topLeft,
-                    child: AnimatedSwitcher(
-                      duration: AppMotion.content,
-                      switchInCurve: AppMotion.standardCurve,
-                      switchOutCurve: AppMotion.reverseCurve,
-                      transitionBuilder: AppMotion.fadeTransition,
-                      child: Text(
-                        _suggestionBody(state),
-                        key: ValueKey('body-${state.cause}'),
-                        style: Theme.of(context).textTheme.bodyLarge,
-                      ),
-                    ),
-                  ),
+                  Text(_suggestionBody(state),
+                      style: Theme.of(context).textTheme.bodyLarge),
                   const Spacer(),
                   Text('변경은 사용자가 선택할 때만 적용돼요.',
                       style: Theme.of(context).textTheme.labelMedium),
@@ -404,16 +362,10 @@ class FocusAmbientView extends StatelessWidget {
               style: Theme.of(context).textTheme.labelMedium),
           const SizedBox(height: 54),
           SizedBox(
-            width: 276,
-            height: 276,
-            child: TweenAnimationBuilder<double>(
-              tween: Tween<double>(end: state.confidence),
-              duration: AppMotion.normal,
-              curve: AppMotion.standardCurve,
-              builder: (context, value, child) => CustomPaint(
-                painter: _FocusRingPainter(value: value),
-                child: child,
-              ),
+            width: 220,
+            height: 220,
+            child: CustomPaint(
+              painter: _FocusRingPainter(value: state.confidence),
               child: Center(
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
                   Text(_elapsedLabel(state),
@@ -608,22 +560,8 @@ class _CurrentStatePanel extends StatelessWidget {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('현재 상태', style: Theme.of(context).textTheme.labelMedium),
           const SizedBox(height: 14),
-          AnimatedSize(
-            duration: AppMotion.content,
-            curve: AppMotion.standardCurve,
-            alignment: Alignment.topLeft,
-            child: AnimatedSwitcher(
-              duration: AppMotion.content,
-              switchInCurve: AppMotion.standardCurve,
-              switchOutCurve: AppMotion.reverseCurve,
-              transitionBuilder: AppMotion.fadeTransition,
-              child: Text(
-                _stateLabel(state),
-                key: ValueKey(state.phase),
-                style: Theme.of(context).textTheme.headlineMedium,
-              ),
-            ),
-          ),
+          Text(_stateLabel(state),
+              style: Theme.of(context).textTheme.headlineMedium),
           const SizedBox(height: 7),
           Text(state.scenario ?? _focusSubline(state),
               style: Theme.of(context).textTheme.bodyMedium),
@@ -696,18 +634,11 @@ class _SlimMetric extends StatelessWidget {
         borderRadius: BorderRadius.circular(DeskmateRadius.control),
         child: Stack(children: [
           Container(height: 40, color: DeskmateColors.surfaceMuted),
-          TweenAnimationBuilder<double>(
-            tween: Tween<double>(end: value.clamp(0, 1)),
-            duration: AppMotion.normal,
-            curve: AppMotion.standardCurve,
-            builder: (context, animatedValue, child) => FractionallySizedBox(
-              widthFactor: animatedValue,
-              child: child,
-            ),
+          FractionallySizedBox(
+            widthFactor: value.clamp(0, 1),
             child: Container(
-              height: 40,
-              color: DeskmateColors.accent.withValues(alpha: .48),
-            ),
+                height: 40,
+                color: DeskmateColors.accent.withValues(alpha: .48)),
           ),
           Positioned.fill(
             child: Padding(
