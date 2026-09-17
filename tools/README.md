@@ -12,6 +12,7 @@
 | [`rehearsal_local.py`](rehearsal_local.py) | amqtt 로컬 브로커 + sim(short) + `hub run --config fsm.demo.yaml` 을 한 번에 띄우고 전이 요약(약 6분) |
 | [`uart_frame_tool.py`](uart_frame_tool.py) | UART2 바이너리 프레임(COBS+CRC-16) test vector 출력·인코딩·디코딩, USB-TTL 로 ESP32 UART2 직접 읽기. 코덱은 `hub/deskmate_hub/ingest/uart_frame.py` 공유 |
 | `connect-deskmate-pi4.ps1` | DHCP 로 바뀌는 Pi 4 주소를 탐색해 SSH 별칭(`atlas`·`rpi4`·`deskmate-pi4`)을 갱신 |
+| [`atlas-hotspot-broker/`](atlas-hotspot-broker/README.md) | 휴대폰 핫스팟으로 Pi 4·Pi 5 를 묶고 Pi 4 에 정적 빌드 Mosquitto 를 띄우는 개발 통신 경로 (opkg 불가 환경용) |
 
 ## 만들면 유용한 것 (우선순위 순)
 

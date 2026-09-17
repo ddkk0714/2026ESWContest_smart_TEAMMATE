@@ -19,6 +19,7 @@
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <sstream>
@@ -61,6 +62,39 @@ void handleSignal(int)
 std::filesystem::path executableDirectory()
 {
     return std::filesystem::canonical("/proc/self/exe").parent_path();
+}
+
+std::string trim(std::string value)
+{
+    const auto not_space = [](unsigned char value) { return !std::isspace(value); };
+    value.erase(value.begin(), std::find_if(value.begin(), value.end(), not_space));
+    value.erase(std::find_if(value.rbegin(), value.rend(), not_space).base(), value.end());
+    return value;
+}
+
+void loadEnvironmentFile(const std::filesystem::path& path)
+{
+    std::ifstream input(path);
+    if (!input) return;
+
+    std::string line;
+    while (std::getline(input, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        line = trim(line);
+        if (line.empty() || line.front() == '#') continue;
+
+        const std::size_t separator = line.find('=');
+        if (separator == std::string::npos) {
+            std::cerr << "DESKMATE Hub: ignoring invalid environment line\n";
+            continue;
+        }
+
+        const std::string key = trim(line.substr(0, separator));
+        const std::string value = trim(line.substr(separator + 1));
+        if (key.empty() || setenv(key.c_str(), value.c_str(), 0) != 0) {
+            std::cerr << "DESKMATE Hub: failed to load environment entry\n";
+        }
+    }
 }
 
 HubProcess startHub(const std::filesystem::path& service_dir)
@@ -183,14 +217,6 @@ void readBridge(int fd, BridgeState& state)
     }
     if (!pending.empty()) processBridgeLine(pending, state);
     close(fd);
-}
-
-std::string trim(std::string value)
-{
-    const auto not_space = [](unsigned char value) { return !std::isspace(value); };
-    value.erase(value.begin(), std::find_if(value.begin(), value.end(), not_space));
-    value.erase(std::find_if(value.rbegin(), value.rend(), not_space).base(), value.end());
-    return value;
 }
 
 bool readRequest(int client, HttpRequest& request)
@@ -409,11 +435,14 @@ int main()
     signal(SIGPIPE, SIG_IGN);
 
     try {
+        const std::filesystem::path service_dir = executableDirectory();
+        loadEnvironmentFile(service_dir / "hub.env");
+
         auto connection = sdbus::createSystemBusConnection(
             sdbus::ServiceName(kServiceName));
         connection->enterEventLoopAsync();
 
-        HubProcess hub = startHub(executableDirectory());
+        HubProcess hub = startHub(service_dir);
         if (hub.pid < 0) return 1;
 
         BridgeState state;
