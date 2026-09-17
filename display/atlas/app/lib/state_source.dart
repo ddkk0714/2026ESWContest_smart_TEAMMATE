@@ -6,11 +6,16 @@ import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 
 import 'display_state.dart';
+import 'session_report.dart';
 
 abstract interface class StateSource {
   String get label;
+  bool get isConnected;
+  String get connectionLabel;
   bool get supportsSensorTest;
   String? get displayMessage;
+  SessionReport? get sessionReport;
+  bool get hasPendingRequest;
   Future<DisplayState> fetch();
   Future<void> feedback(String verdict);
   Future<void> sendTestFrame(TestSensorInput input,
@@ -63,10 +68,22 @@ class HttpStateSource implements StateSource {
   String get label => _base.host;
 
   @override
+  bool get isConnected => true;
+
+  @override
+  String get connectionLabel => 'HTTP 개발 연결';
+
+  @override
   bool get supportsSensorTest => true;
 
   @override
   String? get displayMessage => null;
+
+  @override
+  SessionReport? get sessionReport => null;
+
+  @override
+  bool get hasPendingRequest => false;
 
   @override
   Future<DisplayState> fetch() async {
@@ -155,6 +172,7 @@ class MqttStateSource implements StateSource {
   static const _stateTopic = 'deskmate/state/phase';
   static const _requestTopic = 'deskmate/interaction/request';
   static const _messageTopic = 'deskmate/display/message';
+  static const _reportTopic = 'deskmate/session/report';
   static const _feedbackTopic = 'deskmate/feedback/user';
 
   final String _host;
@@ -165,6 +183,7 @@ class MqttStateSource implements StateSource {
   Future<void>? _connection;
   DisplayState? _latest;
   String? _displayMessage;
+  SessionReport? _sessionReport;
   String? _pendingRequestId;
   int _sequence = 0;
 
@@ -172,10 +191,23 @@ class MqttStateSource implements StateSource {
   String get label => 'MQTT $_host:$port';
 
   @override
+  bool get isConnected =>
+      _client.connectionStatus?.state == MqttConnectionState.connected;
+
+  @override
+  String get connectionLabel => isConnected ? 'MQTT 연결됨' : 'MQTT 재연결 중';
+
+  @override
   bool get supportsSensorTest => false;
 
   @override
   String? get displayMessage => _displayMessage;
+
+  @override
+  SessionReport? get sessionReport => _sessionReport;
+
+  @override
+  bool get hasPendingRequest => _pendingRequestId != null;
 
   @override
   Future<DisplayState> fetch() async {
@@ -205,6 +237,7 @@ class MqttStateSource implements StateSource {
       _client.subscribe(_stateTopic, MqttQos.atLeastOnce);
       _client.subscribe(_requestTopic, MqttQos.atLeastOnce);
       _client.subscribe(_messageTopic, MqttQos.atLeastOnce);
+      _client.subscribe(_reportTopic, MqttQos.atLeastOnce);
     } catch (_) {
       _client.disconnect();
       rethrow;
@@ -230,6 +263,8 @@ class MqttStateSource implements StateSource {
               _pendingRequestId = requestId;
             }
           }
+        } else if (received.topic == _reportTopic) {
+          _sessionReport = SessionReport.fromEnvelope(envelope);
         } else if (received.topic == _messageTopic) {
           if (envelope['schema_version'] != '1.0') continue;
           final data = envelope['data'];
@@ -267,6 +302,7 @@ class MqttStateSource implements StateSource {
       MqttQos.atLeastOnce,
       builder.payload!,
     );
+    _pendingRequestId = null;
   }
 
   @override
@@ -384,10 +420,22 @@ class DemoStateSource implements StateSource {
   String get label => '화면 내장 데모';
 
   @override
+  bool get isConnected => true;
+
+  @override
+  String get connectionLabel => '내장 데모';
+
+  @override
   bool get supportsSensorTest => false;
 
   @override
   String? get displayMessage => null;
+
+  @override
+  SessionReport? get sessionReport => null;
+
+  @override
+  bool get hasPendingRequest => false;
 
   @override
   Future<DisplayState> fetch() async {

@@ -11,6 +11,7 @@ import 'fsm_graph.dart';
 import 'keystroke_capture.dart';
 import 'music_playback.dart';
 import 'sensor_test_page.dart';
+import 'session_report.dart';
 import 'state_source.dart';
 
 const _hubUrl = String.fromEnvironment('DESKMATE_HUB_URL');
@@ -232,13 +233,20 @@ class _DashboardPageState extends State<DashboardPage> {
         child: Padding(
           padding: const EdgeInsets.fromLTRB(44, 24, 44, 28),
           child: state == null
-              ? _Loading(error: _error)
+              ? _Loading(
+                  error: _error,
+                  source: _source.label,
+                  connectionLabel: _source.connectionLabel,
+                  connected: _source.isConnected,
+                  mqttMode: _source is MqttStateSource,
+                )
               : Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _Header(
                         source: _source.label,
-                        online: _error == null,
+                        connectionLabel: _source.connectionLabel,
+                        online: _source.isConnected,
                         sequence: state.sequence,
                         view: _view,
                         onViewChanged: (view) => setState(() => _view = view),
@@ -247,11 +255,19 @@ class _DashboardPageState extends State<DashboardPage> {
                         onMusic: _toggleMusic,
                         onExit: _confirmExit),
                     const SizedBox(height: 12),
+                    if (_source is MqttStateSource) ...[
+                      _Pi4MqttLinkCard(
+                        connected: _source.isConnected,
+                        broker: _source.label,
+                      ),
+                      const SizedBox(height: 12),
+                    ],
                     Expanded(
                         child: switch (_view) {
                       _AppView.dashboard => DashboardView(
                           state: state,
                           displayMessage: _source.displayMessage,
+                          hasPendingRequest: _source.hasPendingRequest,
                           keystroke: _localKeystroke ?? state.keystroke,
                           keystrokeReference: _localKeystroke != null
                               ? DateTime.now()
@@ -275,6 +291,8 @@ class _DashboardPageState extends State<DashboardPage> {
                         ),
                       _AppView.fsmGraph =>
                         FsmGraphPage(currentState: state.fsmState),
+                      _AppView.sessionReport =>
+                        SessionReportCard(report: _source.sessionReport),
                     }),
                   ],
                 ),
@@ -284,11 +302,12 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 }
 
-enum _AppView { dashboard, sensorTest, fsmGraph }
+enum _AppView { dashboard, sensorTest, fsmGraph, sessionReport }
 
 class _Header extends StatelessWidget {
   const _Header(
       {required this.source,
+      required this.connectionLabel,
       required this.online,
       required this.sequence,
       required this.view,
@@ -298,6 +317,7 @@ class _Header extends StatelessWidget {
       required this.onMusic,
       required this.onExit});
   final String source;
+  final String connectionLabel;
   final bool online;
   final int sequence;
   final _AppView view;
@@ -335,6 +355,11 @@ class _Header extends StatelessWidget {
             icon: Icons.account_tree_outlined,
             label: 'FSM 전체',
             onTap: () => onViewChanged(_AppView.fsmGraph)),
+        _HeaderNav(
+            selected: view == _AppView.sessionReport,
+            icon: Icons.summarize_outlined,
+            label: '세션 리포트',
+            onTap: () => onViewChanged(_AppView.sessionReport)),
         const SizedBox(width: 10),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -351,8 +376,13 @@ class _Header extends StatelessWidget {
             const SizedBox(width: 6),
             Tooltip(
               message: source,
-              child: Text('#$sequence',
-                  style: const TextStyle(fontWeight: FontWeight.w600)),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Text(connectionLabel,
+                    style: const TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(width: 4),
+                Text('#$sequence',
+                    style: const TextStyle(fontWeight: FontWeight.w600)),
+              ]),
             ),
           ]),
         ),
@@ -432,19 +462,87 @@ class _Panel extends StatelessWidget {
 }
 
 class _Loading extends StatelessWidget {
-  const _Loading({this.error});
+  const _Loading({
+    this.error,
+    required this.source,
+    required this.connectionLabel,
+    required this.connected,
+    required this.mqttMode,
+  });
   final String? error;
+  final String source;
+  final String connectionLabel;
+  final bool connected;
+  final bool mqttMode;
   @override
   Widget build(BuildContext context) => Center(
           child: Column(mainAxisSize: MainAxisSize.min, children: [
+        if (mqttMode) ...[
+          _Pi4MqttLinkCard(connected: connected, broker: source),
+          const SizedBox(height: 22),
+        ],
         const CircularProgressIndicator(),
         const SizedBox(height: 18),
+        Text(
+          connectionLabel,
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            color: connected
+                ? DeskmateColors.accentStrong
+                : DeskmateColors.offline,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(source, style: const TextStyle(color: DeskmateColors.inkMuted)),
+        const SizedBox(height: 10),
         Text(error ?? 'FSM 상태를 기다리고 있습니다.')
       ]));
 }
 
 /// 화면 강조용 경계값. FSM 판정 임계값이 아니라 색만 바꾸는 힌트다.
 /// 판정 임계값은 hub/deskmate_hub/config/*.yaml 에만 둔다.
+/// MQTT 소켓 연결 여부를 화면에서 즉시 확인하는 전용 상태 카드다.
+/// 연결됨은 지정한 Pi4 broker까지 TCP/MQTT 세션이 수립됐다는 뜻이다.
+class _Pi4MqttLinkCard extends StatelessWidget {
+  const _Pi4MqttLinkCard({required this.connected, required this.broker});
+
+  final bool connected;
+  final String broker;
+
+  @override
+  Widget build(BuildContext context) {
+    final color =
+        connected ? DeskmateColors.accentStrong : DeskmateColors.offline;
+    final title = connected ? 'Pi4 MQTT 연결됨' : 'Pi4 MQTT 연결 대기';
+    final detail = connected
+        ? '$broker · 상태/피드백 통신 준비됨'
+        : '$broker · 랜 케이블 · Pi4 주소 · Mosquitto(1883)를 확인하세요';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .12),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withValues(alpha: .5)),
+      ),
+      child: Row(children: [
+        Icon(connected ? Icons.link : Icons.link_off, color: color, size: 28),
+        const SizedBox(width: 12),
+        Expanded(
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(title,
+                style: TextStyle(
+                    color: color, fontSize: 16, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 3),
+            Text(detail,
+                style: const TextStyle(color: DeskmateColors.inkMuted)),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
 const _ksWarnCv = 0.55;
 const _ksWarnIdle = 0.35;
 const _ksWarnCorrection = 0.09;
