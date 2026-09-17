@@ -1,0 +1,32 @@
+# PC Bluetooth feedback controller.  It is intentionally disabled until an
+# operator sets enabled=true and fills the lamp address after a local scan.
+# Do not put credentials in this file.
+enabled: false
+cooldown_sec: 5
+bluetooth:
+  address: ""
+  write_with_response: false
+
+# All visible feedback is reversible.  Tune colours and brightness here;
+# the controller sends these only when phase changes.
+phase_feedback:
+  idle:
+    power: false
+  start:
+    power: true
+    brightness: 48
+    rgb: [255, 190, 120]
+  focus:
+    power: true
+    brightness: 110
+    color_temperature: 2
+  fatigue:
+    power: true
+    brightness: 180
+    rgb: [255, 120, 40]
+  recovery:
+    power: true
+    brightness: 90
+    rgb: [80, 180, 255]
+  end:
+    power: false
