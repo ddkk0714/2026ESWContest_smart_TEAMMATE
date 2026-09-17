@@ -9,8 +9,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(sdbus-c++ 2.0 REQUIRED)
 find_package(Threads REQUIRED)
 
-add_executable(${PROJECT_NAME} src/main.cpp src/uart_rx.cpp)
-target_link_libraries(${PROJECT_NAME} PRIVATE SDBusCpp::sdbus-c++ Threads::Threads)
+add_executable(${PROJECT_NAME} src/main.cpp src/uart_rx.cpp src/mqtt_bridge.cpp)
+target_include_directories(${PROJECT_NAME} PRIVATE third_party/paho)
+target_link_libraries(${PROJECT_NAME} PRIVATE SDBusCpp::sdbus-c++ Threads::Threads ${CMAKE_DL_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)

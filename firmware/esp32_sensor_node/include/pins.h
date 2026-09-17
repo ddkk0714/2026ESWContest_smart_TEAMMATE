@@ -2,6 +2,26 @@
 
 #include <Arduino.h>
 
+#ifndef DESKMATE_UART2_TX
+#define DESKMATE_UART2_TX 1
+#endif
+
+#ifndef DESKMATE_FIRMWARE_VERSION
+#define DESKMATE_FIRMWARE_VERSION 0x0100
+#endif
+
+#ifndef DESKMATE_HAS_SCD41
+#define DESKMATE_HAS_SCD41 0
+#endif
+
+#ifndef DESKMATE_HAS_BH1750
+#define DESKMATE_HAS_BH1750 0
+#endif
+
+#ifndef DESKMATE_HAS_DHT22
+#define DESKMATE_HAS_DHT22 0
+#endif
+
 namespace deskmate {
 
 constexpr uint32_t kUsbBaud = 115200;
@@ -12,6 +32,11 @@ constexpr int kC1001RxPin = 16;
 constexpr int kC1001TxPin = 17;
 constexpr int kPi4TxPin = 25;
 constexpr int kPi4RxPin = 26;
+constexpr int kI2cSdaPin = 21;
+constexpr int kI2cSclPin = 22;
+constexpr int kDht22Pin = 27;
+constexpr uint8_t kScd41Address = 0x62;
+constexpr uint8_t kBh1750Address = 0x23;
 
 constexpr uint32_t kMmwavePeriodMs = 1000;
 constexpr uint32_t kEnvironmentPeriodMs = 5000;

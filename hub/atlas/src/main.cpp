@@ -1,5 +1,6 @@
 #include <sdbus-c++/sdbus-c++.h>
 
+#include "mqtt_bridge.h"
 #include "uart_rx.h"
 
 #include <arpa/inet.h>
@@ -168,11 +169,24 @@ bool writeBridgeInput(int fd, std::mutex& input_mutex, const std::string& data)
     return writeAll(fd, data);
 }
 
-void processBridgeLine(const std::string& line, BridgeState& state)
+void processBridgeLine(const std::string& line, BridgeState& state, deskmate::MqttBridge* mqtt)
 {
     if (line.rfind("STATE\t", 0) == 0) {
         std::lock_guard<std::mutex> lock(state.mutex);
         state.latest_state = line.substr(6);
+        if (mqtt) mqtt->publish("deskmate/state/phase", line.substr(6), 1, true);
+        return;
+    }
+    if (line.rfind("REQUEST\t", 0) == 0) {
+        if (mqtt) mqtt->publish("deskmate/interaction/request", line.substr(8), 1, false);
+        return;
+    }
+    if (line.rfind("REPORT\t", 0) == 0) {
+        if (mqtt) mqtt->publish("deskmate/session/report", line.substr(7), 1, false);
+        return;
+    }
+    if (line.rfind("CMD\t", 0) == 0) {
+        if (mqtt) mqtt->publish("deskmate/control/cmd", line.substr(4), 1, false);
         return;
     }
     if (line.rfind("ACK\t", 0) == 0) {
@@ -194,7 +208,7 @@ void processBridgeLine(const std::string& line, BridgeState& state)
     if (!line.empty()) std::cerr << "DESKMATE Hub: " << line << '\n';
 }
 
-void readBridge(int fd, BridgeState& state)
+void readBridge(int fd, BridgeState& state, deskmate::MqttBridge* mqtt)
 {
     std::string pending;
     char buffer[4096];
@@ -206,7 +220,7 @@ void readBridge(int fd, BridgeState& state)
             while ((newline = pending.find('\n')) != std::string::npos) {
                 std::string line = pending.substr(0, newline);
                 if (!line.empty() && line.back() == '\r') line.pop_back();
-                processBridgeLine(line, state);
+                processBridgeLine(line, state, mqtt);
                 pending.erase(0, newline + 1);
             }
             continue;
@@ -214,7 +228,7 @@ void readBridge(int fd, BridgeState& state)
         if (count < 0 && errno == EINTR) continue;
         break;
     }
-    if (!pending.empty()) processBridgeLine(pending, state);
+    if (!pending.empty()) processBridgeLine(pending, state, mqtt);
     close(fd);
 }
 
@@ -436,6 +450,7 @@ int main()
     try {
         const std::filesystem::path service_dir = executableDirectory();
         loadEnvironmentFile(service_dir / "hub.env");
+        const deskmate::MqttBridgeConfig mqtt_config = deskmate::mqttBridgeConfigFromEnvironment();
 
         auto connection = sdbus::createSystemBusConnection(
             sdbus::ServiceName(kServiceName));
@@ -447,7 +462,14 @@ int main()
         BridgeState state;
         std::atomic<bool> http_failed{false};
         std::mutex bridge_input_mutex;
-        std::thread reader(readBridge, hub.output_fd, std::ref(state));
+        deskmate::MqttBridge mqtt(mqtt_config,
+            [&hub, &bridge_input_mutex](const std::string& line) {
+                return writeBridgeInput(hub.input_fd, bridge_input_mutex, line);
+            });
+        const bool native_mqtt_started = mqtt_config.enabled() && mqtt.start();
+        if (native_mqtt_started) setenv("DESKMATE_NATIVE_MQTT", "1", 1);
+        deskmate::MqttBridge* mqtt_ptr = native_mqtt_started ? &mqtt : nullptr;
+        std::thread reader(readBridge, hub.output_fd, std::ref(state), mqtt_ptr);
         deskmate::UartReceiver uart(deskmate::uartRxConfigFromEnvironment(),
             [&hub, &bridge_input_mutex](const std::string& line) {
                 return writeBridgeInput(hub.input_fd, bridge_input_mutex, line);
@@ -477,6 +499,7 @@ int main()
 
         g_stop_requested = 1;
         uart.stop();
+        mqtt.stop();
         if (!child_exited) {
             kill(hub.pid, SIGTERM);
             waitpid(hub.pid, &child_status, 0);

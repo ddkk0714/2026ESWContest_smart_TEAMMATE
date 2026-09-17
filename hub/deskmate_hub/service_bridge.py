@@ -38,7 +38,26 @@ class BridgeStateStore(PreviewStateStore):
         )
 
 
-def _read_commands(store: BridgeStateStore, uart_source=None) -> None:
+def _feed_mqtt_line(cache, line: str) -> None:
+    import time
+
+    from .ingest.protocol import TOPIC_FEEDBACK, parse_sensor_message
+
+    _, topic, raw_payload = line.rstrip("\n").split("\t", 2)
+    payload = raw_payload.encode("utf-8")
+    if topic == TOPIC_FEEDBACK:
+        body = json.loads(raw_payload)
+        data = body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), dict) else body
+        if isinstance(data, dict):
+            cache.put_feedback(data)
+        return
+    parsed = parse_sensor_message(topic, payload, time.time())
+    if parsed is not None:
+        kind, sample = parsed
+        cache.put(kind, sample)
+
+
+def _read_commands(store: BridgeStateStore, uart_source=None, mqtt_cache=None) -> None:
     for raw_line in sys.stdin.buffer:
         request_id = "0"
         try:
@@ -46,6 +65,10 @@ def _read_commands(store: BridgeStateStore, uart_source=None) -> None:
             if line.startswith("UART\t"):
                 if uart_source is not None:
                     uart_source.feed_line(line)
+                continue
+            if line.startswith("MQTT\t"):
+                if mqtt_cache is not None:
+                    _feed_mqtt_line(mqtt_cache, line)
                 continue
             kind, request_id, path, raw_body = line.rstrip("\n").split("\t", 3)
             if kind != "POST":
@@ -88,12 +111,12 @@ def _run_live_bridge() -> None:
     store = BridgeStateStore()
     cache = SensorCache()
     uart = UartLineSource(cache)
-    reader = threading.Thread(target=_read_commands, args=(store, uart), daemon=True)
+    reader = threading.Thread(target=_read_commands, args=(store, uart, cache), daemon=True)
     reader.start()
 
     mqtt_source = None
     host = os.environ.get("DESKMATE_MQTT_HOST")
-    if host:
+    if host and not os.environ.get("DESKMATE_NATIVE_MQTT"):
         try:
             from .ingest.mqtt_source import MqttSource
 
