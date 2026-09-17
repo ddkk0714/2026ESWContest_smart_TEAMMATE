@@ -96,6 +96,28 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  testWidgets('header exposes the sensor overview without hiding other views',
+      (tester) async {
+    tester.view.physicalSize = const Size(1024, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(const DeskmateApp());
+    await tester.pump();
+
+    expect(find.byTooltip('상태'), findsOneWidget);
+    expect(find.byTooltip('센서 전체'), findsOneWidget);
+    expect(find.byTooltip('센서 테스트'), findsOneWidget);
+    expect(find.byTooltip('FSM 전체'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('센서 전체'));
+    await tester.pumpAndSettle();
+    expect(find.text('실시간 환경센서 데이터'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('상태'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('demo-cycle-toggle')), findsOneWidget);
+  });
+
   testWidgets('sensor test explains that the real Hub connection is required',
       (tester) async {
     await tester.pumpWidget(const DeskmateApp());

@@ -11,6 +11,7 @@ import 'deskmate_theme.dart';
 import 'fsm_graph.dart';
 import 'keystroke_capture.dart';
 import 'music_playback.dart';
+import 'sensor_overview_page.dart';
 import 'sensor_test_page.dart';
 import 'state_source.dart';
 
@@ -407,6 +408,8 @@ class _DashboardPageState extends State<DashboardPage> {
                                 onShowFocusDetail: (value) =>
                                     setState(() => _showFocusDetail = value),
                               ),
+                            _AppView.sensorOverview =>
+                              SensorOverviewPage(state: state),
                             _AppView.sensorTest => SensorTestPage(
                                 source: _source,
                                 state: state,
@@ -429,7 +432,7 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 }
 
-enum _AppView { dashboard, sensorTest, fsmGraph }
+enum _AppView { dashboard, sensorOverview, sensorTest, fsmGraph }
 
 class _MusicVolumeDialog extends StatefulWidget {
   const _MusicVolumeDialog({
@@ -609,7 +612,7 @@ class _Header extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               SizedBox(
-                width: 128,
+                width: 108,
                 child: Text(classicalTrackTitles[selectedTrack],
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -688,8 +691,8 @@ class _Header extends StatelessWidget {
 class _HeaderNavigation extends StatelessWidget {
   const _HeaderNavigation({required this.view, required this.onViewChanged});
 
-  static const _itemWidth = 52.0;
-  static const _buttonSize = 48.0;
+  static const _itemWidth = 44.0;
+  static const _buttonSize = 40.0;
 
   final _AppView view;
   final ValueChanged<_AppView> onViewChanged;
@@ -718,6 +721,12 @@ class _HeaderNavigation extends StatelessWidget {
             icon: Icons.dashboard_outlined,
             label: '상태',
             onTap: () => onViewChanged(_AppView.dashboard),
+          ),
+          _HeaderNav(
+            selected: view == _AppView.sensorOverview,
+            icon: Icons.sensors_rounded,
+            label: '센서 전체',
+            onTap: () => onViewChanged(_AppView.sensorOverview),
           ),
           _HeaderNav(
             selected: view == _AppView.sensorTest,
