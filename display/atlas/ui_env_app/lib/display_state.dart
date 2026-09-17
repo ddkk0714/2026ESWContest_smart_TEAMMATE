@@ -18,6 +18,10 @@ class DisplayState {
     this.lux,
     this.scenario,
     this.keystroke,
+    this.mmwaveMotionState,
+    this.mmwaveMotionLevel,
+    this.mmwaveDistanceCm,
+    this.mmwaveHeartBpm,
   });
 
   final String fsmState;
@@ -38,6 +42,10 @@ class DisplayState {
   final int? lux;
   final String? scenario;
   final KeystrokeMetrics? keystroke;
+  final String? mmwaveMotionState;
+  final int? mmwaveMotionLevel;
+  final int? mmwaveDistanceCm;
+  final int? mmwaveHeartBpm;
 
   factory DisplayState.fromEnvelope(Map<String, dynamic> envelope) {
     if (envelope['schema_version'] != '1.0') {
@@ -45,6 +53,7 @@ class DisplayState {
     }
     final data = _map(envelope['data']);
     final sensors = _map(data['sensor_summary']);
+    final mmwave = _map(sensors['mmwave']);
     return DisplayState(
       fsmState: _requiredString(data, 'fsm_state'),
       phase: _requiredString(data, 'phase'),
@@ -68,6 +77,12 @@ class DisplayState {
       lux: _nullableInt(sensors['lux']),
       scenario: sensors['scenario']?.toString(),
       keystroke: KeystrokeMetrics.fromJson(sensors['keystroke']),
+      mmwaveMotionState: mmwave['motion_state']?.toString(),
+      mmwaveMotionLevel: _nullableInt(mmwave['motion_level']),
+      mmwaveDistanceCm: _nullableInt(mmwave['distance_cm']),
+      mmwaveHeartBpm: mmwave['heart_valid'] == true
+          ? _nullableInt(mmwave['heart_bpm'])
+          : null,
     );
   }
 

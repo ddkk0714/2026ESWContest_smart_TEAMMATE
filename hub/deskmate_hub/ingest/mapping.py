@@ -164,7 +164,7 @@ def sensor_summary(view: CacheView, now: float, cfg: dict[str, Any]) -> dict[str
         out["present"] = bool(mm.data.get("present", False))
         out["mmwave"] = {
             k: mm.data[k]
-            for k in ("motion_state", "motion_level", "distance_cm", "drowsy_state")
+            for k in ("motion_state", "motion_level", "distance_cm", "heart_bpm", "heart_valid", "drowsy_state")
             if k in mm.data
         }
     env = view.fresh("env", now, fresh["env"])
