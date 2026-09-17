@@ -545,7 +545,60 @@ class _PostureScreenState extends State<PostureScreen> {
             style: const TextStyle(color: kMuted)),
       ]);
 
-  Widget _body(PostureState state, PostureLook look) => Column(
+  /// 지금 센서가 보고 있는 것. 보드 직결이 아니면 null.
+  VisionSnapshot? _vision() {
+    final source = _source;
+    return source is SerialPostureSource ? source.vision : null;
+  }
+
+  /// 기준을 잡는 동안에는 **판정 대신 내 모습을 크게** 보여준다.
+  ///
+  /// 배경을 뜰 때는 화각에서 비켜야 하고 기준을 잡을 때는 바르게 앉아야 하는데,
+  /// 라벨만 보이면 내가 제대로 서 있는지·앉아 있는지 알 수가 없다. 기준이 어긋나면
+  /// 그 뒤 판정이 통째로 틀리므로 이 순간이 제일 중요하다.
+  Widget _calibrationBody(PostureState state, VisionSnapshot snapshot) {
+    final hint = state.scenario ?? '기준을 잡는 중입니다';
+    final sitting = hint.startsWith('2/2');
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Icon(sitting ? Icons.event_seat : Icons.directions_walk,
+            color: kBlue, size: 22),
+        const SizedBox(width: 10),
+        Flexible(
+          child: Text(hint,
+              key: const ValueKey('calibration-hint'),
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  fontSize: 20, fontWeight: FontWeight.w700, color: kInk)),
+        ),
+      ]),
+      const SizedBox(height: 14),
+      SizedBox(
+        width: 430,
+        child: VisionPanel(snapshot: snapshot, stale: state.ageFrom(DateTime.now()).inSeconds >= 5),
+      ),
+      const SizedBox(height: 10),
+      Text(
+        sitting
+            ? '이 자세가 기준이 됩니다 — 초록으로 잡힌 모양이 지금 앉은 모습입니다'
+            : '초록이 남아 있으면 아직 화각 안입니다',
+        style: const TextStyle(fontSize: 12, color: kDim),
+      ),
+    ]);
+  }
+
+  Widget _body(PostureState state, PostureLook look) {
+    // 기준을 잡는 중이면 판정 화면 대신 라이브 화면.
+    final snapshot = _vision();
+    final calibrating = state.label == PostureLabel.baseline ||
+        state.label == PostureLabel.unknown;
+    if (calibrating && snapshot != null) {
+      return _calibrationBody(state, snapshot);
+    }
+    return _dashboardBody(state, look);
+  }
+
+  Widget _dashboardBody(PostureState state, PostureLook look) => Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           _presence(state),

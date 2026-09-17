@@ -91,6 +91,7 @@ class SerialPostureSource implements PostureSource {
   // 화면 표시용. 판정은 마스크만 쓰지만 사람 눈에는 coverage 가 더 읽힌다.
   List<int>? _lastMask;
   List<int>? _lastCoverage;
+  List<double>? _lastDepth;
   int _visionW = 0;
   int _visionH = 0;
   double _lastFrameAt = -1e9;
@@ -99,6 +100,7 @@ class SerialPostureSource implements PostureSource {
   double _fps = 0.0;
   double _lastTick = 0.0;
   double _lastLogAt = 0.0;
+  double _lastFeatureLogAt = 0.0;
   int _bytes = 0;
   String? _error;
   bool _opening = false;
@@ -166,10 +168,37 @@ class SerialPostureSource implements PostureSource {
         ' · 판정 ${verdict?.label ?? "없음"}');
   }
 
+  /// 판정이 지금 무엇을 보고 그렇게 결정했는지 1초에 한 줄.
+  ///
+  /// 정확도가 낮을 때 임계값을 손대기 전에 **어느 축이 흔들리는지** 봐야 한다.
+  /// 엎드림과 젖힘을 가르는 것은 거리(rel) 하나뿐이고, 그 값은 마스크의 겉보기
+  /// 크기에서 되만든 것이라 이 경로에서 제일 약하다.
+  void _logFeatures() {
+    final verdict = _verdict;
+    if (verdict == null) return;
+    final now = _now;
+    if (now - _lastFeatureLogAt < 1.0) return;
+    _lastFeatureLogAt = now;
+    final f = verdict.features;
+    final p = verdict.parts;
+    String n(double? v, {int digits = 3}) =>
+        v == null || v.isNaN ? '—' : v.toStringAsFixed(digits);
+    diag.write('feat: ${verdict.label}'
+        ' occ=${n(f.occupancy)} top=${n(f.topRow)} spread=${n(f.spread)}'
+        ' headW=${n(f.headW)} head=${n(f.headMm, digits: 0)}mm'
+        ' rel=${n(p['dist_rel'])} dmm=${n(p['dist_mm'], digits: 0)}'
+        ' | slump=${n(p['slump'], digits: 2)}/${n(p['slump_raw'], digits: 2)}'
+        ' recl=${n(p['recline'], digits: 2)}/${n(p['recline_raw'], digits: 2)}'
+        ' drow=${n(p['drowsy'], digits: 2)} nod=${n(verdict.nodRate, digits: 1)}'
+        ' dip=${n(p['nod_dip'])} amp=${n(p['nod_amp'])}'
+        ' | phi=${n(verdict.phi, digits: 2)} delta=${n(verdict.delta, digits: 2)}');
+  }
+
   void _onFrame(VisionFrame frame) {
     final now = _now;
     final zone =
         maskToZone(maskFromBytes(frame.payload), frame.height, frame.width);
+    _lastDepth = zone.data;
     _verdict = _tracker.update(zone, now);
     _frames++;
     if (_lastTick > 0) {
@@ -179,6 +208,7 @@ class SerialPostureSource implements PostureSource {
     }
     _lastTick = now;
     _lastFrameAt = now;
+    _logFeatures();
   }
 
   @override
@@ -225,6 +255,7 @@ class SerialPostureSource implements PostureSource {
       height: _visionH,
       mask: _lastMask,
       coverage: _lastCoverage,
+      depthMm: _lastDepth,
       maskAgeS: _lastFrameAt > 0 ? _now - _lastFrameAt : null,
     );
   }

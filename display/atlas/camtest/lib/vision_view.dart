@@ -4,16 +4,19 @@
 /// 노트북에서 `tools/posture_viewer.py` 로 보던 것과 같은 역할이다 - 내가 화각
 /// 안에 있는지, 몸이 잘렸는지, 배경이 잘못 잡혔는지는 눈으로 봐야 안다.
 ///
-/// 두 가지를 겹쳐 보여준다.
-///   * **coverage** - ESP 가 보내는 zone 별 배경 대비 차이값(0~255). 원본에 가깝다.
-///   * **마스크** - RP2040 의 `vision.c` 가 임계값·모폴로지로 만든 이진 실루엣.
-///     **판정이 실제로 먹는 것은 이쪽이다.** 초록 테두리로 그린다.
+/// 세 가지를 번갈아 본다.
+///   * **거리** - 판정에 들어간 zone 거리(mm)를 노트북 뷰어와 같은 팔레트로 칠한다.
+///     가까울수록 뜨겁다(검정 → 파랑 → 초록 → 빨강 → 노랑 → 흰색).
+///   * **차이값** - ESP 가 보내는 coverage(0~255). 배경과 얼마나 다른가.
+///   * **마스크** - RP2040 의 `vision.c` 가 만든 이진 실루엣.
+///     **판정이 실제로 먹는 것은 이쪽이다.**
 library;
 
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'heat_palette.dart';
 import 'palette.dart';
 import 'posture_source.dart';
 
@@ -28,10 +31,13 @@ class VisionViewPage extends StatefulWidget {
   State<VisionViewPage> createState() => _VisionViewPageState();
 }
 
+enum VisionMode { heat, coverage, mask }
+
 class _VisionViewPageState extends State<VisionViewPage> {
   Timer? _timer;
   VisionSnapshot? _snapshot;
-  bool _showCoverage = true;
+  // 노트북 뷰어와 같은 그림을 기본으로 둔다.
+  VisionMode _mode = VisionMode.heat;
 
   @override
   void initState() {
@@ -85,30 +91,19 @@ class _VisionViewPageState extends State<VisionViewPage> {
                       child: Text('센서 프레임을 기다리고 있습니다',
                           style: TextStyle(color: kMuted)))
                   : Center(
-                      child: AspectRatio(
-                        aspectRatio: snapshot.width / snapshot.height,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: kSurface,
-                            border: Border.all(
-                                color: stale ? kAmber : kLine, width: 2),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: CustomPaint(
-                            painter: _VisionPainter(
-                              snapshot: snapshot,
-                              showCoverage: _showCoverage,
-                            ),
-                          ),
-                        ),
-                      ),
+                      child: VisionPanel(
+                          snapshot: snapshot, mode: _mode, stale: stale),
                     ),
             ),
             const SizedBox(height: 8),
             Text(
               stale
                   ? '프레임이 멈췄습니다 — 배선과 전원을 확인하세요'
-                  : '초록 = 판정이 사람으로 본 zone · 회색 = 배경 대비 차이',
+                  : switch (_mode) {
+                      VisionMode.heat => '가까울수록 뜨겁다 — 노트북 뷰어와 같은 팔레트',
+                      VisionMode.coverage => '배경과 다를수록 밝다 (ESP 원본 coverage)',
+                      VisionMode.mask => '초록 = 판정이 사람으로 본 zone',
+                    },
               style: TextStyle(fontSize: 12, color: stale ? kAmber : kDim),
             ),
           ]),
@@ -117,21 +112,63 @@ class _VisionViewPageState extends State<VisionViewPage> {
     );
   }
 
-  Widget _toggle() => TextButton.icon(
-        key: const ValueKey('vision-toggle'),
-        onPressed: () => setState(() => _showCoverage = !_showCoverage),
-        style: TextButton.styleFrom(
-            foregroundColor: kInk, backgroundColor: kSurface),
-        icon: Icon(_showCoverage ? Icons.layers : Icons.layers_clear, size: 18),
-        label: Text(_showCoverage ? '차이값 켬' : '마스크만'),
+  static const Map<VisionMode, (String, IconData)> _modeLook = {
+    VisionMode.heat: ('거리', Icons.thermostat),
+    VisionMode.coverage: ('차이값', Icons.gradient),
+    VisionMode.mask: ('마스크', Icons.person_outline),
+  };
+
+  Widget _toggle() {
+    final (name, icon) = _modeLook[_mode]!;
+    return TextButton.icon(
+      key: const ValueKey('vision-toggle'),
+      onPressed: () => setState(() {
+        final next = (_mode.index + 1) % VisionMode.values.length;
+        _mode = VisionMode.values[next];
+      }),
+      style:
+          TextButton.styleFrom(foregroundColor: kInk, backgroundColor: kSurface),
+      icon: Icon(icon, size: 18),
+      label: Text(name),
+    );
+  }
+}
+
+/// 센서 화면 한 장. 캘리브레이션 중에는 본 화면에도 이 패널이 뜬다 - 기준을 잡는
+/// 동안 내가 화각 안에 제대로 있는지 볼 수 있어야 한다.
+class VisionPanel extends StatelessWidget {
+  const VisionPanel({
+    super.key,
+    required this.snapshot,
+    this.mode = VisionMode.heat,
+    this.stale = false,
+  });
+
+  final VisionSnapshot snapshot;
+  final VisionMode mode;
+  final bool stale;
+
+  @override
+  Widget build(BuildContext context) => AspectRatio(
+        aspectRatio: snapshot.width / snapshot.height,
+        child: Container(
+          decoration: BoxDecoration(
+            color: kSurface,
+            border: Border.all(color: stale ? kAmber : kLine, width: 2),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: CustomPaint(
+            painter: _VisionPainter(snapshot: snapshot, mode: mode),
+          ),
+        ),
       );
 }
 
 class _VisionPainter extends CustomPainter {
-  _VisionPainter({required this.snapshot, required this.showCoverage});
+  _VisionPainter({required this.snapshot, required this.mode});
 
   final VisionSnapshot snapshot;
-  final bool showCoverage;
+  final VisionMode mode;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -142,35 +179,43 @@ class _VisionPainter extends CustomPainter {
     final cellH = size.height / rows;
     final paint = Paint()..style = PaintingStyle.fill;
 
-    final coverage = snapshot.coverage;
-    if (showCoverage && coverage != null && coverage.length >= cols * rows) {
-      for (var r = 0; r < rows; r++) {
-        for (var c = 0; c < cols; c++) {
-          final v = coverage[r * cols + c];
-          if (v < 8) continue; // 배경과 같은 zone 은 안 그린다
-          paint.color = Color.fromARGB(255, v, v, v);
-          canvas.drawRect(
-              Rect.fromLTWH(c * cellW, r * cellH, cellW + 0.5, cellH + 0.5),
-              paint);
-        }
-      }
+    void fill(int index, Color color) {
+      final r = index ~/ cols;
+      final c = index % cols;
+      paint.color = color;
+      canvas.drawRect(
+          Rect.fromLTWH(c * cellW, r * cellH, cellW + 0.5, cellH + 0.5), paint);
     }
 
-    final mask = snapshot.mask;
-    if (mask != null && mask.length >= cols * rows) {
-      paint.color = kGreen.withValues(alpha: showCoverage ? 0.55 : 1.0);
-      for (var r = 0; r < rows; r++) {
-        for (var c = 0; c < cols; c++) {
-          if (mask[r * cols + c] == 0) continue;
-          canvas.drawRect(
-              Rect.fromLTWH(c * cellW, r * cellH, cellW + 0.5, cellH + 0.5),
-              paint);
+    switch (mode) {
+      case VisionMode.heat:
+        // 노트북 뷰어와 같은 그림. 판정에 들어간 거리 격자를 그대로 칠한다.
+        final depth = snapshot.depthMm;
+        if (depth != null && depth.length >= cols * rows) {
+          for (var i = 0; i < cols * rows; i++) {
+            fill(i, heatOfDepth(depth[i]));
+          }
         }
-      }
+      case VisionMode.coverage:
+        final coverage = snapshot.coverage;
+        if (coverage != null && coverage.length >= cols * rows) {
+          for (var i = 0; i < cols * rows; i++) {
+            final v = coverage[i];
+            if (v < 8) continue; // 배경과 같은 zone 은 안 그린다
+            fill(i, Color.fromARGB(255, v, v, v));
+          }
+        }
+      case VisionMode.mask:
+        final mask = snapshot.mask;
+        if (mask != null && mask.length >= cols * rows) {
+          for (var i = 0; i < cols * rows; i++) {
+            if (mask[i] != 0) fill(i, kGreen);
+          }
+        }
     }
   }
 
   @override
   bool shouldRepaint(_VisionPainter old) =>
-      old.snapshot != snapshot || old.showCoverage != showCoverage;
+      old.snapshot != snapshot || old.mode != mode;
 }

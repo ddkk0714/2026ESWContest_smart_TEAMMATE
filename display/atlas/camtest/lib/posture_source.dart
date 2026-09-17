@@ -51,6 +51,7 @@ class VisionSnapshot {
     required this.height,
     this.mask,
     this.coverage,
+    this.depthMm,
     this.maskAgeS,
   });
 
@@ -62,6 +63,9 @@ class VisionSnapshot {
 
   /// zone 별 배경 대비 차이값 0~255. ESP 가 보내는 원본.
   final List<int>? coverage;
+
+  /// 판정에 들어간 zone 거리(mm). 노트북 뷰어가 열화상으로 그리는 그 값이다.
+  final List<double>? depthMm;
 
   /// 마지막 마스크가 몇 초 전 것인지.
   final double? maskAgeS;
