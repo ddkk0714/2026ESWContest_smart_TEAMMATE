@@ -13,6 +13,19 @@ void writeNullable(Stream& output, bool valid, uint16_t value) {
   }
 }
 
+// uint8_t fields (resp/heart bpm) would otherwise be ambiguous between the uint16_t and float overloads.
+void writeNullable(Stream& output, bool valid, uint8_t value) {
+  writeNullable(output, valid, static_cast<uint16_t>(value));
+}
+
+void writeNullable(Stream& output, bool valid, float value) {
+  if (valid) {
+    output.print(value, 1);
+  } else {
+    output.print(F("null"));
+  }
+}
+
 }  // namespace
 
 void writeMmwaveJson(Stream& output, uint32_t now_ms, const MmwaveSample& sample,
@@ -44,12 +57,30 @@ void writeMmwaveJson(Stream& output, uint32_t now_ms, const MmwaveSample& sample
   output.println(F("}"));
 }
 
-void writeEnvironmentStubJson(Stream& output, uint32_t now_ms) {
+void writeEnvironmentJson(Stream& output, uint32_t now_ms, const EnvironmentSample& sample) {
   output.print(F("{\"t\":\"env\",\"ms\":"));
   output.print(now_ms);
-  output.println(F(",\"co2_ppm\":null,\"temp_c\":null,\"humidity_pct\":null,\"lux\":null,"
-                   "\"co2_valid\":false,\"temp_valid\":false,\"humidity_valid\":false,"
-                   "\"lux_valid\":false}"));
+  output.print(F(",\"co2_ppm\":"));
+  writeNullable(output, sample.co2_valid, static_cast<uint16_t>(sample.co2_ppm));
+  output.print(F(",\"temp_c\":"));
+  writeNullable(output, sample.temp_valid, sample.temp_c);
+  output.print(F(",\"humidity_pct\":"));
+  writeNullable(output, sample.humidity_valid, sample.humidity_pct);
+  output.print(F(",\"lux\":"));
+  writeNullable(output, sample.lux_valid, sample.lux);
+  output.print(F(",\"co2_valid\":"));
+  writeBool(output, sample.co2_valid);
+  output.print(F(",\"temp_valid\":"));
+  writeBool(output, sample.temp_valid);
+  output.print(F(",\"humidity_valid\":"));
+  writeBool(output, sample.humidity_valid);
+  output.print(F(",\"lux_valid\":"));
+  writeBool(output, sample.lux_valid);
+  output.println(F("}"));
+}
+
+void writeEnvironmentStubJson(Stream& output, uint32_t now_ms) {
+  writeEnvironmentJson(output, now_ms, EnvironmentSample{});
 }
 
 }  // namespace deskmate

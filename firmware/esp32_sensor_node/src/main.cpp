@@ -3,6 +3,7 @@
 #include "pins.h"
 #include "sensors/c1001/C1001Passive.h"
 #include "sensors/c1001/DrowsyDetector.h"
+#include "sensors/environment/EnvironmentSensors.h"
 #include "transport/frame.h"
 #include "transport/usb_json.h"
 
@@ -11,6 +12,7 @@ using namespace deskmate;
 HardwareSerial pi4_serial(2);
 C1001Passive mmwave(Serial1);
 DrowsyDetector drowsy_detector;
+EnvironmentSensors environment_sensors;
 
 uint32_t last_mmwave_ms = 0;
 uint32_t last_environment_ms = 0;
@@ -57,11 +59,36 @@ void writeMmwaveUart(uint32_t now_ms, const MmwaveSample& sample, DrowsyState dr
 #endif
 }
 
-void writeEnvironmentUart(uint32_t now_ms) {
+uint16_t scaledU16(float value) {
+  if (value <= 0.0F) return 0;
+  if (value >= 6553.5F) return 65535;
+  return static_cast<uint16_t>(value * 10.0F + 0.5F);
+}
+
+void writeEnvironmentUart(uint32_t now_ms, const EnvironmentSample& sample) {
 #if DESKMATE_UART2_TX
-  // Environment drivers are intentionally optional. Zero + valid_bits=0 represents
-  // no available sensor and matches the USB JSON stub's null/false values.
-  const uint8_t payload[] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+  const uint16_t co2_ppm = sample.co2_valid ? static_cast<uint16_t>(sample.co2_ppm) : 0;
+  const int16_t temp_x10 = sample.temp_valid ? static_cast<int16_t>(sample.temp_c * 10.0F) : 0;
+  const uint16_t humidity_x10 = sample.humidity_valid ? scaledU16(sample.humidity_pct) : 0;
+  // data-spec §13.1: lux is a raw u16 (humidity is x10). Clamp instead of scaling.
+  const uint16_t lux = sample.lux_valid
+      ? static_cast<uint16_t>(sample.lux >= 65535.0F ? 65535.0F : (sample.lux <= 0.0F ? 0.0F : sample.lux + 0.5F))
+      : 0;
+  const uint8_t valid_bits = (sample.co2_valid ? 0x01 : 0) |
+                             (sample.temp_valid ? 0x02 : 0) |
+                             (sample.humidity_valid ? 0x04 : 0) |
+                             (sample.lux_valid ? 0x08 : 0);
+  const uint8_t payload[] = {
+      static_cast<uint8_t>(co2_ppm & 0xFF),
+      static_cast<uint8_t>(co2_ppm >> 8),
+      static_cast<uint8_t>(temp_x10 & 0xFF),
+      static_cast<uint8_t>((temp_x10 >> 8) & 0xFF),
+      static_cast<uint8_t>(humidity_x10 & 0xFF),
+      static_cast<uint8_t>(humidity_x10 >> 8),
+      static_cast<uint8_t>(lux & 0xFF),
+      static_cast<uint8_t>(lux >> 8),
+      valid_bits,
+  };
   writeUartFrame(pi4_serial, kFrameTypeEnvironment, environment_sequence++, now_ms, payload,
                  sizeof(payload));
 #endif
@@ -91,6 +118,7 @@ void setup() {
 
   Serial.println(F("DESKMATE ESP32 sensor node starting"));
   mmwave_ready = mmwave.begin();
+  environment_sensors.begin();
   Serial.println(mmwave_ready ? F("C1001 ready") : F("C1001 initialization failed"));
 }
 
@@ -111,8 +139,9 @@ void loop() {
   }
   if (now_ms - last_environment_ms >= kEnvironmentPeriodMs) {
     last_environment_ms = now_ms;
-    writeEnvironmentStubJson(Serial, now_ms);
-    writeEnvironmentUart(now_ms);
+    const EnvironmentSample sample = environment_sensors.read();
+    writeEnvironmentJson(Serial, now_ms, sample);
+    writeEnvironmentUart(now_ms, sample);
   }
   if (now_ms - last_heartbeat_ms >= kMmwavePeriodMs) {
     last_heartbeat_ms = now_ms;
