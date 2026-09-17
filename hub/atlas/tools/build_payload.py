@@ -48,11 +48,14 @@ def main() -> None:
     parser.add_argument("--executable", type=Path, required=True)
     parser.add_argument("--hub", type=Path, required=True)
     parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--ingest-config", type=Path, required=True)
     parser.add_argument("--stdlib", type=Path, required=True)
     args = parser.parse_args()
 
     with args.config.open(encoding="utf-8") as source:
         config = yaml.safe_load(source)
+    with args.ingest_config.open(encoding="utf-8") as source:
+        ingest_config = yaml.safe_load(source)
 
     with tempfile.NamedTemporaryFile(suffix=".zip") as payload:
         with zipfile.ZipFile(payload.name, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -70,15 +73,10 @@ def main() -> None:
                 "deskmate_hub/config/fsm.json",
                 json.dumps(config, ensure_ascii=False, separators=(",", ":")),
             )
-            # ingest.yaml 도 같은 이유(제한 Python 에 PyYAML 의존 모듈 부재)로 JSON 으로 함께 넣는다.
-            ingest_yaml = args.config.with_name("ingest.yaml")
-            if ingest_yaml.exists():
-                with ingest_yaml.open(encoding="utf-8") as source:
-                    ingest = yaml.safe_load(source)
-                archive.writestr(
-                    "deskmate_hub/config/ingest.json",
-                    json.dumps(ingest, ensure_ascii=False, separators=(",", ":")),
-                )
+            archive.writestr(
+                "deskmate_hub/config/ingest.json",
+                json.dumps(ingest_config, ensure_ascii=False, separators=(",", ":")),
+            )
         with args.executable.open("ab") as executable, open(payload.name, "rb") as built:
             executable.write(built.read())
 
