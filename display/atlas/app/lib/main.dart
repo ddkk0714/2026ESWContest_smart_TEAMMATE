@@ -1,10 +1,13 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'atlas_home.dart';
+import 'bluetooth_control_page.dart';
+import 'bluetooth_service.dart';
 import 'display_state.dart';
+import 'feedback_policy.dart';
 import 'dashboard_view.dart';
 import 'deskmate_theme.dart';
 import 'fsm_graph.dart';
@@ -57,6 +60,8 @@ class _DashboardPageState extends State<DashboardPage> {
   bool _musicOn = false;
   bool _musicBusy = false;
   bool _showFocusDetail = false;
+  late final AtlasBluetoothService _bluetooth;
+  late final FeedbackCoordinator _feedbackController;
 
   // 보드에 꽂힌 키보드를 앱이 직접 잡는다. hub 가 주는 collector 지표보다 이걸 우선한다.
   final _capture = KeystrokeCapture();
@@ -73,6 +78,12 @@ class _DashboardPageState extends State<DashboardPage> {
     _clock.start();
     _music = widget.music ?? AtlasMusicPlayback();
     _musicOn = _music.isPlaying;
+    _bluetooth = AtlasBluetoothService();
+    _feedbackController = FeedbackCoordinator(
+      music: _music,
+      lamp: IlinkLampFeedback(_bluetooth),
+      bluetooth: _bluetooth,
+    );
     HardwareKeyboard.instance.addHandler(_onKey);
     _source = _mqttHost.trim().isNotEmpty
         ? MqttStateSource(_mqttHost.trim(), port: _mqttPort)
@@ -83,6 +94,7 @@ class _DashboardPageState extends State<DashboardPage> {
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (_source is! DemoStateSource || _demoCyclingEnabled) _refresh();
       _sampleKeystroke();
+      unawaited(_feedbackController.reconcileAudioOutput());
     });
   }
 
@@ -113,6 +125,7 @@ class _DashboardPageState extends State<DashboardPage> {
           _state = next;
           _error = null;
         });
+        unawaited(_feedbackController.apply(next));
       }
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
@@ -157,6 +170,7 @@ class _DashboardPageState extends State<DashboardPage> {
           _state = nextState;
           _error = null;
         });
+        unawaited(_feedbackController.apply(nextState));
       }
     } catch (_) {
       nextSource.close();
@@ -212,7 +226,7 @@ class _DashboardPageState extends State<DashboardPage> {
           ),
         ) ??
         false;
-    if (shouldExit) exit(0);
+    if (shouldExit) await returnToAtlasHome();
   }
 
   @override
@@ -222,6 +236,7 @@ class _DashboardPageState extends State<DashboardPage> {
     _clock.stop();
     _source.close();
     unawaited(_music.dispose());
+    unawaited(_bluetooth.close());
     super.dispose();
   }
 
@@ -287,10 +302,16 @@ class _DashboardPageState extends State<DashboardPage> {
                           onConnect: _connectHub,
                           onStateChanged: (next) {
                             if (mounted) setState(() => _state = next);
+                            unawaited(_feedbackController.apply(next));
                           },
                         ),
                       _AppView.fsmGraph =>
                         FsmGraphPage(currentState: state.fsmState),
+                      _AppView.bluetooth => BluetoothControlPage(
+                          bluetooth: _bluetooth,
+                          feedback: _feedbackController,
+                          music: _music,
+                        ),
                       _AppView.sessionReport =>
                         SessionReportCard(report: _source.sessionReport),
                     }),
@@ -302,7 +323,7 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 }
 
-enum _AppView { dashboard, sensorTest, fsmGraph, sessionReport }
+enum _AppView { dashboard, sensorTest, fsmGraph, bluetooth, sessionReport }
 
 class _Header extends StatelessWidget {
   const _Header(
@@ -355,6 +376,11 @@ class _Header extends StatelessWidget {
             icon: Icons.account_tree_outlined,
             label: 'FSM 전체',
             onTap: () => onViewChanged(_AppView.fsmGraph)),
+        _HeaderNav(
+            selected: view == _AppView.bluetooth,
+            icon: Icons.bluetooth_audio_rounded,
+            label: 'Bluetooth',
+            onTap: () => onViewChanged(_AppView.bluetooth)),
         _HeaderNav(
             selected: view == _AppView.sessionReport,
             icon: Icons.summarize_outlined,

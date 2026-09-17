@@ -145,6 +145,8 @@ Hub의 `/api/test-frame` 개발 API와 `config/fsm.yaml`을 사용한다.
 우측 상단 스피커 `ON/OFF` 버튼은 패키지에 포함된 `deskmate_test_music.mp3`를
 `audioplayers_atlas`로 반복 재생·일시정지한다. 전원 아이콘은 확인 대화상자 후 앱 프로세스를 종료한다.
 
+**Bluetooth** 화면에서는 Atlas Bluetooth 서비스로 주변 기기를 검색한다. 스피커는 A2DP로 페어링·연결하면 기존 음악이 해당 시스템 출력으로 재생된다. iLink 램프를 선택한 뒤 `상태 기반 조명·음악 피드백`을 켜면 MQTT/HTTP/데모로 수신한 FSM phase 변화에 맞춰 조명 프레임을 전송하고, `fatigue`에서 음악을 재생하며 `recovery`·`idle`·`end`에서 일시정지한다. Bluetooth 권한은 설치 후 Atlas 설정에서 사용자 승인이 필요하다.
+
 성공 기준은 테스트 통과, build 명령 exit code 0, `find` 결과에
 `com.atlas.app.deskmate_display`의 `.ipk`가 존재하는 것이다. SDK·bundle·`.ipk`는 Git에 넣지 않는다.
 공급사 도구 버전이 다르면 먼저 `flutter-atlas build atlas --help`로 `--ipk` 지원을 확인한다.

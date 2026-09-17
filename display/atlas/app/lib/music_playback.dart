@@ -5,6 +5,10 @@ import 'package:dbus/dbus.dart';
 
 abstract interface class MusicPlayback {
   bool get isPlaying;
+  double get volume;
+  Future<bool> play();
+  Future<void> pause();
+  Future<void> setVolume(double value);
   Future<bool> toggle();
   Future<void> dispose();
 }
@@ -19,13 +23,11 @@ class AtlasMusicPlayback implements MusicPlayback {
   bool get isPlaying => _playing;
 
   @override
-  Future<bool> toggle() async {
-    if (_playing) {
-      await _player.pause();
-      _playing = false;
-      return false;
-    }
+  double get volume => _player.volume;
 
+  @override
+  Future<bool> play() async {
+    if (_playing) return true;
     if (!_prepared) {
       if (!await _permission.ensureGranted()) {
         throw StateError('미디어 재생 권한을 허용할 수 없습니다.');
@@ -41,7 +43,34 @@ class AtlasMusicPlayback implements MusicPlayback {
   }
 
   @override
+  Future<void> pause() async {
+    if (!_playing) return;
+    await _player.pause();
+    _playing = false;
+  }
+
+  @override
+  Future<void> setVolume(double value) => _player.setVolume(value.clamp(0.0, 1.0));
+
+  @override
+  Future<bool> toggle() async {
+    if (_playing) {
+      await pause();
+      return false;
+    }
+    return play();
+  }
+
+  @override
   Future<void> dispose() async {
+    // Atlas MediaPlayer pipeline is a system service. Dispose alone releases
+    // the Dart proxy but may leave a looping source audible after app exit.
+    try {
+      await _player.stop();
+    } catch (_) {
+      // The service may already have stopped the player.
+    }
+    _playing = false;
     await _player.dispose();
     await _permission.dispose();
   }
