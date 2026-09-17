@@ -53,6 +53,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         --executable $<TARGET_FILE:${PROJECT_NAME}>
         --hub ${HUB_SOURCE_DIR}
         --config ${HUB_SOURCE_DIR}/config/fsm.yaml
+        --ingest-config ${HUB_SOURCE_DIR}/config/ingest.yaml
         --stdlib ${HOST_STDLIB_DIR}
     COMMENT "Appending the DESKMATE Python Hub payload")
 
