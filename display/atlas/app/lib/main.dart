@@ -11,6 +11,7 @@ import 'fsm_graph.dart';
 import 'keystroke_capture.dart';
 import 'music_playback.dart';
 import 'sensor_test_page.dart';
+import 'session_report.dart';
 import 'state_source.dart';
 
 const _hubUrl = String.fromEnvironment('DESKMATE_HUB_URL');
@@ -329,6 +330,7 @@ class _DashboardPageState extends State<DashboardPage> {
                       _AppView.dashboard => DashboardView(
                           state: state,
                           displayMessage: _source.displayMessage,
+                          hasPendingRequest: _source.hasPendingRequest,
                           keystroke: _localKeystroke ?? state.keystroke,
                           keystrokeReference: _localKeystroke != null
                               ? DateTime.now()
@@ -352,6 +354,8 @@ class _DashboardPageState extends State<DashboardPage> {
                         ),
                       _AppView.fsmGraph =>
                         FsmGraphPage(currentState: state.fsmState),
+                      _AppView.sessionReport =>
+                        SessionReportCard(report: _source.sessionReport),
                     }),
                   ],
                 ),
@@ -361,7 +365,7 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 }
 
-enum _AppView { dashboard, sensorTest, fsmGraph }
+enum _AppView { dashboard, sensorTest, fsmGraph, sessionReport }
 
 class _MusicVolumeDialog extends StatefulWidget {
   const _MusicVolumeDialog({
@@ -512,6 +516,11 @@ class _Header extends StatelessWidget {
             icon: Icons.account_tree_outlined,
             label: 'FSM 전체',
             onTap: () => onViewChanged(_AppView.fsmGraph)),
+        _HeaderNav(
+            selected: view == _AppView.sessionReport,
+            icon: Icons.summarize_outlined,
+            label: '세션 리포트',
+            onTap: () => onViewChanged(_AppView.sessionReport)),
         const SizedBox(width: 10),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -620,15 +629,20 @@ class _HeaderNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(left: 4),
+        padding: const EdgeInsets.only(left: 2),
         child: IconButton(
           tooltip: label,
           onPressed: onTap,
+          // Four nav buttons + status pill must fit the 1024 px header: compact 34 px hit targets.
           style: IconButton.styleFrom(
             foregroundColor:
                 selected ? DeskmateColors.ink : DeskmateColors.inkMuted,
             backgroundColor:
                 selected ? DeskmateColors.surfaceRaised : Colors.transparent,
+            padding: const EdgeInsets.all(6),
+            minimumSize: const Size(34, 34),
+            visualDensity: VisualDensity.compact,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
           icon: Icon(icon, size: 21),
         ),
