@@ -1,0 +1,23 @@
+name: camtest
+description: DESKMATE Raspberry Pi 5 Atlas 자세 화면.
+publish_to: none
+version: 0.4.0+1
+
+environment:
+  # Atlas Flutter 3.27.4 가 쓰는 Dart 는 3.6.x 다. 옆 앱(display/atlas/app)과 맞춘다.
+  sdk: ^3.6.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # ATLAS 의 PeripheralManager UART 를 부르는 데만 쓴다. 옆 앱(display/atlas/app)과
+  # 같은 버전으로 맞춘다 - Atlas 툴체인의 Dart 3.6.2 호환 상한이다.
+  dbus: ^0.7.12
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
