@@ -1,4 +1,4 @@
-import 'package:deskmate_ui_env/fsm_graph.dart';
+import 'package:deskmate_display/fsm_graph.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';

@@ -59,8 +59,11 @@ class _DashboardPageState extends State<DashboardPage> {
   bool _demoCyclingEnabled = true;
   _AppView _view = _AppView.dashboard;
   late final MusicPlayback _music;
+  late final StreamSubscription<bool> _musicChanges;
+  late final StreamSubscription<double> _musicVolumeChanges;
   bool _musicOn = false;
   bool _musicBusy = false;
+  double _musicVolume = 1;
   bool _showFocusDetail = false;
   late final AtlasBluetoothService _bluetooth;
   late final FeedbackCoordinator _feedbackController;
@@ -80,6 +83,13 @@ class _DashboardPageState extends State<DashboardPage> {
     _clock.start();
     _music = widget.music ?? AtlasMusicPlayback();
     _musicOn = _music.isPlaying;
+    _musicVolume = _music.volume;
+    _musicChanges = _music.playingChanges.listen((playing) {
+      if (mounted) setState(() => _musicOn = playing);
+    });
+    _musicVolumeChanges = _music.volumeChanges.listen((volume) {
+      if (mounted) setState(() => _musicVolume = volume);
+    });
     _bluetooth = AtlasBluetoothService();
     _feedbackController = FeedbackCoordinator(
       music: _music,
@@ -197,6 +207,38 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
+  Future<void> _selectMusic(int index) async {
+    if (_musicBusy) return;
+    setState(() => _musicBusy = true);
+    try {
+      await _music.selectTrack(index);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _musicOn = _music.isPlaying;
+          _musicBusy = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _setMusicVolume(double value) async {
+    await _music.setVolume(value);
+    if (mounted) setState(() => _musicVolume = _music.volume);
+  }
+
+  Future<void> _showVolumeControl() => showDialog<void>(
+        context: context,
+        builder: (context) => _MusicVolumeDialog(
+          initialValue: _musicVolume,
+          changes: _music.volumeChanges,
+          onChanged: (value) {
+            if (mounted) setState(() => _musicVolume = value);
+            unawaited(_setMusicVolume(value));
+          },
+        ),
+      );
+
   void _toggleDemoCycling() {
     if (_source is! DemoStateSource) return;
     setState(() => _demoCyclingEnabled = !_demoCyclingEnabled);
@@ -237,6 +279,8 @@ class _DashboardPageState extends State<DashboardPage> {
     HardwareKeyboard.instance.removeHandler(_onKey);
     _clock.stop();
     _source.close();
+    unawaited(_musicChanges.cancel());
+    unawaited(_musicVolumeChanges.cancel());
     unawaited(_music.dispose());
     unawaited(_bluetooth.close());
     super.dispose();
@@ -270,6 +314,10 @@ class _DashboardPageState extends State<DashboardPage> {
                         musicOn: _musicOn,
                         musicBusy: _musicBusy,
                         onMusic: _toggleMusic,
+                        selectedTrack: _music.selectedTrack,
+                        onSelectMusic: _selectMusic,
+                        musicVolume: _musicVolume,
+                        onVolume: _showVolumeControl,
                         onExit: _confirmExit),
                     const SizedBox(height: 12),
                     if (_source is MqttStateSource) ...[
@@ -298,7 +346,8 @@ class _DashboardPageState extends State<DashboardPage> {
                           onShowFocusDetail: (value) =>
                               setState(() => _showFocusDetail = value),
                         ),
-                      _AppView.sensorOverview => SensorOverviewPage(state: state),
+                      _AppView.sensorOverview =>
+                        SensorOverviewPage(state: state),
                       _AppView.sensorTest => SensorTestPage(
                           source: _source,
                           state: state,
@@ -327,7 +376,66 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 }
 
-enum _AppView { dashboard, sensorOverview, sensorTest, posture, fsmGraph, bluetooth, sessionReport }
+class _MusicVolumeDialog extends StatefulWidget {
+  const _MusicVolumeDialog(
+      {required this.initialValue,
+      required this.changes,
+      required this.onChanged});
+  final double initialValue;
+  final Stream<double> changes;
+  final ValueChanged<double> onChanged;
+  @override
+  State<_MusicVolumeDialog> createState() => _MusicVolumeDialogState();
+}
+
+class _MusicVolumeDialogState extends State<_MusicVolumeDialog> {
+  late double _value;
+  late final StreamSubscription<double> _subscription;
+  @override
+  void initState() {
+    super.initState();
+    _value = widget.initialValue;
+    _subscription = widget.changes.listen((value) {
+      if (mounted) setState(() => _value = value);
+    });
+  }
+
+  @override
+  void dispose() {
+    unawaited(_subscription.cancel());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        title: const Text('\uC74C\uB7C9 \uC870\uC808'),
+        content: Slider(
+            key: const ValueKey('music-volume-slider'),
+            value: _value,
+            divisions: 20,
+            label: (_value * 100).round().toString() + '%',
+            onChanged: (value) {
+              setState(() => _value = value);
+              widget.onChanged(value);
+            }),
+        actions: [
+          Text((_value * 100).round().toString() + '%'),
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('\uB2EB\uAE30'))
+        ],
+      );
+}
+
+enum _AppView {
+  dashboard,
+  sensorOverview,
+  sensorTest,
+  posture,
+  fsmGraph,
+  bluetooth,
+  sessionReport
+}
 
 class _Header extends StatelessWidget {
   const _Header(
@@ -340,121 +448,109 @@ class _Header extends StatelessWidget {
       required this.musicOn,
       required this.musicBusy,
       required this.onMusic,
+      required this.selectedTrack,
+      required this.onSelectMusic,
+      required this.musicVolume,
+      required this.onVolume,
       required this.onExit});
   final String source;
   final String connectionLabel;
-  final bool online;
-  final int sequence;
+  final bool online, musicOn, musicBusy;
+  final int sequence, selectedTrack;
   final _AppView view;
   final ValueChanged<_AppView> onViewChanged;
-  final bool musicOn;
-  final bool musicBusy;
-  final VoidCallback onMusic;
-  final VoidCallback onExit;
-
+  final ValueChanged<int> onSelectMusic;
+  final VoidCallback onMusic, onVolume, onExit;
+  final double musicVolume;
   @override
-  Widget build(BuildContext context) => Row(children: [
-        Container(
-          width: 7,
-          height: 7,
-          decoration: const BoxDecoration(
-              color: DeskmateColors.ink, shape: BoxShape.circle),
-        ),
-        const SizedBox(width: 9),
-        const Text('DESKMATE',
-            style: TextStyle(
-                fontSize: 13, fontWeight: FontWeight.w700, letterSpacing: -.2)),
-        const Spacer(),
-        _HeaderNav(
-            selected: view == _AppView.dashboard,
-            icon: Icons.dashboard_outlined,
-            label: '상태',
-            onTap: () => onViewChanged(_AppView.dashboard)),
-        _HeaderNav(
-            selected: view == _AppView.sensorOverview,
-            icon: Icons.sensors_rounded,
-            label: '센서 전체',
-            onTap: () => onViewChanged(_AppView.sensorOverview)),
-        _HeaderNav(
-            selected: view == _AppView.sensorTest,
-            icon: Icons.tune,
-            label: '센서 테스트',
-            onTap: () => onViewChanged(_AppView.sensorTest)),
-        _HeaderNav(
-            selected: view == _AppView.posture,
-            icon: Icons.chair_alt,
-            label: '자세',
-            onTap: () => onViewChanged(_AppView.posture)),
-        _HeaderNav(
-            selected: view == _AppView.fsmGraph,
-            icon: Icons.account_tree_outlined,
-            label: 'FSM 전체',
-            onTap: () => onViewChanged(_AppView.fsmGraph)),
-        _HeaderNav(
-            selected: view == _AppView.bluetooth,
-            icon: Icons.bluetooth_audio_rounded,
-            label: 'Bluetooth',
-            onTap: () => onViewChanged(_AppView.bluetooth)),
-        _HeaderNav(
-            selected: view == _AppView.sessionReport,
-            icon: Icons.summarize_outlined,
-            label: '세션 리포트',
-            onTap: () => onViewChanged(_AppView.sessionReport)),
-        const SizedBox(width: 10),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          decoration: BoxDecoration(
-              color: (online ? DeskmateColors.accent : DeskmateColors.offline)
-                  .withValues(alpha: .12),
-              borderRadius: BorderRadius.circular(99)),
-          child: Row(children: [
-            Icon(Icons.circle,
-                size: 10,
-                color: online
-                    ? DeskmateColors.accentStrong
-                    : DeskmateColors.offline),
-            const SizedBox(width: 6),
-            Tooltip(
+  Widget build(BuildContext context) =>
+      Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          const Text('DESKMATE', style: TextStyle(fontWeight: FontWeight.w700)),
+          const Spacer(),
+          Tooltip(
               message: source,
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Text(connectionLabel,
-                    style: const TextStyle(fontWeight: FontWeight.w600)),
+                Text(connectionLabel),
                 const SizedBox(width: 4),
-                Text('#$sequence',
-                    style: const TextStyle(fontWeight: FontWeight.w600)),
-              ]),
-            ),
-          ]),
-        ),
-        const SizedBox(width: 8),
-        TextButton.icon(
-          key: const ValueKey('music-toggle'),
-          onPressed: musicBusy ? null : onMusic,
-          style: TextButton.styleFrom(
-            foregroundColor:
-                musicOn ? DeskmateColors.accentStrong : DeskmateColors.inkMuted,
-            backgroundColor: musicOn
-                ? DeskmateColors.accent.withValues(alpha: .22)
-                : Colors.transparent,
-          ),
-          icon: musicBusy
-              ? const SizedBox(
-                  width: 17,
-                  height: 17,
-                  child: CircularProgressIndicator(strokeWidth: 2))
-              : Icon(
-                  musicOn ? Icons.volume_up_rounded : Icons.volume_off_rounded,
-                  size: 20),
-          label: Text(musicOn ? 'ON' : 'OFF'),
-        ),
-        const SizedBox(width: 4),
-        IconButton(
-          key: const ValueKey('app-exit'),
-          tooltip: '앱 종료',
-          onPressed: onExit,
-          color: DeskmateColors.inkMuted,
-          icon: const Icon(Icons.power_settings_new),
-        ),
+                Text('#' + sequence.toString())
+              ])),
+          PopupMenuButton<int>(
+              key: const ValueKey('music-select'),
+              tooltip: '\uC7AC\uC0DD\uD560 \uACE1 \uC120\uD0DD',
+              enabled: !musicBusy,
+              initialValue: selectedTrack,
+              onSelected: onSelectMusic,
+              itemBuilder: (context) => [
+                    for (var i = 0; i < classicalTrackTitles.length; i++)
+                      CheckedPopupMenuItem<int>(
+                          key: ValueKey('music-track-' + i.toString()),
+                          value: i,
+                          checked: i == selectedTrack,
+                          child: Text(classicalTrackTitles[i]))
+                  ],
+              child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: SizedBox(
+                      width: 112,
+                      child: Text(classicalTrackTitles[selectedTrack],
+                          maxLines: 1, overflow: TextOverflow.ellipsis)))),
+          IconButton(
+              key: const ValueKey('music-volume'),
+              tooltip: '\uC74C\uB7C9',
+              onPressed: onVolume,
+              icon: Icon(musicVolume == 0
+                  ? Icons.volume_off_rounded
+                  : Icons.volume_up_rounded)),
+          TextButton.icon(
+              key: const ValueKey('music-toggle'),
+              onPressed: musicBusy ? null : onMusic,
+              icon: Icon(
+                  musicOn ? Icons.volume_up_rounded : Icons.volume_off_rounded),
+              label: Text(musicOn ? 'ON' : 'OFF')),
+          IconButton(
+              key: const ValueKey('app-exit'),
+              tooltip: '\uC571 \uC885\uB8CC',
+              onPressed: onExit,
+              icon: const Icon(Icons.power_settings_new)),
+        ]),
+        Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          _HeaderNav(
+              selected: view == _AppView.dashboard,
+              icon: Icons.dashboard_outlined,
+              label: '\uC0C1\uD0DC',
+              onTap: () => onViewChanged(_AppView.dashboard)),
+          _HeaderNav(
+              selected: view == _AppView.sensorOverview,
+              icon: Icons.sensors_rounded,
+              label: '\uC13C\uC11C \uC804\uCCB4',
+              onTap: () => onViewChanged(_AppView.sensorOverview)),
+          _HeaderNav(
+              selected: view == _AppView.sensorTest,
+              icon: Icons.tune,
+              label: '\uC13C\uC11C \uD14C\uC2A4\uD2B8',
+              onTap: () => onViewChanged(_AppView.sensorTest)),
+          _HeaderNav(
+              selected: view == _AppView.posture,
+              icon: Icons.chair_alt,
+              label: '\uC790\uC138',
+              onTap: () => onViewChanged(_AppView.posture)),
+          _HeaderNav(
+              selected: view == _AppView.fsmGraph,
+              icon: Icons.account_tree_outlined,
+              label: 'FSM \uC804\uCCB4',
+              onTap: () => onViewChanged(_AppView.fsmGraph)),
+          _HeaderNav(
+              selected: view == _AppView.bluetooth,
+              icon: Icons.bluetooth_audio_rounded,
+              label: 'Bluetooth',
+              onTap: () => onViewChanged(_AppView.bluetooth)),
+          _HeaderNav(
+              selected: view == _AppView.sessionReport,
+              icon: Icons.summarize_outlined,
+              label: '\uC138\uC158 \uB9AC\uD3EC\uD2B8',
+              onTap: () => onViewChanged(_AppView.sessionReport)),
+        ]),
       ]);
 }
 

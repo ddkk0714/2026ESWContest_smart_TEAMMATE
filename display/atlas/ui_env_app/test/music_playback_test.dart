@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:deskmate_ui_env/music_playback.dart';
+import 'package:deskmate_display/music_playback.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 

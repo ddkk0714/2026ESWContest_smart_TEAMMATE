@@ -583,27 +583,43 @@ class _EnvironmentPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) => SoftPanel(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('환경 요약', style: Theme.of(context).textTheme.labelMedium),
+          Text('\uD658\uACBD \uC694\uC57D',
+              style: Theme.of(context).textTheme.labelMedium),
           const SizedBox(height: 20),
           Row(children: [
             Expanded(
                 child: _DataPoint(
-                    label: 'CO₂',
-                    value: state.co2Ppm == null ? '--' : '${state.co2Ppm}',
+                    label: '\uC628\uB3C4',
+                    value: state.temperatureC == null
+                        ? '--'
+                        : state.temperatureC!.toStringAsFixed(1),
+                    unit: '\u00B0C')),
+            Expanded(
+                child: _DataPoint(
+                    label: '\uC2B5\uB3C4',
+                    value: state.humidityPct == null
+                        ? '--'
+                        : state.humidityPct!.toStringAsFixed(1),
+                    unit: '%')),
+            Expanded(
+                child: _DataPoint(
+                    label: 'CO\u2082',
+                    value:
+                        state.co2Ppm == null ? '--' : state.co2Ppm.toString(),
                     unit: 'ppm')),
             Expanded(
                 child: _DataPoint(
-                    label: '조도',
-                    value: state.lux == null ? '--' : '${state.lux}',
+                    label: '\uC870\uB3C4',
+                    value: state.lux == null ? '--' : state.lux.toString(),
                     unit: 'lx')),
             Expanded(
                 child: _DataPoint(
-                    label: '재실',
+                    label: '\uC88C\uC11D',
                     value: state.present == null
                         ? '--'
                         : state.present!
-                            ? '감지'
-                            : '없음')),
+                            ? '\uAC10\uC9C0'
+                            : '\uC5C6\uC74C')),
           ]),
           const Spacer(),
           Text(_comfort(state), style: Theme.of(context).textTheme.bodyMedium),

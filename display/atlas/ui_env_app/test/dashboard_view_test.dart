@@ -1,6 +1,6 @@
-import 'package:deskmate_ui_env/dashboard_view.dart';
-import 'package:deskmate_ui_env/deskmate_theme.dart';
-import 'package:deskmate_ui_env/display_state.dart';
+import 'package:deskmate_display/dashboard_view.dart';
+import 'package:deskmate_display/deskmate_theme.dart';
+import 'package:deskmate_display/display_state.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

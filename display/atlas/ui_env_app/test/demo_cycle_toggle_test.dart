@@ -1,4 +1,4 @@
-import 'package:deskmate_ui_env/main.dart';
+import 'package:deskmate_display/main.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

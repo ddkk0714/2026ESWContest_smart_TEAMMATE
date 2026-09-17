@@ -1,4 +1,4 @@
-import 'package:deskmate_ui_env/keystroke_capture.dart';
+import 'package:deskmate_display/keystroke_capture.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 

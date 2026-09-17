@@ -1,4 +1,4 @@
-import 'package:deskmate_ui_env/display_state.dart';
+import 'package:deskmate_display/display_state.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
