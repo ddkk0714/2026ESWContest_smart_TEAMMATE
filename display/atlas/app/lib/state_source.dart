@@ -432,7 +432,29 @@ class DemoStateSource implements StateSource {
   String? get displayMessage => null;
 
   @override
-  SessionReport? get sessionReport => null;
+  SessionReport? get sessionReport {
+    // 데모 빌드는 Pi 4 MQTT broker 없이도 결과 화면을 현장에서 확인할 수
+    // 있도록 고정된 예시 리포트를 제공한다. MQTT/HTTP 연결에서는 이 값을
+    // 사용하지 않고 Hub가 발행한 실제 세션 리포트만 표시한다.
+    final endedAt = DateTime.now();
+    return SessionReport(
+      startedAt: endedAt.subtract(const Duration(minutes: 52)),
+      endedAt: endedAt,
+      durationSeconds: 52 * 60,
+      focusSeconds: 38 * 60,
+      focusRatio: 0.73,
+      fatigueEpisodes: 2,
+      interventionTotal: 3,
+      interventionRecovered: 2,
+      breakAcceptRate: 0.67,
+      stateDurations: const {
+        'FOCUS_PC': 2280,
+        'RECOVERY': 420,
+        'FATIGUE_SUSPECT': 240,
+        'START': 180,
+      },
+    );
+  }
 
   @override
   bool get hasPendingRequest => false;
