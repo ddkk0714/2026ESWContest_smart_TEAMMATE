@@ -38,7 +38,7 @@ class BridgeStateStore(PreviewStateStore):
         )
 
 
-def _read_commands(store: BridgeStateStore, uart_source=None) -> None:
+def _read_commands(store: BridgeStateStore, uart_source=None, mqtt_source=None) -> None:
     for raw_line in sys.stdin.buffer:
         request_id = "0"
         try:
@@ -46,6 +46,10 @@ def _read_commands(store: BridgeStateStore, uart_source=None) -> None:
             if line.startswith("UART\t"):
                 if uart_source is not None:
                     uart_source.feed_line(line)
+                continue
+            if line.startswith("MQTT\t"):
+                if mqtt_source is not None:
+                    mqtt_source.feed_line(line)
                 continue
             kind, request_id, path, raw_body = line.rstrip("\n").split("\t", 3)
             if kind != "POST":
@@ -117,68 +121,49 @@ def _report_runtime_capabilities() -> None:
 
 
 def _run_live_bridge() -> None:
-    """실센서 모드: UART 라인(stdin) + 선택적 MQTT 센서 → LiveHub → STATE 라인(+MQTT)."""
+    """실센서 모드: stdin 의 UART/MQTT 라인 → LiveHub → STATE/REQUEST/REPORT/CMD 라인.
+
+    MQTT 소켓은 C++ 서비스가 잡는다(보드 제한 Python 에 _socket 없음). 이 프로세스는 라인만 주고받는다:
+      stdin  ← `UART\t{...}` (ESP32 프레임) · `MQTT\t<topic>\t<payload>` (센서·피드백·제어 결과)
+      stdout → `STATE\t{...}` → state/phase(retain) · `REQUEST\t` → interaction/request ·
+               `REPORT\t` → session/report(retain) · `CMD\t` → control/cmd
+    """
     import time
 
     _report_runtime_capabilities()
 
     from .ingest import SensorCache
+    from .ingest.mqtt_lines import MqttLineSource, control_envelope
     from .ingest.uart_source import UartLineSource
     from .live import LiveHub
 
     store = BridgeStateStore()
     cache = SensorCache()
     uart = UartLineSource(cache)
-    reader = threading.Thread(target=_read_commands, args=(store, uart), daemon=True)
+    mqtt_lines = MqttLineSource(cache)
+    reader = threading.Thread(target=_read_commands, args=(store, uart, mqtt_lines), daemon=True)
     reader.start()
 
-    mqtt_source = None
-    host = os.environ.get("DESKMATE_MQTT_HOST")
-    if host:
-        try:
-            from .ingest.mqtt_source import MqttSource
+    def emit(prefix: str, envelope: dict[str, Any]) -> None:
+        store.write_message(prefix + "\t" + json.dumps(envelope, ensure_ascii=False, separators=(",", ":")))
 
-            mqtt_source = MqttSource(cache, host, int(os.environ.get("DESKMATE_MQTT_PORT", "1883")),
-                                     on_log=lambda m: print(m, file=sys.stderr))
-            mqtt_source.start()
-        except Exception as exc:  # noqa: BLE001 — paho 부재 등. MQTT 없이도 FSM 은 돈다.
-            print(f"[bridge] MQTT 비활성: {exc}", file=sys.stderr)
-            mqtt_source = None
-
-    def publish(envelope: dict[str, Any]) -> None:
-        store.publish(envelope)
-        if mqtt_source is not None:
-            mqtt_source.publish_state(envelope)
-
-    def publish_request(envelope: dict[str, Any]) -> None:
-        store.write_message("REQUEST\t" + json.dumps(envelope, ensure_ascii=False, separators=(",", ":")))
-        if mqtt_source is not None:
-            mqtt_source.publish_request(envelope)
-
-    def publish_report(envelope: dict[str, Any]) -> None:
-        store.write_message("REPORT\t" + json.dumps(envelope, ensure_ascii=False, separators=(",", ":")))
-        if mqtt_source is not None:
-            mqtt_source.publish_report(envelope)
-
-    publish_control = mqtt_source.publish_control if mqtt_source is not None else None
-    hub = LiveHub(cache, publish=publish, publish_request=publish_request, publish_control=publish_control,
-                  publish_report=publish_report, out=sys.stderr)
+    hub = LiveHub(cache, publish=store.publish,
+                  publish_request=lambda envelope: emit("REQUEST", envelope),
+                  publish_control=lambda command: emit("CMD", control_envelope(command)),
+                  publish_report=lambda envelope: emit("REPORT", envelope), out=sys.stderr)
     next_tick = time.time()
-    try:
-        while True:
-            feedback = store.pop_feedback()
-            if feedback is not None:
-                cache.put_feedback(feedback)
-            hub.tick_once()
-            if hub.seq % 30 == 0:
-                st = uart.stats
-                print(f"[bridge] uart frames={st.frames} dropped={st.dropped} hb={st.heartbeats} "
-                      f"unknown={st.unknown_types}", file=sys.stderr)
-            next_tick += hub.period
-            time.sleep(max(0.0, next_tick - time.time()))
-    finally:
-        if mqtt_source is not None:
-            mqtt_source.stop()
+    while True:
+        feedback = store.pop_feedback()
+        if feedback is not None:
+            cache.put_feedback(feedback)
+        hub.tick_once()
+        if hub.seq % 30 == 0:
+            st, ms = uart.stats, mqtt_lines.stats
+            print(f"[bridge] uart frames={st.frames} dropped={st.dropped} hb={st.heartbeats} "
+                  f"unknown={st.unknown_types} | mqtt lines={ms.lines} routed={ms.routed} rejected={ms.rejected}",
+                  file=sys.stderr)
+        next_tick += hub.period
+        time.sleep(max(0.0, next_tick - time.time()))
 
 
 if __name__ == "__main__":

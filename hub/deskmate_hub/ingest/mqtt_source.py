@@ -13,9 +13,10 @@ from typing import Any, Callable
 import paho.mqtt.client as mqtt
 
 from .cache import SensorCache
+from .mqtt_lines import route_mqtt_message
 from .protocol import (
     TOPIC_CONTROL_CMD, TOPIC_CONTROL_RESULT, TOPIC_FEEDBACK, TOPIC_HEALTH, TOPIC_REQUEST, TOPIC_SENSOR, TOPIC_SESSION_REPORT,
-    TOPIC_STATE, parse_sensor_message,
+    TOPIC_STATE,
 )
 
 class MqttSource:
@@ -85,20 +86,4 @@ class MqttSource:
         self._log("[mqtt] disconnected (자동 재연결)")
 
     def _on_message(self, client, userdata, msg) -> None:
-        now = time.time()
-        if msg.topic in (TOPIC_FEEDBACK, TOPIC_CONTROL_RESULT):
-            try:
-                body = json.loads(msg.payload.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                return
-            data = body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), dict) else body
-            if isinstance(data, dict):
-                if msg.topic == TOPIC_FEEDBACK:
-                    self.cache.put_feedback(data)
-                else:
-                    self.cache.put_control_result(data)
-            return
-        parsed = parse_sensor_message(msg.topic, msg.payload, now)
-        if parsed is not None:
-            kind, sample = parsed
-            self.cache.put(kind, sample)
+        route_mqtt_message(self.cache, msg.topic, msg.payload, time.time())

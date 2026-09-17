@@ -101,10 +101,10 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 **일별 목표**
 
 - [ ] **화 09-15 — 센서가 MQTT 에 보인다**
-  - [x] `firmware/esp32_sensor_node/` PlatformIO 프로젝트(PR #12) + UART2 COBS/CRC 송신(09-16). **`pio run` PC 빌드 통과(09-16)** — 업로드는 실보드에서
+  - [x] `firmware/esp32_sensor_node/` PlatformIO 프로젝트(PR #12) + UART2 COBS/CRC 송신(09-16). **09-16 실보드 업로드(COM8 CH340)·USB JSON 1 Hz 확인, ESP32→PC 브리지→브로커→hub 체인 확인**. C1001 미연결 시 10 s 재시도 + 300 ms 프로브(벤더 begin 15 s 블로킹 회피). 환경 센서 드라이버(SCD41 CO₂만·BH1750·DHT22)는 `-DDESKMATE_HAS_*` 로 켜며 둘 다 `pio run` 통과(09-17)
   - [x] 펌웨어 UART0(USB) 1 Hz mmWave JSON + 5 s 환경 스텁 JSON(`{"t":"mmwave"|"env", ...}`) — PR #12
   - [x] `tools/uart_mqtt_bridge.py`: `{"t":` 라인 → 공통 envelope → `deskmate/sensor/{mmwave,env}/<node>`, health LWT, 백오프, 날짜별 JSONL. 순수 변환 테스트 9개 — PR #12
-  - [ ] broker 결정·기동: Pi 4 Mosquitto(`hub/mqtt/`) 우선, 안 되면 PC mosquitto. `mosquitto_sub -t 'deskmate/#'` 로 확인
+  - [x] broker 결정(09-17): **PC 브로커**(`tools/pc_broker.py`, amqtt 0.0.0.0:1883) + ASUS 포트포워딩 TCP 1883 → PC. 이유: Pi 4·Pi 5 ATLAS 이미지에 브로커 없음·루트 RO·AppArmor → 보드 브로커는 IPK 포팅이 필요(통합 MVP 뒤 검토). 보드는 공유기 WAN `172.16.34.176:1883` 로 접속. **공유기 규칙·Windows 방화벽 1883 허용은 사용자 작업(대기)**
   - [ ] `feat/merge-pending` PR 머지 → `python -m collector --broker <ip>` 로 키스트로크 토픽 확인
 - [ ] **수 09-16 — Node-RED 시각화**
   - [x] `tools/node-red-visualizer/flows.json` 대시보드(node-red-dashboard 3.6.6): mmWave·환경·키스트로크·FSM 패널 — PR #12 (화면 캡처는 실센서 연결 후)
@@ -162,10 +162,11 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 - [x] Pi 4 Mosquitto 설정, `mqtt-topics.md` 계약, Node-RED 모니터, display MQTT 구독·`feedback/user` 발행
 - [x] Pi 4 native service(`hub/atlas`) IPK 로 제한 Python 실행, HTTP 8765 개발 API
 - [x] ESP32 UART2 프레임 송신 — mmWave 0x20 · 환경 0x10(스텁, valid_bits 0) · 하트비트 0xF0 (`transport/frame.cpp`, 09-16). **`pio run` PC 빌드 통과(09-16)**, 실보드 업로드·검증 남음
-- [x] Pi 4 C++ 서비스에 `/dev/serial0` 수신 → COBS 해제 → CRC 검증 → 라인 브리지(`UART\t<json>`) — `hub/atlas/src/uart_rx.cpp`. **호스트 테스트 통과(09-16, zig 크로스 빌드 → WSL 실행, aarch64 컴파일 확인)**. ARC 실컴파일·실보드 검증 남음
+- [x] Pi 4 C++ 서비스에 `/dev/serial0` 수신 → COBS 해제 → CRC 검증 → 라인 브리지(`UART\t<json>`) — `hub/atlas/src/uart_rx.cpp`. 호스트 테스트 통과(09-16), **ARC 실컴파일·실보드 UART 수신 확인(09-16, rx=132 discarded=0 crc_errors=0)**. 남음: `/dev/ttyS0` 권한 영구화·getty 영구 비활성·커널 console 제거(`hub/atlas/README.md`)
 - [x] hub `ingest/`: MQTT 센서·키스트로크 + `UART\t` 라인(`uart_source.py`) → `SensorCache` → `SensorFrame`, freshness·seq 갭 (09-14/15)
 - [x] hub MQTT 발행: `state/phase`(retain)·`health/hub`, `feedback/user` 구독 → FSM 반영 (09-14). `interaction/request` 는 충돌 신호 경로(§5)와 함께
-- [ ] 전 토픽·UART 라인 JSONL 로거(`tools/log_recorder.py`), 리플레이 포맷과 동일
+- [x] 보드 경로 MQTT: C++ `mqtt_client.cpp`(구독 sensor/#·feedback·control/result → `MQTT\t` 라인, `STATE/REQUEST/REPORT/CMD` 라인 → 발행, health LWT) + `ingest/mqtt_lines.py` — 09-17, 테스트 4개
+- [x] 전 토픽 JSONL 기록: `tools/pc_broker.py --log-dir`(브로커 탭) + Node-RED 기록 노드 — 09-17. UART 라인은 hub 의 frames JSONL. 리플레이 포맷 정합은 세부 튜닝
 - [ ] collector payload 에 공통 envelope(`schema_version/boot_id/seq`) 추가 (세부 튜닝)
 - [ ] Node-RED 를 끄고도 운영 경로가 동작하는지 확인
 
@@ -223,7 +224,8 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 #### 9. 통합 MVP 구현 — 마감 10-05
 
 - [ ] 4-A MVP 통과 (09-18)
-- [ ] Pi 4 native service 에 UART 디코더·MQTT 클라이언트 탑재, PC 브리지 제거 — 코드는 09-16 준비(uart_rx + bridge live 모드 + paho 동봉), ARC 빌드·설치·실기 확인 남음
+- [x] Pi 4 native service 에 UART 디코더·MQTT 클라이언트 탑재 — **09-16 ARC 빌드·설치·D-Bus 활성화·live FSM 실보드 확인, UART 실수신 rx=132/discarded 0**. 보드 제한 Python 에 `_socket` 없음 → MQTT 는 C++ 자체 3.1.1 클라이언트(`hub/atlas/src/mqtt_client.cpp`, 09-17, 호스트 왕복 테스트 통과)로 이동, Python 은 `MQTT\t`/`CMD\t` 라인만. **실브로커 연결 실측은 포트포워딩 뒤**
+- [ ] PC 브리지(`tools/uart_mqtt_bridge.py`) 제거 — UART 경로가 실브로커까지 확인되면
 - [ ] 4 신호(ToF·mmWave·환경·키스트로크) 모두 `SensorFrame`·`reasons` 에 등장
 - [ ] 센서 → 피로 판정 → 제안 → 터치 수락 → 플러그 ON → MONITOR → RECOVERY 1사이클 실기 재현
 - [ ] display 를 꺼도 hub 계속 동작, Node-RED 없이 동작, 인터넷 없이 동작
