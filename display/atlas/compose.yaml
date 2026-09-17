@@ -11,4 +11,11 @@ services:
     tty: true
     volumes:
       - ../..:/workspace
+      # 등록한 Pi 장치(custom_devices.json)와 SSH 키를 컨테이너 재생성 후에도 유지한다.
+      - atlas-flutter-config:/root/.config/flutter
+      - atlas-ssh:/root/.ssh
     command: sleep infinity
+
+volumes:
+  atlas-flutter-config:
+  atlas-ssh:
