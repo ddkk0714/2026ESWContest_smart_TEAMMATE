@@ -1,5 +1,6 @@
 #include <sdbus-c++/sdbus-c++.h>
 
+#include "mqtt_client.h"
 #include "uart_rx.h"
 
 #include <arpa/inet.h>
@@ -15,6 +16,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <csignal>
+#include <ctime>
 #include <cctype>
 #include <cerrno>
 #include <cstring>
@@ -46,7 +48,22 @@ struct BridgeState {
     std::condition_variable ack_ready;
     std::string latest_state;
     std::unordered_map<std::string, int> acknowledgements;
+    deskmate::MqttClient* mqtt = nullptr;
 };
+
+struct OutgoingTopic {
+    const char* prefix;
+    const char* topic;
+    bool retain;
+};
+
+constexpr OutgoingTopic kOutgoingTopics[] = {
+    {"STATE\t", "deskmate/state/phase", true},
+    {"REQUEST\t", "deskmate/interaction/request", false},
+    {"REPORT\t", "deskmate/session/report", true},
+    {"CMD\t", "deskmate/control/cmd", false},
+};
+constexpr const char* kHealthTopic = "deskmate/health/hub";
 
 struct HttpRequest {
     std::string method;
@@ -133,6 +150,7 @@ HubProcess startHub(const std::filesystem::path& service_dir)
         setenv("PYTHONPATH", python_path.c_str(), 1);
         setenv("PYTHONUNBUFFERED", "1", 1);
         setenv("DESKMATE_HUB_MODE", "live", 0);
+        setenv("DESKMATE_NATIVE_MQTT", "1", 1);
         if (chdir(service_dir.c_str()) != 0) {
             perror("deskmate-hub chdir");
             _exit(126);
@@ -172,8 +190,17 @@ bool writeBridgeInput(int fd, std::mutex& input_mutex, const std::string& data)
 void processBridgeLine(const std::string& line, BridgeState& state)
 {
     if (line.rfind("STATE\t", 0) == 0) {
-        std::lock_guard<std::mutex> lock(state.mutex);
-        state.latest_state = line.substr(6);
+        {
+            std::lock_guard<std::mutex> lock(state.mutex);
+            state.latest_state = line.substr(6);
+        }
+    }
+    for (const OutgoingTopic& outgoing : kOutgoingTopics) {
+        const std::size_t prefix_length = std::strlen(outgoing.prefix);
+        if (line.rfind(outgoing.prefix, 0) != 0) continue;
+        if (state.mqtt != nullptr) {
+            state.mqtt->publish(outgoing.topic, line.substr(prefix_length), 1, outgoing.retain);
+        }
         return;
     }
     if (line.rfind("ACK\t", 0) == 0) {
@@ -307,13 +334,15 @@ void handleClient(int client, int bridge_input, std::mutex& input_mutex, BridgeS
 
     if (request.method == "GET" && request.path == "/health") {
         bool ready = false;
+        const bool mqtt_connected = state.mqtt != nullptr && state.mqtt->connected();
         {
             std::lock_guard<std::mutex> lock(state.mutex);
             ready = !state.latest_state.empty();
         }
-        sendResponse(client, 200, ready
-            ? R"({"status":"ok","state_ready":true})"
-            : R"({"status":"ok","state_ready":false})");
+        sendResponse(client, 200,
+                     std::string("{\"status\":\"ok\",\"state_ready\":") +
+                         (ready ? "true" : "false") + ",\"mqtt\":" +
+                         (mqtt_connected ? "true" : "false") + "}");
         return;
     }
 
@@ -448,12 +477,38 @@ int main()
         BridgeState state;
         std::atomic<bool> http_failed{false};
         std::mutex bridge_input_mutex;
-        std::thread reader(readBridge, hub.output_fd, std::ref(state));
         deskmate::UartReceiver uart(deskmate::uartRxConfigFromEnvironment(),
             [&hub, &bridge_input_mutex](const std::string& line) {
                 return writeBridgeInput(hub.input_fd, bridge_input_mutex, line);
             });
         uart.start();
+
+        deskmate::MqttConfig mqtt_config = deskmate::mqttConfigFromEnvironment();
+        mqtt_config.will = {kHealthTopic, R"({"node":"hub","status":"offline"})", 1, true};
+        mqtt_config.subscriptions = {{"deskmate/sensor/#", 0}, {"deskmate/feedback/user", 1},
+                                     {"deskmate/control/result", 1}};
+        deskmate::MqttClient mqtt(
+            mqtt_config,
+            [&hub, &bridge_input_mutex](const std::string& topic, const std::string& payload) {
+                std::string line = "MQTT\t" + topic + '\t';
+                for (const char value : payload) {
+                    line += (value == '\n' || value == '\r') ? ' ' : value;
+                }
+                line += '\n';
+                writeBridgeInput(hub.input_fd, bridge_input_mutex, line);
+            },
+            [&state](bool connected) {
+                if (connected && state.mqtt != nullptr) {
+                    state.mqtt->publish(
+                        kHealthTopic,
+                        "{\"ts\":" + std::to_string(static_cast<long long>(std::time(nullptr))) +
+                            ",\"node\":\"hub\",\"status\":\"online\"}",
+                        1, true);
+                }
+            });
+        state.mqtt = &mqtt;
+        std::thread reader(readBridge, hub.output_fd, std::ref(state));
+        mqtt.start();
         std::thread http(runHttpServer, hub.input_fd, std::ref(bridge_input_mutex), std::ref(state),
                          std::ref(http_failed));
 
@@ -478,6 +533,12 @@ int main()
 
         g_stop_requested = 1;
         uart.stop();
+        if (mqtt.connected()) {
+            mqtt.publish(kHealthTopic, R"({"node":"hub","status":"offline"})", 1, true);
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+        mqtt.stop();
+        state.mqtt = nullptr;
         if (!child_exited) {
             kill(hub.pid, SIGTERM);
             waitpid(hub.pid, &child_status, 0);

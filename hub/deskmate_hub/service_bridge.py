@@ -6,8 +6,8 @@ stdout → C++ 서비스:  STATE	<envelope json> · ACK	<id>	<status>
 
 모드 (환경변수 DESKMATE_HUB_MODE):
   demo (기본) — 합성 세션 순환 + 센서 테스트 API (기존 동작)
-  live        — UART 라인(+ DESKMATE_MQTT_HOST 가 있으면 MQTT 센서 토픽)을 SensorFrame 으로 만들어 FSM 실행,
-                state/phase 를 STATE 라인과 MQTT(가능 시)로 발행
+  live        — UART/MQTT 라인을 SensorFrame 으로 만들어 FSM 실행. Atlas native service에서는 C++가
+                MQTT 연결을 소유하고 Python은 라인 프로토콜만 사용한다.
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ class BridgeStateStore(PreviewStateStore):
         )
 
 
-def _read_commands(store: BridgeStateStore, uart_source=None) -> None:
+def _read_commands(store: BridgeStateStore, uart_source=None, mqtt_line_source=None) -> None:
     for raw_line in sys.stdin.buffer:
         request_id = "0"
         try:
@@ -46,6 +46,10 @@ def _read_commands(store: BridgeStateStore, uart_source=None) -> None:
             if line.startswith("UART\t"):
                 if uart_source is not None:
                     uart_source.feed_line(line)
+                continue
+            if line.startswith("MQTT\t"):
+                if mqtt_line_source is not None:
+                    mqtt_line_source.feed_line(line)
                 continue
             kind, request_id, path, raw_body = line.rstrip("\n").split("\t", 3)
             if kind != "POST":
@@ -78,22 +82,29 @@ def run_bridge(interval: float = 1.0) -> None:
 
 
 def _run_live_bridge() -> None:
-    """실센서 모드: UART 라인(stdin) + 선택적 MQTT 센서 → LiveHub → STATE 라인(+MQTT)."""
+    """실센서 모드: UART와 MQTT 라인 → LiveHub → C++ native MQTT 발행 라인."""
     import time
 
     from .ingest import SensorCache
+    from .ingest.mqtt_lines import MqttLineSource
     from .ingest.uart_source import UartLineSource
     from .live import LiveHub
 
     store = BridgeStateStore()
     cache = SensorCache()
     uart = UartLineSource(cache)
-    reader = threading.Thread(target=_read_commands, args=(store, uart), daemon=True)
+    native_mqtt = os.environ.get("DESKMATE_NATIVE_MQTT") == "1"
+    mqtt_lines = MqttLineSource(cache) if native_mqtt else None
+    reader = threading.Thread(
+        target=_read_commands,
+        args=(store, uart, mqtt_lines),
+        daemon=True,
+    )
     reader.start()
 
     mqtt_source = None
     host = os.environ.get("DESKMATE_MQTT_HOST")
-    if host:
+    if host and not native_mqtt:
         try:
             from .ingest.mqtt_source import MqttSource
 
@@ -124,8 +135,18 @@ def _run_live_bridge() -> None:
             hub.tick_once()
             if hub.seq % 30 == 0:
                 st = uart.stats
-                print(f"[bridge] uart frames={st.frames} dropped={st.dropped} hb={st.heartbeats} "
-                      f"unknown={st.unknown_types}", file=sys.stderr)
+                mqtt_stats = mqtt_lines.stats if mqtt_lines is not None else None
+                mqtt_status = (
+                    f" | mqtt lines={mqtt_stats.lines} routed={mqtt_stats.routed} "
+                    f"rejected={mqtt_stats.rejected}"
+                    if mqtt_stats is not None
+                    else ""
+                )
+                print(
+                    f"[bridge] uart frames={st.frames} dropped={st.dropped} hb={st.heartbeats} "
+                    f"unknown={st.unknown_types}{mqtt_status}",
+                    file=sys.stderr,
+                )
             next_tick += hub.period
             time.sleep(max(0.0, next_tick - time.time()))
     finally:
