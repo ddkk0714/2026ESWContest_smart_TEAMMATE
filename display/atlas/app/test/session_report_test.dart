@@ -45,6 +45,11 @@ void main() {
     expect(find.byKey(const ValueKey('session-report-card')), findsOneWidget);
     expect(find.text('세션 리포트'), findsOneWidget);
     expect(find.text('58%'), findsOneWidget);
+    expect(find.byKey(const ValueKey('state-duration-chart')), findsOneWidget);
+    expect(find.text('FOCUS_PC'), findsOneWidget);
+    expect(find.text('REST'), findsOneWidget);
+    expect(find.textContaining('50% ('), findsOneWidget);
+    expect(find.textContaining('8% ('), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

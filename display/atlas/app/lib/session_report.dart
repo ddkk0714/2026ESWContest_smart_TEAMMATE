@@ -78,7 +78,9 @@ class SessionReportCard extends StatelessWidget {
     if (value == null) {
       return const Center(child: Text('완료된 세션 리포트를 기다리고 있습니다.'));
     }
-    final topStates = value.stateDurations.entries.toList()
+    final topStates = value.stateDurations.entries
+        .where((entry) => entry.value > 0)
+        .toList()
       ..sort((a, b) => b.value.compareTo(a.value));
     return SingleChildScrollView(
       child: Container(
@@ -112,13 +114,9 @@ class SessionReportCard extends StatelessWidget {
             const SizedBox(height: 28),
             Text('상태별 체류', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 12),
-            ...topStates.take(6).map((entry) => Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 5),
-                  child: Row(children: [
-                    Expanded(child: Text(entry.key)),
-                    Text(_duration(entry.value)),
-                  ]),
-                )),
+            _StateDurationsChart(
+                entries: topStates.take(6).toList(),
+                sessionDurationSeconds: value.durationSeconds),
           ],
         ]),
       ),
@@ -126,6 +124,96 @@ class SessionReportCard extends StatelessWidget {
   }
 }
 
+class _StateDurationsChart extends StatelessWidget {
+  const _StateDurationsChart({
+    required this.entries,
+    required this.sessionDurationSeconds,
+  });
+
+  final List<MapEntry<String, double>> entries;
+  final double sessionDurationSeconds;
+
+  @override
+  Widget build(BuildContext context) {
+    final recordedSeconds =
+        entries.fold<double>(0, (sum, entry) => sum + entry.value);
+    final denominator = sessionDurationSeconds > 0
+        ? sessionDurationSeconds
+        : recordedSeconds;
+
+    return Semantics(
+      key: const ValueKey('state-duration-chart'),
+      label: 'State duration bar chart',
+      child: Column(
+        children: [
+          for (final entry in entries)
+            _StateDurationBar(
+              state: entry.key,
+              seconds: entry.value,
+              ratio: denominator <= 0
+                  ? 0
+                  : (entry.value / denominator).clamp(0.0, 1.0).toDouble(),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StateDurationBar extends StatelessWidget {
+  const _StateDurationBar({
+    required this.state,
+    required this.seconds,
+    required this.ratio,
+  });
+
+  final String state;
+  final double seconds;
+  final double ratio;
+
+  @override
+  Widget build(BuildContext context) {
+    final percentage = _percent(ratio);
+    return Semantics(
+      label: '$state $percentage, ${_duration(seconds)}',
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 14),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(child: Text(state)),
+            Text('$percentage (${_duration(seconds)})',
+                style: Theme.of(context).textTheme.bodyMedium),
+          ]),
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(DeskmateRadius.pill),
+            child: SizedBox(
+              height: 10,
+              child: Stack(children: [
+                const Positioned.fill(
+                    child: ColoredBox(color: DeskmateColors.surfaceMuted)),
+                FractionallySizedBox(
+                  widthFactor: ratio,
+                  alignment: Alignment.centerLeft,
+                  child: ColoredBox(color: _barColor(state)),
+                ),
+              ]),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  static Color _barColor(String state) {
+    final normalized = state.toUpperCase();
+    if (normalized.contains('FATIGUE')) return DeskmateColors.warning;
+    if (normalized.contains('RECOVERY') || normalized.contains('REST')) {
+      return DeskmateColors.accent;
+    }
+    return DeskmateColors.accentStrong;
+  }
+}
 class _Metric extends StatelessWidget {
   const _Metric({required this.label, required this.value});
   final String label;
