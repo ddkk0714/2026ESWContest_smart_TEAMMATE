@@ -13,6 +13,14 @@ import 'dart:io';
 /// 노드의 기본 HTTP 포트(`--port-http` 기본값).
 const kHubPort = 8765;
 
+/// 같은 보드에서 도는 스켈레톤 판정 서비스(`display/atlas/camsvc`).
+///
+/// 판정이 보드 안에 있는 이유는 ATLAS 에 파이썬이 없고 Dart 로 TFLite 를 돌릴
+/// 길도 없어서다. 8765 가 아닌 이유는 그 번호를 이미 쓰는 것이 보드에 있어서다
+/// (`camsvc/src/service_api.h`).
+const kCamsvcPort = 8770;
+const kCamsvcUrl = 'http://127.0.0.1:$kCamsvcPort';
+
 /// 키패드로 찍은 문자열을 주소로 받아들일지 판단한다.
 ///
 /// IPv4 만 받는다. 보드에 DNS 가 없을 수 있고, 호스트 이름을 치려면 키보드가

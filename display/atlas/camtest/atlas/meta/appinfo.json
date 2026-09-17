@@ -4,7 +4,7 @@
     "name": "Cam Test",
     "description": "DESKMATE ESP32-CAM posture display",
     "entry": "camtest --bundle=./ --fullscreen -a com.atlas.app.camtest",
-    "version": "0.6.1",
+    "version": "1.0.0",
     "required_permissions": {
         "privileged": [
             "com.atlas.permission.privileged.peripheral"

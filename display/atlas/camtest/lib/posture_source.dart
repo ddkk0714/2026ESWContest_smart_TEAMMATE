@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'camera_view.dart';
 import 'posture_state.dart';
 
 /// 노드 링크 상태(`/health`).
@@ -93,9 +95,16 @@ abstract interface class PostureSource {
 /// 주소는 빌드 시 `--dart-define=DESKMATE_HUB_URL=http://<Pi4-IP>:8765` 로 준다.
 /// 배포 스크립트의 `ATLAS_HUB_URL` 이 그대로 이 define 으로 들어간다.
 class HttpPostureSource implements PostureSource {
-  HttpPostureSource(String baseUrl)
+  HttpPostureSource(String baseUrl, {this.capturesSeated = false})
       : _base = Uri.parse(baseUrl),
         _client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
+
+  /// 기준을 **앉은 자세 그대로** 한 장으로 잡는지.
+  ///
+  /// Pi 4 자세 노드는 빈 책상부터 재야 해서 사람이 비켜야 하지만, 스켈레톤
+  /// 판정(`camsvc`)은 어깨와 코가 보이는 한 장이면 끝난다. 안내 문구가 반대로
+  /// 나가면 사람이 자리를 비우고 기준은 사람 없는 프레임으로 잡힌다.
+  final bool capturesSeated;
 
   final Uri _base;
   final HttpClient _client;
@@ -138,6 +147,24 @@ class HttpPostureSource implements PostureSource {
       // 링크 표시는 부가 정보다. 여기서 던지면 판정까지 못 보여준다.
       return null;
     }
+  }
+
+  /// 카메라가 지금 보고 있는 그림 한 장과 그 위의 랜드마크.
+  ///
+  /// 판정 서비스만 내준다. 아직 프레임이 없으면(503) null 이다.
+  Future<PreviewFrame?> preview() async {
+    final request = await _client.getUrl(_base.resolve('/preview.raw'));
+    final response = await request.close().timeout(_timeout);
+    if (response.statusCode != HttpStatus.ok) {
+      await response.drain<void>();
+      return null;
+    }
+    final chunks = await response.toList();
+    final builder = BytesBuilder(copy: false);
+    for (final chunk in chunks) {
+      builder.add(chunk);
+    }
+    return PreviewFrame.parse(builder.takeBytes());
   }
 
   @override

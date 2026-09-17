@@ -1,17 +1,19 @@
 // DESKMATE — 자세 화면 (ATLAS Flutter)
 //
-// ESP32-CAM ──UART 921600──> Pi 5 GPIO15 ──PeripheralManager──> 이 앱
-//                                                                ├ 프레임 디코딩
-//                                                                ├ 자세 판정
-//                                                                └ 화면
+// 판정을 내는 곳이 둘이고, 화면은 어느 쪽이든 같게 그린다.
 //
-// **판정까지 앱 안에서 한다.** ATLAS 는 Python 을 앱 런타임으로 지원하지 않으므로
-// (`/restricted/python3` 은 AppArmor 가 막는다) Pi 4 의 Python 노드를 그대로 쓸 수
-// 없었다. 그래서 `tools/posture.py` 를 `posture_judge.dart` 로 옮겼고, 옮긴 결과가
-// 원본과 같은 숫자를 내는지는 골든 벡터로 채점한다.
+//   1) camsvc (권장)  ESP32-CAM ─UART─> 판정 서비스(MediaPipe 두 모델 + 스켈레톤
+//                     판정) ─HTTP 127.0.0.1:8770─> 이 앱
+//   2) 보드 직결      ESP32-CAM ─UART─> 이 앱(프레임 디코딩 + coverage 판정)
 //
-// 보드에 물린 센서를 못 열면(개발 PC·배선 전) 저장된 주소 → 빌드에 박힌 주소 →
-// 화면 내장 데모 순으로 떨어진다. 화면 코드는 어느 경로든 같다.
+// **1번이 앱 안에서 될 수 없는 이유**는 Dart 로 TFLite 를 돌릴 길이 없기 때문이다.
+// 그래서 모델을 쓰는 판정은 네이티브 서비스(`display/atlas/camsvc`)로 나가 있고,
+// 앱 안의 2번은 그게 없을 때의 대비책으로 남는다. 둘 다 원본 파이썬을 옮긴 것이고
+// 옮긴 결과가 원본과 같은지는 각자 골든 벡터로 채점한다
+// (`test/golden/posture_golden.json` · `camsvc/test/pose_golden.txt`).
+//
+// 서비스도 센서도 못 잡으면 저장된 주소 → 빌드에 박힌 주소 → 화면 내장 데모 순으로
+// 떨어진다.
 //
 // 옆 앱: `display/atlas/app`(허브 FSM 대시보드) · `display/atlas/keystroke`(국면).
 // 앱 ID 가 서로 달라 Pi 5 에 셋을 나란히 설치해 비교할 수 있다.
@@ -26,6 +28,7 @@ import 'hub_setup.dart';
 import 'palette.dart';
 import 'posture_source.dart';
 import 'serial_posture_source.dart';
+import 'camera_view.dart';
 import 'vision_view.dart';
 import 'posture_state.dart';
 
@@ -56,6 +59,8 @@ const kPostureLook = <PostureLabel, PostureLook>{
       Icons.airline_seat_recline_extra, '센서에서 멀어졌어요. 책상 쪽으로 다시 앉아 보세요'),
   PostureLabel.drowsy: PostureLook('졸음', 'DROWSY', kViolet, Icons.bedtime_outlined,
       '머리가 반복해서 끄덕이고 있어요. 잠깐 쉬어 가는 건 어때요?'),
+  PostureLabel.chinRest: PostureLook('턱 괴기', 'CHIN_REST', kAmber,
+      Icons.self_improvement, '손으로 턱을 받치고 있어요. 팔을 내려 보세요'),
   PostureLabel.absent: PostureLook('자리 비움', 'ABSENT', kGray,
       Icons.person_off_outlined, '책상 앞에 사람이 없어요'),
   PostureLabel.baseline: PostureLook('기준 측정 중', 'BASELINE', kBlue,
@@ -156,7 +161,8 @@ class _PostureScreenState extends State<PostureScreen> {
     _store = widget.store ?? HubStore();
     _hubOverride = _store.read();
     _source = _makeSource();
-    _startSerialIfIdle();
+    // 판정 서비스 -> 보드 직결 -> 데모 순. 서비스가 있으면 그게 제일 정확하다.
+    _startBestLocalSource();
     _refresh();
     // 노드도 1Hz 로 내보낸다. 더 자주 긁어도 새 값이 없다.
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _refresh());
@@ -177,18 +183,58 @@ class _PostureScreenState extends State<PostureScreen> {
     return url.isEmpty ? DemoPostureSource() : HttpPostureSource(url);
   }
 
-  /// 주소가 없으면 **보드에 직접 물린 ESP32-CAM** 을 먼저 본다.
+  /// 판정 서비스를 먼저, 안 되면 보드 직결을 본다.
+  Future<void> _startBestLocalSource() async {
+    await _startLocalServiceIfIdle();
+    await _startSerialIfIdle();
+  }
+
+  /// 주소가 없으면 **같은 보드에서 도는 판정 서비스** 를 먼저 본다.
   ///
-  /// 이게 이 앱의 원래 경로다 - 판정까지 앱 안에서 끝나므로 Pi 4 도 네트워크도
-  /// 필요 없다. UART 를 못 열면(개발 PC, 권한 없음, 배선 전) 조용히 데모로 남는다.
-  /// 사람이 주소를 찍어 뒀으면 그 뜻을 존중해 시도하지 않는다.
+  /// 스켈레톤 판정(`display/atlas/camsvc`)은 앱이 못 하는 일을 한다 - MediaPipe
+  /// 모델 두 개를 TFLite 로 돌린다. 앱 안의 coverage 판정은 그게 없을 때의
+  /// 대비책으로 남겨 둔다. 사람이 주소를 찍어 뒀으면 그 뜻을 존중해 둘 다 건너뛴다.
+  Future<void> _startLocalServiceIfIdle() async {
+    if (widget.source != null) return;
+    if ((_hubOverride ?? _hubUrl).trim().isNotEmpty) return;
+    if (_source is HttpPostureSource) return;
+
+    final service = HttpPostureSource(kCamsvcUrl, capturesSeated: true);
+    // `/health` 는 판정이 아직 없어도 200 을 낸다. 서비스가 떠 있는지만 본다.
+    final health = await service.health();
+    if (health == null) {
+      diag.write('camsvc: $kCamsvcUrl 응답 없음 — 앱 안 판정으로 갑니다');
+      service.close();
+      return;
+    }
+    diag.write('camsvc: $kCamsvcUrl 붙었습니다');
+    if (!mounted) {
+      service.close();
+      return;
+    }
+    final previous = _source;
+    setState(() {
+      _source = service;
+      _serialNote = null;
+      _state = null;
+      _health = null;
+      _error = null;
+    });
+    previous.close();
+    _refresh();
+  }
+
+  /// 판정 서비스가 없을 때 **보드에 직접 물린 ESP32-CAM** 을 본다.
+  ///
+  /// 판정까지 앱 안에서 끝나므로 Pi 4 도 네트워크도 필요 없다. UART 를 못 열면
+  /// (개발 PC, 권한 없음, 배선 전) 조용히 데모로 남는다.
   Future<void> _startSerialIfIdle() async {
     if (widget.source != null) return;
     if ((_hubOverride ?? _hubUrl).trim().isNotEmpty) {
       diag.write('serial: 주소가 저장돼 있어 보드 직결을 건너뜀');
       return;
     }
-    if (_source is SerialPostureSource) return;
+    if (_source is SerialPostureSource || _source is HttpPostureSource) return;
 
     diag.write('serial: 보드 직결 시도 (로그 ${diag.path})');
     final serial = SerialPostureSource();
@@ -230,7 +276,7 @@ class _PostureScreenState extends State<PostureScreen> {
       _store.clear();
       _applyHub(null, unsaved: false);
       _notify('주소를 지웠습니다 — 보드에 물린 센서를 다시 찾아봅니다');
-      unawaited(_startSerialIfIdle());
+      unawaited(_startBestLocalSource());
       return;
     }
     final url = hubUrlFor(result);
@@ -288,13 +334,20 @@ class _PostureScreenState extends State<PostureScreen> {
   }
 
   Future<void> _calibrate() async {
+    // 두 판정의 기준 잡는 법이 반대다. 문구를 하나로 두면 한쪽은 반드시 틀린다.
+    final source = _source;
+    final seated = source is HttpPostureSource && source.capturesSeated;
+    final guide = seated
+        ? '지금 **바르게 앉은 자세**가 새 기준이 됩니다. 어깨가 둘 다 보이게 앉은 '
+            '채로 눌러 주세요. 바로 끝납니다.'
+        : '먼저 자리에서 비켜 주세요. 빈 책상을 재고 나면 화면이 '
+            '"바른 자세로 앉아 주세요" 로 바뀝니다. 전부 20초쯤 걸립니다.';
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: kSurface,
         title: const Text('기준을 다시 잡을까요?'),
-        content: const Text('먼저 자리에서 비켜 주세요. 빈 책상을 재고 나면 화면이 '
-            '"바른 자세로 앉아 주세요" 로 바뀝니다. 전부 20초쯤 걸립니다.'),
+        content: Text(guide.replaceAll('**', '')),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
@@ -310,7 +363,9 @@ class _PostureScreenState extends State<PostureScreen> {
     setState(() => _calibrating = true);
     try {
       await _source.calibrate();
-      _notify('기준을 다시 잡습니다 — 화면 안내를 따라 주세요');
+      _notify(seated
+          ? '지금 자세를 기준으로 잡았습니다'
+          : '기준을 다시 잡습니다 — 화면 안내를 따라 주세요');
     } catch (error) {
       _notify('기준 다시 잡기에 실패했습니다: ${_message(error)}');
     } finally {
@@ -320,6 +375,15 @@ class _PostureScreenState extends State<PostureScreen> {
 
   /// 센서가 보고 있는 것을 띄운다. 화면에 라벨만 있으면 "지금 잡히고 있나" 를
   /// 사람이 확인할 방법이 없다.
+  /// 판정 서비스가 보내는 카메라 그림 + 뼈대.
+  void _openCamera() {
+    final source = _source;
+    if (source is! HttpPostureSource || !source.capturesSeated) return;
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => CameraViewPage(source: source),
+    ));
+  }
+
   void _openVision() {
     final source = _source;
     if (source is! SerialPostureSource) return;
@@ -417,6 +481,14 @@ class _PostureScreenState extends State<PostureScreen> {
             onPressed: _openVision,
             color: kMuted,
             icon: const Icon(Icons.visibility_outlined),
+          ),
+        if (_source case HttpPostureSource(capturesSeated: true))
+          IconButton(
+            key: const ValueKey('camera-open'),
+            tooltip: '영상 보기',
+            onPressed: _openCamera,
+            color: kMuted,
+            icon: const Icon(Icons.videocam_outlined),
           ),
         IconButton(
           key: const ValueKey('hub-setup'),

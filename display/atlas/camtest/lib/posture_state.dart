@@ -10,7 +10,16 @@ library;
 
 /// 판정이 내는 라벨. `posture.py` 의 UPRIGHT/SLUMP/RECLINE/DROWSY/ABSENT 와
 /// 기준을 아직 못 잡은 두 상태(BASELINE/UNKNOWN)까지가 전부다.
-enum PostureLabel { upright, slump, recline, drowsy, absent, baseline, unknown }
+enum PostureLabel {
+  upright,
+  slump,
+  recline,
+  drowsy,
+  chinRest,
+  absent,
+  baseline,
+  unknown
+}
 
 /// `posture_detail` — 판정이 실제로 뭐라고 했는지가 그대로 담긴 규약 밖 필드.
 const _detailNames = <String, PostureLabel>{
@@ -18,6 +27,9 @@ const _detailNames = <String, PostureLabel>{
   'slump': PostureLabel.slump,
   'recline': PostureLabel.recline,
   'drowsy': PostureLabel.drowsy,
+  // 스켈레톤 판정(`camsvc`)만 내는 라벨. 계약 enum 에는 자리가 없어서
+  // `posture_detail` 로만 온다.
+  'chin_rest': PostureLabel.chinRest,
   'absent': PostureLabel.absent,
   'baseline': PostureLabel.baseline,
   'unknown': PostureLabel.unknown,
@@ -98,7 +110,8 @@ class PostureState {
       valid &&
       (label == PostureLabel.slump ||
           label == PostureLabel.recline ||
-          label == PostureLabel.drowsy);
+          label == PostureLabel.drowsy ||
+          label == PostureLabel.chinRest);
 
   Duration ageFrom(DateTime now) {
     final age = now.difference(timestamp);
