@@ -4,8 +4,10 @@
 
 #include <dlfcn.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
+#include <ctime>
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -61,7 +63,7 @@ public:
         if (rc != MQTTASYNC_SUCCESS) return fail("set callbacks", rc);
         if (api_.set_connected) api_.set_connected(client_, this, &Impl::connectedCallback);
 
-        will_payload_ = R"({"node":"hub","status":"offline"})";
+        will_payload_ = healthPayload("offline");
         MQTTAsync_willOptions will = MQTTAsync_willOptions_initializer;
         will.topicName = kHealthTopic;
         will.message = will_payload_.c_str();
@@ -89,7 +91,7 @@ public:
     {
         if (!library_) return;
         if (client_) {
-            if (connected_) publish(kHealthTopic, R"({"node":"hub","status":"offline"})", 1, true);
+            if (connected_) publish(kHealthTopic, healthPayload("offline"), 1, true);
             MQTTAsync_disconnectOptions options = MQTTAsync_disconnectOptions_initializer;
             options.timeout = 1000;
             api_.disconnect(client_, &options);
@@ -163,6 +165,13 @@ private:
                load(api_.free_memory, "MQTTAsync_free");
     }
 
+    // docs/mqtt-topics.md: deskmate/health/<node> = {ts,node,status,...} (LWT, retain)
+    static std::string healthPayload(const char* status)
+    {
+        return "{\"ts\":" + std::to_string(static_cast<long long>(std::time(nullptr))) +
+               ",\"node\":\"hub\",\"status\":\"" + status + "\"}";
+    }
+
     bool fail(const char* operation, int rc)
     {
         std::cerr << "DESKMATE MQTT " << operation << " failed: " << rc << '\n';
@@ -175,7 +184,7 @@ private:
         connected_ = true;
         api_.subscribe(client_, kSensorTopic, 0, nullptr);
         api_.subscribe(client_, kFeedbackTopic, 1, nullptr);
-        publish(kHealthTopic, R"({"node":"hub","status":"online"})", 1, true);
+        publish(kHealthTopic, healthPayload("online"), 1, true);
         std::cerr << "DESKMATE MQTT connected\n";
     }
 
@@ -208,8 +217,13 @@ private:
         auto* self = static_cast<Impl*>(context);
         const std::string topic(topic_name, topic_length > 0
             ? static_cast<std::size_t>(topic_length) : std::strlen(topic_name));
-        const std::string payload(static_cast<const char*>(message->payload),
-                                  static_cast<std::size_t>(message->payloadlen));
+        std::string payload(static_cast<const char*>(message->payload),
+                            static_cast<std::size_t>(message->payloadlen));
+        // The bridge protocol is line based; JSON never needs raw newlines outside strings
+        // (and inside strings they are escaped), so dropping them keeps one message per line.
+        payload.erase(std::remove_if(payload.begin(), payload.end(),
+                                     [](char c) { return c == '\n' || c == '\r'; }),
+                      payload.end());
         self->sink_("MQTT\t" + topic + "\t" + payload + "\n");
         self->api_.free_message(&message);
         self->api_.free_memory(topic_name);

@@ -67,8 +67,13 @@ def _read_commands(store: BridgeStateStore, uart_source=None, mqtt_cache=None) -
                     uart_source.feed_line(line)
                 continue
             if line.startswith("MQTT\t"):
+                # 네이티브 MQTT 브리지가 넘긴 수신 메시지. 명령이 아니므로 ACK 를 내지 않고,
+                # 깨진 메시지는 로그만 남긴다(한 메시지 오류로 FSM 이 멈추면 안 됨).
                 if mqtt_cache is not None:
-                    _feed_mqtt_line(mqtt_cache, line)
+                    try:
+                        _feed_mqtt_line(mqtt_cache, line)
+                    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+                        print(f"[bridge] MQTT 라인 무시: {exc}", file=sys.stderr)
                 continue
             kind, request_id, path, raw_body = line.rstrip("\n").split("\t", 3)
             if kind != "POST":

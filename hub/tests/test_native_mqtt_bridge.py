@@ -40,3 +40,27 @@ def test_native_mqtt_feedback_line_accepts_envelope():
     )
 
     assert cache.pop_feedback() == {"request_id": "req-1", "verdict": "accept"}
+
+
+def test_native_mqtt_malformed_line_does_not_ack(monkeypatch, capsys):
+    import io
+    import sys as _sys
+
+    from deskmate_hub.service_bridge import BridgeStateStore, _read_commands
+
+    class _Stdin:
+        buffer = io.BytesIO(
+            b"MQTT\tdeskmate/feedback/user\t{not json\n"
+            b"MQTT\tdeskmate/sensor/keystroke\t{not json\n"
+        )
+
+    monkeypatch.setattr(_sys, "stdin", _Stdin())
+    store = BridgeStateStore()
+    cache = SensorCache()
+    _read_commands(store, None, cache)
+
+    captured = capsys.readouterr()
+    assert "ACK" not in captured.out          # 수신 메시지는 명령이 아니므로 ACK 없음
+    assert "MQTT 라인 무시" in captured.err   # feedback JSON 오류는 로그로만
+    assert cache.pop_feedback() is None
+    assert cache.snapshot().keystroke is None
