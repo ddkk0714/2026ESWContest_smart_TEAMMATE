@@ -34,6 +34,8 @@ env/
 .flutter-plugins
 .flutter-plugins-dependencies
 display/atlas/vendor/
+display/atlas/deploy/device.env
+display/atlas/deploy/ssh/
 display/**/atlas/flutter/ephemeral/
 
 # --- PlatformIO / ESP32 ---
