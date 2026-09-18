@@ -88,21 +88,33 @@ void writeHeartbeatUart(uint32_t now_ms) {
 
 void setup() {
   Serial.begin(kUsbBaud);
+  // 능동 보고를 놓치지 않도록 수신 버퍼를 키운다. begin() 앞에서 해야 적용된다
+  Serial1.setRxBufferSize(1024);
   Serial1.begin(kC1001Baud, SERIAL_8N1, kC1001RxPin, kC1001TxPin);
   pi4_serial.begin(kPi4Baud, SERIAL_8N1, kPi4RxPin, kPi4TxPin);
 
   Serial.println(F("DESKMATE ESP32 sensor node starting"));
   mmwave_ready = mmwave.begin();
   Serial.println(mmwave_ready ? F("C1001 ready") : F("C1001 initialization failed"));
+  drowsy_detector.begin(millis());
   environment_sensors.begin(millis(), environment_sample);
 }
 
 void loop() {
+  // 파서는 논블로킹이다. 주기와 무관하게 매 루프에서 밀린 바이트를 소화하고,
+  // 판정기는 값이 실제로 갱신된 것만 소비한다. 보고가 끊기면 질의로 깨운다.
+  if (mmwave_ready) {
+    mmwave.poll();
+    mmwave.nudgeIfSilent(millis());
+  }
+
   const uint32_t now_ms = millis();
+  if (mmwave_ready) drowsy_detector.update(mmwave, now_ms);
+
   if (now_ms - last_mmwave_ms >= kMmwavePeriodMs) {
     last_mmwave_ms = now_ms;
-    const MmwaveSample sample = mmwave_ready ? mmwave.read() : MmwaveSample{};
-    const DrowsyState drowsy_state = drowsy_detector.update(sample, now_ms);
+    const MmwaveSample sample = mmwave_ready ? mmwave.sample(now_ms) : MmwaveSample{};
+    const DrowsyState drowsy_state = drowsy_detector.state();
     writeMmwaveJson(Serial, now_ms, sample, drowsy_state);
     writeMmwaveUart(now_ms, sample, drowsy_state);
   }
