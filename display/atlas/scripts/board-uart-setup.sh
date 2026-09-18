@@ -54,5 +54,5 @@ ls -l "$DEV"
 stty -F "$DEV" | head -n 1
 echo
 echo "완료. 앱을 다시 시작하세요:"
-echo "  abusctl call com.atlas.AppManager1 Stop  \"com.atlas.app.camtest\""
-echo "  abusctl call com.atlas.AppManager1 Start \"com.atlas.app.camtest\""
+echo "  abusctl call com.atlas.AppManager1 Stop  \"com.atlas.app.deskmate_display_ui_test\""
+echo "  abusctl call com.atlas.AppManager1 Start \"com.atlas.app.deskmate_display_ui_test\""

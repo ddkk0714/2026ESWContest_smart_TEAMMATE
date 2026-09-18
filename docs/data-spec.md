@@ -126,6 +126,14 @@ ToF 원본 2,268-zone 배열은 L0이며 기본 운영 스키마에 포함하지
 | `drowsy_state` | enum | ESP32 `DrowsyDetector` 5상태 `NOPERSON`·`NOLOCK`·`WARMUP`·`AWAKE`·`DROWSY`. hub 는 `DROWSY` 를 posture delta 1.0 증거로 쓴다(2026-09-14 MVP 계약). |
 | `valid` | boolean | 프레임 파싱 성공. |
 
+펌웨어는 벤더 폴링 라이브러리 대신 **수신 전용 파서**(`sensors/c1001/C1001Passive`)로 읽는다.
+벤더 `getData()` 는 호출마다 수신 버퍼를 비우고 질의를 보낸 뒤 바이트당 delay 로 기다려서, 폴링
+주기가 센서의 실제 갱신 시점(체동 1 s · 거리 2 s · 호흡/심박 3 s)과 어긋나 값이 통째로 빠진다.
+파서는 아무것도 버리지 않고 필드별 갱신 시각·횟수를 들고 있으며, 판정기는 새로 갱신된 표본만
+소비한다. `drowsy_state` 의 판정 구조와 임계값(전부 실측 근거 있음)은
+[`DrowsyDetector.h`](../firmware/esp32_sensor_node/src/sensors/c1001/DrowsyDetector.h) 에 있고,
+호스트 유닛 테스트(`pio test -e native`)가 그 계약을 붙잡는다.
+
 `motion_state` 는 C1001 movement 0/1/2 → `none`/`still`/`active`, `motion_level` 은 bodyMove 0~100 이다. hub 매핑(`hub/deskmate_hub/config/ingest.yaml`): 정적 지속·`drowsy_state` → `posture.delta`, `motion_level` → `posture.phi`, 재실 중 `resp_valid=false` 지속 → `respiration.delta`.
 
 ### 6.3 `environment_sample`

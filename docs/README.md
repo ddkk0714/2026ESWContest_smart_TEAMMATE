@@ -26,6 +26,7 @@
 |---|---|
 | [`hardware.md`](hardware.md) | 장비 역할, 배선, 센서, BOM |
 | [`atlas-build-handoff.md`](atlas-build-handoff.md) | Pi 5 Atlas IPK 빌드·실기 배포 점검 |
+| [`posture-camera.md`](posture-camera.md) | ESP32-CAM 자세 판정 — 판정 위치, 보드 준비, 캘리브레이션, 진단 |
 | [`ilink-bluetooth-lamp.md`](ilink-bluetooth-lamp.md) | iLink BLE 조명 프로토콜·상태 피드백·PC 연결 절차 |
 | [`submission.md`](submission.md) | 결선 제출물·마감·시연 규칙 |
 
