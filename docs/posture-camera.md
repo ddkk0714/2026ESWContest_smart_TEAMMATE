@@ -18,7 +18,7 @@
 원본과 같은지는 각자 골든 벡터로 채점한다
 (`display/atlas/app/test/posture/golden/posture_golden.json` · `camsvc/test/pose_golden.txt`).
 
-서비스도 센서도 못 잡으면 **저장된 주소 → 빌드에 박힌 `DESKMATE_HUB_URL` → 화면 내장 데모**
+서비스도 센서도 못 잡으면 **저장된 주소 → 빌드에 박힌 `DESKMATE_POSTURE_URL` → 화면 내장 데모**
 순으로 떨어진다. 화면 코드는 어느 경로든 같다.
 
 ## 왜 RP2040 이 경로에 남아 있나

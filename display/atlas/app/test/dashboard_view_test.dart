@@ -85,6 +85,21 @@ void main() {
     expect(find.text('재실'), findsOneWidget);
   });
 
+  // 실기에서 SCD41 만 안 올라오고 온·습도·조도는 멀쩡히 들어오는 일이 있었다.
+  testWidgets('status strip still summarises env when CO2 is missing',
+      (tester) async {
+    tester.view.physicalSize = const Size(1024, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await _pump(
+      tester,
+      _state(phase: 'focus', fsmState: 'FOCUS_PC', co2Ppm: null),
+    );
+    expect(find.text('센서 대기'), findsNothing);
+    expect(find.textContaining('조도 444 lx'), findsWidgets);
+  });
+
   testWidgets('pending MQTT request opens suggestion controls', (tester) async {
     tester.view.physicalSize = const Size(1024, 600);
     tester.view.devicePixelRatio = 1;
@@ -133,6 +148,7 @@ DisplayState _state({
   required String fsmState,
   String gate = 'none',
   String? cause,
+  int? co2Ppm = 720,
   MmwaveSummary? mmwave = const MmwaveSummary(
     motionState: 'still',
     motionLevel: 4,
@@ -155,7 +171,7 @@ DisplayState _state({
       sequence: 1,
       timestamp: DateTime(2026, 9, 4, 19, 21),
       present: true,
-      co2Ppm: 720,
+      co2Ppm: co2Ppm,
       lux: 444,
       mmwave: mmwave,
     );

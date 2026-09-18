@@ -335,7 +335,9 @@ class _MainStatusStrip extends StatelessWidget {
         const Spacer(),
         Flexible(
           child: Text(
-            state.co2Ppm == null ? '센서 대기' : _environmentInline(state),
+            // CO₂ 하나로 판단하면 안 된다. 실기에서 SCD41 만 안 올라오고
+            // 온·습도·조도는 멀쩡히 들어오는 상태를 "센서 대기" 로 읽었다.
+            _environmentInline(state).isEmpty ? '센서 대기' : _environmentInline(state),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.end,

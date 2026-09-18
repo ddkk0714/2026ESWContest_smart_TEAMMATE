@@ -19,7 +19,7 @@ import 'dart:typed_data';
 
 import 'package:dbus/dbus.dart';
 
-import 'diag.dart';
+import '../diag.dart';
 
 const String peripheralService = 'com.atlas.PeripheralManager1';
 const String peripheralPath = '/com/atlas/PeripheralManager1';

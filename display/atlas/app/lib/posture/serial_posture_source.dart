@@ -13,7 +13,7 @@ library;
 import 'dart:async';
 
 import 'calibration.dart';
-import 'diag.dart';
+import '../diag.dart';
 import 'posture_judge.dart';
 import 'posture_source.dart';
 import 'posture_state.dart';

@@ -11,6 +11,7 @@ import 'display_state.dart';
 import 'feedback_policy.dart';
 import 'dashboard_view.dart';
 import 'deskmate_theme.dart';
+import 'diag.dart';
 import 'fsm_graph.dart';
 import 'keystroke_capture.dart';
 import 'music_playback.dart';
@@ -61,6 +62,9 @@ class _DashboardPageState extends State<DashboardPage> {
   DisplayState? _state;
   String? _error;
   bool _busy = false;
+  // 진단 로그를 상태가 바뀔 때만 남기기 위한 표시.
+  bool _loggedFetchOk = false;
+  String? _lastLoggedError;
   bool _demoCyclingEnabled = true;
   int _autoScreenPhaseIndex = 0;
   Timer? _autoScreenTimer;
@@ -119,6 +123,9 @@ class _DashboardPageState extends State<DashboardPage> {
     HardwareKeyboard.instance.addHandler(_onKey);
     _source =
         _hubUrl.trim().isEmpty ? DemoStateSource() : HttpStateSource(_hubUrl);
+    // 이 보드는 앱 표준출력이 journal 에도 app_log 에도 안 남는다. 허브에 왜 못
+    // 붙었는지 알 방법이 화면밖에 없어서, 첫 판단과 그 결과를 파일로 남긴다.
+    diag.write('hub: DESKMATE_HUB_URL="$_hubUrl" → ${_source.runtimeType}');
     _refresh();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (_source is! DemoStateSource || _demoCyclingEnabled) _refresh();
@@ -159,6 +166,11 @@ class _DashboardPageState extends State<DashboardPage> {
     _busy = true;
     try {
       final next = await _source.fetch();
+      if (!_loggedFetchOk) {
+        _loggedFetchOk = true;
+        _lastLoggedError = null;
+        diag.write('hub fetch 성공: seq=${next.sequence} state=${next.fsmState}');
+      }
       if (mounted) {
         setState(() {
           _state = next;
@@ -167,7 +179,14 @@ class _DashboardPageState extends State<DashboardPage> {
         unawaited(_feedbackController.apply(next));
       }
     } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      // 1초마다 같은 줄로 파일을 채우지 않는다. 메시지가 바뀔 때만 적는다.
+      final text = error.toString();
+      if (text != _lastLoggedError) {
+        _lastLoggedError = text;
+        _loggedFetchOk = false;
+        diag.write('hub fetch 실패: $text');
+      }
+      if (mounted) setState(() => _error = text);
     } finally {
       _busy = false;
     }

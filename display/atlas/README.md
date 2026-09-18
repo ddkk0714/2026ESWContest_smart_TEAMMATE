@@ -287,5 +287,8 @@ DESKMATE display는 Flutter 앱이므로 `flutter-atlas`가 기준이다.
 - Pi 5 SSH 도달성과 `deskmate_pi5` 장치 등록: 확인
 - Pi 5 터치 확인용 자동 순환 ON/OFF 버튼 포함 release 앱 교체 설치·fullscreen 실행: 확인
 - Pi 5 버튼 터치 육안 확인: USB MTouch가 input event 생성 전에 xHCI 오류로 분리되어 하드웨어 점검 대기
-- 앱 통합(자세·센서 전체 흡수)과 `flutter test` 107개 통과: 2026-09-18 확인
+- 앱 통합(자세·센서 전체 흡수)과 `flutter test` 111개 통과: 2026-09-18 확인
+- Pi 5 실기 설치·실행: 2026-09-18 확인. 허브(`/api/state`) 연결과 camsvc(8770) 연결 모두 성공
+- 보드에서 앱이 무슨 일을 겪었는지는 앱 설치 경로의 `deskmate.log` 로만 알 수 있다.
+  앱 표준출력은 journal 에도 `appdata/*/cache/app_log` 에도 남지 않는다 (실기 확인)
 - 최신 진행 인계: [`../../docs/atlas-build-handoff.md`](../../docs/atlas-build-handoff.md)
