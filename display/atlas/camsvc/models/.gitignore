@@ -1,0 +1,4 @@
+# 모델 바이너리는 커밋하지 않는다 (팀 규칙: 학습 모델 커밋 금지).
+# tools/extract_models.py 가 pose_landmarker_full.task 에서 꺼낸다.
+*.tflite
+*.task

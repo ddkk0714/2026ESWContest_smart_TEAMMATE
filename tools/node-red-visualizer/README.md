@@ -1,7 +1,6 @@
-# DESKMATE PC Node-RED 모니터
+# DESKMATE PC Node-RED 시각화
 
-제품 통신 경로에 포함되지 않는 PC-local 개발 도구다. Pi 4 MQTT broker가 준비되면
-`deskmate/#`를 구독해 실시간 상태와 피드백을 Debug sidebar에서 확인한다.
+PC에서 실행 중인 MQTT 브로커와 연결해 `deskmate/#` 메시지를 대시보드와 Debug sidebar에서 확인하는 개발 도구다.
 
 ```powershell
 cd tools/node-red-visualizer
@@ -9,25 +8,17 @@ npm.cmd install
 npm.cmd start
 ```
 
-브라우저에서 편집기는 <http://127.0.0.1:1880>, 대시보드는 <http://127.0.0.1:1880/ui>로 연다.
-`데모:` inject 노드를 누르면 합성 상태·피드백·화면 메시지를 확인할 수 있다.
+- 편집기: <http://127.0.0.1:1880>
+- 대시보드: <http://127.0.0.1:1880/ui>
+- MQTT 브로커: PC의 `127.0.0.1:1883`
 
-대시보드에는 다음 패널이 있다.
+대시보드에는 mmWave, 환경 센서, 키스트로크, FSM 및 통신 상태와 함께 다음 항목이 표시된다.
 
-- mmWave: motion level·거리·유효한 호흡수 차트, 재실·motion·졸음 상태
-- 환경: CO₂(400~2000 ppm, 1000 ppm부터 경고색)·온도·습도·조도 게이지
-- 키스트로크: dwell/flight 평균·idle ratio·flight CV와 입력 활성 상태
-- FSM: 상태·phase·context·gate·reasons와 C_fatigue/C_focus 차트
-- 수신 상태: 토픽별 마지막 수신 경과 시간과 seq 불연속 횟수
+- **제어 패널**: `deskmate/control/cmd` 명령 발행
+- **리포트 패널**: `deskmate/session/report` 세션 요약 표시
 
-수신한 `deskmate/#` 메시지는 `logs/nodered-YYYYMMDD.jsonl`에 한 줄씩 기록된다. `logs/`는
-저장소 `.gitignore` 대상이다.
+수신한 `deskmate/#` 메시지는 저장소 기준 `tools/node-red-visualizer/logs/` 아래의
+`nodered-YYYYMMDD.jsonl` 파일에 한 줄당 하나의 JSON 객체로 기록된다. `logs/`는 `.gitignore` 적용 대상이다.
 
-사진·데모용으로 `/ui` 페이지가 포커스를 가진 동안 브라우저 키보드의 타이밍 통계만 Node-RED 내부에
-임시 생성한다. 키 문자나 키 코드는 수집하지 않으며 MQTT broker로도 발행하지 않는다. 대시보드를 닫으면
-수집도 즉시 끝난다.
-
-브로커 주소는 편집기의 설정 노드 `pi4-mqtt-broker` 하나에서만 바꾼다. 우측 상단 메뉴의
-Configuration nodes에서 해당 노드를 열어 Server를 Pi 4 주소로 변경하고 Deploy한다.
-
-`settings.js`는 loopback만 사용한다. 외부 공개·포트 포워딩을 하지 않는다.
+이 도구는 키 내용, 카메라, 상시 음성 및 운영 ToF raw 데이터를 수집하거나 발행하지 않는다.
+브로커 주소를 바꿔야 할 때는 Node-RED 편집기의 MQTT configuration node에서 변경한 뒤 Deploy한다.

@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y \
     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
     && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
     && apt-get update && apt-get install -y nodejs \
+    && python3 -m pip install --no-cache-dir --break-system-packages pyyaml 'paho-mqtt>=2,<3' \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY vendor/atlas_engine /opt/atlas_engine

@@ -36,6 +36,7 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 | `deskmate/sensor/keystroke` | PC 수집기 | hub | 1Hz | 키 입력 타이밍 특징 |
 | `deskmate/state/phase` | hub | display, control | 10 s 주기(retain) | 추론 결과 + 신뢰도. `python -m deskmate_hub run` 이 발행 |
 | `deskmate/display/message` | Node-RED/debug | display | 이벤트 | Pi 5 화면에 일회성 텍스트 표시 |
+| `deskmate/session/report` | hub | display | 세션 종료 시 | 화면용 세션 요약. 개별 행동 로그 없음 |
 | `deskmate/interaction/request` | hub | display | 이벤트 | 불확실한 판정의 사용자 확인 질문 |
 | `deskmate/control/cmd` | hub | control | 이벤트 | 기기 제어 명령 |
 | `deskmate/feedback/user` | display | hub | 이벤트 | 사용자 수락 · 정정 |
@@ -179,6 +180,29 @@ Node-RED에서 Pi 5 화면을 확인할 때 쓰는 일회성 안내 문구다. �
 }
 ```
 
+### `deskmate/session/report`
+
+세션이 `END`에 도달했을 때 Hub가 발행하는 화면용 요약이다. Pi 5는 이 값을 메모리에만
+보관해 세션 리포트 화면에 표시한다. 키 내용, ToF raw, 개인 식별자, 개별 시각의 행동 로그는
+포함하지 않는다.
+
+```json
+{
+  "schema_version": "1.0", "ts": 1769003600.0,
+  "node": "hub", "boot_id": "a8021bf0", "seq": 212,
+  "data": {
+    "t_start": 1769000000.0, "t_end": 1769003600.0,
+    "duration_s": 3600, "focus_time_s": 2100, "focus_ratio": 0.583,
+    "state_durations_s": {"FOCUS_PC": 1800, "REST": 300},
+    "fatigue_episodes": [{"t_onset": 1769001800.0, "peak_fatigue": 0.81}],
+    "intervention_counts": {"total": 2, "recovered": 1},
+    "break_accept_rate": 0.5
+  }
+}
+```
+
+`state_durations_s`는 상태별 누적 시간(초), `fatigue_episodes`는 화면에 필요한 발생 시각과
+최대 피로도만 담는다. 수락률을 아직 계산할 수 없으면 `break_accept_rate`는 생략한다.
 ### `deskmate/interaction/request`
 
 ```json
@@ -233,7 +257,7 @@ hub 는 현재 질문의 `request_id`(또는 `request_id` 생략·`atlas-display
 ## QoS · 보존
 
 - 센서 스트림: QoS 0 (유실 허용, 고빈도)
-- `state/phase` · `display/message` · `interaction/request` · `control/cmd` · `feedback/user`: QoS 1
+- `state/phase` · `display/message` · `session/report` · `interaction/request` · `control/cmd` · `feedback/user`: QoS 1
 - `state/phase` 는 retain 을 켜서 디스플레이 재시작 시 즉시 현재 상태를 받는다
 - `display/message` 는 retain 을 끈다. 이전 문구가 재시작 뒤 다시 표시되거나 broker에 남지 않게 한다.
 - 노드는 재연결 시 지수 백오프(1s → 최대 30s)

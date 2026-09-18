@@ -13,6 +13,14 @@ void writeNullable(Stream& output, bool valid, uint16_t value) {
   }
 }
 
+void writeNullableFloat(Stream& output, bool valid, float value, uint8_t digits) {
+  if (valid) {
+    output.print(value, digits);
+  } else {
+    output.print(F("null"));
+  }
+}
+
 }  // namespace
 
 void writeMmwaveJson(Stream& output, uint32_t now_ms, const MmwaveSample& sample,
@@ -44,12 +52,27 @@ void writeMmwaveJson(Stream& output, uint32_t now_ms, const MmwaveSample& sample
   output.println(F("}"));
 }
 
-void writeEnvironmentStubJson(Stream& output, uint32_t now_ms) {
+void writeEnvironmentJson(Stream& output, uint32_t now_ms,
+                          const EnvironmentSample& sample) {
   output.print(F("{\"t\":\"env\",\"ms\":"));
   output.print(now_ms);
-  output.println(F(",\"co2_ppm\":null,\"temp_c\":null,\"humidity_pct\":null,\"lux\":null,"
-                   "\"co2_valid\":false,\"temp_valid\":false,\"humidity_valid\":false,"
-                   "\"lux_valid\":false}"));
+  output.print(F(",\"co2_ppm\":"));
+  writeNullableFloat(output, sample.co2_valid, sample.co2_ppm, 0);
+  output.print(F(",\"temp_c\":"));
+  writeNullableFloat(output, sample.temp_valid, sample.temp_c, 2);
+  output.print(F(",\"humidity_pct\":"));
+  writeNullableFloat(output, sample.humidity_valid, sample.humidity_pct, 2);
+  output.print(F(",\"lux\":"));
+  writeNullableFloat(output, sample.lux_valid, sample.lux, 2);
+  output.print(F(",\"co2_valid\":"));
+  writeBool(output, sample.co2_valid);
+  output.print(F(",\"temp_valid\":"));
+  writeBool(output, sample.temp_valid);
+  output.print(F(",\"humidity_valid\":"));
+  writeBool(output, sample.humidity_valid);
+  output.print(F(",\"lux_valid\":"));
+  writeBool(output, sample.lux_valid);
+  output.println(F("}"));
 }
 
 }  // namespace deskmate
