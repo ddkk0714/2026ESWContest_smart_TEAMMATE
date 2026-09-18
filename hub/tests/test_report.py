@@ -145,3 +145,22 @@ def test_report_envelope_says_unknown_when_nothing_was_asked():
     # 길이가 0 인 세션에서 0 으로 나누지 않는다.
     assert env["data"]["duration_s"] == 0.0
     assert env["data"]["focus_ratio"] == 0.0
+
+
+def test_report_envelope_counts_time_before_the_session_starts():
+    """START 전이라도 경과가 흘러야 한다. 안 그러면 화면이 멈춘 것처럼 보인다."""
+    rec = SessionRecorder()
+    # 책상이 비어 있어 FSM 이 IDLE 에만 머문다 - START 를 한 번도 안 지난다.
+    rec.observe(_fr(100.0), _res(State.IDLE))
+    rec.observe(_fr(160.0), _res(State.IDLE))
+
+    data = report_envelope(rec.finalize(), now=200.0)['data']
+
+    # 첫 관측(100 s)부터 지금(200 s)까지가 경과다. 예전에는 t_start 가 없다고
+    # start=now 로 잡아 duration_s 가 계속 0.0 이었다.
+    assert data['t_start'] == 100.0
+    assert data['duration_s'] == 100.0
+    # 집중한 적이 없으니 비율은 0 이지만 분모는 0 이 아니다.
+    assert data['focus_time_s'] == 0
+    assert data['focus_ratio'] == 0.0
+    assert data['state_durations_s']['IDLE'] == 60.0

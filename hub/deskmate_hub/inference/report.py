@@ -37,6 +37,10 @@ class FatigueEpisode:
 
 @dataclass
 class SessionReport:
+    # 관측을 시작한 시각. t_start 는 FSM 이 START 에 들어가야 찍히는데, 책상이
+    # 비어 있으면 그 일이 영영 안 일어난다. 그러면 리포트가 내내 0 초짜리로
+    # 남아 화면이 멈춘 것처럼 보인다. 그래서 '언제부터 보고 있었나' 를 따로 센다.
+    t_first: float | None = None
     t_start: float | None = None
     t_end: float | None = None
     ticks: int = 0
@@ -70,6 +74,8 @@ class SessionRecorder:
         now = frame.now
         st = result.state.value
         self.r.ticks += 1
+        if self.r.t_first is None:
+            self.r.t_first = now
 
         # 직전 상태 체류시간 누적
         if self._pstate is not None and self._pt is not None:
@@ -140,7 +146,10 @@ def report_envelope(r: SessionReport, *, now: float, node: str = "hub") -> dict:
     필드 이름은 display 의 SessionReport.fromEnvelope 계약이다
     (display/atlas/ui_env_app/lib/session_report.dart).
     """
-    start = r.t_start if r.t_start is not None else now
+    # START 전이라도 '보고 있던 시간' 은 흘러간다. t_start 만 보면 duration 이
+    # 계속 0 이라 화면의 리포트가 갱신되지 않는 것처럼 보인다(실측: IDLE 45분
+    # 인데 duration_s 0.0).
+    start = r.t_start if r.t_start is not None else (r.t_first or now)
     end = r.t_end if r.t_end is not None else now
     duration = max(0.0, end - start)
     focus = r.focus_time

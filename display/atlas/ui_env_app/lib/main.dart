@@ -67,7 +67,7 @@ class _DashboardPageState extends State<DashboardPage> {
   // 정보인데 계속 떠 있으면 상단을 영구히 차지한다. 끊긴 상태는 계속 띄운다 -
   // 그건 사람이 손을 써야 하는 정보다.
   static const _linkBadgeVisible = Duration(seconds: 5);
-  DateTime? _connectedAt;
+  Timer? _linkBadgeTimer;
   bool _showLinkLabel = true;
   // 테스트로 고정한 상태. 있으면 화면은 이것을 그리고, 라이브 갱신은 _state 에만
   // 쌓인다 - 풀면 곧바로 최신 라이브 상태로 돌아간다.
@@ -125,6 +125,7 @@ class _DashboardPageState extends State<DashboardPage> {
       _updateLinkLabel();
       unawaited(_feedbackController.reconcileAudioOutput());
     });
+    _updateLinkLabel();
     _screenCycleTimer = Timer.periodic(
       _autoScreenCycleInterval,
       (_) => _advanceAutoScreen(),
@@ -278,16 +279,22 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
+  /// 붙어 있으면 5 초 뒤 배지를 감춘다. 끊기면 다시 띄운다.
+  ///
+  /// 벽시계를 비교하지 않고 타이머로 한 번만 끈다. 시계 비교는 화면에서만
+  /// 확인할 수 있어 테스트로 잡을 수가 없었다.
   void _updateLinkLabel() {
     if (!_source.isConnected) {
-      _connectedAt = null;
+      _linkBadgeTimer?.cancel();
+      _linkBadgeTimer = null;
       if (!_showLinkLabel) setState(() => _showLinkLabel = true);
       return;
     }
-    _connectedAt ??= DateTime.now();
-    final expired =
-        DateTime.now().difference(_connectedAt!) >= _linkBadgeVisible;
-    if (expired && _showLinkLabel) setState(() => _showLinkLabel = false);
+    // 이미 예약했거나 이미 감췄으면 그대로 둔다.
+    if (_linkBadgeTimer != null || !_showLinkLabel) return;
+    _linkBadgeTimer = Timer(_linkBadgeVisible, () {
+      if (mounted) setState(() => _showLinkLabel = false);
+    });
   }
 
   void _advanceAutoScreen() {
@@ -322,6 +329,7 @@ class _DashboardPageState extends State<DashboardPage> {
   void dispose() {
     _timer?.cancel();
     _screenCycleTimer?.cancel();
+    _linkBadgeTimer?.cancel();
     HardwareKeyboard.instance.removeHandler(_onKey);
     _clock.stop();
     _source.close();
