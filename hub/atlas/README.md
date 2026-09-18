@@ -45,4 +45,47 @@ Python 브리지를 실센서 모드로 띄우려면 서비스 환경에 `DESKMA
 빌드 시 `paho-mqtt` 가 설치돼 있으면 payload 에 동봉된다(`tools/build_payload.py`).
 
 호스트 테스트: `cmake -DBUILD_TESTING=ON` 후 `ctest` 로 `deskmate_uart_rx_host_test`(CRC check value·COBS·라인 형식).
-**ARC 컨테이너에서의 실컴파일·실보드 UART 검증은 아직 안 했다.**
+
+실보드 검증 완료(2026-09-18): `rx=71 discarded=0 crc_errors=0`, `/health` `mqtt=true`,
+`/api/state` 에 실측 temp 26.4 · humidity 53.8 · lux 392.
+
+
+## 재부팅·재설치 후 기동 (2026-09-18 실측)
+
+```bash
+scp hub/atlas/tools/pi4-hub-activate.sh atlas:/tmp/
+ssh atlas sh /tmp/pi4-hub-activate.sh
+```
+
+재부팅·IPK 재설치 때마다 네 가지가 날아가고, 넷 다 증상이 `rx=0` 또는 서비스 미기동이다.
+
+| 날아가는 것 | 증상 |
+|---|---|
+| 서비스 계정 uid (설치할 때마다 재할당, 실측 `u0_a5010`→`u0_a5015`) | 계정을 박아 둔 설정이 전부 어긋남 |
+| D-Bus `.service` 의 `User=` | `Cannot do system-bus activation with no user`. `User=root` 도 `Failed to setup environment correctly` 로 거절되므로 **실제 설치 계정**이어야 한다 |
+| `.conf` 의 `own` 정책 | IPK 가 넣는 파일은 root 에만 열려 있어 서비스가 버스 이름을 못 가짐 |
+| `/dev/serial0` 노드 권한 (`root:tty 0620` 으로 원복) | 서비스가 노드를 못 열어 UART 수신 0 |
+
+`hub.env` 도 재설치 때 사라진다. 스크립트가 없으면 만들고, 있으면 건드리지 않는다.
+
+## UART 수신이 `rx=0` 일 때
+
+30 s 주기 로그가 `rx=<프레임> bytes=<원시 바이트>` 를 함께 찍는다. 이 둘로 원인이 갈린다.
+
+| 로그 | 뜻 | 볼 곳 |
+|---|---|---|
+| `open failed: ... (Permission denied)` | 서비스 계정이 노드를 못 연다 | `chgrp`/`chmod 660` |
+| `bytes=0` | 선에 아무것도 오지 않는다 | 배선·공통 GND·ESP32 송신 |
+| `bytes>0 rx=0` | 오는데 프레임이 안 선다 | 보드율, getty·콘솔과의 분할 수신 |
+
+`open` 로그에 `/dev/serial0` 이 실제로 가리킨 노드가 같이 남는다. Pi 4 기본은
+`ttyS0` 이고, `ttyAMA0` 으로 바뀌어 있으면 부팅 설정이 변한 것이라 `ttyS0` 앞으로
+해 둔 권한·getty 정지가 적용되지 않는다.
+
+보드에서 한 번에 점검하려면:
+
+```bash
+scp hub/atlas/tools/pi4-uart-check.sh atlas:/tmp/
+ssh atlas sh /tmp/pi4-uart-check.sh          # 점검만
+ssh atlas sh /tmp/pi4-uart-check.sh --fix    # getty 정지·권한·보드율까지
+```
