@@ -40,6 +40,7 @@ constexpr uint8_t kBh1750Address = 0x23;
 
 constexpr uint32_t kMmwavePeriodMs = 1000;
 constexpr uint32_t kEnvironmentPeriodMs = 5000;
+constexpr uint32_t kC1001RetryMs = 10000;
 
 // Supplied by platformio.ini build flags so tuning does not require source edits.
 constexpr uint32_t kWarmupMs = DESKMATE_WARMUP_MS;
