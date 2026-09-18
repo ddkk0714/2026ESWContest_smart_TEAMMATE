@@ -68,6 +68,11 @@ class _DashboardPageState extends State<DashboardPage> {
   // 그건 사람이 손을 써야 하는 정보다.
   static const _linkBadgeVisible = Duration(seconds: 5);
   Timer? _linkBadgeTimer;
+  // 배지는 '연결됐다는 플래그' 가 아니라 **상태가 실제로 오고 있는가** 로 본다.
+  // mqtt_client 의 connectionStatus 는 재연결 중에 잠깐씩 흔들려서, 그걸 보고
+  // 되돌리면 배지가 영영 안 사라진다.
+  static const _linkStaleAfter = Duration(seconds: 15);
+  DateTime? _lastStateAt;
   bool _showLinkLabel = true;
   // 테스트로 고정한 상태. 있으면 화면은 이것을 그리고, 라이브 갱신은 _state 에만
   // 쌓인다 - 풀면 곧바로 최신 라이브 상태로 돌아간다.
@@ -154,6 +159,7 @@ class _DashboardPageState extends State<DashboardPage> {
     _busy = true;
     try {
       final next = await _source.fetch();
+      _lastStateAt = DateTime.now();
       if (mounted) {
         setState(() {
           _state = next;
@@ -284,7 +290,10 @@ class _DashboardPageState extends State<DashboardPage> {
   /// 벽시계를 비교하지 않고 타이머로 한 번만 끈다. 시계 비교는 화면에서만
   /// 확인할 수 있어 테스트로 잡을 수가 없었다.
   void _updateLinkLabel() {
-    if (!_source.isConnected) {
+    final last = _lastStateAt;
+    final stale =
+        last == null || DateTime.now().difference(last) > _linkStaleAfter;
+    if (stale || !_source.isConnected) {
       _linkBadgeTimer?.cancel();
       _linkBadgeTimer = null;
       if (!_showLinkLabel) setState(() => _showLinkLabel = true);

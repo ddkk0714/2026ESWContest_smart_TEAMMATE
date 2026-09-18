@@ -184,6 +184,9 @@ class MqttStateSource implements StateSource {
   DisplayState? _latest;
   String? _displayMessage;
   SessionReport? _sessionReport;
+
+  /// 마지막으로 해석에 실패한 메시지. 화면이 왜 안 움직이는지 말해 주려고 둔다.
+  String? _lastParseError;
   String? _pendingRequestId;
   int _sequence = 0;
 
@@ -195,7 +198,11 @@ class MqttStateSource implements StateSource {
       _client.connectionStatus?.state == MqttConnectionState.connected;
 
   @override
-  String get connectionLabel => isConnected ? 'MQTT 연결됨' : 'MQTT 재연결 중';
+  String get connectionLabel {
+    final failure = _lastParseError;
+    if (failure != null) return '메시지 해석 실패';
+    return isConnected ? 'MQTT 연결됨' : 'MQTT 재연결 중';
+  }
 
   @override
   bool get supportsSensorTest => false;
@@ -273,10 +280,12 @@ class MqttStateSource implements StateSource {
             if (_displayMessage?.isEmpty ?? false) _displayMessage = null;
           }
         }
-      } on FormatException {
-        // 손상됐거나 다른 schema의 메시지는 display를 멈추지 않는다.
-      } on TypeError {
-        // JSON envelope가 아닌 토픽 오발행도 같은 방식으로 무시한다.
+      } catch (error) {
+        // 손상됐거나 다른 schema 의 메시지는 display 를 멈추지 않는다. 다만
+        // **조용히 삼키지는 않는다** - 전에는 여기서 걸리면 화면이 첫 상태를
+        // 영영 못 받고 멈춰 있는데 아무 단서도 남지 않았다.
+        _lastParseError = '${received.topic}: $error';
+        stderr.writeln('[display] 메시지 해석 실패 $_lastParseError');
       }
     }
   }
