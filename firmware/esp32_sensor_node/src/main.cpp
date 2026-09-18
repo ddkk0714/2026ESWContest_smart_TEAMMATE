@@ -3,6 +3,8 @@
 #include "pins.h"
 #include "sensors/c1001/C1001Passive.h"
 #include "sensors/c1001/DrowsyDetector.h"
+#include "sensors/environment/EnvironmentPayload.h"
+#include "sensors/environment/EnvironmentSensors.h"
 #include "transport/frame.h"
 #include "transport/usb_json.h"
 
@@ -11,6 +13,8 @@ using namespace deskmate;
 HardwareSerial pi4_serial(2);
 C1001Passive mmwave(Serial1);
 DrowsyDetector drowsy_detector;
+EnvironmentSensors environment_sensors(Wire);
+EnvironmentSample environment_sample;
 
 uint32_t last_mmwave_ms = 0;
 uint32_t last_environment_ms = 0;
@@ -56,11 +60,10 @@ void writeMmwaveUart(uint32_t now_ms, const MmwaveSample& sample, DrowsyState dr
 #endif
 }
 
-void writeEnvironmentUart(uint32_t now_ms) {
+void writeEnvironmentUart(uint32_t now_ms, const EnvironmentSample& sample) {
 #if DESKMATE_UART2_TX
-  // Environment drivers are intentionally optional. Zero + valid_bits=0 represents
-  // no available sensor and matches the USB JSON stub's null/false values.
-  const uint8_t payload[] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+  uint8_t payload[kEnvironmentPayloadSize];
+  encodeEnvironmentPayload(sample, payload);
   writeUartFrame(pi4_serial, kFrameTypeEnvironment, environment_sequence++, now_ms, payload,
                  sizeof(payload));
 #endif
@@ -91,6 +94,7 @@ void setup() {
   Serial.println(F("DESKMATE ESP32 sensor node starting"));
   mmwave_ready = mmwave.begin();
   Serial.println(mmwave_ready ? F("C1001 ready") : F("C1001 initialization failed"));
+  environment_sensors.begin(millis(), environment_sample);
 }
 
 void loop() {
@@ -102,10 +106,12 @@ void loop() {
     writeMmwaveJson(Serial, now_ms, sample, drowsy_state);
     writeMmwaveUart(now_ms, sample, drowsy_state);
   }
+
+  environment_sensors.poll(now_ms, environment_sample);
   if (now_ms - last_environment_ms >= kEnvironmentPeriodMs) {
     last_environment_ms = now_ms;
-    writeEnvironmentStubJson(Serial, now_ms);
-    writeEnvironmentUart(now_ms);
+    writeEnvironmentJson(Serial, now_ms, environment_sample);
+    writeEnvironmentUart(now_ms, environment_sample);
   }
   if (now_ms - last_heartbeat_ms >= kMmwavePeriodMs) {
     last_heartbeat_ms = now_ms;
