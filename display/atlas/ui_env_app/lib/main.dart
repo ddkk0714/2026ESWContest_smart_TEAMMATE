@@ -23,6 +23,9 @@ const _hubUrl = String.fromEnvironment('DESKMATE_HUB_URL');
 const _mqttHost = String.fromEnvironment('DESKMATE_MQTT_HOST');
 const _mqttPort = int.fromEnvironment('DESKMATE_MQTT_PORT', defaultValue: 1883);
 
+const _autoScreenCycleInterval = Duration(seconds: 5);
+const _autoScreenPhases = ['idle', 'focus', 'fatigue', 'recovery', 'end'];
+
 void main() => runApp(const DeskmateApp());
 
 class DeskmateApp extends StatelessWidget {
@@ -56,7 +59,11 @@ class _DashboardPageState extends State<DashboardPage> {
   DisplayState? _state;
   String? _error;
   bool _busy = false;
-  bool _demoCyclingEnabled = false;
+  // PR #21 은 기본 true 였지만 지금은 실센서가 붙어 있어 켜 두면 허브의 실제
+  // 국면을 데모 국면이 덮어쓴다. 기본 OFF 로 두고 토글로만 켠다.
+  bool _autoScreenCyclingEnabled = false;
+  int _autoScreenPhaseIndex = 0;
+  Timer? _screenCycleTimer;
   _AppView _view = _AppView.dashboard;
   late final MusicPlayback _music;
   late final StreamSubscription<bool> _musicChanges;
@@ -104,10 +111,14 @@ class _DashboardPageState extends State<DashboardPage> {
             : HttpStateSource(_hubUrl);
     _refresh();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (_source is! DemoStateSource || _demoCyclingEnabled) _refresh();
+      if (_source is! DemoStateSource || _autoScreenCyclingEnabled) _refresh();
       _sampleKeystroke();
       unawaited(_feedbackController.reconcileAudioOutput());
     });
+    _screenCycleTimer = Timer.periodic(
+      _autoScreenCycleInterval,
+      (_) => _advanceAutoScreen(),
+    );
   }
 
   /// 키 이벤트는 소비하지 않는다(항상 false). 타건 수만 즉시 반영해 화면이 살아 보이게 한다.
@@ -239,18 +250,31 @@ class _DashboardPageState extends State<DashboardPage> {
         ),
       );
 
-  void _toggleDemoCycling() {
-    if (_source is! DemoStateSource) return;
-    setState(() => _demoCyclingEnabled = !_demoCyclingEnabled);
-    if (_demoCyclingEnabled) _refresh();
+  void _toggleAutoScreenCycling() {
+    setState(() {
+      _autoScreenCyclingEnabled = !_autoScreenCyclingEnabled;
+      if (_autoScreenCyclingEnabled) {
+        _autoScreenPhaseIndex =
+            (_autoScreenPhaseIndex + 1) % _autoScreenPhases.length;
+      }
+    });
+    if (_autoScreenCyclingEnabled) _refresh();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         duration: const Duration(seconds: 1),
         content: Text(
-          _demoCyclingEnabled ? '자동 순환을 시작했습니다.' : '자동 순환을 멈췄습니다.',
+          _autoScreenCyclingEnabled ? '자동 화면 순환을 시작했습니다.' : '자동 화면 순환을 멈췄습니다.',
         ),
       ),
     );
+  }
+
+  void _advanceAutoScreen() {
+    if (!mounted || !_autoScreenCyclingEnabled) return;
+    setState(() {
+      _autoScreenPhaseIndex =
+          (_autoScreenPhaseIndex + 1) % _autoScreenPhases.length;
+    });
   }
 
   Future<void> _confirmExit() async {
@@ -276,6 +300,7 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void dispose() {
     _timer?.cancel();
+    _screenCycleTimer?.cancel();
     HardwareKeyboard.instance.removeHandler(_onKey);
     _clock.stop();
     _source.close();
@@ -339,9 +364,13 @@ class _DashboardPageState extends State<DashboardPage> {
                               : state.timestamp,
                           liveKeys: _localKeystroke != null ? _liveKeys : null,
                           onFeedback: _feedback,
-                          showDemoControl: _source is DemoStateSource,
-                          demoCyclingEnabled: _demoCyclingEnabled,
-                          onToggleDemoCycling: _toggleDemoCycling,
+                          showDemoControl: true,
+                          demoCyclingEnabled: _autoScreenCyclingEnabled,
+                          onToggleDemoCycling: _toggleAutoScreenCycling,
+                          phaseOverride: _source is! DemoStateSource &&
+                                  _autoScreenCyclingEnabled
+                              ? _autoScreenPhases[_autoScreenPhaseIndex]
+                              : null,
                           showFocusDetail: _showFocusDetail,
                           onShowFocusDetail: (value) =>
                               setState(() => _showFocusDetail = value),
