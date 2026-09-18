@@ -130,6 +130,53 @@ def build_report(
     return rec.finalize()
 
 
+def report_envelope(r: SessionReport, *, now: float, node: str = "hub") -> dict:
+    """진행 중인 세션의 스냅샷을 display 가 읽는 봉투로 만든다.
+
+    세션이 끝나야만 리포트를 낼 수 있으면 화면의 리포트 탭은 세션 내내 비어
+    있는다. 그래서 t_end 를 "지금"으로 두고 같은 스키마로 중간 스냅샷을 낸다.
+    끝난 세션은 recorder 가 기록한 t_end 를 그대로 쓴다.
+
+    필드 이름은 display 의 SessionReport.fromEnvelope 계약이다
+    (display/atlas/ui_env_app/lib/session_report.dart).
+    """
+    start = r.t_start if r.t_start is not None else now
+    end = r.t_end if r.t_end is not None else now
+    duration = max(0.0, end - start)
+    focus = r.focus_time
+    accepted = sum(1 for x in r.esm_labels if x.get("label") == "break_accept")
+    rejected = sum(1 for x in r.esm_labels if x.get("label") == "break_reject")
+    asked = accepted + rejected
+    return {
+        "schema_version": "1.0",
+        "ts": round(now, 3),
+        "node": node,
+        "data": {
+            "t_start": round(start, 3),
+            "t_end": round(end, 3),
+            "duration_s": round(duration, 3),
+            "focus_time_s": round(focus, 3),
+            # 0 초 세션에서 0 으로 나누지 않는다. 화면은 이 값을 막대로 그린다.
+            "focus_ratio": round(focus / duration, 4) if duration > 0 else 0.0,
+            "fatigue_episodes": [
+                {
+                    "t_onset": round(e.t_onset, 3),
+                    "peak_fatigue": round(e.peak_fatigue, 4),
+                    "t_resolved": None if e.t_resolved is None else round(e.t_resolved, 3),
+                }
+                for e in r.episodes
+            ],
+            "intervention_counts": {
+                "total": len(r.interventions),
+                "recovered": sum(1 for i in r.interventions if i.outcome == "recovered"),
+            },
+            # 물어본 적이 없으면 0% 가 아니라 "모름" 이다.
+            "break_accept_rate": round(accepted / asked, 4) if asked else None,
+            "state_durations_s": {k: round(v, 3) for k, v in r.durations.items()},
+        },
+    }
+
+
 def format_session_report(r: SessionReport) -> str:
     lines = ["=== 세션 리포트 ==="]
     dur = r.duration

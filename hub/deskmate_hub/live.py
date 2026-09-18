@@ -14,7 +14,8 @@ import time
 from dataclasses import asdict
 from typing import Any, TextIO
 
-from .inference import FSMEngine, GateMode, SensorFrame, State, load_config
+from .inference import (FSMEngine, GateMode, SensorFrame, SessionRecorder, State,
+                        load_config, report_envelope)
 from .ingest import SensorCache, SessionTracker, build_frame, load_ingest_config, sensor_summary
 from .presentation import state_envelope
 
@@ -46,6 +47,9 @@ class LiveHub:
         self.ingest_cfg = ingest_cfg or load_ingest_config()
         self.engine = FSMEngine(self.fsm_cfg)
         self.tracker = SessionTracker()
+        # 리포트는 세션이 끝나야 나오는 게 아니라 진행 중에도 스냅샷을 낼 수 있어야
+        # 한다. 화면의 리포트 탭이 세션 내내 비어 있으면 아무도 안 본다.
+        self.recorder = SessionRecorder()
         self.publish = publish or (lambda envelope: None)
         self.publish_request = publish_request or (lambda envelope: None)
         self.pending_request: dict[str, Any] | None = None
@@ -70,6 +74,7 @@ class LiveHub:
         prev_state = self.engine.state
         result = self.engine.tick(frame)
         self.tracker.observe_state(result.state, now)
+        self.recorder.observe(frame, result)
 
         envelope = state_envelope(
             result, boot_id=self.boot_id, seq=self.seq, ts=now,
@@ -94,6 +99,12 @@ class LiveHub:
         )
         return envelope
 
+
+    def report_envelope(self, now: float | None = None) -> dict[str, Any]:
+        """지금까지의 세션 요약. 주기 발행과 세션 종료에 같은 모양을 쓴다."""
+        return report_envelope(
+            self.recorder.finalize(), now=time.time() if now is None else now
+        )
 
     _REQUEST_STATES = {
         State.ACTION_BREAK: ("break_suggest", "take_a_break"),

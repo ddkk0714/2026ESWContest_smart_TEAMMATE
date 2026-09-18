@@ -63,6 +63,12 @@ class _DashboardPageState extends State<DashboardPage> {
   // 국면을 데모 국면이 덮어쓴다. 기본 OFF 로 두고 토글로만 켠다.
   bool _autoScreenCyclingEnabled = false;
   int _autoScreenPhaseIndex = 0;
+  // 연결 배지는 붙은 뒤 5 초만 띄운다. '붙었다' 는 한 번 확인하면 되는
+  // 정보인데 계속 떠 있으면 상단을 영구히 차지한다. 끊긴 상태는 계속 띄운다 -
+  // 그건 사람이 손을 써야 하는 정보다.
+  static const _linkBadgeVisible = Duration(seconds: 5);
+  DateTime? _connectedAt;
+  bool _showLinkLabel = true;
   Timer? _screenCycleTimer;
   _AppView _view = _AppView.dashboard;
   late final MusicPlayback _music;
@@ -113,6 +119,7 @@ class _DashboardPageState extends State<DashboardPage> {
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (_source is! DemoStateSource || _autoScreenCyclingEnabled) _refresh();
       _sampleKeystroke();
+      _updateLinkLabel();
       unawaited(_feedbackController.reconcileAudioOutput());
     });
     _screenCycleTimer = Timer.periodic(
@@ -268,6 +275,18 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
+  void _updateLinkLabel() {
+    if (!_source.isConnected) {
+      _connectedAt = null;
+      if (!_showLinkLabel) setState(() => _showLinkLabel = true);
+      return;
+    }
+    _connectedAt ??= DateTime.now();
+    final expired =
+        DateTime.now().difference(_connectedAt!) >= _linkBadgeVisible;
+    if (expired && _showLinkLabel) setState(() => _showLinkLabel = false);
+  }
+
   void _advanceAutoScreen() {
     if (!mounted || !_autoScreenCyclingEnabled) return;
     setState(() {
@@ -330,7 +349,8 @@ class _DashboardPageState extends State<DashboardPage> {
                   children: [
                     _Header(
                         source: _source.label,
-                        connectionLabel: _source.connectionLabel,
+                        connectionLabel:
+                            _showLinkLabel ? _source.connectionLabel : '',
                         online: _source.isConnected,
                         sequence: state.sequence,
                         view: _view,
@@ -499,8 +519,10 @@ class _Header extends StatelessWidget {
           Tooltip(
               message: source,
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Text(connectionLabel),
-                const SizedBox(width: 4),
+                if (connectionLabel.isNotEmpty) ...[
+                  Text(connectionLabel),
+                  const SizedBox(width: 4),
+                ],
                 Text('#' + sequence.toString())
               ])),
           PopupMenuButton<int>(
