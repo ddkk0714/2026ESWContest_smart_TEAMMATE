@@ -68,11 +68,19 @@ defines=()
 if [ -n "$ATLAS_HUB_URL" ]; then
     defines+=("--dart-define=DESKMATE_HUB_URL=$ATLAS_HUB_URL")
 fi
+# MQTT 가 있으면 앱이 그것을 먼저 쓴다(main.dart 의 소스 선택 순서: MQTT > HTTP > 데모).
+# 제품 경로는 MQTT 다 - HTTP 8765 는 개발용 어댑터다.
+if [ -n "$ATLAS_MQTT_HOST" ]; then
+    defines+=("--dart-define=DESKMATE_MQTT_HOST=$ATLAS_MQTT_HOST")
+    defines+=("--dart-define=DESKMATE_MQTT_PORT=$ATLAS_MQTT_PORT")
+fi
 
 echo "앱      : $app_id ($app_dir)"
 echo "장치    : $ATLAS_DEVICE_ID ($ATLAS_SSH_USER@$ATLAS_DEVICE_IP:$ATLAS_SSH_PORT)"
 echo "모드    : $mode"
-echo "Hub URL : ${ATLAS_HUB_URL:-(없음 - 내장 데모)}"
+echo "MQTT    : ${ATLAS_MQTT_HOST:+$ATLAS_MQTT_HOST:$ATLAS_MQTT_PORT}${ATLAS_MQTT_HOST:-(없음)}"
+echo "Hub URL : ${ATLAS_HUB_URL:-(없음)}"
+if [ -z "$ATLAS_MQTT_HOST" ] && [ -z "$ATLAS_HUB_URL" ]; then echo "          -> 둘 다 비어 내장 데모로 뜬다"; fi
 echo "동작    : $action"
 echo
 
