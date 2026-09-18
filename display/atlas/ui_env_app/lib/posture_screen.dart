@@ -30,12 +30,32 @@ import 'package:flutter/material.dart';
 import 'package:camtest/diag.dart';
 import 'package:camtest/hub_config.dart';
 import 'package:camtest/hub_setup.dart';
-import 'package:camtest/palette.dart';
+import 'deskmate_theme.dart';
 import 'package:camtest/posture_source.dart';
 import 'package:camtest/serial_posture_source.dart';
 import 'package:camtest/camera_view.dart';
 import 'package:camtest/vision_view.dart';
 import 'package:camtest/posture_state.dart';
+
+// camtest 의 palette.dart 는 어두운 화면용이다(kBg #0F1420, kInk #E8ECF4).
+// 통합 앱은 밝은 테마라 그대로 쓰면 자세 탭만 검은 판이 되고 글씨가 흰색이 된다.
+// 그래서 그 파일을 가져오는 대신 같은 이름을 앱 테마 색으로 여기서 다시 정의한다.
+// 화면 코드는 한 줄도 바꾸지 않고, camtest 앱 자신의 색은 그대로 남는다.
+const kBg = DeskmateColors.background;
+const kSurface = DeskmateColors.surfaceRaised;
+const kLine = DeskmateColors.line;
+const kInk = DeskmateColors.ink;
+const kMuted = DeskmateColors.inkMuted;
+const kDim = DeskmateColors.inkFaint;
+const kGray = DeskmateColors.inkMuted;
+
+// 상태색은 밝은 바탕에서 읽히도록 어둡게 낮춘 값이다. camtest 의 네온 톤
+// (예: kGreen #37D0A0)은 #D8D6D1 위에서 거의 안 보인다.
+const kGreen = Color(0xFF2F7A66);
+const kAmber = Color(0xFF8A6526);
+const kRed = Color(0xFF9E4F47);
+const kBlue = Color(0xFF3C6488);
+const kViolet = Color(0xFF63528A);
 
 /// 배포 스크립트(`deploy/device.env` 의 `ATLAS_HUB_URL`)가 그대로 넘겨주는 값.
 /// 여기서는 허브가 아니라 **Pi 4 자세 노드**의 주소다 — 두 API 모양이 같아서

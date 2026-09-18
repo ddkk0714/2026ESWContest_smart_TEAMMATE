@@ -144,6 +144,19 @@ class _CameraViewPageState extends State<CameraViewPage> {
   }
 }
 
+/// ToF 깊이 맵처럼 보이게 하는 색 필터 — 검정에서 빨강까지 한 축으로만 간다.
+///
+/// 휘도를 빨강 한 채널로 옮기고 녹·청은 0 으로 눌러, 어두운 곳은 검정이고
+/// 밝을수록 빨개진다. 픽셀을 직접 훑지 않고 캔버스 단계에서 걸리므로 프레임
+/// 비용이 사실상 없다. 이득 1.35 는 원본 카메라가 밋밋해 대비를 올린 값이다.
+const double _tofGain = 1.35;
+const ColorFilter tofDepthFilter = ColorFilter.matrix(<double>[
+  0.2126 * _tofGain, 0.7152 * _tofGain, 0.0722 * _tofGain, 0, 0, // R = 휘도
+  0, 0, 0, 0, 0, // G
+  0, 0, 0, 0, 0, // B
+  0, 0, 0, 1, 0, // A 그대로
+]);
+
 class _CameraPainter extends CustomPainter {
   _CameraPainter({required this.image, required this.points});
 
@@ -156,7 +169,10 @@ class _CameraPainter extends CustomPainter {
       image,
       Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
       Offset.zero & size,
-      Paint()..filterQuality = FilterQuality.medium,
+      // 뼈대는 필터를 타지 않는다 - 영상에만 걸어야 초록 선이 그대로 보인다.
+      Paint()
+        ..filterQuality = FilterQuality.medium
+        ..colorFilter = tofDepthFilter,
     );
     if (points.isEmpty) return;
 
