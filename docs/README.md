@@ -26,6 +26,7 @@
 |---|---|
 | [`hardware.md`](hardware.md) | 장비 역할, 배선, 센서, BOM |
 | [`atlas-build-handoff.md`](atlas-build-handoff.md) | Pi 5 Atlas IPK 빌드·실기 배포 점검 |
+| [`ilink-bluetooth-lamp.md`](ilink-bluetooth-lamp.md) | iLink BLE 조명 프로토콜·상태 피드백·PC 연결 절차 |
 | [`submission.md`](submission.md) | 결선 제출물·마감·시연 규칙 |
 
 계약을 바꾸는 변경은 해당 문서와 구현·테스트를 같은 커밋에서 함께 갱신한다.

@@ -10,6 +10,8 @@ abstract interface class MusicPlayback {
   double get volume;
   Stream<bool> get playingChanges;
   Stream<double> get volumeChanges;
+  Future<bool> play();
+  Future<void> pause();
   Future<bool> toggle();
   Future<void> selectTrack(int index);
   Future<void> setVolume(double value);
@@ -172,21 +174,35 @@ class AtlasMusicPlayback implements MusicPlayback {
   }
 
   @override
-  Future<bool> toggle() async {
+  Future<bool> play() async {
     await _enqueue(() async {
-      if (_playing) {
-        await _player!.pause();
-        _setPlaying(false);
+      if (_playing) return;
+      if (_prepared) {
+        await _player!.resume();
       } else {
-        if (_prepared) {
-          await _player!.resume();
-        } else {
-          await _startTrack();
-        }
-        _setPlaying(true);
+        await _startTrack();
       }
+      _setPlaying(true);
     });
     return _playing;
+  }
+
+  @override
+  Future<void> pause() async {
+    await _enqueue(() async {
+      if (!_playing) return;
+      await _player!.pause();
+      _setPlaying(false);
+    });
+  }
+
+  @override
+  Future<bool> toggle() async {
+    if (_playing) {
+      await pause();
+      return _playing;
+    }
+    return play();
   }
 
   @override

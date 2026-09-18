@@ -11,6 +11,7 @@ class DashboardView extends StatelessWidget {
     super.key,
     required this.state,
     this.displayMessage,
+    this.hasPendingRequest = false,
     required this.keystroke,
     required this.keystrokeReference,
     required this.onFeedback,
@@ -24,6 +25,7 @@ class DashboardView extends StatelessWidget {
 
   final DisplayState state;
   final String? displayMessage;
+  final bool hasPendingRequest;
   final KeystrokeMetrics? keystroke;
   final DateTime keystrokeReference;
   final int? liveKeys;
@@ -51,7 +53,8 @@ class DashboardView extends StatelessWidget {
     } else if (state.phase == 'end') {
       transitionKey = 'report';
       content = SessionReportView(state: state);
-    } else if (state.phase == 'fatigue' && state.gate != 'none') {
+    } else if (hasPendingRequest ||
+        (state.phase == 'fatigue' && state.gate != 'none')) {
       transitionKey = 'suggestion';
       content = SuggestionView(state: state, onFeedback: onFeedback);
     } else if (state.phase == 'recovery') {

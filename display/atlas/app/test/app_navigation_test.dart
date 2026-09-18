@@ -141,6 +141,15 @@ class _FakeMusicPlayback implements MusicPlayback {
   bool get isPlaying => _playing;
 
   @override
+  Future<bool> play() async {
+    _playing = true;
+    return true;
+  }
+
+  @override
+  Future<void> pause() async => _playing = false;
+
+  @override
   Stream<bool> get playingChanges => const Stream<bool>.empty();
 
   @override
