@@ -26,8 +26,15 @@
 | Pi 4 ↔ Pi 5 | RJ45 유선 LAN (DHCP 주소 확인) | MQTT 1883 + SSH 22 |
 
 - Pi 4 와 ESP32 의 5V 는 직접 연결하지 않는다. 각 보드는 자기 전원을 쓴다.
-- Pi 4 `/dev/serial0 → ttyS0`. 커널 콘솔·`serial-getty@ttyS0` 가 기본 활성이라 실험 중 `systemctl stop serial-getty@ttyS0.service` 로 중지했다.
+- Pi 4 `/dev/serial0` 은 심볼릭 링크다. **어느 노드를 가리키는지 매번 확인한다.**
+  2026-09-16 실측은 `→ ttyS0`(mini UART) 였고, 그 기준으로 `serial-getty@ttyS0` 정지와
+  `chgrp`/`chmod 660` 을 했다. 부팅 설정이 바뀌어 `→ ttyAMA0` 이 되면 그 조치가 전부
+  다른 노드 앞으로 간 것이 되어 수신이 조용히 0 이 된다.
   읽기 전용 rootfs 라 재부팅 시 원복 — 영구 설정은 ATLAS 공식 절차 확인 필요.
+- 점검·응급 복구: `ssh atlas sh /tmp/pi4-uart-check.sh [--fix]`
+  (원본 `hub/atlas/tools/pi4-uart-check.sh`). 노드·보드율·콘솔·getty·점유 프로세스·권한을
+  차례로 찍고 마지막에 원시 바이트를 캡처한다. 0 B 면 배선/ESP32, 바이트는 오는데
+  Hub `rx=0` 이면 보드율·프레이밍 문제다.
 - ESP32 UART0 = 디버그·`log2file`, UART1 = C1001, UART2 = Pi 4 링크. ESP32 는 UART 3개라 채널 부족은 제약이 아니다.
 - 실측 프레임: COBS 인코딩 + 끝 `0x00` + CRC-16/CCITT-FALSE, 약 26 B, 1 Hz. 목표 속도 460,800 bps 이상은 미검증.
 - USB Ethernet Gadget 은 Pi 4·Pi 5 USB-C 가 전원 전용이라 불가.

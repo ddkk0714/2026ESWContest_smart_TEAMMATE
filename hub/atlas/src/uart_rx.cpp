@@ -3,9 +3,11 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <fcntl.h>
 #include <iomanip>
 #include <iostream>
+#include <limits.h>
 #include <poll.h>
 #include <sstream>
 #include <termios.h>
@@ -54,15 +56,31 @@ speed_t baudToSpeed(int baud)
     }
 }
 
+// /dev/serial0 은 심볼릭 링크다. Pi 4 기본은 ttyS0(mini UART)이지만 부팅 설정에
+// 따라 ttyAMA0 으로 바뀐다. 어느 노드를 실제로 열었는지 로그에 남겨야 배선이
+// 아니라 부팅 설정이 바뀐 경우를 구분할 수 있다.
+std::string resolveDevice(const std::string& device)
+{
+    char resolved[PATH_MAX];
+    if (realpath(device.c_str(), resolved) == nullptr) {
+        return device;
+    }
+    return std::string(resolved);
+}
+
 int openSerial(const UartRxConfig& config)
 {
     const int fd = open(config.device.c_str(), O_RDONLY | O_NOCTTY | O_NONBLOCK);
     if (fd < 0) {
+        std::cerr << "DESKMATE UART open failed: " << config.device << " ("
+                  << std::strerror(errno) << ")\n";
         return -1;
     }
 
     termios settings{};
     if (tcgetattr(fd, &settings) != 0) {
+        std::cerr << "DESKMATE UART tcgetattr failed: " << config.device << " ("
+                  << std::strerror(errno) << ")\n";
         close(fd);
         return -1;
     }
@@ -77,9 +95,13 @@ int openSerial(const UartRxConfig& config)
     settings.c_cc[VMIN] = 0;
     settings.c_cc[VTIME] = 0;
     if (tcsetattr(fd, TCSANOW, &settings) != 0) {
+        std::cerr << "DESKMATE UART tcsetattr failed: " << config.device << " ("
+                  << std::strerror(errno) << ")\n";
         close(fd);
         return -1;
     }
+    std::cerr << "DESKMATE UART open " << config.device << " -> "
+              << resolveDevice(config.device) << " @" << config.baud << "\n";
     return fd;
 }
 
@@ -239,6 +261,7 @@ void UartReceiver::run()
         const auto now = Clock::now();
         if (now >= next_report) {
             std::cerr << "DESKMATE UART rx=" << counters_.received.load()
+                      << " bytes=" << counters_.bytes.load()
                       << " discarded=" << counters_.discarded.load()
                       << " crc_errors=" << counters_.crc_errors.load() << "\n";
             next_report = now + std::chrono::seconds(30);
@@ -270,6 +293,7 @@ void UartReceiver::run()
             }
             continue;
         }
+        counters_.bytes += static_cast<std::uint64_t>(count);
         for (ssize_t index = 0; index < count; ++index) {
             if (bytes[index] == 0) {
                 if (oversize) {
