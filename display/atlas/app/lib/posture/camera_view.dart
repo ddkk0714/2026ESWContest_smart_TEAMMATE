@@ -15,6 +15,8 @@ import 'package:flutter/material.dart';
 
 import 'palette.dart';
 import 'posture_source.dart';
+import 'thermal_panel.dart';
+import 'thermal_view.dart';
 import 'tof_filter.dart';
 import 'vision_view.dart';
 
@@ -48,11 +50,18 @@ class _CameraViewPageState extends State<CameraViewPage> {
   String? _error;
   int _frames = 0;
 
-  /// ToF 화면은 배경 모델을 들고 있어야 하므로 프레임마다 같은 객체에 넣는다.
+  /// 배경차분 화면은 배경 모델을 들고 있어야 하므로 프레임마다 같은 객체에 넣는다.
   final _tof = TofFilter();
   VisionSnapshot? _zones;
-  bool _tofView = false;
+  ThermalFrame? _thermal;
+  int _previewW = 0;
+  int _previewH = 0;
+  double _fps = 0;
+  DateTime? _lastFrameAt;
+  _CamView _view = _CamView.thermal;
   VisionMode _tofMode = VisionMode.heat;
+  bool _skeleton = true;
+  bool _grid = false;
 
   @override
   void initState() {
@@ -85,11 +94,22 @@ class _CameraViewPageState extends State<CameraViewPage> {
       // 화면을 안 보고 있어도 계속 넣는다. 배경 모델은 연속된 프레임으로만
       // 서고, 전환한 뒤에 처음부터 다시 세우면 20프레임을 또 기다려야 한다.
       final zones = _tof.add(frame.width, frame.height, frame.grey);
+      final thermal = thermalZones(frame.grey, frame.width, frame.height);
+      final now = DateTime.now();
+      final previous = _lastFrameAt;
+      final gap = previous == null
+          ? null
+          : now.difference(previous).inMicroseconds / 1e6;
       setState(() {
         _image?.dispose();
         _image = image;
         _points = frame.points;
         _zones = zones;
+        _thermal = thermal;
+        _previewW = frame.width;
+        _previewH = frame.height;
+        _lastFrameAt = now;
+        if (gap != null && gap > 0) _fps = _fps * 0.9 + 0.1 / gap;
         _error = null;
         _frames++;
       });
@@ -99,9 +119,11 @@ class _CameraViewPageState extends State<CameraViewPage> {
     }
   }
 
-  /// 화면 아래 한 줄. ToF 로 보면 무엇을 보고 있는지 말해 준다.
+  /// 화면 아래 한 줄. 지금 무엇을 보고 있는지 말해 준다.
   String _caption(ui.Image image) {
-    if (!_tofView) return '${image.width}x${image.height} · $_frames장 받음';
+    if (_view != _CamView.coverage) {
+      return '${image.width}x${image.height} · $_frames장 받음';
+    }
     if (_tof.warmingUp) return '배경을 잡는 중… 화각에서 잠깐 비켜 주세요';
     return '$tofCols x $tofRows · 임계 ${_tof.threshold} · $_frames장 받음';
   }
@@ -132,22 +154,35 @@ class _CameraViewPageState extends State<CameraViewPage> {
   Widget build(BuildContext context) {
     final image = _image;
     final zones = _zones;
+    final thermal = _thermal;
     return Scaffold(
       backgroundColor: kBg,
       appBar: AppBar(
         backgroundColor: kSurface,
-        title: Text(_tofView ? 'ToF 보기 — 54x42' : '카메라 보기'),
+        title: Text(_view.title),
         actions: [
           IconButton(
-            key: const ValueKey('tof-toggle'),
-            tooltip: _tofView ? '원본 보기' : 'ToF 처럼 보기',
-            onPressed: () => setState(() => _tofView = !_tofView),
-            color: _tofView ? kGreen : kMuted,
-            icon: Icon(_tofView
-                ? Icons.videocam_outlined
-                : Icons.blur_on_rounded),
+            key: const ValueKey('cam-view-cycle'),
+            tooltip: '화면 바꾸기 — ${_view.next.title}',
+            onPressed: () => setState(() => _view = _view.next),
+            color: _view == _CamView.raw ? kMuted : kGreen,
+            icon: Icon(_view.icon),
           ),
-          if (_tofView)
+          if (_view == _CamView.thermal) ...[
+            IconButton(
+              tooltip: '뼈대',
+              onPressed: () => setState(() => _skeleton = !_skeleton),
+              color: _skeleton ? kGreen : kMuted,
+              icon: const Icon(Icons.accessibility_new_rounded, size: 20),
+            ),
+            IconButton(
+              tooltip: '센서 격자',
+              onPressed: () => setState(() => _grid = !_grid),
+              color: _grid ? kGreen : kMuted,
+              icon: const Icon(Icons.grid_on_rounded, size: 20),
+            ),
+          ],
+          if (_view == _CamView.coverage)
             IconButton(
               tooltip: '기준 다시 잡기',
               onPressed: () => setState(_tof.resetBackground),
@@ -183,26 +218,64 @@ class _CameraViewPageState extends State<CameraViewPage> {
                 children: [
                   Padding(
                     padding: const EdgeInsets.all(12),
-                    child: _tofView && zones != null
-                        ? VisionPanel(snapshot: zones, mode: _tofMode)
-                        : AspectRatio(
-                            aspectRatio: image.width / image.height,
-                            child: CustomPaint(
-                              painter: _CameraPainter(
-                                  image: image, points: _points),
-                            ),
+                    child: switch (_view) {
+                      _CamView.thermal when thermal != null => ThermalPanel(
+                          frame: thermal,
+                          points: _points,
+                          showSkeleton: _skeleton,
+                          showGrid: _grid,
+                        ),
+                      _CamView.coverage when zones != null =>
+                        VisionPanel(snapshot: zones, mode: _tofMode),
+                      _ => AspectRatio(
+                          aspectRatio: image.width / image.height,
+                          child: CustomPaint(
+                            painter:
+                                _CameraPainter(image: image, points: _points),
                           ),
+                        ),
+                    },
                   ),
-                  if (_tofView) _tofModes(),
-                  Text(
-                    _error ?? _caption(image),
-                    style: const TextStyle(fontSize: 13, color: kGray),
-                  ),
+                  if (_view == _CamView.coverage) _tofModes(),
+                  if (_view == _CamView.thermal && thermal != null)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: ThermalHud(
+                        frame: thermal,
+                        previewWidth: _previewW,
+                        previewHeight: _previewH,
+                        joints: _points.length,
+                        fps: _fps,
+                      ),
+                    )
+                  else
+                    Text(
+                      _error ?? _caption(image),
+                      style: const TextStyle(fontSize: 13, color: kGray),
+                    ),
                 ],
               ),
       ),
     );
   }
+}
+
+/// 같은 프레임을 세 가지로 본다. 원본 `thermal_pose.py` 의 `m` 키와 같은 뜻이다.
+enum _CamView {
+  /// 열화상 + 54x42 zone + tee 뼈대. 원본이 기본으로 켜 두는 그림이다.
+  thermal('열화상 — 54x42 zone', Icons.local_fire_department_outlined),
+
+  /// 판정 서비스가 보내는 그대로. 뼈대가 어디 찍혔는지는 이쪽이 정확하다.
+  raw('카메라 보기', Icons.videocam_outlined),
+
+  /// 배경차분 coverage/마스크. 보드 직결 경로의 `센서 보기` 와 같은 그림이다.
+  coverage('차이값 — 54x42 zone', Icons.blur_on_rounded);
+
+  const _CamView(this.title, this.icon);
+  final String title;
+  final IconData icon;
+
+  _CamView get next => _CamView.values[(index + 1) % _CamView.values.length];
 }
 
 class _CameraPainter extends CustomPainter {
