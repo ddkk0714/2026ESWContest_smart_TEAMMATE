@@ -21,6 +21,7 @@ uint32_t last_environment_ms = 0;
 uint32_t last_heartbeat_ms = 0;
 uint32_t last_c1001_retry_ms = 0;
 uint8_t mmwave_fail_streak = 0;
+uint32_t c1001_retry_interval_ms = kC1001RetryMs;
 uint16_t mmwave_sequence = 0;
 uint16_t environment_sequence = 0;
 uint16_t heartbeat_sequence = 0;
@@ -102,10 +103,20 @@ void setup() {
 void loop() {
   const uint32_t now_ms = millis();
   // C1001 boots several seconds after power-up and may be plugged in after the ESP32; keep retrying.
-  if (!mmwave_ready && now_ms - last_c1001_retry_ms >= kC1001RetryMs) {
+  // 실패가 이어지면 간격을 두 배씩 늘린다. probe 를 통과하고도 begin() 이 실패하는
+  // 상태(센서가 응답하다 마는 경우)에서는 시도 한 번이 15 s 를 먹어서, 고정 10 s
+  // 간격으로 부르면 루프가 영영 제 주기를 못 돈다 - 환경값까지 같이 늦어진다.
+  if (!mmwave_ready && now_ms - last_c1001_retry_ms >= c1001_retry_interval_ms) {
     last_c1001_retry_ms = now_ms;
     mmwave_ready = mmwave.begin();
-    if (mmwave_ready) Serial.println(F("C1001 ready (late init)"));
+    if (mmwave_ready) {
+      c1001_retry_interval_ms = kC1001RetryMs;
+      Serial.println(F("C1001 ready (late init)"));
+    } else if (c1001_retry_interval_ms < kC1001RetryMaxMs) {
+      c1001_retry_interval_ms *= 2;
+      Serial.print(F("C1001 retry backoff -> "));
+      Serial.println(c1001_retry_interval_ms);
+    }
   }
   if (now_ms - last_mmwave_ms >= kMmwavePeriodMs) {
     last_mmwave_ms = now_ms;
@@ -118,6 +129,7 @@ void loop() {
         mmwave_ready = false;
         mmwave_fail_streak = 0;
         last_c1001_retry_ms = now_ms;
+        c1001_retry_interval_ms = kC1001RetryMs;
         Serial.println(F("C1001 stopped answering - back to retry"));
       }
     } else {
