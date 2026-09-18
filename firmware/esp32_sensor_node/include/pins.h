@@ -43,6 +43,9 @@ constexpr uint32_t kEnvironmentPeriodMs = 5000;
 constexpr uint32_t kC1001RetryMs = 10000;
 // 이만큼 연속으로 응답이 없으면 센서가 죽은 것으로 보고 값싼 probe 재시도로 돌아간다.
 constexpr uint8_t kC1001FailStreakMax = 3;
+// 재시도가 계속 실패하면 간격을 두 배씩 늘려 이 값까지 간다. begin() 은 센서가
+// 응답하다 마는 상태에서 15 s 를 먹으므로 10 s 마다 부르면 루프가 못 돈다.
+constexpr uint32_t kC1001RetryMaxMs = 120000;
 
 // Supplied by platformio.ini build flags so tuning does not require source edits.
 constexpr uint32_t kWarmupMs = DESKMATE_WARMUP_MS;

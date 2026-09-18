@@ -24,15 +24,26 @@ class C1001Passive {
  public:
   explicit C1001Passive(HardwareSerial& serial) : serial_(serial), sensor_(&serial) {}
 
-  // Cheap presence check (~probe_ms) before the vendor begin(), which blocks ~15 s when no sensor answers:
-  // send the "initialisation status" query (0x01/0x83) and see whether any byte comes back.
+  // 벤더 begin() 은 센서가 없으면 delay(10 s)+5 s 타임아웃으로 15 s 를 통째로
+  // 막는다. 그 앞에 값싼 생존 확인을 둔다 - 초기화 상태 질의(0x01/0x83)를 보내고
+  // 응답을 기다린다.
+  //
+  // **아무 바이트나 받아들이면 안 된다.** 전원만 들어오고 응답은 못 하는 상태의
+  // C1001 도 선에 무언가를 흘리는데, 그걸 '살아 있다' 로 보면 곧바로 begin() 이
+  // 불려 15 s 를 먹는다(2026-09-18 실측: env 주기가 5 s -> 7.9 s 로 늘어졌다).
+  // 그래서 프레임 머리 0x53 0x59 ("SY") 가 실제로 올 때만 통과시킨다.
   bool probe(uint32_t probe_ms = 300) {
     static const uint8_t query[] = {0x53, 0x59, 0x01, 0x83, 0x00, 0x01, 0x0F, 0x40, 0x54, 0x43};
     while (serial_.available() > 0) serial_.read();
     serial_.write(query, sizeof(query));
     const uint32_t start = millis();
+    uint8_t previous = 0;
     while (millis() - start < probe_ms) {
-      if (serial_.available() > 0) return true;
+      while (serial_.available() > 0) {
+        const uint8_t current = static_cast<uint8_t>(serial_.read());
+        if (previous == 0x53 && current == 0x59) return true;
+        previous = current;
+      }
       delay(1);
     }
     return false;
