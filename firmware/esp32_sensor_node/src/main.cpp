@@ -18,6 +18,7 @@ uint32_t last_mmwave_ms = 0;
 uint32_t last_environment_ms = 0;
 uint32_t last_heartbeat_ms = 0;
 uint32_t last_c1001_retry_ms = 0;
+uint8_t mmwave_fail_streak = 0;
 uint16_t mmwave_sequence = 0;
 uint16_t environment_sequence = 0;
 uint16_t heartbeat_sequence = 0;
@@ -139,6 +140,19 @@ void loop() {
   if (now_ms - last_mmwave_ms >= kMmwavePeriodMs) {
     last_mmwave_ms = now_ms;
     const MmwaveSample sample = mmwave_ready ? mmwave.read() : MmwaveSample{};
+    // 센서가 답을 멈추면 read() 한 번이 수 초를 먹어 환경·heartbeat 까지 같이 굶는다.
+    // 몇 번 연속으로 응답이 없으면 죽은 것으로 보고 재시도 경로(probe 300 ms)로 돌린다.
+    // 센서가 돌아오면 그 경로가 알아서 다시 잡는다.
+    if (mmwave_ready && mmwave.lastReadTimedOut()) {
+      if (++mmwave_fail_streak >= kC1001FailStreakMax) {
+        mmwave_ready = false;
+        mmwave_fail_streak = 0;
+        last_c1001_retry_ms = now_ms;
+        Serial.println(F("C1001 stopped answering - back to retry"));
+      }
+    } else {
+      mmwave_fail_streak = 0;
+    }
     const DrowsyState drowsy_state = drowsy_detector.update(sample, now_ms);
     writeMmwaveJson(Serial, now_ms, sample, drowsy_state);
     writeMmwaveUart(now_ms, sample, drowsy_state);
