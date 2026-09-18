@@ -22,9 +22,24 @@ struct MmwaveSample {
 
 class C1001Passive {
  public:
-  explicit C1001Passive(HardwareSerial& serial) : sensor_(&serial) {}
+  explicit C1001Passive(HardwareSerial& serial) : serial_(serial), sensor_(&serial) {}
+
+  // Cheap presence check (~probe_ms) before the vendor begin(), which blocks ~15 s when no sensor answers:
+  // send the "initialisation status" query (0x01/0x83) and see whether any byte comes back.
+  bool probe(uint32_t probe_ms = 300) {
+    static const uint8_t query[] = {0x53, 0x59, 0x01, 0x83, 0x00, 0x01, 0x0F, 0x40, 0x54, 0x43};
+    while (serial_.available() > 0) serial_.read();
+    serial_.write(query, sizeof(query));
+    const uint32_t start = millis();
+    while (millis() - start < probe_ms) {
+      if (serial_.available() > 0) return true;
+      delay(1);
+    }
+    return false;
+  }
 
   bool begin() {
+    if (!probe()) return false;
     if (sensor_.begin() != 0) return false;
     if (sensor_.configWorkMode(DFRobot_HumanDetection::eSleepMode) != 0) return false;
     return sensor_.getWorkMode() == DFRobot_HumanDetection::eSleepMode;
@@ -58,6 +73,7 @@ class C1001Passive {
   }
 
  private:
+  HardwareSerial& serial_;
   DFRobot_HumanDetection sensor_;
 };
 

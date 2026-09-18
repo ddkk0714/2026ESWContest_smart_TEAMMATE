@@ -33,6 +33,7 @@ constexpr uint32_t kBh1750ReadIntervalMs = 1000;
 constexpr uint32_t kDht22ReadIntervalMs = 2000;
 constexpr uint32_t kEnvironmentSensorRetryMs = 10000;
 constexpr uint32_t kEnvironmentStaleAfterMs = 15000;
+constexpr uint32_t kC1001RetryMs = 10000;
 
 // Supplied by platformio.ini build flags so tuning does not require source edits.
 constexpr uint32_t kWarmupMs = DESKMATE_WARMUP_MS;
