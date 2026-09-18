@@ -22,9 +22,9 @@ class SensorOverviewPage extends StatelessWidget {
               style: Theme.of(context).textTheme.bodyMedium),
           const SizedBox(height: 18),
           Expanded(
-              child: ListView(children: [
-            _SectionTitle(title: '\uD658\uACBD'),
-            _SensorGrid(children: [
+              child: Row(children: [
+            Expanded(
+                child: _SensorSection(title: '\uD658\uACBD', children: [
               _SensorValueCard(
                   icon: Icons.co2_rounded,
                   label: 'CO\u2082',
@@ -45,10 +45,10 @@ class SensorOverviewPage extends StatelessWidget {
                   label: '\uC870\uB3C4',
                   value: state.lux?.toString() ?? '--',
                   unit: 'lx'),
-            ]),
-            const SizedBox(height: 20),
-            _SectionTitle(title: 'mmWave'),
-            _SensorGrid(children: [
+            ])),
+            const SizedBox(width: 16),
+            Expanded(
+                child: _SensorSection(title: 'mmWave', children: [
               _SensorValueCard(
                   icon: Icons.person_search_rounded,
                   label: '\uC7AC\uC2E4',
@@ -75,35 +75,31 @@ class SensorOverviewPage extends StatelessWidget {
                   label: '\uC2EC\uBC15',
                   value: state.mmwaveHeartBpm?.toString() ?? '--',
                   unit: 'bpm'),
-            ]),
+            ])),
           ])),
         ]),
       );
 }
 
-class _SectionTitle extends StatelessWidget {
-  const _SectionTitle({required this.title});
+class _SensorSection extends StatelessWidget {
+  const _SensorSection({required this.title, required this.children});
   final String title;
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 10),
-        child: Text(title, style: Theme.of(context).textTheme.titleMedium),
-      );
-}
-
-class _SensorGrid extends StatelessWidget {
-  const _SensorGrid({required this.children});
   final List<Widget> children;
   @override
-  Widget build(BuildContext context) => GridView.count(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        crossAxisCount: 2,
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
-        childAspectRatio: 2.7,
-        children: children,
-      );
+  Widget build(BuildContext context) =>
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title, style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 10),
+        Expanded(
+            child: GridView.count(
+          physics: const NeverScrollableScrollPhysics(),
+          crossAxisCount: 2,
+          crossAxisSpacing: 12,
+          mainAxisSpacing: 12,
+          childAspectRatio: 1.65,
+          children: children,
+        )),
+      ]);
 }
 
 String _motionLabel(String? state) {
@@ -134,7 +130,7 @@ class _SensorValueCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
           color: DeskmateColors.surface,
           borderRadius: BorderRadius.circular(DeskmateRadius.panel),
@@ -151,14 +147,14 @@ class _SensorValueCard extends StatelessWidget {
               ),
               child: Icon(icon, color: DeskmateColors.accentStrong, size: 23),
             ),
-            const SizedBox(width: 18),
+            const SizedBox(width: 10),
             Expanded(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(label, style: Theme.of(context).textTheme.labelMedium),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 4),
                   Text(
                     '$value $unit',
                     maxLines: 1,

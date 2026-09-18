@@ -190,16 +190,19 @@ class FocusStatusView extends StatelessWidget {
   Widget build(BuildContext context) =>
       LayoutBuilder(builder: (context, constraints) {
         final compact = constraints.maxWidth < 700;
+        final short = constraints.maxHeight < 520;
         return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const SizedBox(height: 18),
+              SizedBox(height: short ? 4 : 12),
+              _MainStatusStrip(state: state),
+              SizedBox(height: short ? 8 : 18),
               Text(_focusHeadline(state),
                   style: Theme.of(context).textTheme.headlineLarge),
-              const SizedBox(height: 5),
+              SizedBox(height: short ? 2 : 5),
               Text(_focusSubline(state),
                   style: Theme.of(context).textTheme.bodyMedium),
-              const SizedBox(height: 32),
+              SizedBox(height: short ? 10 : 32),
               Expanded(
                 child: Flex(
                   direction: compact ? Axis.vertical : Axis.horizontal,
@@ -212,8 +215,10 @@ class FocusStatusView extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(height: 26),
-              _MetricStrip(state: state),
+              if (!short) ...[
+                const SizedBox(height: 26),
+                _MetricStrip(state: state),
+              ],
               if (keystroke != null) ...[
                 const SizedBox(height: 10),
                 KeystrokeSummary(
@@ -238,6 +243,57 @@ class FocusStatusView extends StatelessWidget {
               ],
             ]);
       });
+}
+
+class _MainStatusStrip extends StatelessWidget {
+  const _MainStatusStrip({required this.state});
+  final DisplayState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final now = state.timestamp.millisecondsSinceEpoch == 0
+        ? DateTime.now()
+        : state.timestamp;
+    final time = now.hour.toString().padLeft(2, '0') +
+        ':' +
+        now.minute.toString().padLeft(2, '0');
+    final focus = (state.focus * 100).round().toString() + '%';
+    final occupancy = state.present == null
+        ? '--'
+        : state.present!
+            ? '\uC7AC\uC2E4'
+            : '\uC790\uB9AC \uBE44\uC6C0';
+    final environment = state.co2Ppm == null
+        ? '\uC13C\uC11C \uB300\uAE30'
+        : 'CO\u2082 ' + state.co2Ppm.toString() + ' ppm';
+    return SoftPanel(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+      child: Row(children: [
+        _StatusStripValue(label: '\uD604\uC7AC \uC2DC\uAC04', value: time),
+        const SizedBox(width: 28),
+        _StatusStripValue(label: '\uC9D1\uC911\uB3C4', value: focus),
+        const SizedBox(width: 28),
+        _StatusStripValue(label: '\uC7AC\uC2E4 \uC0C1\uD0DC', value: occupancy),
+        const Spacer(),
+        Text(environment, style: Theme.of(context).textTheme.labelMedium),
+      ]),
+    );
+  }
+}
+
+class _StatusStripValue extends StatelessWidget {
+  const _StatusStripValue({required this.label, required this.value});
+  final String label;
+  final String value;
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.labelSmall),
+          const SizedBox(height: 3),
+          Text(value, style: Theme.of(context).textTheme.titleMedium),
+        ],
+      );
 }
 
 class SuggestionView extends StatelessWidget {

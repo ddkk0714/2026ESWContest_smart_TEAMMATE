@@ -56,7 +56,7 @@ class _DashboardPageState extends State<DashboardPage> {
   DisplayState? _state;
   String? _error;
   bool _busy = false;
-  bool _demoCyclingEnabled = true;
+  bool _demoCyclingEnabled = false;
   _AppView _view = _AppView.dashboard;
   late final MusicPlayback _music;
   late final StreamSubscription<bool> _musicChanges;

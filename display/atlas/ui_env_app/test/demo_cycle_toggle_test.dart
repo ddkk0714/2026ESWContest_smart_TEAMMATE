@@ -3,19 +3,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('demo cycles by default and can be paused', (tester) async {
+  testWidgets('demo cycling is OFF by default and can be enabled',
+      (tester) async {
     await tester.pumpWidget(const DeskmateApp());
     await tester.pump();
-
     expect(find.text('#1'), findsOneWidget);
-
-    await tester.pump(const Duration(seconds: 1));
+    expect(find.textContaining('OFF'), findsWidgets);
+    await tester.pump(const Duration(seconds: 2));
     await tester.pump();
-    expect(find.text('#2'), findsOneWidget);
-
+    expect(find.text('#1'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('demo-cycle-toggle')));
     await tester.pump();
-    await tester.pump(const Duration(seconds: 2));
-    expect(find.text('#2'), findsOneWidget);
+    expect(find.textContaining('ON'), findsWidgets);
   });
 }

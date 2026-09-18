@@ -24,6 +24,7 @@
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -49,6 +50,145 @@ struct BridgeState {
     std::string latest_state;
     std::unordered_map<std::string, int> acknowledgements;
     deskmate::MqttClient* mqtt = nullptr;
+};
+
+struct NativeSensorState {
+    std::mutex mutex;
+    std::optional<int> co2;
+    std::optional<int> lux;
+    std::optional<int> motion_level;
+    std::optional<int> distance_cm;
+    std::optional<int> heart_bpm;
+    std::optional<double> temp_c;
+    std::optional<double> humidity_pct;
+    std::optional<bool> present;
+    std::optional<bool> heart_valid;
+    std::optional<std::string> motion_state;
+    unsigned long long sequence = 0;
+
+    static int readLe16(const std::vector<unsigned char>& bytes, std::size_t offset)
+    {
+        return bytes[offset] | (bytes[offset + 1] << 8);
+    }
+
+    static std::vector<unsigned char> payloadBytes(const std::string& line)
+    {
+        constexpr const char* key = "\"payload_hex\":\"";
+        const auto key_start = line.find(key);
+        if (key_start == std::string::npos) return {};
+
+        const auto payload_start = key_start + std::strlen(key);
+        const auto payload_end = line.find('"', payload_start);
+        if (payload_end == std::string::npos || (payload_end - payload_start) % 2 != 0) return {};
+
+        std::vector<unsigned char> result;
+        for (std::size_t offset = payload_start; offset < payload_end; offset += 2) {
+            const std::string hex_byte = line.substr(offset, 2);
+            char* parsed_end = nullptr;
+            const long value = std::strtol(hex_byte.c_str(), &parsed_end, 16);
+            if (parsed_end == hex_byte.c_str() || *parsed_end != '\0' || value < 0 || value > 255) {
+                return {};
+            }
+            result.push_back(static_cast<unsigned char>(value));
+        }
+        return result;
+    }
+
+    bool consume(const std::string& line)
+    {
+        const bool is_environment = line.rfind("UART\t{\"type\":16,", 0) == 0;
+        const bool is_mmwave = line.rfind("UART\t{\"type\":32,", 0) == 0;
+        if (!is_environment && !is_mmwave) return false;
+
+        const auto bytes = payloadBytes(line);
+        if (bytes.empty()) return false;
+
+        std::lock_guard<std::mutex> lock(mutex);
+        if (is_environment) {
+            if (bytes.size() < 9) return false;
+            const int valid = bytes[8];
+            if (valid & 1) co2 = readLe16(bytes, 0);
+            if (valid & 2) {
+                temp_c = static_cast<double>(static_cast<std::int16_t>(readLe16(bytes, 2))) / 10.0;
+            }
+            if (valid & 4) humidity_pct = static_cast<double>(readLe16(bytes, 4)) / 10.0;
+            if (valid & 8) lux = readLe16(bytes, 6);
+        } else {
+            if (bytes.size() < 11) return false;
+            present = bytes[0] != 0;
+            motion_state = bytes[1] == 1 ? "still" : bytes[1] == 2 ? "active" : "none";
+            motion_level = bytes[2];
+
+            const int distance = readLe16(bytes, 3);
+            distance_cm =
+                distance == 0xffff ? std::optional<int>{} : std::optional<int>{distance};
+            heart_valid = bytes[8] != 0;
+            heart_bpm = (*heart_valid && bytes[7] != 0xff)
+                ? std::optional<int>{bytes[7]}
+                : std::optional<int>{};
+        }
+        ++sequence;
+        return true;
+    }
+
+    std::string envelope()
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        std::ostringstream output;
+        output << "{\"schema_version\":\"1.0\",\"seq\":" << sequence
+               << ",\"ts\":" << static_cast<long long>(std::time(nullptr))
+               << ",\"data\":{\"fsm_state\":\"IDLE\",\"phase\":\"IDLE\","
+                  "\"context\":\"focused\",\"c_focus\":0,\"c_fatigue\":0,"
+                  "\"confidence\":0,\"gate\":\"none\",\"reasons\":[],"
+                  "\"sensor_summary\":{";
+
+        bool has_field = false;
+        const auto append_number = [&output, &has_field](const char* name, const auto& value) {
+            if (!value) return;
+            if (has_field) output << ',';
+            output << '"' << name << "\":" << *value;
+            has_field = true;
+        };
+        append_number("co2_ppm", co2);
+        append_number("temp_c", temp_c);
+        append_number("humidity_pct", humidity_pct);
+        append_number("lux", lux);
+
+        if (present) {
+            if (has_field) output << ',';
+            output << "\"present\":" << (*present ? "true" : "false");
+            has_field = true;
+        }
+
+        if (motion_state || motion_level || distance_cm || heart_bpm || heart_valid) {
+            if (has_field) output << ',';
+            output << "\"mmwave\":{";
+            bool has_mmwave_field = false;
+            if (motion_state) {
+                output << "\"motion_state\":\"" << *motion_state << '"';
+                has_mmwave_field = true;
+            }
+            const auto append_mmwave_number =
+                [&output, &has_mmwave_field](const char* name, const auto& value) {
+                    if (!value) return;
+                    if (has_mmwave_field) output << ',';
+                    output << '"' << name << "\":" << *value;
+                    has_mmwave_field = true;
+                };
+            append_mmwave_number("motion_level", motion_level);
+            append_mmwave_number("distance_cm", distance_cm);
+            if (heart_valid) {
+                if (has_mmwave_field) output << ',';
+                output << "\"heart_valid\":" << (*heart_valid ? "true" : "false");
+                has_mmwave_field = true;
+            }
+            append_mmwave_number("heart_bpm", heart_bpm);
+            output << '}';
+        }
+
+        output << "}}}";
+        return output.str();
+    }
 };
 
 struct OutgoingTopic {
@@ -475,11 +615,20 @@ int main()
         if (hub.pid < 0) return 1;
 
         BridgeState state;
+        NativeSensorState native_sensors;
         std::atomic<bool> http_failed{false};
         std::mutex bridge_input_mutex;
         deskmate::UartReceiver uart(deskmate::uartRxConfigFromEnvironment(),
-            [&hub, &bridge_input_mutex](const std::string& line) {
-                return writeBridgeInput(hub.input_fd, bridge_input_mutex, line);
+            [&hub, &bridge_input_mutex, &native_sensors, &state](const std::string& line) {
+                const bool native_consumed = native_sensors.consume(line);
+                if (native_consumed) {
+                    const std::string envelope = native_sensors.envelope();
+                    { std::lock_guard<std::mutex> lock(state.mutex); state.latest_state = envelope; }
+                    if (state.mqtt != nullptr) state.mqtt->publish("deskmate/state/phase", envelope, 1, true);
+                }
+                const bool bridge_consumed = hub.input_fd >= 0 &&
+                    writeBridgeInput(hub.input_fd, bridge_input_mutex, line);
+                return native_consumed || bridge_consumed;
             });
         uart.start();
 
@@ -516,11 +665,12 @@ int main()
         int child_status = 0;
         bool child_exited = false;
         while (!g_stop_requested && !http_failed) {
-            const pid_t result = waitpid(hub.pid, &child_status, WNOHANG);
+            const pid_t result = child_exited ? 0 : waitpid(hub.pid, &child_status, WNOHANG);
             if (result == hub.pid) {
                 child_exited = true;
-                std::cerr << "DESKMATE Hub child exited\n";
-                break;
+                close(hub.input_fd);
+                hub.input_fd = -1;
+                std::cerr << "DESKMATE Hub Python bridge unavailable; native sensor forwarding remains active\n";
             }
             if (result < 0) {
                 perror("deskmate-hub waitpid");
