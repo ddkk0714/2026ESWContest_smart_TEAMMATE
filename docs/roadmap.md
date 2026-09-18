@@ -119,6 +119,14 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
   - [x] Node-RED FSM 패널(상태·phase·context·gate, C_fatigue/C_focus 차트, reasons) — PR #12
   - [ ] (보너스) Pi 5 를 `DESKMATE_MQTT_HOST=<broker>` 로 빌드해 같은 상태가 화면에 뜨는지 확인
 - [ ] **금 09-18 — 통합 리허설·기록**
+  - [x] PR #20·#21·#22 를 PR #18 시점 main 위에 다시 병합하고 **앱 셋을 통합 앱 하나로** 합침
+        (`display/atlas/app`: 상태·자세·센서 전체·센서 테스트·FSM 전체·Bluetooth·세션 리포트).
+        중복 구현 두 건은 하나씩 골랐다 — 환경 센서 펌웨어는 PR #21(실드라이버·호스트 테스트),
+        보드 네이티브 MQTT 도 PR #21(`mqtt_client`, libpaho 불필요). `flutter test` 107개 통과
+  - [x] mmWave C1001 읽기를 **수신 전용 파서 + 실측 기반 졸음 판정**으로 교체
+        (출처 76EHwan/ESP32-mmWave). `pio run -e esp32dev` 통과, 호스트 테스트 12개.
+        `sensor_summary.mmwave` 에 심박·호흡을 `*_valid` 와 함께 실어 앱 `센서 전체` 에 표시
+  - [ ] 실보드 확인: ESP32 UART2 → Pi 4, Pi 5 통합 앱 `.ipk` 설치·자세 화면 실데이터
   - [ ] 시나리오 1회 통과: 착석 → 타이핑(FOCUS_PC) → 손 떼고 정적 10분(FATIGUE_SUSPECT 이상) → 자리 비움(IDLE) — **합성 sim 으로는 09-16 통과**(`tools/rehearsal_local.py`: START→CONTEXT_DETECT→FOCUS_PC→FATIGUE_SUSPECT→FATIGUE→CAUSE_ANALYSIS→ACTION→MONITOR→RECOVERY). 실센서로 재확인 필요
   - [ ] 위 세션의 JSONL 을 `python -m deskmate_hub --replay` 로 재생해 같은 전이가 나오는지 확인
   - [ ] 노션 SW 페이지에 화면 캡처·발견한 임계값 문제·다음 할 일 기록

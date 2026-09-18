@@ -1,7 +1,7 @@
-# Atlas Flutter 앱을 ipk 로 빌드해 Pi 5 에 올린다. 저장소 루트에서 실행한다.
+﻿# Atlas Flutter 앱을 ipk 로 빌드해 Pi 5 에 올린다. 저장소 루트에서 실행한다.
 #   .\display\atlas\scripts\pi-deploy.ps1
 #   .\display\atlas\scripts\pi-deploy.ps1 -Action install -Mode debug -NoTest
-#   .\display\atlas\scripts\pi-deploy.ps1 -AppDir display/atlas/ui_env_app
+#   .\display\atlas\scripts\pi-deploy.ps1 -AppDir display/atlas/app
 param(
     [ValidateSet('run', 'install', 'build', 'uninstall')]
     [string]$Action = 'run',

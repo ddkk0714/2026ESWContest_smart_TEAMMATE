@@ -7,7 +7,7 @@
 #endif
 
 #ifndef DESKMATE_FIRMWARE_VERSION
-#define DESKMATE_FIRMWARE_VERSION 0x0100
+#define DESKMATE_FIRMWARE_VERSION 0x0110
 #endif
 
 namespace deskmate {
@@ -34,9 +34,7 @@ constexpr uint32_t kDht22ReadIntervalMs = 2000;
 constexpr uint32_t kEnvironmentSensorRetryMs = 10000;
 constexpr uint32_t kEnvironmentStaleAfterMs = 15000;
 
-// Supplied by platformio.ini build flags so tuning does not require source edits.
-constexpr uint32_t kWarmupMs = DESKMATE_WARMUP_MS;
-constexpr uint32_t kDrowsyStillMs = DESKMATE_DROWSY_STILL_MS;
-constexpr uint8_t kStillMotionLevelMax = DESKMATE_STILL_MOTION_LEVEL_MAX;
+// 졸음 판정 임계값은 실측 근거 주석과 함께 sensors/c1001/DrowsyDetector.h 에 있다.
+// 시연용으로 확정 시간만 줄이려면 -DDESKMATE_DROWSY_HOLD_SCALE_PCT=<퍼센트>.
 
 }  // namespace deskmate

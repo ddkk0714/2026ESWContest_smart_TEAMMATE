@@ -15,6 +15,25 @@
 Docker는 빌드 PC에서만 실행한다. Pi 5에 Docker를 설치하거나 컨테이너 안에서 앱을 실행하는
 구성이 아니다. `.ipk`는 실행 파일 그 자체가 아니라 AI Native OS에 설치하는 opkg 패키지다.
 
+## 앱은 하나다
+
+`display/atlas/app` 이 Pi 5 에 올라가는 유일한 Flutter 앱이다. 2026-09-18 이전에는 화면 묶음마다
+앱이 따로 있었는데(`camtest` 자세 · `ui_env_app` 환경 센서), 보드에 셋을 나란히 깔아 비교하던
+단계가 끝나 하나로 합쳤다. 헤더에서 일곱 화면을 오간다.
+
+| 화면 | 보는 것 | 데이터 출처 |
+|---|---|---|
+| 상태 | 국면별 대시보드(집중·피로·키스트로크·제안) | 허브 `deskmate/state/phase` |
+| 자세 | ESP32-CAM 스켈레톤 판정 | camsvc(HTTP 8770) → 보드 직결 UART → 데모 |
+| 센서 전체 | mmWave 심박·호흡·거리·체동 + CO₂·온도·습도·조도 | 허브 `sensor_summary` |
+| 센서 테스트 | FSM 입력 신호를 손으로 밀어 전이 확인 | 허브 개발 API |
+| FSM 전체 | 18상태 전이 그래프 | 로컬 |
+| Bluetooth | 스피커·iLink 조명 연결과 국면별 피드백 | Atlas BlueZ |
+| 세션 리포트 | 세션 종료 요약 | 허브 `deskmate/session/report` |
+
+`자세` 화면만 허브가 아니라 자기 데이터 경로를 따로 가진다 — 자세한 것은
+[`../../docs/posture-camera.md`](../../docs/posture-camera.md).
+
 ## 0. 선행 조건
 
 - x86_64 개발 PC: Docker Engine + Docker Compose V2
@@ -89,7 +108,7 @@ Pi 4의 실제 IP를 먼저 정하고 컨테이너에서 실행한다.
 
 ```bash
 source "$ATLAS_FLUTTER_NDK_ENV"
-cd /workspace/display/atlas/ui_env_app
+cd /workspace/display/atlas/app
 flutter pub get
 flutter test
 flutter-atlas build atlas --ipk --release \
@@ -198,7 +217,7 @@ custom device 등록도 다시 해야 한다. IP와 로컬 인증 설정이 든 
 빠른 개발 반복은 debug 모드를 사용한다.
 
 ```bash
-cd /workspace/display/atlas/ui_env_app
+cd /workspace/display/atlas/app
 flutter-atlas run -d deskmate_pi5 --debug \
   --dart-define=DESKMATE_HUB_URL=http://<Pi4-IP>:8765
 ```
@@ -225,7 +244,7 @@ flutter-atlas run -d deskmate_pi5 --release \
 ## 6. 수정 반복
 
 ```text
-1. 개발 PC에서 display/atlas/ui_env_app/lib 수정
+1. 개발 PC에서 display/atlas/app/lib 수정
 2. flutter test
 3. flutter-atlas run --debug
 4. Pi 5 화면·터치와 run 콘솔/DevTools 확인
@@ -252,7 +271,7 @@ docker compose -f display/atlas/compose.yaml down
 다음 항목은 커밋하지 않는다.
 
 - `display/atlas/vendor/`
-- `display/atlas/ui_env_app/build/`와 생성된 `.ipk`
+- `display/atlas/app/build/`와 생성된 `.ipk`
 - Flutter/Atlas 캐시와 SDK
 - Pi 5 SSH 개인키, 실행 로그, 사용자 데이터
 
@@ -268,4 +287,8 @@ DESKMATE display는 Flutter 앱이므로 `flutter-atlas`가 기준이다.
 - Pi 5 SSH 도달성과 `deskmate_pi5` 장치 등록: 확인
 - Pi 5 터치 확인용 자동 순환 ON/OFF 버튼 포함 release 앱 교체 설치·fullscreen 실행: 확인
 - Pi 5 버튼 터치 육안 확인: USB MTouch가 input event 생성 전에 xHCI 오류로 분리되어 하드웨어 점검 대기
+- 앱 통합(자세·센서 전체 흡수)과 `flutter test` 111개 통과: 2026-09-18 확인
+- Pi 5 실기 설치·실행: 2026-09-18 확인. 허브(`/api/state`) 연결과 camsvc(8770) 연결 모두 성공
+- 보드에서 앱이 무슨 일을 겪었는지는 앱 설치 경로의 `deskmate.log` 로만 알 수 있다.
+  앱 표준출력은 journal 에도 `appdata/*/cache/app_log` 에도 남지 않는다 (실기 확인)
 - 최신 진행 인계: [`../../docs/atlas-build-handoff.md`](../../docs/atlas-build-handoff.md)

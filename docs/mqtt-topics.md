@@ -135,7 +135,14 @@ health: `deskmate/health/pc-collector` 에 `{"node","status":"online|offline","r
   "cause": "environment",
   "reasons": ["posture_stable", "typing_rhythm_slow", "co2_rising"],
   "sensor_summary": {           // 선택: 화면 표시용 특징 요약. 센서 원본 금지
-    "present": true, "co2_ppm": 812, "lux": 310, "valid": true,
+    "present": true, "valid": true,
+    "co2_ppm": 812, "temp_c": 25.3, "humidity_pct": 54.6, "lux": 310,
+    "mmwave": {                 // 선택: deskmate/sensor/mmwave/<node> 중 화면에 쓰는 것
+      "motion_state": "still", "motion_level": 5, "distance_cm": 55,
+      "resp_bpm": 16, "resp_valid": true,
+      "heart_bpm": null, "heart_valid": false,
+      "drowsy_state": "AWAKE"
+    },
     "keystroke": {              // 선택: deskmate/sensor/keystroke 규약 필드 그대로
       "node": "pc-collector", "ts": 1769000001.0,
       "window_s": 60, "event_count": 184,
@@ -166,6 +173,16 @@ envelope를 사용하므로 최종 전송 어댑터를 바꿔도 display 모델�
 
 collector 규약 추가분(`typing_active` · `flight_cv` · `mouse_event_rate`)은 오면 쓰고 없으면
 비운다. `flight_cv`가 없으면 display가 `flight_std_ms / flight_mean_ms`로 만들어 쓴다.
+
+`sensor_summary.mmwave`도 같은 규칙을 따르되, **심박·호흡은 값과 `*_valid`를 함께 보낸다.**
+C1001은 락온(사람을 제대로 물고 있는 상태)이 풀리면 이 둘을 통째로 끊고, 추정기가 수렴하기
+전에는 범위 밖 값을 낸다. 펌웨어가 그 구분을 `*_valid`로 실어 보내므로 display는
+`*_valid: false`면 값이 있어도 버리고 `--`로 그린다. 0으로 그리면 화면이 "심박 0"이 된다.
+
+`drowsy_state`(`NOPERSON` · `NOLOCK` · `WARMUP` · `AWAKE` · `DROWSY`)는 ESP32가 이미 끝낸
+판정이다. 허브도 display도 다시 판정하지 않고 라벨만 옮긴다 — 같은 상태를 보드 로그와 화면이
+다르게 부르면 시연 중에 맞춰 볼 수가 없다. 판정 근거와 임계값은
+[`firmware/esp32_sensor_node/src/sensors/c1001/DrowsyDetector.h`](../firmware/esp32_sensor_node/src/sensors/c1001/DrowsyDetector.h)에 실측과 함께 적혀 있다.
 
 ### `deskmate/display/message`
 

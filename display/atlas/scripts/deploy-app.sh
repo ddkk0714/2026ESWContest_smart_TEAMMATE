@@ -6,7 +6,7 @@
 #   bash /workspace/display/atlas/scripts/deploy-app.sh --build    # ipk 만 만든다
 #   bash /workspace/display/atlas/scripts/deploy-app.sh --uninstall
 #   bash /workspace/display/atlas/scripts/deploy-app.sh --mode debug --no-test
-#   bash /workspace/display/atlas/scripts/deploy-app.sh --app-dir display/atlas/ui_env_app
+#   bash /workspace/display/atlas/scripts/deploy-app.sh --app-dir display/atlas/app
 #
 # 대상 장치 · 앱 경로 · Hub URL 은 display/atlas/deploy/device.env 에서 읽는다.
 set -euo pipefail
@@ -65,6 +65,9 @@ app_id=$(python3 -c 'import json; print(json.load(open("atlas/meta/appinfo.json"
 
 # Hub URL 은 빌드에 박히므로 값이 바뀌면 다시 빌드해야 한다. 비우면 내장 데모가 순환한다.
 defines=()
+if [ -n "$ATLAS_POSTURE_URL" ]; then
+    defines+=("--dart-define=DESKMATE_POSTURE_URL=$ATLAS_POSTURE_URL")
+fi
 if [ -n "$ATLAS_HUB_URL" ]; then
     defines+=("--dart-define=DESKMATE_HUB_URL=$ATLAS_HUB_URL")
 fi
@@ -73,6 +76,7 @@ echo "앱      : $app_id ($app_dir)"
 echo "장치    : $ATLAS_DEVICE_ID ($ATLAS_SSH_USER@$ATLAS_DEVICE_IP:$ATLAS_SSH_PORT)"
 echo "모드    : $mode"
 echo "Hub URL : ${ATLAS_HUB_URL:-(없음 - 내장 데모)}"
+echo "자세 노드: ${ATLAS_POSTURE_URL:-(없음 - camsvc → 보드 직결 → 데모)}"
 echo "동작    : $action"
 echo
 

@@ -1,0 +1,1059 @@
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
+
+import 'app_motion.dart';
+import 'deskmate_theme.dart';
+import 'display_state.dart';
+
+class DashboardView extends StatelessWidget {
+  const DashboardView({
+    super.key,
+    required this.state,
+    this.displayMessage,
+    this.hasPendingRequest = false,
+    required this.keystroke,
+    required this.keystrokeReference,
+    required this.onFeedback,
+    required this.showDemoControl,
+    required this.demoCyclingEnabled,
+    required this.onToggleDemoCycling,
+    this.phaseOverride,
+    required this.showFocusDetail,
+    required this.onShowFocusDetail,
+    this.liveKeys,
+  });
+
+  final DisplayState state;
+  final String? displayMessage;
+  final bool hasPendingRequest;
+  final KeystrokeMetrics? keystroke;
+  final DateTime keystrokeReference;
+  final int? liveKeys;
+  final ValueChanged<String> onFeedback;
+  final bool showDemoControl;
+  final bool demoCyclingEnabled;
+  final VoidCallback onToggleDemoCycling;
+
+  /// 시연용 자동 화면 순환이 켜져 있을 때, 실제 FSM 국면 대신 그릴 국면.
+  /// 허브가 보낸 상태는 그대로 두고 표현만 바꾼다.
+  final String? phaseOverride;
+  final bool showFocusDetail;
+  final ValueChanged<bool> onShowFocusDetail;
+
+  @override
+  Widget build(BuildContext context) {
+    final phase = phaseOverride ?? state.phase;
+    late final String transitionKey;
+    late final Widget content;
+    if (showFocusDetail) {
+      transitionKey = 'focus-detail';
+      content = FocusDetailView(
+        state: state,
+        onClose: () => onShowFocusDetail(false),
+      );
+    } else if (phase == 'idle') {
+      transitionKey = 'idle';
+      content =
+          AmbientView(state: state, onDetail: () => onShowFocusDetail(true));
+    } else if (phase == 'end') {
+      transitionKey = 'report';
+      content = SessionReportView(state: state);
+    } else if (hasPendingRequest ||
+        (phase == 'fatigue' && (phaseOverride != null || state.gate != 'none'))) {
+      transitionKey = 'suggestion';
+      content = SuggestionView(state: state, onFeedback: onFeedback);
+    } else if (phase == 'recovery') {
+      transitionKey = 'recovery';
+      content = FocusAmbientView(state: state);
+    } else {
+      transitionKey = 'focus';
+      content = FocusStatusView(
+        state: state,
+        keystroke: keystroke,
+        keystrokeReference: keystrokeReference,
+        liveKeys: liveKeys,
+        onDetail: () => onShowFocusDetail(true),
+      );
+    }
+    final message = displayMessage;
+    final animatedContent = AnimatedSwitcher(
+      duration: AppMotion.normal,
+      switchInCurve: AppMotion.standardCurve,
+      switchOutCurve: AppMotion.reverseCurve,
+      transitionBuilder: AppMotion.fadeScaleTransition,
+      child: KeyedSubtree(key: ValueKey(transitionKey), child: content),
+    );
+    final dashboardContent = showDemoControl
+        ? Stack(
+            fit: StackFit.expand,
+            children: [
+              animatedContent,
+              Positioned(
+                right: 2,
+                bottom: 2,
+                child: _AutoCycleToggle(
+                  enabled: demoCyclingEnabled,
+                  onPressed: onToggleDemoCycling,
+                ),
+              ),
+            ],
+          )
+        : animatedContent;
+    if (message == null || message.isEmpty) return dashboardContent;
+    return Column(children: [
+      DisplayMessageBanner(message: message),
+      const SizedBox(height: 10),
+      Expanded(child: dashboardContent),
+    ]);
+  }
+}
+
+class _AutoCycleToggle extends StatelessWidget {
+  const _AutoCycleToggle({required this.enabled, required this.onPressed});
+
+  final bool enabled;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+        message: enabled ? '자동 화면 순환 끄기' : '자동 화면 순환 켜기',
+        child: Material(
+          color: Colors.transparent,
+          child: OutlinedButton.icon(
+            key: const ValueKey('demo-cycle-toggle'),
+            onPressed: onPressed,
+            icon: Icon(
+              enabled ? Icons.pause_rounded : Icons.play_arrow_rounded,
+              size: 16,
+            ),
+            label: Text('자동 ${enabled ? 'ON' : 'OFF'}'),
+            style: OutlinedButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              textStyle: Theme.of(context).textTheme.labelSmall,
+            ),
+          ),
+        ),
+      );
+}
+
+class DisplayMessageBanner extends StatelessWidget {
+  const DisplayMessageBanner({super.key, required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) => SoftPanel(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 13),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Icon(Icons.chat_bubble_outline_rounded,
+              color: DeskmateColors.accentStrong, size: 19),
+          const SizedBox(width: 10),
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                Text('받은 메시지', style: Theme.of(context).textTheme.labelMedium),
+                const SizedBox(height: 3),
+                Text(message, style: Theme.of(context).textTheme.bodyLarge),
+              ])),
+        ]),
+      );
+}
+
+class AmbientView extends StatelessWidget {
+  const AmbientView({super.key, required this.state, required this.onDetail});
+  final DisplayState state;
+  final VoidCallback onDetail;
+
+  @override
+  Widget build(BuildContext context) {
+    final now = state.timestamp.millisecondsSinceEpoch == 0
+        ? DateTime.now()
+        : state.timestamp;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(22, 50, 22, 8),
+      child: Row(children: [
+        Expanded(
+          flex: 6,
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Spacer(),
+            Text(_clock(now), style: Theme.of(context).textTheme.displayLarge),
+            const SizedBox(height: 18),
+            Text(_date(now), style: Theme.of(context).textTheme.bodyMedium),
+            const SizedBox(height: 6),
+            const Text('오늘도 편안하게 시작해볼까요?'),
+            const Spacer(flex: 2),
+            Text('상세 상태는 필요할 때만 확인할 수 있어요.',
+                style: Theme.of(context).textTheme.labelMedium),
+          ]),
+        ),
+        const SizedBox(width: 46),
+        Expanded(
+          flex: 4,
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            SoftPanel(
+              child: Row(children: [
+                Expanded(
+                    child: _AmbientMetric(
+                        title: '방 안 상태', value: _comfort(state))),
+                const _StatusDot(),
+              ]),
+            ),
+            const SizedBox(height: 18),
+            SoftPanel(
+              child: Row(children: [
+                Expanded(
+                  child: _AmbientMetric(
+                    title: '책상 상태',
+                    value: state.present == false ? '자리 비움' : '재실 감지됨',
+                  ),
+                ),
+                Flexible(
+                  child: Text(
+                    _environmentInline(state),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.end,
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 26),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                  onPressed: onDetail, child: const Text('상세 보기  ›')),
+            ),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+class FocusStatusView extends StatelessWidget {
+  const FocusStatusView({
+    super.key,
+    required this.state,
+    this.displayMessage,
+    required this.keystroke,
+    required this.keystrokeReference,
+    required this.onDetail,
+    this.liveKeys,
+  });
+  final DisplayState state;
+  final String? displayMessage;
+  final KeystrokeMetrics? keystroke;
+  final DateTime keystrokeReference;
+  final int? liveKeys;
+  final VoidCallback onDetail;
+
+  @override
+  Widget build(BuildContext context) =>
+      LayoutBuilder(builder: (context, constraints) {
+        final compact = constraints.maxWidth < 700;
+        // 보드 화면(1024x600)에서 헤더·배너까지 얹으면 세로가 모자란다.
+        // 짧으면 여백을 줄이고 지표 스트립을 접는다 — 넘치면 아무것도 안 보인다.
+        final short = constraints.maxHeight < 520;
+        return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(height: short ? 4 : 12),
+              _MainStatusStrip(state: state),
+              SizedBox(height: short ? 8 : 18),
+              Text(_focusHeadline(state),
+                  style: Theme.of(context).textTheme.headlineLarge),
+              SizedBox(height: short ? 2 : 5),
+              Text(_focusSubline(state),
+                  style: Theme.of(context).textTheme.bodyMedium),
+              SizedBox(height: short ? 10 : 32),
+              Expanded(
+                child: Flex(
+                  direction: compact ? Axis.vertical : Axis.horizontal,
+                  children: [
+                    Expanded(
+                        child: _CurrentStatePanel(
+                            state: state, onDetail: onDetail)),
+                    SizedBox(width: compact ? 0 : 28, height: compact ? 16 : 0),
+                    Expanded(child: _EnvironmentPanel(state: state)),
+                  ],
+                ),
+              ),
+              if (!short) ...[
+                const SizedBox(height: 26),
+                _MetricStrip(state: state),
+              ],
+              if (keystroke != null) ...[
+                const SizedBox(height: 10),
+                KeystrokeSummary(
+                  metrics: keystroke,
+                  reference: keystrokeReference,
+                  liveKeys: liveKeys,
+                ),
+              ],
+            ]);
+      });
+}
+
+/// 국면 화면 맨 위의 한 줄 요약. 시연 중 화면을 스치듯 볼 때 필요한 것만 둔다.
+class _MainStatusStrip extends StatelessWidget {
+  const _MainStatusStrip({required this.state});
+  final DisplayState state;
+
+  @override
+  Widget build(BuildContext context) {
+    // 허브가 ts 를 못 실어 보내면(에폭 0) 화면 시계를 쓴다. 00:00 이 박히면
+    // 시연 중에 "멈춘 화면"으로 읽힌다.
+    final now = state.timestamp.millisecondsSinceEpoch == 0
+        ? DateTime.now()
+        : state.timestamp;
+    final time = '${now.hour.toString().padLeft(2, '0')}:'
+        '${now.minute.toString().padLeft(2, '0')}';
+    final occupancy = state.present == null
+        ? '--'
+        : state.present!
+            ? '재실'
+            : '자리 비움';
+    final heart = state.mmwave?.heartBpm;
+    return SoftPanel(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+      child: Row(children: [
+        _StatusStripValue(label: '현재 시간', value: time),
+        const SizedBox(width: 28),
+        _StatusStripValue(
+            label: '집중도', value: '${(state.focus * 100).round()}%'),
+        const SizedBox(width: 28),
+        _StatusStripValue(label: '재실 상태', value: occupancy),
+        if (heart != null) ...[
+          const SizedBox(width: 28),
+          _StatusStripValue(label: '심박', value: '$heart bpm'),
+        ],
+        const Spacer(),
+        Flexible(
+          child: Text(
+            // CO₂ 하나로 판단하면 안 된다. 실기에서 SCD41 만 안 올라오고
+            // 온·습도·조도는 멀쩡히 들어오는 상태를 "센서 대기" 로 읽었다.
+            _environmentInline(state).isEmpty ? '센서 대기' : _environmentInline(state),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.end,
+            style: Theme.of(context).textTheme.labelMedium,
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+class _StatusStripValue extends StatelessWidget {
+  const _StatusStripValue({required this.label, required this.value});
+  final String label;
+  final String value;
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.labelSmall),
+          const SizedBox(height: 3),
+          Text(value, style: Theme.of(context).textTheme.titleMedium),
+        ],
+      );
+}
+
+class SuggestionView extends StatelessWidget {
+  const SuggestionView(
+      {super.key, required this.state, required this.onFeedback});
+  final DisplayState state;
+  final ValueChanged<String> onFeedback;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(children: [
+      Positioned.fill(
+        child: Row(children: [
+          Expanded(
+              child: Opacity(
+                  opacity: .25, child: _CurrentStatePanel(state: state))),
+          const SizedBox(width: 30),
+          const Expanded(child: SizedBox()),
+          const SizedBox(width: 30),
+          Expanded(
+              child: Opacity(
+                  opacity: .25, child: _EnvironmentPanel(state: state))),
+        ]),
+      ),
+      Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 430, maxHeight: 430),
+          child: SoftPanel(
+            raised: true,
+            padding: const EdgeInsets.all(34),
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(children: [
+                    const _StatusDot(),
+                    const SizedBox(width: 8),
+                    Text('지금의 제안',
+                        style: Theme.of(context).textTheme.labelMedium),
+                  ]),
+                  const SizedBox(height: 14),
+                  AnimatedSize(
+                    duration: AppMotion.content,
+                    curve: AppMotion.standardCurve,
+                    alignment: Alignment.topLeft,
+                    child: AnimatedSwitcher(
+                      duration: AppMotion.content,
+                      switchInCurve: AppMotion.standardCurve,
+                      switchOutCurve: AppMotion.reverseCurve,
+                      transitionBuilder: AppMotion.fadeTransition,
+                      child: Text(
+                        _suggestionTitle(state),
+                        key: ValueKey('title-${state.cause}'),
+                        style: Theme.of(context).textTheme.headlineMedium,
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  AnimatedSize(
+                    duration: AppMotion.content,
+                    curve: AppMotion.standardCurve,
+                    alignment: Alignment.topLeft,
+                    child: AnimatedSwitcher(
+                      duration: AppMotion.content,
+                      switchInCurve: AppMotion.standardCurve,
+                      switchOutCurve: AppMotion.reverseCurve,
+                      transitionBuilder: AppMotion.fadeTransition,
+                      child: Text(
+                        _suggestionBody(state),
+                        key: ValueKey('body-${state.cause}'),
+                        style: Theme.of(context).textTheme.bodyLarge,
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  Text('변경은 사용자가 선택할 때만 적용돼요.',
+                      style: Theme.of(context).textTheme.labelMedium),
+                  const SizedBox(height: 15),
+                  Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                    OutlinedButton(
+                      onPressed: () => onFeedback('reject'),
+                      child: const Text('괜찮아요'),
+                    ),
+                    const SizedBox(width: 10),
+                    FilledButton(
+                      onPressed: () => onFeedback('accept'),
+                      child: const Text('적용할게요'),
+                    ),
+                  ]),
+                ]),
+          ),
+        ),
+      ),
+    ]);
+  }
+}
+
+class SessionReportView extends StatelessWidget {
+  const SessionReportView({super.key, required this.state});
+  final DisplayState state;
+
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SizedBox(height: 8),
+          Text('오늘의 집중 리포트', style: Theme.of(context).textTheme.headlineLarge),
+          const SizedBox(height: 4),
+          Text('${_date(state.timestamp)} · 세션 완료',
+              style: Theme.of(context).textTheme.bodyMedium),
+          const SizedBox(height: 22),
+          Row(children: [
+            Expanded(
+                child:
+                    _ReportMetric(label: '종료 상태', value: _stateLabel(state))),
+            const SizedBox(width: 18),
+            Expanded(
+                child: _ReportMetric(
+                    label: '집중 저하', value: _percent(state.focus))),
+            const SizedBox(width: 18),
+            Expanded(
+                child: _ReportMetric(
+                    label: '판정 신뢰도', value: _percent(state.confidence))),
+          ]),
+          const SizedBox(height: 20),
+          Expanded(
+            child: Row(children: [
+              Expanded(flex: 7, child: _ReportChart(state: state)),
+              const SizedBox(width: 20),
+              Expanded(flex: 3, child: _ReportEvents(state: state)),
+            ]),
+          ),
+          const SizedBox(height: 14),
+          SoftPanel(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
+            child: Text('환경 변화    ${_environmentInline(state)}',
+                style: Theme.of(context).textTheme.bodyMedium),
+          ),
+        ],
+      );
+}
+
+class FocusAmbientView extends StatelessWidget {
+  const FocusAmbientView({super.key, required this.state});
+  final DisplayState state;
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text('•  DESKMATE FOCUS',
+              style: Theme.of(context).textTheme.labelMedium),
+          const SizedBox(height: 54),
+          SizedBox(
+            width: 276,
+            height: 276,
+            child: TweenAnimationBuilder<double>(
+              tween: Tween<double>(end: state.confidence),
+              duration: AppMotion.normal,
+              curve: AppMotion.standardCurve,
+              builder: (context, value, child) => CustomPaint(
+                painter: _FocusRingPainter(value: value),
+                child: child,
+              ),
+              child: Center(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Text(_elapsedLabel(state),
+                      style: Theme.of(context).textTheme.headlineLarge),
+                  const SizedBox(height: 6),
+                  Text('STATUS',
+                      style: Theme.of(context).textTheme.labelMedium),
+                ]),
+              ),
+            ),
+          ),
+          const SizedBox(height: 70),
+          Text('DESKMATE', style: Theme.of(context).textTheme.labelMedium),
+        ]),
+      );
+}
+
+class FocusDetailView extends StatelessWidget {
+  const FocusDetailView(
+      {super.key, required this.state, required this.onClose});
+  final DisplayState state;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) => Row(children: [
+        Expanded(
+          flex: 6,
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Spacer(),
+            Text(_elapsedLabel(state),
+                style: Theme.of(context).textTheme.displayLarge),
+            const SizedBox(height: 4),
+            Text('남은 집중 시간', style: Theme.of(context).textTheme.labelMedium),
+            const SizedBox(height: 26),
+            SizedBox(height: 180, child: _CurrentStatePanel(state: state)),
+            const Spacer(),
+          ]),
+        ),
+        const SizedBox(width: 38),
+        Expanded(
+          flex: 4,
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            SoftPanel(
+              raised: true,
+              child: Row(children: [
+                Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('FOCUS MODE',
+                            style: Theme.of(context).textTheme.labelMedium),
+                        const SizedBox(height: 10),
+                        Text('Deep Focus',
+                            style: Theme.of(context).textTheme.titleLarge),
+                      ]),
+                ),
+                const OutlinedButton(onPressed: null, child: Text('변경')),
+              ]),
+            ),
+            const SizedBox(height: 18),
+            Row(children: const [
+              Expanded(
+                  child: FilledButton(onPressed: null, child: Text('Pause'))),
+              SizedBox(width: 12),
+              Expanded(
+                  child:
+                      OutlinedButton(onPressed: null, child: Text('Focus 종료'))),
+            ]),
+            const SizedBox(height: 12),
+            TextButton(onPressed: onClose, child: const Text('상태 화면으로 돌아가기')),
+            const SizedBox(height: 58),
+            Text('추가 입력이 없으면 곧 조용한 화면으로 돌아갑니다.',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.labelMedium),
+          ]),
+        ),
+      ]);
+}
+
+class SoftPanel extends StatelessWidget {
+  const SoftPanel(
+      {super.key, required this.child, this.padding, this.raised = false});
+  final Widget child;
+  final EdgeInsetsGeometry? padding;
+  final bool raised;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: padding ?? const EdgeInsets.all(22),
+        decoration: BoxDecoration(
+          color: raised ? DeskmateColors.surfaceRaised : DeskmateColors.surface,
+          borderRadius: BorderRadius.circular(DeskmateRadius.panel),
+          border: Border.all(color: Colors.white.withValues(alpha: .36)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.white.withValues(alpha: raised ? .7 : .42),
+              offset: const Offset(-2, -2),
+              blurRadius: raised ? 8 : 5,
+            ),
+            BoxShadow(
+              color: Colors.black.withValues(alpha: raised ? .12 : .065),
+              offset: const Offset(3, 4),
+              blurRadius: raised ? 13 : 8,
+            ),
+          ],
+        ),
+        child: child,
+      );
+}
+
+class KeystrokeSummary extends StatelessWidget {
+  const KeystrokeSummary({
+    super.key,
+    required this.metrics,
+    required this.reference,
+    this.liveKeys,
+  });
+  final KeystrokeMetrics? metrics;
+  final DateTime reference;
+  final int? liveKeys;
+
+  @override
+  Widget build(BuildContext context) {
+    final age = metrics?.ageFrom(reference);
+    final active = metrics != null && (metrics!.valid ?? true) && age != null;
+    return Row(children: [
+      Text('키스트로크', style: Theme.of(context).textTheme.labelMedium),
+      const SizedBox(width: 14),
+      Text(active
+          ? (metrics!.typingActive == true ? '타이핑 중' : '입력 없음')
+          : '수신 끊김'),
+      const Spacer(),
+      if (metrics?.dwellMeanMs != null) ...[
+        Text('${metrics!.dwellMeanMs!.round()} ms'),
+        const SizedBox(width: 12),
+      ],
+      if (metrics?.flightMeanMs != null) ...[
+        Text('${metrics!.flightMeanMs!.round()} ms'),
+        const SizedBox(width: 12),
+      ],
+      if (metrics?.flightCv != null) ...[
+        Text(metrics!.flightCv!.toStringAsFixed(2)),
+        const SizedBox(width: 12),
+      ],
+      if (metrics?.idleRatio != null) ...[
+        Text(_percent(metrics!.idleRatio!)),
+        const SizedBox(width: 12),
+      ],
+      if (metrics?.correctionRate != null)
+        Text(_percent(metrics!.correctionRate!)),
+      if (metrics?.windowS != null) ...[
+        const SizedBox(width: 12),
+        Text('${metrics!.windowS}초 윈도'),
+      ],
+      if (liveKeys != null) ...[
+        const SizedBox(width: 12),
+        Text('$liveKeys타'),
+      ],
+    ]);
+  }
+}
+
+class KeystrokePanelForTest extends StatelessWidget {
+  const KeystrokePanelForTest({
+    super.key,
+    required this.metrics,
+    required this.reference,
+    this.liveKeys,
+  });
+  final KeystrokeMetrics? metrics;
+  final DateTime reference;
+  final int? liveKeys;
+  @override
+  Widget build(BuildContext context) => SoftPanel(
+        child:
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const Text('키스트로크'),
+          const Spacer(),
+          KeystrokeSummary(
+              metrics: metrics, reference: reference, liveKeys: liveKeys),
+        ]),
+      );
+}
+
+class _CurrentStatePanel extends StatelessWidget {
+  const _CurrentStatePanel({required this.state, this.onDetail});
+  final DisplayState state;
+  final VoidCallback? onDetail;
+  @override
+  Widget build(BuildContext context) => SoftPanel(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('현재 상태', style: Theme.of(context).textTheme.labelMedium),
+          const SizedBox(height: 14),
+          AnimatedSize(
+            duration: AppMotion.content,
+            curve: AppMotion.standardCurve,
+            alignment: Alignment.topLeft,
+            child: AnimatedSwitcher(
+              duration: AppMotion.content,
+              switchInCurve: AppMotion.standardCurve,
+              switchOutCurve: AppMotion.reverseCurve,
+              transitionBuilder: AppMotion.fadeTransition,
+              child: Text(
+                _stateLabel(state),
+                key: ValueKey(state.phase),
+                style: Theme.of(context).textTheme.headlineMedium,
+              ),
+            ),
+          ),
+          const SizedBox(height: 7),
+          Text(state.scenario ?? _focusSubline(state),
+              style: Theme.of(context).textTheme.bodyMedium),
+          const Spacer(),
+          Row(children: [
+            Text('세부 ${state.fsmState}',
+                style: Theme.of(context).textTheme.labelMedium),
+            const Spacer(),
+            if (onDetail != null)
+              TextButton(onPressed: onDetail, child: const Text('상세 보기')),
+          ]),
+        ]),
+      );
+}
+
+class _EnvironmentPanel extends StatelessWidget {
+  const _EnvironmentPanel({required this.state});
+  final DisplayState state;
+  @override
+  Widget build(BuildContext context) => SoftPanel(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('환경 요약', style: Theme.of(context).textTheme.labelMedium),
+          const SizedBox(height: 20),
+          Row(children: [
+            Expanded(
+                child: _DataPoint(
+                    label: 'CO₂',
+                    value: state.co2Ppm == null ? '--' : '${state.co2Ppm}',
+                    unit: 'ppm')),
+            Expanded(
+                child: _DataPoint(
+                    label: '온도',
+                    value: state.temperatureC == null
+                        ? '--'
+                        : state.temperatureC!.toStringAsFixed(1),
+                    unit: '°C')),
+            Expanded(
+                child: _DataPoint(
+                    label: '습도',
+                    value: state.humidityPct == null
+                        ? '--'
+                        : state.humidityPct!.toStringAsFixed(1),
+                    unit: '%')),
+            Expanded(
+                child: _DataPoint(
+                    label: '조도',
+                    value: state.lux == null ? '--' : '${state.lux}',
+                    unit: 'lx')),
+          ]),
+          const Spacer(),
+          Text(_comfort(state), style: Theme.of(context).textTheme.bodyMedium),
+        ]),
+      );
+}
+
+class _MetricStrip extends StatelessWidget {
+  const _MetricStrip({required this.state});
+  final DisplayState state;
+  @override
+  Widget build(BuildContext context) => Row(children: [
+        Expanded(child: _SlimMetric(label: '집중 저하 / 낮음', value: state.focus)),
+        const SizedBox(width: 22),
+        Expanded(child: _SlimMetric(label: '피로 / 낮음', value: state.fatigue)),
+        const SizedBox(width: 22),
+        Expanded(
+            child: _SlimMetric(label: '판정 신뢰도 / 높음', value: state.confidence)),
+      ]);
+}
+
+class _SlimMetric extends StatelessWidget {
+  const _SlimMetric({required this.label, required this.value});
+  final String label;
+  final double value;
+  @override
+  Widget build(BuildContext context) => ClipRRect(
+        borderRadius: BorderRadius.circular(DeskmateRadius.control),
+        child: Stack(children: [
+          Container(height: 40, color: DeskmateColors.surfaceMuted),
+          TweenAnimationBuilder<double>(
+            tween: Tween<double>(end: value.clamp(0, 1)),
+            duration: AppMotion.normal,
+            curve: AppMotion.standardCurve,
+            builder: (context, animatedValue, child) => FractionallySizedBox(
+              widthFactor: animatedValue,
+              child: child,
+            ),
+            child: Container(
+              height: 40,
+              color: DeskmateColors.accent.withValues(alpha: .48),
+            ),
+          ),
+          Positioned.fill(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 13),
+              child: Row(children: [
+                Text(label, style: Theme.of(context).textTheme.labelMedium),
+                const Spacer(),
+                Text(_percent(value),
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+              ]),
+            ),
+          ),
+        ]),
+      );
+}
+
+class _AmbientMetric extends StatelessWidget {
+  const _AmbientMetric({required this.title, required this.value});
+  final String title;
+  final String value;
+  @override
+  Widget build(BuildContext context) =>
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title, style: Theme.of(context).textTheme.labelMedium),
+        const SizedBox(height: 9),
+        Text(value, style: Theme.of(context).textTheme.titleLarge),
+      ]);
+}
+
+class _DataPoint extends StatelessWidget {
+  const _DataPoint({required this.label, required this.value, this.unit});
+  final String label;
+  final String value;
+  final String? unit;
+  @override
+  Widget build(BuildContext context) =>
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label, style: Theme.of(context).textTheme.labelMedium),
+        const SizedBox(height: 7),
+        RichText(
+          text: TextSpan(
+              style: Theme.of(context).textTheme.titleLarge,
+              children: [
+                TextSpan(text: value),
+                if (unit != null)
+                  TextSpan(
+                      text: ' $unit',
+                      style: Theme.of(context).textTheme.labelMedium),
+              ]),
+        ),
+      ]);
+}
+
+class _ReportMetric extends StatelessWidget {
+  const _ReportMetric({required this.label, required this.value});
+  final String label;
+  final String value;
+  @override
+  Widget build(BuildContext context) => SoftPanel(
+        padding: const EdgeInsets.all(18),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label, style: Theme.of(context).textTheme.labelMedium),
+          const SizedBox(height: 8),
+          Text(value, style: Theme.of(context).textTheme.titleLarge),
+        ]),
+      );
+}
+
+class _ReportChart extends StatelessWidget {
+  const _ReportChart({required this.state});
+  final DisplayState state;
+  @override
+  Widget build(BuildContext context) => SoftPanel(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('집중 상태 변화', style: Theme.of(context).textTheme.labelMedium),
+          const Spacer(),
+          Expanded(
+              child: CustomPaint(
+                  painter: _ReportBarsPainter(state), size: Size.infinite)),
+          const SizedBox(height: 10),
+          Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: const [Text('시작'), Text('중간'), Text('완료')]),
+        ]),
+      );
+}
+
+class _ReportEvents extends StatelessWidget {
+  const _ReportEvents({required this.state});
+  final DisplayState state;
+  @override
+  Widget build(BuildContext context) => SoftPanel(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('주요 이벤트', style: Theme.of(context).textTheme.labelMedium),
+          const SizedBox(height: 16),
+          const Text('세션 시작'),
+          const SizedBox(height: 12),
+          Text(_stateLabel(state)),
+          if (state.reasons.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(state.reasons.take(2).join('\n'),
+                style: Theme.of(context).textTheme.bodyMedium),
+          ],
+          const Spacer(),
+          Text('상세 이력은 Hub 데이터 연결 후 표시됩니다.',
+              style: Theme.of(context).textTheme.labelMedium),
+        ]),
+      );
+}
+
+class _StatusDot extends StatelessWidget {
+  const _StatusDot();
+  @override
+  Widget build(BuildContext context) => Container(
+        width: 8,
+        height: 8,
+        decoration: const BoxDecoration(
+            color: DeskmateColors.accentStrong, shape: BoxShape.circle),
+      );
+}
+
+class _FocusRingPainter extends CustomPainter {
+  const _FocusRingPainter({required this.value});
+  final double value;
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    final radius = math.min(size.width, size.height) / 2 - 16;
+    canvas.drawCircle(center, radius + 12,
+        Paint()..color = Colors.white.withValues(alpha: .18));
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()
+        ..color = DeskmateColors.line
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3,
+    );
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius),
+      -math.pi / 2,
+      math.pi * 2 * value.clamp(0, 1),
+      false,
+      Paint()
+        ..color = DeskmateColors.inkMuted
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = 4,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _FocusRingPainter oldDelegate) =>
+      oldDelegate.value != value;
+}
+
+class _ReportBarsPainter extends CustomPainter {
+  const _ReportBarsPainter(this.state);
+  final DisplayState state;
+  @override
+  void paint(Canvas canvas, Size size) {
+    final values = <double>[
+      state.focus,
+      state.fatigue,
+      state.confidence,
+      state.focus,
+      state.fatigue,
+      state.confidence,
+    ];
+    final barWidth = math.min(34.0, size.width / (values.length * 2));
+    final gap = barWidth * .65;
+    final total = values.length * barWidth + (values.length - 1) * gap;
+    var x = (size.width - total) / 2;
+    for (var i = 0; i < values.length; i++) {
+      final height = math.max(14.0, size.height * values[i].clamp(.08, .9));
+      final rect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(x, size.height - height, barWidth, height),
+        const Radius.circular(4),
+      );
+      canvas.drawRRect(
+          rect,
+          Paint()
+            ..color =
+                i.isEven ? DeskmateColors.inkFaint : DeskmateColors.accent);
+      x += barWidth + gap;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ReportBarsPainter oldDelegate) =>
+      oldDelegate.state != state;
+}
+
+String _clock(DateTime time) =>
+    '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+String _date(DateTime time) => '${time.month}월 ${time.day}일';
+String _percent(double value) => '${(value.clamp(0, 1) * 100).round()}%';
+String _environmentInline(DisplayState state) => [
+      if (state.co2Ppm != null) 'CO₂ ${state.co2Ppm} ppm',
+      if (state.temperatureC != null) '${state.temperatureC!.toStringAsFixed(1)}°C',
+      if (state.humidityPct != null) '습도 ${state.humidityPct!.toStringAsFixed(0)}%',
+      if (state.lux != null) '조도 ${state.lux} lx',
+    ].join(' · ');
+String _comfort(DisplayState state) =>
+    state.present == false ? '조용히 대기 중이에요' : '쾌적해요';
+String _elapsedLabel(DisplayState state) => '--:--';
+String _focusHeadline(DisplayState state) =>
+    state.phase == 'start' ? '집중을 준비하고 있어요' : '지금 잘 집중하고 있어요';
+String _focusSubline(DisplayState state) => state.phase == 'start'
+    ? '현재 상태를 살피며 기준을 만들고 있어요.'
+    : '현재 상태를 방해하지 않도록 필요한 정보만 보여드려요.';
+String _stateLabel(DisplayState state) =>
+    const {
+      'idle': '대기 중',
+      'start': '집중 준비 중',
+      'focus': '집중 유지 중',
+      'fatigue': '잠시 조정이 필요해요',
+      'recovery': '회복 중',
+      'end': '세션 완료',
+    }[state.phase] ??
+    state.fsmState;
+String _suggestionTitle(DisplayState state) => switch (state.cause) {
+      'environment' => '조명을 조금 낮춰볼까요?',
+      'posture' => '자세를 가볍게 바로잡아볼까요?',
+      'cognitive' => '잠깐 쉬어가는 건 어떨까요?',
+      _ => '환경을 잠시 조정해볼까요?',
+    };
+String _suggestionBody(DisplayState state) => switch (state.cause) {
+      'environment' => '현재 환경 신호를 바탕으로 작은 조정을 제안드려요.',
+      'posture' => '자세 변화가 이어지고 있어요. 가볍게 몸을 펴면 다시 편안해질 수 있어요.',
+      'cognitive' => '피로 신호가 이어지고 있어요. 짧은 휴식이 다음 집중에 도움이 될 수 있어요.',
+      _ => state.scenario ?? '현재 상태에 맞는 작은 변화를 제안드려요.',
+    };

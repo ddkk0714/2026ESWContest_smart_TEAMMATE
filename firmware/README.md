@@ -6,9 +6,18 @@
 **UART2 바이너리 프레임(COBS + CRC-16/CCITT-FALSE)** 으로 Pi 4 에 보낸다. 2026-09-11 에 C1001 → ESP32 → Pi 4 `/dev/serial0` 도달을 실측했다.
 VL53L9CX 는 연결 경로(Path A: Pi 4 CSI-2 / Path B: ESP32 I2C 1 MHz binning)가 09-19 결정 대기이며, Path B 일 때만 이 노드에 붙는다.
 
-> **현재 상태(2026-09-15):** `esp32_sensor_node/`에 PlatformIO 프로젝트, 공식 DFRobot C1001 라이브러리 기반
-> `C1001Passive`, 5상태 `DrowsyDetector`, UART0(USB) JSON 출력이 들어왔다. 환경 센서는 MVP 스텁이며 5초마다
-> 모든 값을 `null`, valid 플래그를 `false`로 출력한다.
+> **현재 상태(2026-09-18):** `esp32_sensor_node/`에 PlatformIO 프로젝트, 수신 전용 `C1001Passive` 파서,
+> 5상태 `DrowsyDetector`, 환경 센서 실드라이버(SCD41·BH1750·DHT22), UART0(USB) JSON 출력이 들어왔다.
+> `pio run -e esp32dev` 실빌드 통과(RAM 7.1% · Flash 23.2%). 실보드 UART 검증은 아직이다.
+>
+> **mmWave 경로(2026-09-18):** C1001 읽기를 벤더 폴링에서 **수신 전용 파서**로 바꿨다. 출처는
+> [76EHwan/ESP32-mmWave](https://github.com/76EHwan/ESP32-mmWave) — 실제 G60SM1SY / R60A 로그로 맞춘
+> 구현이다. 벤더 `getData()` 는 호출마다 수신 버퍼를 비우고 질의를 보낸 뒤 바이트당 delay 로 기다려서,
+> 폴링 주기가 센서의 실제 갱신 시점과 어긋나 값이 통째로 빠졌다. 파서는 아무것도 버리지 않고
+> (`poll()` 논블로킹), 능동 보고가 2초 이상 끊기면 질의로 폴백한다. 졸음 판정은 체동 스파이크의
+> 부재를 주 신호로, 호흡 소실·심박 하락을 보조 증거로 써서 증거 개수에 따라 확정 시간을
+> 3분/1분/25초로 줄인다. 임계값마다 어떤 실측 때문에 그 값인지 `DrowsyDetector.h` 에 적혀 있고,
+> 호스트 유닛 테스트 12개(`pio test -e native`)가 그 계약을 붙잡는다.
 >
 > **2026-09-16 추가:** UART2 로 `docs/data-spec.md` §13.1 잠정 규약의 바이너리 프레임을 보낸다 —
 > `transport/frame.cpp`(헤더·CRC-16/CCITT-FALSE·COBS·`0x00` 종료), `include/frame_types.h`(TYPE 0x20 mmWave 1 Hz ·
@@ -66,6 +75,18 @@ esp32_sensor_node/
 
 PlatformIO (Arduino 프레임워크) 또는 ESP-IDF.
 `platformio.ini` 에 보드 · 라이브러리 의존성을 고정한다.
+
+```bash
+cd firmware/esp32_sensor_node
+pio run  -e esp32dev   # 보드 빌드
+pio test -e native     # 호스트 유닛 테스트 (졸음 판정 · 환경 센서 유효성/페이로드)
+```
+
+`env:native` 는 보드가 없어도 도는 순수 로직만 컴파일한다(`build_src_filter`). 판정기는
+`update(C1001Passive&)` 만 `#ifdef ARDUINO` 로 갈라 두고 나머지는 Arduino 의존이 없으므로,
+테스트가 개별 이벤트(`onBodyMove` · `onHeartRate` · `tick`)를 직접 넣어 시간 축을 만든다.
+시연용으로 확정 시간만 줄이려면 `-DDESKMATE_DROWSY_HOLD_SCALE_PCT=10` — 임계값 검증에는
+쓰면 안 된다. 심박 중앙값 창(120초)과 기준선 시정수(600초)는 이 배율을 따라가지 않는다.
 
 ESP32 는 Pi 4 와 유선이므로 Wi-Fi 자격증명이 기본 경로에 필요 없다. 필요해지면 `include/secrets.h.example` 를 복사해 `include/secrets.h` 로 쓰고 커밋하지 않는다.
 

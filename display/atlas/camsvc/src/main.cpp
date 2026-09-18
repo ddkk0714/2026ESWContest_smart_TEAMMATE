@@ -3,7 +3,7 @@
 //   /dev/ttyACM* (Vision Stream) -> preview 160x120 -> BlazePose 두 모델
 //     -> 랜드마크 33개 -> posture_pose 판정 -> 127.0.0.1:8770 HTTP
 //
-// 앱(`display/atlas/camtest`)은 판정을 보여 주기만 한다. 판정이 여기 있는 이유는
+// 앱(`display/atlas/app`)은 판정을 보여 주기만 한다. 판정이 여기 있는 이유는
 // ATLAS 에 파이썬이 없고, Dart 에서 TFLite 를 돌릴 길도 없기 때문이다.
 //
 // 모드

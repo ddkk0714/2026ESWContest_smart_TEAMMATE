@@ -1,0 +1,23 @@
+{
+    "id": "com.atlas.app.deskmate_display_ui_test",
+    "type": "flutter",
+    "name": "DESKMATE",
+    "description": "DESKMATE 통합 화면 — FSM 상태·자세·센서·피드백",
+    "entry": "deskmate_display --bundle=./ --fullscreen -a com.atlas.app.deskmate_display_ui_test",
+    "version": "0.1.0",
+    "required_permissions": {
+        "privileged": [
+            "com.atlas.permission.privileged.audiocontrol",
+            "com.atlas.permission.privileged.mediacontrol",
+            "com.atlas.permission.privileged.mediasession",
+            "com.atlas.permission.privileged.permission_agent",
+            "com.atlas.permission.privileged.bluetooth_admin",
+            "com.atlas.permission.privileged.peripheral"
+        ],
+        "user_consent": [
+            "com.atlas.permission.user_consent.mediaplayer",
+            "com.atlas.permission.user_consent.bluetooth_connect",
+            "com.atlas.permission.user_consent.bluetooth_scan"
+        ]
+    }
+}
