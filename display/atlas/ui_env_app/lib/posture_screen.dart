@@ -404,15 +404,12 @@ class _PostureScreenState extends State<PostureScreen> {
     final look = kPostureLook[state?.label ?? PostureLabel.unknown]!;
     final now = DateTime.now();
     final note = _note(state, now);
+    // 배경을 깔지 않는다. camtest 는 단독 앱이라 판정색 방사 그라디언트를
+    // 깔았지만, 여기서는 탭 하나라 뒤에 이미 앱 배경이 있다. 그 위에 또 깔면
+    // 탭만 색이 다른 판처럼 떠 보인다. Scaffold 도 투명하게 둔다.
     return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: RadialGradient(
-            center: const Alignment(0, -0.45),
-            radius: 1.2,
-            colors: [look.color.withValues(alpha: .16), kBg],
-          ),
-        ),
+      backgroundColor: Colors.transparent,
+      body: SizedBox.expand(
         child: SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(28, 18, 28, 16),

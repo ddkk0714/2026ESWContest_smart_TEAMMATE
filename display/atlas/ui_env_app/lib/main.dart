@@ -258,7 +258,6 @@ class _DashboardPageState extends State<DashboardPage> {
             (_autoScreenPhaseIndex + 1) % _autoScreenPhases.length;
       }
     });
-    if (_autoScreenCyclingEnabled) _refresh();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         duration: const Duration(seconds: 1),

@@ -13,6 +13,11 @@ void main() {
     await tester.pumpWidget(const DeskmateApp());
     await tester.pump();
 
+    // 자동 순환이 꺼져 있으면 상태 탭은 시계 화면에 고정된다. 키스트로크 패널은
+    // 집중 화면에 있으므로 순환을 켜서 국면 화면으로 넘어가게 한다.
+    await tester.tap(find.byKey(const ValueKey('demo-cycle-toggle')));
+    await tester.pump();
+
     expect(find.text('키스트로크'), findsOneWidget);
     expect(find.text('타이핑 중'), findsOneWidget);
 

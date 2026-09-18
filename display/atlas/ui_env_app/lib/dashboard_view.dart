@@ -49,6 +49,16 @@ class DashboardView extends StatelessWidget {
         state: state,
         onClose: () => onShowFocusDetail(false),
       );
+    } else if (hasPendingRequest) {
+      // 허브가 물어본 것은 답을 받아야 끝난다. 자동 순환과 무관하게 먼저 띄운다.
+      transitionKey = 'suggestion';
+      content = SuggestionView(state: state, onFeedback: onFeedback);
+    } else if (!demoCyclingEnabled) {
+      // 자동 순환이 꺼져 있으면 국면이 바뀌어도 화면을 바꾸지 않는다.
+      // 켜 두면 아래 분기들이 국면을 따라 화면을 돌린다.
+      transitionKey = 'idle';
+      content =
+          AmbientView(state: state, onDetail: () => onShowFocusDetail(true));
     } else if (phase == 'idle') {
       transitionKey = 'idle';
       content =
@@ -56,9 +66,8 @@ class DashboardView extends StatelessWidget {
     } else if (phase == 'end') {
       transitionKey = 'report';
       content = SessionReportView(state: state);
-    } else if (hasPendingRequest ||
-        (phase == 'fatigue' &&
-            (phaseOverride != null || state.gate != 'none'))) {
+    } else if (phase == 'fatigue' &&
+        (phaseOverride != null || state.gate != 'none')) {
       transitionKey = 'suggestion';
       content = SuggestionView(state: state, onFeedback: onFeedback);
     } else if (phase == 'recovery') {

@@ -77,7 +77,9 @@ Future<void> _pump(
           keystrokeReference: state.timestamp,
           onFeedback: (_) {},
           showDemoControl: false,
-          demoCyclingEnabled: false,
+          // 이 테스트가 보는 것은 '국면별 화면' 이다. 자동 순환이 꺼져 있으면
+          // 화면이 시계 화면에 고정되므로 국면 라우팅을 보려면 켜 둬야 한다.
+          demoCyclingEnabled: true,
           onToggleDemoCycling: () {},
           showFocusDetail: detail,
           onShowFocusDetail: (_) {},

@@ -94,7 +94,17 @@ class _CameraViewPageState extends State<CameraViewPage> {
       backgroundColor: kBg,
       appBar: AppBar(
         backgroundColor: kSurface,
-        title: const Text('카메라 보기'),
+        // 이 화면은 어두운 팔레트인데 아이콘·글자 색은 앱 테마에서 온다.
+        // 밝은 테마 앱(통합 앱) 안에서 열면 뒤로가기 화살표가 배경에 묻혀
+        // 나갈 방법이 없어 보인다. 그래서 색을 여기서 고정한다.
+        foregroundColor: kInk,
+        // 자동 뒤로가기 대신 명시적인 닫기 버튼을 둔다. 터치 화면에서
+        // 무엇을 누르면 나가는지 분명해야 한다.
+        leading: IconButton(
+          icon: const Icon(Icons.close, color: kInk),
+          tooltip: '닫기',
+          onPressed: () => Navigator.of(context).maybePop(),
+        ),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 16),
@@ -144,16 +154,22 @@ class _CameraViewPageState extends State<CameraViewPage> {
   }
 }
 
-/// ToF 깊이 맵처럼 보이게 하는 색 필터 — 검정에서 빨강까지 한 축으로만 간다.
+/// ToF 깊이 맵처럼 보이게 하는 색 필터 — 초록에서 빨강까지 한 축으로 간다.
 ///
-/// 휘도를 빨강 한 채널로 옮기고 녹·청은 0 으로 눌러, 어두운 곳은 검정이고
-/// 밝을수록 빨개진다. 픽셀을 직접 훑지 않고 캔버스 단계에서 걸리므로 프레임
-/// 비용이 사실상 없다. 이득 1.35 는 원본 카메라가 밋밋해 대비를 올린 값이다.
-const double _tofGain = 1.35;
+/// 휘도를 빨강으로 올리면서 같은 양만큼 초록을 내린다. 어두운 곳은 초록,
+/// 밝을수록 빨강이 되고 중간은 노랑을 지난다. ToF 뷰어가 먼 곳을 차갑게,
+/// 가까운 곳을 뜨겁게 칠하는 것과 같은 읽기다.
+///
+/// 픽셀을 직접 훑지 않고 캔버스 단계에서 걸리므로 프레임 비용이 사실상 없다.
+/// 이득은 1.0 이다 — 더 올리면 양 끝이 잘려 초록·빨강 단색으로 뭉갠다.
+const double _tofGain = 1.0;
+const double _lumR = 0.2126 * _tofGain;
+const double _lumG = 0.7152 * _tofGain;
+const double _lumB = 0.0722 * _tofGain;
 const ColorFilter tofDepthFilter = ColorFilter.matrix(<double>[
-  0.2126 * _tofGain, 0.7152 * _tofGain, 0.0722 * _tofGain, 0, 0, // R = 휘도
-  0, 0, 0, 0, 0, // G
-  0, 0, 0, 0, 0, // B
+  _lumR, _lumG, _lumB, 0, 0, // R = 휘도
+  -_lumR, -_lumG, -_lumB, 0, 255, // G = 255 - 휘도
+  0, 0, 0, 0, 0, // B = 0
   0, 0, 0, 1, 0, // A 그대로
 ]);
 
