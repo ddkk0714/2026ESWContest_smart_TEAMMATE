@@ -69,6 +69,9 @@ class _DashboardPageState extends State<DashboardPage> {
   static const _linkBadgeVisible = Duration(seconds: 5);
   DateTime? _connectedAt;
   bool _showLinkLabel = true;
+  // 테스트로 고정한 상태. 있으면 화면은 이것을 그리고, 라이브 갱신은 _state 에만
+  // 쌓인다 - 풀면 곧바로 최신 라이브 상태로 돌아간다.
+  DisplayState? _override;
   Timer? _screenCycleTimer;
   _AppView _view = _AppView.dashboard;
   late final MusicPlayback _music;
@@ -331,7 +334,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
   @override
   Widget build(BuildContext context) {
-    final state = _state;
+    final state = _override ?? _state;
     return Scaffold(
       body: SafeArea(
         child: Padding(
@@ -349,8 +352,9 @@ class _DashboardPageState extends State<DashboardPage> {
                   children: [
                     _Header(
                         source: _source.label,
-                        connectionLabel:
-                            _showLinkLabel ? _source.connectionLabel : '',
+                        connectionLabel: _override != null
+                            ? '테스트 상태 고정'
+                            : (_showLinkLabel ? _source.connectionLabel : ''),
                         online: _source.isConnected,
                         sequence: state.sequence,
                         view: _view,
@@ -390,6 +394,9 @@ class _DashboardPageState extends State<DashboardPage> {
                                   _autoScreenCyclingEnabled
                               ? _autoScreenPhases[_autoScreenPhaseIndex]
                               : null,
+                          // 테스트로 상태를 고정한 동안에는 그 국면 화면을 봐야 한다.
+                          pinAmbient:
+                              !_autoScreenCyclingEnabled && _override == null,
                           showFocusDetail: _showFocusDetail,
                           onShowFocusDetail: (value) =>
                               setState(() => _showFocusDetail = value),
@@ -403,6 +410,14 @@ class _DashboardPageState extends State<DashboardPage> {
                           onStateChanged: (next) {
                             if (mounted) setState(() => _state = next);
                             unawaited(_feedbackController.apply(next));
+                          },
+                          overridden: _override != null,
+                          onOverride: (next) {
+                            if (!mounted) return;
+                            setState(() => _override = next);
+                            if (next != null) {
+                              unawaited(_feedbackController.apply(next));
+                            }
                           },
                         ),
                       _AppView.posture => const PostureScreen(),

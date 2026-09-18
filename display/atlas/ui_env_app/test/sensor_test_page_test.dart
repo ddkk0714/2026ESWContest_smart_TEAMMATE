@@ -17,6 +17,7 @@ void main() {
           state: state,
           onConnect: (_) async {},
           onStateChanged: (next) => state = next,
+          onOverride: (_) {},
         ),
       ),
     ));
@@ -44,6 +45,42 @@ void main() {
           'elapsed',
         ]));
   });
+
+  testWidgets('Pi 4 없이도 임의의 FSM 상태로 화면을 고정할 수 있다', (tester) async {
+    tester.view.physicalSize = const Size(1024, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    DisplayState? overridden;
+    final source = _FakeSource()..sensorTest = false;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SensorTestPage(
+          source: source,
+          state: _state(),
+          onConnect: (_) async {},
+          onStateChanged: (_) {},
+          onOverride: (next) => overridden = next,
+        ),
+      ),
+    ));
+    await tester.pump();
+
+    // 허브 연결 폼은 그대로 있고, 그 옆에 상태 목록이 함께 나온다.
+    expect(find.byKey(const ValueKey('hub-url-input')), findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('override-ACTION_BREAK')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('override-ACTION_BREAK')));
+    await tester.pump();
+
+    expect(overridden, isNotNull);
+    expect(overridden!.fsmState, 'ACTION_BREAK');
+    // 국면 표는 허브의 presentation.py 와 같아야 한다.
+    expect(overridden!.phase, 'fatigue');
+    // 제안 화면은 gate 가 none 이 아닐 때만 뜬다.
+    expect(overridden!.gate, isNot('none'));
+  });
 }
 
 DisplayState _state() => DisplayState(
@@ -62,6 +99,8 @@ DisplayState _state() => DisplayState(
 class _FakeSource implements StateSource {
   TestSensorInput? lastInput;
   String? lastCommand;
+  /// Pi 4 가 없는 상황(MQTT·데모 소스)을 흉내 낸다.
+  bool sensorTest = true;
 
   @override
   String get label => 'fake';
@@ -75,7 +114,7 @@ class _FakeSource implements StateSource {
   bool get hasPendingRequest => false;
 
   @override
-  bool get supportsSensorTest => true;
+  bool get supportsSensorTest => sensorTest;
 
   @override
   String? get displayMessage => null;

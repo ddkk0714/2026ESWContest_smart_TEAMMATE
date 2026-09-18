@@ -12,6 +12,7 @@ class DashboardView extends StatelessWidget {
     required this.state,
     this.displayMessage,
     this.hasPendingRequest = false,
+    this.pinAmbient = false,
     required this.keystroke,
     required this.keystrokeReference,
     required this.onFeedback,
@@ -27,6 +28,9 @@ class DashboardView extends StatelessWidget {
   final DisplayState state;
   final String? displayMessage;
   final bool hasPendingRequest;
+  /// 국면이 바뀌어도 시계 화면에 묶어 둔다. 자동 순환이 꺼져 있을 때 그렇고,
+  /// 테스트로 상태를 고정한 동안에는 그 상태의 화면을 봐야 하므로 풀린다.
+  final bool pinAmbient;
   final KeystrokeMetrics? keystroke;
   final DateTime keystrokeReference;
   final int? liveKeys;
@@ -53,9 +57,9 @@ class DashboardView extends StatelessWidget {
       // 허브가 물어본 것은 답을 받아야 끝난다. 자동 순환과 무관하게 먼저 띄운다.
       transitionKey = 'suggestion';
       content = SuggestionView(state: state, onFeedback: onFeedback);
-    } else if (!demoCyclingEnabled) {
+    } else if (pinAmbient) {
       // 자동 순환이 꺼져 있으면 국면이 바뀌어도 화면을 바꾸지 않는다.
-      // 켜 두면 아래 분기들이 국면을 따라 화면을 돌린다.
+      // 켜 두면(또는 테스트로 상태를 고정하면) 아래 분기들이 국면을 따라 돈다.
       transitionKey = 'idle';
       content =
           AmbientView(state: state, onDetail: () => onShowFocusDetail(true));
