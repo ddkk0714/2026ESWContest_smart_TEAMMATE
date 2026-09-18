@@ -26,6 +26,17 @@ const _mqttPort = int.fromEnvironment('DESKMATE_MQTT_PORT', defaultValue: 1883);
 const _autoScreenCycleInterval = Duration(seconds: 5);
 const _autoScreenPhases = ['idle', 'focus', 'fatigue', 'recovery', 'end'];
 
+/// 화면 강조용 경계값. FSM 판정 임계값이 아니라 색만 바꾸는 힌트다.
+/// 판정 임계값은 hub/deskmate_hub/config/*.yaml 에만 둔다.
+const _ksWarnCv = 0.55;
+const _ksWarnIdle = 0.35;
+const _ksWarnCorrection = 0.09;
+
+/// collector 표본이 이보다 묵으면 값을 흐리고 '수신 끊김' 으로 표시한다.
+/// collector 가 죽어도 hub 는 국면을 계속 내보내므로 이게 없으면
+/// 마지막 값이 화면에 그대로 굳는다.
+const _ksStaleAfter = Duration(seconds: 5);
+
 void main() => runApp(const DeskmateApp());
 
 class DeskmateApp extends StatelessWidget {
@@ -362,7 +373,6 @@ class _DashboardPageState extends State<DashboardPage> {
                   source: _source.label,
                   connectionLabel: _source.connectionLabel,
                   connected: _source.isConnected,
-                  mqttMode: _source is MqttStateSource,
                 )
               : Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -385,13 +395,6 @@ class _DashboardPageState extends State<DashboardPage> {
                         onVolume: _showVolumeControl,
                         onExit: _confirmExit),
                     const SizedBox(height: 12),
-                    if (_source is MqttStateSource) ...[
-                      _Pi4MqttLinkCard(
-                        connected: _source.isConnected,
-                        broker: _source.label,
-                      ),
-                      const SizedBox(height: 12),
-                    ],
                     Expanded(
                         child: switch (_view) {
                       _AppView.dashboard => DashboardView(
@@ -685,20 +688,14 @@ class _Loading extends StatelessWidget {
     required this.source,
     required this.connectionLabel,
     required this.connected,
-    required this.mqttMode,
   });
   final String? error;
   final String source;
   final String connectionLabel;
   final bool connected;
-  final bool mqttMode;
   @override
   Widget build(BuildContext context) => Center(
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-        if (mqttMode) ...[
-          _Pi4MqttLinkCard(connected: connected, broker: source),
-          const SizedBox(height: 22),
-        ],
         const CircularProgressIndicator(),
         const SizedBox(height: 18),
         Text(
@@ -719,59 +716,6 @@ class _Loading extends StatelessWidget {
 
 /// 화면 강조용 경계값. FSM 판정 임계값이 아니라 색만 바꾸는 힌트다.
 /// 판정 임계값은 hub/deskmate_hub/config/*.yaml 에만 둔다.
-/// MQTT 소켓 연결 여부를 화면에서 즉시 확인하는 전용 상태 카드다.
-/// 연결됨은 지정한 Pi4 broker까지 TCP/MQTT 세션이 수립됐다는 뜻이다.
-class _Pi4MqttLinkCard extends StatelessWidget {
-  const _Pi4MqttLinkCard({required this.connected, required this.broker});
-
-  final bool connected;
-  final String broker;
-
-  @override
-  Widget build(BuildContext context) {
-    final color =
-        connected ? DeskmateColors.accentStrong : DeskmateColors.offline;
-    final title = connected ? 'Pi4 MQTT 연결됨' : 'Pi4 MQTT 연결 대기';
-    final detail = connected
-        ? '$broker · 상태/피드백 통신 준비됨'
-        : '$broker · 랜 케이블 · Pi4 주소 · Mosquitto(1883)를 확인하세요';
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: .12),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withValues(alpha: .5)),
-      ),
-      child: Row(children: [
-        Icon(connected ? Icons.link : Icons.link_off, color: color, size: 28),
-        const SizedBox(width: 12),
-        Expanded(
-          child:
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(title,
-                style: TextStyle(
-                    color: color, fontSize: 16, fontWeight: FontWeight.w800)),
-            const SizedBox(height: 3),
-            Text(detail,
-                style: const TextStyle(color: DeskmateColors.inkMuted)),
-          ]),
-        ),
-      ]),
-    );
-  }
-}
-
-const _ksWarnCv = 0.55;
-const _ksWarnIdle = 0.35;
-const _ksWarnCorrection = 0.09;
-
-/// collector 표본이 이보다 묵으면 값을 흐리고 '수신 끊김' 으로 표시한다.
-/// collector 가 죽어도 hub 는 국면을 계속 내보내므로 이게 없으면
-/// 마지막 값이 화면에 그대로 굳는다.
-const _ksStaleAfter = Duration(seconds: 5);
-
-/// 화면이 7인치라 세로가 귀하다. 카드 격자 대신 _SensorPanel 과 같은
-/// 세로 목록으로 두고 가로 한 칸을 차지한다.
 class _KeystrokePanel extends StatelessWidget {
   const _KeystrokePanel({
     required this.metrics,

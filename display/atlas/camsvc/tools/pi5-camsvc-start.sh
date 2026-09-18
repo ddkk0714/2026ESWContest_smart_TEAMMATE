@@ -46,12 +46,23 @@ PICK="${CAMSVC_DEVICE:-}"
 if [ -n "$PICK" ]; then
     echo "   환경변수 지정: $PICK"
 else
-    for dev in /dev/ttyACM0 /dev/ttyACM1; do
+    # **ttyACM1(Vision Stream) 을 먼저 본다.** 둘 다 A5 5A 를 흘리지만 성질이
+    # 다르다(2026-09-18 실측): ACM0(ESP32-CAM UART 직결)은 11 프레임쯤 오다
+    # 멈추고 dropped 가 1.5 만까지 치솟는 반면, ACM1 은 dropped 0 · crc 0 으로
+    # 계속 흐른다. camsvc 의 원래 설계도 Vision Stream 이다.
+    for dev in /dev/ttyACM1 /dev/ttyACM0; do
         [ -e "$dev" ] || continue
+        # **회선을 먼저 맞춘다.** RP2040 은 CDC 로 요청된 속도를 그대로 ESP 쪽
+        # UART 에 건다. 설정 없이 읽으면 속도가 안 맞아 잡음만 나오고(실측:
+        # 매직이 안 보임) 카메라가 죽은 것처럼 보인다. camsvc 는 열 때 스스로
+        # cfmakeraw + 921600 을 걸지만, 이 탐지에는 여기서 걸어야 한다.
+        stty -F "$dev" 921600 raw -echo min 1 time 0 2>/dev/null
         rm -f /tmp/camprobe.bin
-        dd if="$dev" of=/tmp/camprobe.bin bs=1 count=512 2>/dev/null &
+        # preview 한 장이 160x120 = 19 KB 라, 조금만 읽으면 프레임 한가운데만
+        # 잡혀 머리를 못 본다. 최소 한 장을 덮을 만큼 읽는다.
+        dd if="$dev" of=/tmp/camprobe.bin bs=1 count=24576 2>/dev/null &
         probe=$!
-        sleep 3
+        sleep 5
         kill "$probe" 2>/dev/null
         size=$(wc -c < /tmp/camprobe.bin 2>/dev/null || echo 0)
         if [ "$size" -gt 0 ] && od -A n -t x1 /tmp/camprobe.bin 2>/dev/null | tr -d ' \n' | grep -q "a55a"; then
