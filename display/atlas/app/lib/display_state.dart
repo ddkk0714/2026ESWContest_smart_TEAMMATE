@@ -13,9 +13,12 @@ class DisplayState {
     this.cause,
     this.present,
     this.co2Ppm,
+    this.temperatureC,
+    this.humidityPct,
     this.lux,
     this.scenario,
     this.keystroke,
+    this.mmwave,
   });
 
   final String fsmState;
@@ -31,9 +34,12 @@ class DisplayState {
   final DateTime timestamp;
   final bool? present;
   final int? co2Ppm;
+  final double? temperatureC;
+  final double? humidityPct;
   final int? lux;
   final String? scenario;
   final KeystrokeMetrics? keystroke;
+  final MmwaveSummary? mmwave;
 
   factory DisplayState.fromEnvelope(Map<String, dynamic> envelope) {
     if (envelope['schema_version'] != '1.0') {
@@ -57,29 +63,91 @@ class DisplayState {
       timestamp: DateTime.fromMillisecondsSinceEpoch(
         (((envelope['ts'] as num?)?.toDouble() ?? 0) * 1000).round(),
       ),
-      present: sensors['present'] as bool?,
-      co2Ppm: (sensors['co2_ppm'] as num?)?.toInt(),
-      lux: (sensors['lux'] as num?)?.toInt(),
+      present: sensors['present'] is bool ? sensors['present'] as bool : null,
+      co2Ppm: _nullableInt(sensors['co2_ppm']),
+      temperatureC: _nullableDouble(sensors['temp_c']),
+      humidityPct: _nullableDouble(sensors['humidity_pct']),
+      lux: _nullableInt(sensors['lux']),
       scenario: sensors['scenario']?.toString(),
       keystroke: KeystrokeMetrics.fromJson(sensors['keystroke']),
+      mmwave: MmwaveSummary.fromJson(sensors['mmwave']),
     );
   }
 
   static Map<String, dynamic> _map(Object? value) {
     if (value is Map<String, dynamic>) return value;
-    if (value is Map) return value.map((key, value) => MapEntry(key.toString(), value));
+    if (value is Map) {
+      return value.map((key, value) => MapEntry(key.toString(), value));
+    }
     return const {};
   }
 
   static String _requiredString(Map<String, dynamic> data, String key) {
     final value = data[key];
-    if (value is! String || value.isEmpty) throw FormatException('missing $key');
+    if (value is! String || value.isEmpty) {
+      throw FormatException('missing $key');
+    }
     return value;
   }
 
   static double _unit(Object? value) {
     final number = (value as num?)?.toDouble() ?? 0;
     return number.clamp(0.0, 1.0).toDouble();
+  }
+
+  static int? _nullableInt(Object? value) {
+    final number = value is num ? value : null;
+    if (number == null || !number.isFinite) return null;
+    return number.toInt();
+  }
+
+  static double? _nullableDouble(Object? value) {
+    final number = value is num ? value.toDouble() : null;
+    if (number == null || !number.isFinite) return null;
+    return number;
+  }
+}
+
+/// `sensor_summary.mmwave` — C1001 레이더가 올린 값 중 화면에 쓰는 것만.
+///
+/// 계약(docs/data-spec.md)상 심박·호흡은 락온이 풀리면 값 자체가 오지 않거나
+/// `*_valid=false` 로 온다. 그때 0 으로 채우면 화면이 "심박 0" 으로 읽히므로
+/// null 로 둔다. 판정 자체는 ESP32 가 이미 끝내서 `drowsyState` 로 보낸다.
+class MmwaveSummary {
+  const MmwaveSummary({
+    this.motionState,
+    this.motionLevel,
+    this.distanceCm,
+    this.respBpm,
+    this.heartBpm,
+    this.drowsyState,
+  });
+
+  final String? motionState;
+  final int? motionLevel;
+  final int? distanceCm;
+  final int? respBpm;
+  final int? heartBpm;
+  final String? drowsyState;
+
+  static MmwaveSummary? fromJson(Object? value) {
+    if (value is! Map) return null;
+    final data = DisplayState._map(value);
+    return MmwaveSummary(
+      motionState: data['motion_state']?.toString(),
+      motionLevel: DisplayState._nullableInt(data['motion_level']),
+      distanceCm: DisplayState._nullableInt(data['distance_cm']),
+      respBpm: _validated(data, 'resp_bpm', 'resp_valid'),
+      heartBpm: _validated(data, 'heart_bpm', 'heart_valid'),
+      drowsyState: data['drowsy_state']?.toString(),
+    );
+  }
+
+  /// `*_valid` 가 명시적으로 false 면 값이 있어도 버린다. 펌웨어는 추정기가
+  /// 수렴하기 전의 값을 그 플래그로 구분해서 보낸다.
+  static int? _validated(Map<String, dynamic> data, String key, String validKey) {
+    if (data[validKey] == false) return null;
+    return DisplayState._nullableInt(data[key]);
   }
 }
 

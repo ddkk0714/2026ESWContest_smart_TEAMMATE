@@ -106,6 +106,30 @@ void main() {
 
     expect(find.textContaining('Pi 4의 실제 FSMEngine'), findsOneWidget);
   });
+
+  // 자세·센서 전체는 예전에 각각 별도 앱(camtest·ui_env_app)이었다.
+  // 한 앱으로 합친 뒤에도 헤더에서 바로 갈 수 있어야 한다.
+  testWidgets('every merged screen is reachable from the header',
+      (tester) async {
+    tester.view.physicalSize = const Size(1024, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(const DeskmateApp());
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('센서 전체'));
+    await tester.pump();
+    expect(find.text('센서 전체'), findsOneWidget);
+    expect(find.text('생체 · mmWave'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('자세'));
+    await tester.pump();
+    expect(find.text('DESKMATE · 자세'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('세션 리포트'));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+  });
 }
 
 class _FakeMusicPlayback implements MusicPlayback {

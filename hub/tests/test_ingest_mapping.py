@@ -144,6 +144,15 @@ def test_sensor_summary_omits_missing_fields(cfg):
     assert "co2_ppm" not in s and "keystroke" not in s
 
 
+def test_sensor_summary_carries_vitals_with_their_validity(cfg):
+    """심박·호흡은 값과 *_valid 가 함께 가야 화면이 '측정 중'과 '0'을 구분한다."""
+    cache = SensorCache()
+    cache.put("mmwave", mm(0.0))
+    s = sensor_summary(cache.snapshot(), 0.0, cfg)["mmwave"]
+    assert s["resp_bpm"] == 15 and s["resp_valid"] is True
+    assert s["heart_bpm"] is None and s["heart_valid"] is False
+
+
 # ── MQTT 파서 ──────────────────────────────────────────────────────
 
 def test_parse_envelope_and_flat_payload():

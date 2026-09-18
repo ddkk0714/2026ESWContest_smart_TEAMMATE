@@ -162,9 +162,13 @@ def sensor_summary(view: CacheView, now: float, cfg: dict[str, Any]) -> dict[str
     mm = view.fresh("mmwave", now, fresh["mmwave"])
     if mm:
         out["present"] = bool(mm.data.get("present", False))
+        # 심박·호흡은 *_valid 와 짝으로 넘긴다. 락온이 풀린 구간의 값을 화면이
+        # 그대로 그리면 "심박 0" 으로 읽히는데, 그건 사람이 없다는 뜻이 아니다.
         out["mmwave"] = {
             k: mm.data[k]
-            for k in ("motion_state", "motion_level", "distance_cm", "drowsy_state")
+            for k in ("motion_state", "motion_level", "distance_cm",
+                      "resp_bpm", "resp_valid", "heart_bpm", "heart_valid",
+                      "drowsy_state")
             if k in mm.data
         }
     env = view.fresh("env", now, fresh["env"])

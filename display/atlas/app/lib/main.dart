@@ -14,11 +14,19 @@ import 'deskmate_theme.dart';
 import 'fsm_graph.dart';
 import 'keystroke_capture.dart';
 import 'music_playback.dart';
+import 'posture/posture_page.dart';
+import 'sensor_overview_page.dart';
 import 'sensor_test_page.dart';
 import 'session_report.dart';
 import 'state_source.dart';
 
 const _hubUrl = String.fromEnvironment('DESKMATE_HUB_URL');
+
+/// 시연용 자동 화면 순환. 데모 소스일 때는 FSM 자체가 돌지만, 실제 허브에
+/// 붙어 있을 때는 상태가 몇 분씩 안 바뀌어서 화면을 보여 줄 수가 없다.
+/// 그때는 허브 상태를 건드리지 않고 **그리는 국면만** 돌린다.
+const _autoScreenCycleInterval = Duration(seconds: 5);
+const _autoScreenPhases = ['idle', 'focus', 'fatigue', 'recovery', 'end'];
 
 void main() => runApp(const DeskmateApp());
 
@@ -54,6 +62,8 @@ class _DashboardPageState extends State<DashboardPage> {
   String? _error;
   bool _busy = false;
   bool _demoCyclingEnabled = true;
+  int _autoScreenPhaseIndex = 0;
+  Timer? _autoScreenTimer;
   _AppView _view = _AppView.dashboard;
   final _viewDirection = ValueNotifier<double>(1);
   late final MusicPlayback _music;
@@ -114,6 +124,16 @@ class _DashboardPageState extends State<DashboardPage> {
       if (_source is! DemoStateSource || _demoCyclingEnabled) _refresh();
       _sampleKeystroke();
       unawaited(_feedbackController.reconcileAudioOutput());
+    });
+    _autoScreenTimer = Timer.periodic(_autoScreenCycleInterval, (_) {
+      _advanceAutoScreenPhase();
+    });
+  }
+
+  void _advanceAutoScreenPhase() {
+    if (!mounted || !_demoCyclingEnabled) return;
+    setState(() {
+      _autoScreenPhaseIndex = (_autoScreenPhaseIndex + 1) % _autoScreenPhases.length;
     });
   }
 
@@ -264,14 +284,19 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   void _toggleDemoCycling() {
-    if (_source is! DemoStateSource) return;
-    setState(() => _demoCyclingEnabled = !_demoCyclingEnabled);
-    if (_demoCyclingEnabled) _refresh();
+    setState(() {
+      _demoCyclingEnabled = !_demoCyclingEnabled;
+      if (_demoCyclingEnabled) {
+        _autoScreenPhaseIndex =
+            (_autoScreenPhaseIndex + 1) % _autoScreenPhases.length;
+      }
+    });
+    if (_demoCyclingEnabled && _source is DemoStateSource) _refresh();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         duration: const Duration(seconds: 1),
         content: Text(
-          _demoCyclingEnabled ? '자동 순환을 시작했습니다.' : '자동 순환을 멈췄습니다.',
+          _demoCyclingEnabled ? '자동 화면 순환을 시작했습니다.' : '자동 화면 순환을 멈췄습니다.',
         ),
       ),
     );
@@ -316,6 +341,7 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void dispose() {
     _timer?.cancel();
+    _autoScreenTimer?.cancel();
     HardwareKeyboard.instance.removeHandler(_onKey);
     _clock.stop();
     _source.close();
@@ -394,13 +420,22 @@ class _DashboardPageState extends State<DashboardPage> {
                                 liveKeys:
                                     _localKeystroke != null ? _liveKeys : null,
                                 onFeedback: _feedback,
-                                showDemoControl: _source is DemoStateSource,
+                                showDemoControl: true,
                                 demoCyclingEnabled: _demoCyclingEnabled,
                                 onToggleDemoCycling: _toggleDemoCycling,
+                                phaseOverride: _source is! DemoStateSource &&
+                                        _demoCyclingEnabled
+                                    ? _autoScreenPhases[_autoScreenPhaseIndex]
+                                    : null,
                                 showFocusDetail: _showFocusDetail,
                                 onShowFocusDetail: (value) =>
                                     setState(() => _showFocusDetail = value),
                               ),
+                            // 자세 화면은 허브가 아니라 판정 서비스(camsvc) 또는
+                            // 보드에 직결된 ESP32-CAM 을 스스로 본다.
+                            _AppView.posture => const PostureScreen(),
+                            _AppView.sensorOverview =>
+                              SensorOverviewPage(state: state),
                             _AppView.sensorTest => SensorTestPage(
                                 source: _source,
                                 state: state,
@@ -431,7 +466,17 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 }
 
-enum _AppView { dashboard, sensorTest, fsmGraph, bluetooth, sessionReport }
+/// 선언 순서가 곧 헤더 내비게이션의 순서이고, 선택 표시의 위치 계산
+/// (`_HeaderNavigation`)과 화면 전환 방향(`_changeView`)도 이 순서를 쓴다.
+enum _AppView {
+  dashboard,
+  posture,
+  sensorOverview,
+  sensorTest,
+  fsmGraph,
+  bluetooth,
+  sessionReport,
+}
 
 class _MusicVolumeDialog extends StatefulWidget {
   const _MusicVolumeDialog({
@@ -568,8 +613,19 @@ class _Header extends StatelessWidget {
         const Text('DESKMATE',
             style: TextStyle(
                 fontSize: 13, fontWeight: FontWeight.w700, letterSpacing: -.2)),
-        const Spacer(),
-        _HeaderNavigation(view: view, onViewChanged: onViewChanged),
+        // 목적지가 일곱이라 좁은 화면에서는 고정 Row 가 넘친다. 자리가 모자라면
+        // 통째로 줄여서 그린다 - 잘라 내면 안 보이는 항목을 누를 수가 없고,
+        // 가로 스크롤로 밀어 두면 그 항목이 있는 줄도 모른다.
+        Expanded(
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerRight,
+              child: _HeaderNavigation(view: view, onViewChanged: onViewChanged),
+            ),
+          ),
+        ),
         const SizedBox(width: 10),
         AnimatedContainer(
           duration: AppMotion.fast,
@@ -697,8 +753,8 @@ class _Header extends StatelessWidget {
 class _HeaderNavigation extends StatelessWidget {
   const _HeaderNavigation({required this.view, required this.onViewChanged});
 
-  static const _itemWidth = 52.0;
-  static const _buttonSize = 48.0;
+  static const _itemWidth = 46.0;
+  static const _buttonSize = 42.0;
 
   final _AppView view;
   final ValueChanged<_AppView> onViewChanged;
@@ -727,6 +783,18 @@ class _HeaderNavigation extends StatelessWidget {
             icon: Icons.dashboard_outlined,
             label: '상태',
             onTap: () => onViewChanged(_AppView.dashboard),
+          ),
+          _HeaderNav(
+            selected: view == _AppView.posture,
+            icon: Icons.chair_alt_outlined,
+            label: '자세',
+            onTap: () => onViewChanged(_AppView.posture),
+          ),
+          _HeaderNav(
+            selected: view == _AppView.sensorOverview,
+            icon: Icons.sensors_rounded,
+            label: '센서 전체',
+            onTap: () => onViewChanged(_AppView.sensorOverview),
           ),
           _HeaderNav(
             selected: view == _AppView.sensorTest,

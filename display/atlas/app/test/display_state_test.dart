@@ -15,14 +15,64 @@ void main() {
         'c_fatigue': 0.3,
         'confidence': 0.7,
         'gate': 'none',
-        'sensor_summary': {'present': true, 'co2_ppm': 812, 'lux': 310},
+        'sensor_summary': {
+          'present': true,
+          'co2_ppm': 812,
+          'temp_c': 25.3,
+          'humidity_pct': 54.6,
+          'lux': 310.8,
+        },
       },
     });
 
     expect(state.fsmState, 'FOCUS_PC');
     expect(state.sequence, 3);
     expect(state.co2Ppm, 812);
+    expect(state.temperatureC, 25.3);
+    expect(state.humidityPct, 54.6);
+    expect(state.lux, 310);
     expect(state.present, isTrue);
+  });
+
+  test('leaves a missing CO2 value null while parsing other sensors', () {
+    final state = DisplayState.fromEnvelope(_environmentEnvelope({
+      'temp_c': 24,
+      'humidity_pct': 52,
+      'lux': 295,
+    }));
+
+    expect(state.co2Ppm, isNull);
+    expect(state.temperatureC, 24.0);
+    expect(state.humidityPct, 52.0);
+    expect(state.lux, 295);
+  });
+
+  test('accepts a null CO2 value without crashing', () {
+    final state = DisplayState.fromEnvelope(_environmentEnvelope({
+      'co2_ppm': null,
+      'temp_c': 25.1,
+      'humidity_pct': 53.4,
+      'lux': 300.0,
+    }));
+
+    expect(state.co2Ppm, isNull);
+    expect(state.temperatureC, 25.1);
+    expect(state.humidityPct, 53.4);
+    expect(state.lux, 300);
+  });
+
+  test('ignores non-numeric environment values instead of throwing', () {
+    final state = DisplayState.fromEnvelope(_environmentEnvelope({
+      'co2_ppm': 'invalid',
+      'temp_c': false,
+      'humidity_pct': '54.0',
+      'lux': <Object>[],
+    }));
+
+    expect(state.co2Ppm, isNull);
+    expect(state.temperatureC, isNull);
+    expect(state.humidityPct, isNull);
+    expect(state.lux, isNull);
   });
 
   test('rejects an unknown contract version', () {
@@ -115,3 +165,19 @@ void main() {
     expect(state.keystroke, isNull);
   });
 }
+
+Map<String, dynamic> _environmentEnvelope(Map<String, Object?> sensors) => {
+      'schema_version': '1.0',
+      'ts': 100.5,
+      'seq': 3,
+      'data': {
+        'fsm_state': 'FOCUS_PC',
+        'phase': 'focus',
+        'context': 'pc',
+        'c_focus': 0.2,
+        'c_fatigue': 0.3,
+        'confidence': 0.7,
+        'gate': 'none',
+        'sensor_summary': sensors,
+      },
+    };

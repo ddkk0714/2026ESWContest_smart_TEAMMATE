@@ -1,6 +1,6 @@
 // 앱이 읽는 HTTP API. 127.0.0.1 에만 연다.
 //
-// 앱(`display/atlas/camtest`)에는 이미 Pi 4 자세 노드를 긁던 클라이언트가 있다 -
+// 앱(`display/atlas/app`)에는 이미 Pi 4 자세 노드를 긁던 클라이언트가 있다 -
 // `/api/state` · `/health` · `/api/calibrate`. 그 셋을 여기서 그대로 낸다.
 // **봉투 모양을 바꾸지 말 것**: `lib/posture_state.dart` 의 `fromEnvelope` 가
 // `schema_version` 이 "1.0" 이 아니면 던진다.

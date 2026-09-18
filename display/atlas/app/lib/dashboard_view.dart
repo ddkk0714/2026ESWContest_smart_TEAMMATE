@@ -18,6 +18,7 @@ class DashboardView extends StatelessWidget {
     required this.showDemoControl,
     required this.demoCyclingEnabled,
     required this.onToggleDemoCycling,
+    this.phaseOverride,
     required this.showFocusDetail,
     required this.onShowFocusDetail,
     this.liveKeys,
@@ -33,11 +34,16 @@ class DashboardView extends StatelessWidget {
   final bool showDemoControl;
   final bool demoCyclingEnabled;
   final VoidCallback onToggleDemoCycling;
+
+  /// 시연용 자동 화면 순환이 켜져 있을 때, 실제 FSM 국면 대신 그릴 국면.
+  /// 허브가 보낸 상태는 그대로 두고 표현만 바꾼다.
+  final String? phaseOverride;
   final bool showFocusDetail;
   final ValueChanged<bool> onShowFocusDetail;
 
   @override
   Widget build(BuildContext context) {
+    final phase = phaseOverride ?? state.phase;
     late final String transitionKey;
     late final Widget content;
     if (showFocusDetail) {
@@ -46,18 +52,18 @@ class DashboardView extends StatelessWidget {
         state: state,
         onClose: () => onShowFocusDetail(false),
       );
-    } else if (state.phase == 'idle') {
+    } else if (phase == 'idle') {
       transitionKey = 'idle';
       content =
           AmbientView(state: state, onDetail: () => onShowFocusDetail(true));
-    } else if (state.phase == 'end') {
+    } else if (phase == 'end') {
       transitionKey = 'report';
       content = SessionReportView(state: state);
     } else if (hasPendingRequest ||
-        (state.phase == 'fatigue' && state.gate != 'none')) {
+        (phase == 'fatigue' && (phaseOverride != null || state.gate != 'none'))) {
       transitionKey = 'suggestion';
       content = SuggestionView(state: state, onFeedback: onFeedback);
-    } else if (state.phase == 'recovery') {
+    } else if (phase == 'recovery') {
       transitionKey = 'recovery';
       content = FocusAmbientView(state: state);
     } else {
@@ -68,9 +74,6 @@ class DashboardView extends StatelessWidget {
         keystrokeReference: keystrokeReference,
         liveKeys: liveKeys,
         onDetail: () => onShowFocusDetail(true),
-        showDemoControl: showDemoControl,
-        demoCyclingEnabled: demoCyclingEnabled,
-        onToggleDemoCycling: onToggleDemoCycling,
       );
     }
     final message = displayMessage;
@@ -81,13 +84,58 @@ class DashboardView extends StatelessWidget {
       transitionBuilder: AppMotion.fadeScaleTransition,
       child: KeyedSubtree(key: ValueKey(transitionKey), child: content),
     );
-    if (message == null || message.isEmpty) return animatedContent;
+    final dashboardContent = showDemoControl
+        ? Stack(
+            fit: StackFit.expand,
+            children: [
+              animatedContent,
+              Positioned(
+                right: 2,
+                bottom: 2,
+                child: _AutoCycleToggle(
+                  enabled: demoCyclingEnabled,
+                  onPressed: onToggleDemoCycling,
+                ),
+              ),
+            ],
+          )
+        : animatedContent;
+    if (message == null || message.isEmpty) return dashboardContent;
     return Column(children: [
       DisplayMessageBanner(message: message),
       const SizedBox(height: 10),
-      Expanded(child: animatedContent),
+      Expanded(child: dashboardContent),
     ]);
   }
+}
+
+class _AutoCycleToggle extends StatelessWidget {
+  const _AutoCycleToggle({required this.enabled, required this.onPressed});
+
+  final bool enabled;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+        message: enabled ? '자동 화면 순환 끄기' : '자동 화면 순환 켜기',
+        child: Material(
+          color: Colors.transparent,
+          child: OutlinedButton.icon(
+            key: const ValueKey('demo-cycle-toggle'),
+            onPressed: onPressed,
+            icon: Icon(
+              enabled ? Icons.pause_rounded : Icons.play_arrow_rounded,
+              size: 16,
+            ),
+            label: Text('자동 ${enabled ? 'ON' : 'OFF'}'),
+            style: OutlinedButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              textStyle: Theme.of(context).textTheme.labelSmall,
+            ),
+          ),
+        ),
+      );
 }
 
 class DisplayMessageBanner extends StatelessWidget {
@@ -163,8 +211,15 @@ class AmbientView extends StatelessWidget {
                     value: state.present == false ? '자리 비움' : '재실 감지됨',
                   ),
                 ),
-                Text(_environmentInline(state),
-                    style: Theme.of(context).textTheme.labelMedium),
+                Flexible(
+                  child: Text(
+                    _environmentInline(state),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.end,
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                ),
               ]),
             ),
             const SizedBox(height: 26),
@@ -188,9 +243,6 @@ class FocusStatusView extends StatelessWidget {
     required this.keystroke,
     required this.keystrokeReference,
     required this.onDetail,
-    required this.showDemoControl,
-    required this.demoCyclingEnabled,
-    required this.onToggleDemoCycling,
     this.liveKeys,
   });
   final DisplayState state;
@@ -199,9 +251,6 @@ class FocusStatusView extends StatelessWidget {
   final DateTime keystrokeReference;
   final int? liveKeys;
   final VoidCallback onDetail;
-  final bool showDemoControl;
-  final bool demoCyclingEnabled;
-  final VoidCallback onToggleDemoCycling;
 
   @override
   Widget build(BuildContext context) =>
@@ -237,20 +286,6 @@ class FocusStatusView extends StatelessWidget {
                   metrics: keystroke,
                   reference: keystrokeReference,
                   liveKeys: liveKeys,
-                ),
-              ],
-              if (showDemoControl) ...[
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: OutlinedButton.icon(
-                    key: const ValueKey('demo-cycle-toggle'),
-                    onPressed: onToggleDemoCycling,
-                    icon: Icon(demoCyclingEnabled
-                        ? Icons.pause_rounded
-                        : Icons.play_arrow_rounded),
-                    label: Text('자동 순환: ${demoCyclingEnabled ? 'ON' : 'OFF'}'),
-                  ),
                 ),
               ],
             ]);
@@ -658,17 +693,23 @@ class _EnvironmentPanel extends StatelessWidget {
                     unit: 'ppm')),
             Expanded(
                 child: _DataPoint(
+                    label: '온도',
+                    value: state.temperatureC == null
+                        ? '--'
+                        : state.temperatureC!.toStringAsFixed(1),
+                    unit: '°C')),
+            Expanded(
+                child: _DataPoint(
+                    label: '습도',
+                    value: state.humidityPct == null
+                        ? '--'
+                        : state.humidityPct!.toStringAsFixed(1),
+                    unit: '%')),
+            Expanded(
+                child: _DataPoint(
                     label: '조도',
                     value: state.lux == null ? '--' : '${state.lux}',
                     unit: 'lx')),
-            Expanded(
-                child: _DataPoint(
-                    label: '재실',
-                    value: state.present == null
-                        ? '--'
-                        : state.present!
-                            ? '감지'
-                            : '없음')),
           ]),
           const Spacer(),
           Text(_comfort(state), style: Theme.of(context).textTheme.bodyMedium),
@@ -910,6 +951,8 @@ String _date(DateTime time) => '${time.month}월 ${time.day}일';
 String _percent(double value) => '${(value.clamp(0, 1) * 100).round()}%';
 String _environmentInline(DisplayState state) => [
       if (state.co2Ppm != null) 'CO₂ ${state.co2Ppm} ppm',
+      if (state.temperatureC != null) '${state.temperatureC!.toStringAsFixed(1)}°C',
+      if (state.humidityPct != null) '습도 ${state.humidityPct!.toStringAsFixed(0)}%',
       if (state.lux != null) '조도 ${state.lux} lx',
     ].join(' · ');
 String _comfort(DisplayState state) =>

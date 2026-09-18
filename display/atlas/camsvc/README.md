@@ -1,7 +1,7 @@
 # camsvc — ESP32-CAM 스켈레톤 자세 판정 서비스 (Pi 5 / ATLAS native-service)
 
 ```
-ESP32-CAM ─UART 921600─> /dev/ttyACM1 ─> camsvc ─HTTP 127.0.0.1:8770─> camtest 앱
+ESP32-CAM ─UART 921600─> /dev/ttyACM1 ─> camsvc ─HTTP 127.0.0.1:8770─> DESKMATE 앱
                          (Vision Stream)   │
                                            ├ 프레임 디코딩 (A5 5A … CRC-16)
                                            ├ BlazePose 검출기 224x224
@@ -11,7 +11,7 @@ ESP32-CAM ─UART 921600─> /dev/ttyACM1 ─> camsvc ─HTTP 127.0.0.1:8770─>
 
 **왜 앱이 아니라 서비스인가.** 판정이 MediaPipe 모델 두 개를 돌려야 하는데 Dart 에는
 TFLite 를 쓸 길이 없다. ATLAS 에는 Python 도 없다. 그래서 모델을 쓰는 판정만 네이티브로
-빼고, 앱(`display/atlas/camtest`)은 보여 주기만 한다.
+빼고, 앱(`display/atlas/app`)은 보여 주기만 한다.
 
 ## 원본과 포팅
 
@@ -91,7 +91,7 @@ python -c "import zipfile; zipfile.ZipFile('pose_landmarker_full.task').extracta
 ## API (앱이 읽는 것)
 
 앱에 이미 있던 Pi 4 자세 노드 클라이언트를 그대로 쓴다. **봉투 모양을 바꾸지 말 것** —
-`camtest/lib/posture_state.dart` 의 `fromEnvelope` 가 `schema_version` 이 `"1.0"` 이
+`app/lib/posture/posture_state.dart` 의 `fromEnvelope` 가 `schema_version` 이 `"1.0"` 이
 아니면 던진다.
 
 - `GET /health` — 포트·프레임 수·버린 바이트·CRC 오류·fps·모델 시간·검출 점수·존재 점수·
