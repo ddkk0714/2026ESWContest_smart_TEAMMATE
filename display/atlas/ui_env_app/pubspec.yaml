@@ -11,6 +11,10 @@ dependencies:
     sdk: flutter
   audioplayers: ^6.0.0
   dbus: ^0.7.12
+  # 자세 탭은 PR #20 의 camtest 판정·화면을 그대로 쓴다. 복사하면 갈라지므로
+  # 같은 저장소의 그 앱을 패키지로 가져온다(camtest 의 테스트가 계속 지킨다).
+  camtest:
+    path: ../camtest
   # Atlas toolchain의 Dart 3.6.2 호환 상한. Dart 3.8 이상을 요구하는
   # 10.8.1+로 자동 상승하지 않도록 정확한 버전으로 고정한다.
   mqtt_client: 10.5.1

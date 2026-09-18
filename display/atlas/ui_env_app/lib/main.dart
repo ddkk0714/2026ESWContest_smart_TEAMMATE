@@ -13,7 +13,7 @@ import 'deskmate_theme.dart';
 import 'fsm_graph.dart';
 import 'keystroke_capture.dart';
 import 'music_playback.dart';
-import 'posture_status_page.dart';
+import 'posture_screen.dart';
 import 'sensor_overview_page.dart';
 import 'sensor_test_page.dart';
 import 'session_report.dart';
@@ -386,7 +386,7 @@ class _DashboardPageState extends State<DashboardPage> {
                             unawaited(_feedbackController.apply(next));
                           },
                         ),
-                      _AppView.posture => PostureStatusPage(hubUrl: _hubUrl),
+                      _AppView.posture => const PostureScreen(),
                       _AppView.fsmGraph =>
                         FsmGraphPage(currentState: state.fsmState),
                       _AppView.bluetooth => BluetoothControlPage(

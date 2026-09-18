@@ -88,6 +88,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.1"
+  camtest:
+    dependency: "direct main"
+    description:
+      path: "../camtest"
+      relative: true
+    source: path
+    version: "1.0.0+1"
   characters:
     dependency: transitive
     description:
