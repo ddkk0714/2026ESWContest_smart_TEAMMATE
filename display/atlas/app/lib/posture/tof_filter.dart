@@ -24,10 +24,9 @@ import 'dart:typed_data';
 
 import 'posture_source.dart' show VisionSnapshot;
 import 'vision_frame.dart' show maskToZone;
+import 'zone_image.dart';
 
-/// ToF(VL53L9CX) 와 같은 zone 격자. 화면을 그쪽과 같은 크기로 둔다.
-const int tofCols = 54;
-const int tofRows = 42;
+export 'zone_image.dart' show tofCols, tofRows;
 
 /// 스케치가 잡는 해상도(QQVGA). 배경 모델을 여기서 돌린다.
 const int _srcW = 160;
@@ -73,7 +72,7 @@ class TofFilter {
     if (width <= 0 || height <= 0 || grey.length < width * height) {
       return _empty();
     }
-    final small = _areaResize(grey, width, height, _srcW, _srcH);
+    final small = areaResizeBytes(grey, width, height, _srcW, _srcH);
 
     _frames++;
     if (_settle > 0) {
@@ -105,7 +104,7 @@ class TofFilter {
     // 절댓값은 박스 평균 **앞** 에서 픽셀마다 취한다. box(|cur-bg|) 는
     // |box(cur)-box(bg)| 가 아니고, 뒤쪽은 한 칸 안에 피사체의 밝은 부분과
     // 어두운 부분이 같이 들어가면 상쇄된다 - 윤곽선이 대부분 그렇다.
-    final scaled = _areaResize2d(absdiff, _srcW, _srcH, tofCols, tofRows);
+    final scaled = areaResize(absdiff, _srcW, _srcH, tofCols, tofRows);
     final coverage = Uint8List(tofCols * tofRows);
     for (var i = 0; i < coverage.length; i++) {
       final v = (scaled[i] * _gainQ4 / 16.0).round();
@@ -147,57 +146,6 @@ class TofFilter {
       depthMm: maskToZone(mask, tofRows, tofCols).data,
     );
   }
-}
-
-/// 면적 평균으로 줄인다(OpenCV `INTER_AREA`). 배율이 정수가 아니라
-/// (160/54 = 2.96) 가장자리 픽셀을 비율만큼만 세야 그림이 안 밀린다.
-Float64List _areaResize(Uint8List src, int sw, int sh, int dw, int dh) {
-  final input = Float64List(sw * sh);
-  for (var i = 0; i < input.length; i++) {
-    input[i] = src[i].toDouble();
-  }
-  return _areaResize2d(input, sw, sh, dw, dh);
-}
-
-Float64List _areaResize2d(Float64List src, int sw, int sh, int dw, int dh) {
-  if (sw == dw && sh == dh) return src;
-  final out = Float64List(dw * dh);
-  final xScale = sw / dw;
-  final yScale = sh / dh;
-  for (var dy = 0; dy < dh; dy++) {
-    final y0 = dy * yScale;
-    final y1 = y0 + yScale;
-    final ry0 = y0.floor();
-    final ry1 = (y1.ceil()).clamp(0, sh);
-    for (var dx = 0; dx < dw; dx++) {
-      final x0 = dx * xScale;
-      final x1 = x0 + xScale;
-      final rx0 = x0.floor();
-      final rx1 = (x1.ceil()).clamp(0, sw);
-      var sum = 0.0;
-      var weight = 0.0;
-      for (var sy = ry0; sy < ry1; sy++) {
-        final wy = _overlap(sy.toDouble(), sy + 1.0, y0, y1);
-        if (wy <= 0) continue;
-        final row = sy * sw;
-        for (var sx = rx0; sx < rx1; sx++) {
-          final wx = _overlap(sx.toDouble(), sx + 1.0, x0, x1);
-          if (wx <= 0) continue;
-          final w = wx * wy;
-          sum += src[row + sx] * w;
-          weight += w;
-        }
-      }
-      out[dy * dw + dx] = weight > 0 ? sum / weight : 0.0;
-    }
-  }
-  return out;
-}
-
-double _overlap(double a0, double a1, double b0, double b1) {
-  final lo = a0 > b0 ? a0 : b0;
-  final hi = a1 < b1 ? a1 : b1;
-  return hi > lo ? hi - lo : 0.0;
 }
 
 /// 테두리에서 배경을 흘려 넣고, 물이 못 닿은 곳을 전경으로 올린다.
