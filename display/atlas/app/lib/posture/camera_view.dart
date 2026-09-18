@@ -15,6 +15,8 @@ import 'package:flutter/material.dart';
 
 import 'palette.dart';
 import 'posture_source.dart';
+import 'tof_filter.dart';
+import 'vision_view.dart';
 
 /// 상반신 뼈대. MediaPipe 랜드마크 번호 쌍이다.
 ///
@@ -46,6 +48,12 @@ class _CameraViewPageState extends State<CameraViewPage> {
   String? _error;
   int _frames = 0;
 
+  /// ToF 화면은 배경 모델을 들고 있어야 하므로 프레임마다 같은 객체에 넣는다.
+  final _tof = TofFilter();
+  VisionSnapshot? _zones;
+  bool _tofView = false;
+  VisionMode _tofMode = VisionMode.heat;
+
   @override
   void initState() {
     super.initState();
@@ -74,10 +82,14 @@ class _CameraViewPageState extends State<CameraViewPage> {
         image.dispose();
         return;
       }
+      // 화면을 안 보고 있어도 계속 넣는다. 배경 모델은 연속된 프레임으로만
+      // 서고, 전환한 뒤에 처음부터 다시 세우면 20프레임을 또 기다려야 한다.
+      final zones = _tof.add(frame.width, frame.height, frame.grey);
       setState(() {
         _image?.dispose();
         _image = image;
         _points = frame.points;
+        _zones = zones;
         _error = null;
         _frames++;
       });
@@ -87,15 +99,61 @@ class _CameraViewPageState extends State<CameraViewPage> {
     }
   }
 
+  /// 화면 아래 한 줄. ToF 로 보면 무엇을 보고 있는지 말해 준다.
+  String _caption(ui.Image image) {
+    if (!_tofView) return '${image.width}x${image.height} · $_frames장 받음';
+    if (_tof.warmingUp) return '배경을 잡는 중… 화각에서 잠깐 비켜 주세요';
+    return '$tofCols x $tofRows · 임계 ${_tof.threshold} · $_frames장 받음';
+  }
+
+  Widget _tofModes() => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Wrap(
+          spacing: 8,
+          children: [
+            for (final (mode, name) in const [
+              (VisionMode.heat, '거리'),
+              (VisionMode.coverage, '차이값'),
+              (VisionMode.mask, '마스크'),
+            ])
+              TextButton(
+                onPressed: () => setState(() => _tofMode = mode),
+                style: TextButton.styleFrom(
+                  foregroundColor: _tofMode == mode ? kInk : kMuted,
+                  backgroundColor: _tofMode == mode ? kSurface : null,
+                ),
+                child: Text(name),
+              ),
+          ],
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     final image = _image;
+    final zones = _zones;
     return Scaffold(
       backgroundColor: kBg,
       appBar: AppBar(
         backgroundColor: kSurface,
-        title: const Text('카메라 보기'),
+        title: Text(_tofView ? 'ToF 보기 — 54x42' : '카메라 보기'),
         actions: [
+          IconButton(
+            key: const ValueKey('tof-toggle'),
+            tooltip: _tofView ? '원본 보기' : 'ToF 처럼 보기',
+            onPressed: () => setState(() => _tofView = !_tofView),
+            color: _tofView ? kGreen : kMuted,
+            icon: Icon(_tofView
+                ? Icons.videocam_outlined
+                : Icons.blur_on_rounded),
+          ),
+          if (_tofView)
+            IconButton(
+              tooltip: '기준 다시 잡기',
+              onPressed: () => setState(_tof.resetBackground),
+              color: kMuted,
+              icon: const Icon(Icons.restart_alt, size: 20),
+            ),
           Padding(
             padding: const EdgeInsets.only(right: 16),
             child: Center(
@@ -125,16 +183,19 @@ class _CameraViewPageState extends State<CameraViewPage> {
                 children: [
                   Padding(
                     padding: const EdgeInsets.all(12),
-                    child: AspectRatio(
-                      aspectRatio: image.width / image.height,
-                      child: CustomPaint(
-                        painter: _CameraPainter(image: image, points: _points),
-                      ),
-                    ),
+                    child: _tofView && zones != null
+                        ? VisionPanel(snapshot: zones, mode: _tofMode)
+                        : AspectRatio(
+                            aspectRatio: image.width / image.height,
+                            child: CustomPaint(
+                              painter: _CameraPainter(
+                                  image: image, points: _points),
+                            ),
+                          ),
                   ),
+                  if (_tofView) _tofModes(),
                   Text(
-                    _error ??
-                        '${image.width}x${image.height} · $_frames장 받음',
+                    _error ?? _caption(image),
                     style: const TextStyle(fontSize: 13, color: kGray),
                   ),
                 ],
