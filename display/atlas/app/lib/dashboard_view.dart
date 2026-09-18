@@ -256,16 +256,21 @@ class FocusStatusView extends StatelessWidget {
   Widget build(BuildContext context) =>
       LayoutBuilder(builder: (context, constraints) {
         final compact = constraints.maxWidth < 700;
+        // 보드 화면(1024x600)에서 헤더·배너까지 얹으면 세로가 모자란다.
+        // 짧으면 여백을 줄이고 지표 스트립을 접는다 — 넘치면 아무것도 안 보인다.
+        final short = constraints.maxHeight < 520;
         return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const SizedBox(height: 18),
+              SizedBox(height: short ? 4 : 12),
+              _MainStatusStrip(state: state),
+              SizedBox(height: short ? 8 : 18),
               Text(_focusHeadline(state),
                   style: Theme.of(context).textTheme.headlineLarge),
-              const SizedBox(height: 5),
+              SizedBox(height: short ? 2 : 5),
               Text(_focusSubline(state),
                   style: Theme.of(context).textTheme.bodyMedium),
-              const SizedBox(height: 32),
+              SizedBox(height: short ? 10 : 32),
               Expanded(
                 child: Flex(
                   direction: compact ? Axis.vertical : Axis.horizontal,
@@ -278,8 +283,10 @@ class FocusStatusView extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(height: 26),
-              _MetricStrip(state: state),
+              if (!short) ...[
+                const SizedBox(height: 26),
+                _MetricStrip(state: state),
+              ],
               if (keystroke != null) ...[
                 const SizedBox(height: 10),
                 KeystrokeSummary(
@@ -290,6 +297,69 @@ class FocusStatusView extends StatelessWidget {
               ],
             ]);
       });
+}
+
+/// 국면 화면 맨 위의 한 줄 요약. 시연 중 화면을 스치듯 볼 때 필요한 것만 둔다.
+class _MainStatusStrip extends StatelessWidget {
+  const _MainStatusStrip({required this.state});
+  final DisplayState state;
+
+  @override
+  Widget build(BuildContext context) {
+    // 허브가 ts 를 못 실어 보내면(에폭 0) 화면 시계를 쓴다. 00:00 이 박히면
+    // 시연 중에 "멈춘 화면"으로 읽힌다.
+    final now = state.timestamp.millisecondsSinceEpoch == 0
+        ? DateTime.now()
+        : state.timestamp;
+    final time = '${now.hour.toString().padLeft(2, '0')}:'
+        '${now.minute.toString().padLeft(2, '0')}';
+    final occupancy = state.present == null
+        ? '--'
+        : state.present!
+            ? '재실'
+            : '자리 비움';
+    final heart = state.mmwave?.heartBpm;
+    return SoftPanel(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+      child: Row(children: [
+        _StatusStripValue(label: '현재 시간', value: time),
+        const SizedBox(width: 28),
+        _StatusStripValue(
+            label: '집중도', value: '${(state.focus * 100).round()}%'),
+        const SizedBox(width: 28),
+        _StatusStripValue(label: '재실 상태', value: occupancy),
+        if (heart != null) ...[
+          const SizedBox(width: 28),
+          _StatusStripValue(label: '심박', value: '$heart bpm'),
+        ],
+        const Spacer(),
+        Flexible(
+          child: Text(
+            state.co2Ppm == null ? '센서 대기' : _environmentInline(state),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.end,
+            style: Theme.of(context).textTheme.labelMedium,
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+class _StatusStripValue extends StatelessWidget {
+  const _StatusStripValue({required this.label, required this.value});
+  final String label;
+  final String value;
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.labelSmall),
+          const SizedBox(height: 3),
+          Text(value, style: Theme.of(context).textTheme.titleMedium),
+        ],
+      );
 }
 
 class SuggestionView extends StatelessWidget {

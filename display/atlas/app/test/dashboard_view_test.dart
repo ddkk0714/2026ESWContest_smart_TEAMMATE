@@ -51,6 +51,40 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  // 국면 화면 맨 위 한 줄. 시연 중 화면을 스치듯 볼 때 쓰는 값들이다.
+  testWidgets('focus screen leads with time, focus, presence and vitals',
+      (tester) async {
+    tester.view.physicalSize = const Size(1024, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await _pump(tester, _state(phase: 'focus', fsmState: 'FOCUS_PC'));
+    // 값은 아래 지표 스트립에도 나오므로 라벨로 스트립을 집어 확인한다.
+    for (final label in ['현재 시간', '집중도', '재실 상태', '심박']) {
+      expect(find.text(label), findsOneWidget);
+    }
+    expect(find.text('19:21'), findsOneWidget);       // 허브 envelope 의 ts
+    expect(find.text('72 bpm'), findsOneWidget);      // sensor_summary.mmwave
+    expect(find.text('18%'), findsWidgets);           // c_focus
+    expect(find.text('재실'), findsOneWidget);
+  });
+
+  // 심박은 락온이 풀리면 값 자체가 안 온다. 자리를 비워 두면 "-- bpm" 이
+  // 아니라 항목이 통째로 빠져야 한다 — 없는 값에 자리를 내줄 여유가 없다.
+  testWidgets('status strip drops the heart slot when no sample arrived',
+      (tester) async {
+    tester.view.physicalSize = const Size(1024, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await _pump(
+      tester,
+      _state(phase: 'focus', fsmState: 'FOCUS_PC', mmwave: null),
+    );
+    expect(find.text('심박'), findsNothing);
+    expect(find.text('재실'), findsOneWidget);
+  });
+
   testWidgets('pending MQTT request opens suggestion controls', (tester) async {
     tester.view.physicalSize = const Size(1024, 600);
     tester.view.devicePixelRatio = 1;
@@ -99,6 +133,14 @@ DisplayState _state({
   required String fsmState,
   String gate = 'none',
   String? cause,
+  MmwaveSummary? mmwave = const MmwaveSummary(
+    motionState: 'still',
+    motionLevel: 4,
+    distanceCm: 55,
+    respBpm: 16,
+    heartBpm: 72,
+    drowsyState: 'AWAKE',
+  ),
 }) =>
     DisplayState(
       fsmState: fsmState,
@@ -115,4 +157,5 @@ DisplayState _state({
       present: true,
       co2Ppm: 720,
       lux: 444,
+      mmwave: mmwave,
     );
