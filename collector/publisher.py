@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import time
 
 import paho.mqtt.client as mqtt
@@ -19,6 +20,8 @@ class FeaturePublisher:
         self.cfg = cfg
         self.connected = False
         self._reconnects = -1  # 최초 connect 를 0 으로 세기 위해
+        self._boot_id = secrets.token_hex(4)
+        self._sequence = 0
 
         os.makedirs(cfg.log_dir, exist_ok=True)
         self._log_path = os.path.join(cfg.log_dir, "keystroke.jsonl")
@@ -60,8 +63,16 @@ class FeaturePublisher:
             print(f"[mqtt] start error ({e}); 로컬 로깅으로 계속")
 
     def publish(self, payload: dict):
-        payload = {"ts": round(time.time(), 3), **payload}
-        line = json.dumps(payload, ensure_ascii=False)
+        self._sequence += 1
+        envelope = {
+            "schema_version": "1.0",
+            "ts": round(time.time(), 3),
+            "node": self.cfg.node,
+            "boot_id": self._boot_id,
+            "seq": self._sequence,
+            "data": payload,
+        }
+        line = json.dumps(envelope, ensure_ascii=False)
         with open(self._log_path, "a", encoding="utf-8") as fp:
             fp.write(line + "\n")
         if self.connected:

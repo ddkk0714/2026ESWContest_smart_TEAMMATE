@@ -1,12 +1,16 @@
 """합성 이벤트로 특징 추출 검증 — 실제 키 캡처 없이 로직만 테스트."""
+import json
 import os
 import sys
+from argparse import Namespace
 
 # 저장소 루트를 path 에 추가해 `collector` 패키지를 import
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from collector.capture import InputCapture, KeyEvent, KeyKind, MouseEvent  # noqa: E402
+from collector.config import Config  # noqa: E402
 from collector.features import extract  # noqa: E402
+from collector.publisher import FeaturePublisher  # noqa: E402
 
 
 def _typing(start=0.0, n=20, flight=0.15, dwell=0.09, kind=KeyKind.CHAR):
@@ -84,6 +88,27 @@ def test_payload_matches_mqtt_contract():
         assert key in p, f"규약 필드 누락: {key}"
     assert p["node"] == "pc-collector" and p["window_s"] == 60
 
+
+def test_config_uses_deskmate_broker_environment(monkeypatch):
+    monkeypatch.setenv("DESKMATE_BROKER", "192.0.2.10")
+    args = Namespace(broker=None, port=None, node=None, window=None, period=None)
+    assert Config.resolve(args).broker_host == "192.0.2.10"
+
+
+def test_publisher_wraps_features_in_common_envelope(tmp_path):
+    cfg = Config(log_dir=str(tmp_path))
+    publisher = FeaturePublisher(cfg)
+    payload = {"node": cfg.node, "window_s": 60, "typing_active": False}
+
+    publisher.publish(payload)
+
+    envelope = json.loads((tmp_path / "keystroke.jsonl").read_text(encoding="utf-8"))
+    assert envelope["schema_version"] == "1.0"
+    assert envelope["node"] == cfg.node
+    assert len(envelope["boot_id"]) == 8
+    assert envelope["seq"] == 1
+    assert isinstance(envelope["ts"], float)
+    assert envelope["data"] == payload
 
 if __name__ == "__main__":
     import pytest
