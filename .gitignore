@@ -11,6 +11,7 @@ ml/datasets/
 logs/
 *.jsonl
 *.csv
+*.mp3
 
 # --- 학습 모델 ---
 ml/models/
@@ -41,6 +42,11 @@ display/**/atlas/flutter/ephemeral/
 .pioenvs/
 .piolibdeps/
 build/
+*.ipk
+
+# --- 로컬 작업 공간 · 생성 산출물 ---
+.worktrees/
+Claude outputs/
 
 # --- FSM 작업 폴더 (LGE Internal PDF · drawio 원본 · 설계 초안) ---
 FSM/
