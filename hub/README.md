@@ -71,7 +71,7 @@ python -m deskmate_hub run --broker <broker-ip>            # 기본 포트 1883,
 python -m deskmate_hub run --broker <ip> --ingest-config my-ingest.yaml --log-dir logs
 ```
 
-- 구독: `deskmate/sensor/#`(mmwave·env·keystroke — envelope 또는 collector 평면 payload), `deskmate/feedback/user`
+- 구독: `deskmate/sensor/#`(mmwave·env·keystroke — envelope(collector 포함) 또는 구버전 평면 payload), `deskmate/feedback/user`
 - 발행: `deskmate/state/phase`(retain, QoS 1, 10 s 주기), `deskmate/interaction/request`(제안 게이트로 ACTION_* 진입 시, retain 없음), `deskmate/control/cmd`(ACTION_ENV, `control.yaml`), `deskmate/health/hub`(LWT). 구독에 `deskmate/control/result` 포함
 - 제어 어댑터가 없으면 명령은 `result_timeout_sec` 뒤 timeout 으로 닫히고 FSM 은 계속 진행한다. 리허설은 `python tools/mock_plug.py --broker <ip>`. `control.yaml adapter: mock` 이면 프로세스 안에서 즉시 성공 처리
 - 매핑은 `config/ingest.yaml`. `normalization: baseline`(기본)이면 START 보정 창에서 만든 개인 기준선(중앙값·MAD Modified z)을 우선 쓰고, 기준선이 없는 지표·보정 전에는 선형 램프로 폴백한다. `baseline.persist.enabled: true` 면 median·MAD·표본 수만 JSON 에 저장(opt-in).

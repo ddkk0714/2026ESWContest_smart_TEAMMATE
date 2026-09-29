@@ -57,17 +57,17 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 
 | 모듈 | 담당 | 상태 | 메모 |
 |---|---|---|---|
-| `hub/inference/` FSM 1단계 | 박소연 | ✅ | 18상태 엔진·`report.py`·리플레이·데모, 엎드림·노딩 시나리오. hub 테스트 94 통과·1 xfail(`feat/display-hub-followup` 기준 — 병합 `aec531a` 이후 옛 API 를 import 하던 `test_native_mqtt_bridge.py` 수집 오류를 이 브랜치에서 수정). `feat/hub-swonly` 기준 105 통과 |
+| `hub/inference/` FSM 1단계 | 박소연 | ✅ | 18상태 엔진·`report.py`·리플레이·데모, 엎드림·노딩 시나리오. hub 테스트 114 통과·1 xfail(`feat/edge-hub-port` 기준, PR #27 위). 병합 `aec531a` 이후 옛 API 를 import 하던 `test_native_mqtt_bridge.py` 수집 오류는 PR #27 에서 수정 |
 | `hub/atlas/` Pi 4 native service | 공통 | 🟡 | IPK 로 제한 Python FSM 실행, C++ `uart_rx`(09-16 실수신 rx=132·crc 0), C++ 네이티브 MQTT 브리지. 재부팅·재설치 후 `pi4-hub-activate.sh` 필요(`feat/edge-mvp-nodered`). 자동 시작 없음 |
 | `hub/ingest/` + `live.py` | 이민혁·공통 | ✅ | MQTT·`UART	` 라인 → `SensorCache` → 10 s `SensorFrame` → FSM → `state/phase`·`interaction/request`·`health/hub`. `config/ingest.yaml` 임시 스케일 |
-| `hub/features/` baseline 정규화 | 김태환 | 🟡 | main 은 빈 패키지. 중앙값·MAD `baseline.py` 는 `feat/hub-swonly` 에만 있음 → PR 필요 |
-| `hub/control/` 플러그·ThinQ | 조명희 | 🟡 | main: iLink 블루투스 램프 어댑터(PR #22). 디스패처·mock 플러그는 `feat/hub-swonly`. **스마트 플러그 미선정** |
+| `hub/features/` baseline 정규화 | 김태환 | 🟡 | 중앙값·MAD Modified z `baseline.py`(세션 보정 창·시간대 버킷·opt-in 저장), ingest 기본 `normalization: baseline` — `feat/edge-hub-port` 로 이관. z_full·mad_floor 실측 튜닝 남음 |
+| `hub/control/` 플러그·ThinQ | 조명희 | 🟡 | iLink 블루투스 램프 어댑터(main, PR #22) + ACTION_ENV 디스패처·mock 플러그·`config/control.yaml`(`feat/edge-hub-port`, 보드에서는 `CMD	` 라인 → C++ 가 `control/cmd` 발행). **스마트 플러그 미선정** |
 | `hub/inference/` TFLite 2단계 | 조명희 | ⬜ | 선택적 의존. 라벨 축적 후 |
 | `ml/` 학습→TFLite | 조명희 | ⬜ | 비어 있음 |
 | `firmware/` ESP32 | 이민혁·김태환 | 🟡 | C1001 + DrowsyDetector, 환경 센서(SCD41·BH1750·DHT22) 드라이버, USB JSON + UART2 COBS/CRC. 실보드 플래시 09-16. C1001 무응답·재시도·SCD41 수정 5커밋은 `feat/edge-mvp-nodered` |
 | `display/` Atlas UI | 최민경 | 🟡 | 통합 앱(PR #23): 센서 개요·ENV·mmWave 심박·음악·블루투스 피드백·데모 세션 리포트. 4화면 전환·자동 실행 알림·자동 시작 없음 |
 | `display/atlas/camsvc`·`camtest` 카메라 자세 | 박소연 | ⚠ | ESP32-CAM + MediaPipe 스켈레톤 판정(PR #20). 통합 앱 자세 탭은 `base/camera-zone-views`(PR #25). **"카메라 미사용" 원칙과 충돌 — 팀 결정 필요**(`docs/roadmap.md` §3 I7) |
-| `collector/` 키스트로크 | 최민경 | ✅ | main 진입(PR #15). 공통 envelope·발행기·설정 문서는 `feat/edge-mvp-nodered`(테스트 10) |
+| `collector/` 키스트로크 | 최민경 | ✅ | main 진입(PR #15). 공통 envelope 발행·이식성 설정 문서는 `feat/edge-hub-port`(테스트 10) |
 | `tools/` | 공통 | ✅ | `uart_mqtt_bridge.py`, Node-RED 대시보드, Pi 4 정적 Mosquitto·핫스팟 스크립트(PR #18), 시나리오 sim·로컬 리허설 |
 | ToF 파이프라인 | 김태환 | ⬜ | **미연결, Path A/B 미결(09-19 마감 경과).** 기하 특징 7종 코드 없음 |
 ---
@@ -93,10 +93,10 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 | 1 | 요구사항 분석·시스템 구조 설계 | 09-19 | 🟡 **마감 경과** — ToF 경로·UART TYPE 확정·플러그 모델 남음 |
 | 2 | HW 구성·센서 인터페이스 | 09-28 | 🟡 **마감 경과** — mmWave·환경·화면 완료, ToF·플러그 남음 |
 | 3 | MQTT 통신·로깅 파이프라인 | 09-28 | 🟡 Pi 4 broker·UART 디코더·ingest·hub 발행 완료. 자동 시작·리플레이 포맷 정합 남음 |
-| 4 | ToF·환경·키스트로크 특징 추출 | 10-05 | 🟡 키스트로크·mmWave 완료, baseline 은 `feat/hub-swonly`. ToF 7종·환경 특징 남음 |
-| 5 | 작업 모드 판단·규칙 FSM 엔진 | 10-12 | ✅ 엔진 완료, 합성 채터링 테스트(`feat/hub-swonly`). 실센서 검증·충돌 확인 남음 |
+| 4 | ToF·환경·키스트로크 특징 추출 | 10-05 | 🟡 키스트로크·mmWave·baseline(`feat/edge-hub-port`) 완료. ToF 7종·환경 특징 남음 |
+| 5 | 작업 모드 판단·규칙 FSM 엔진 | 10-12 | ✅ 엔진 완료, 합성 채터링 테스트(`feat/edge-hub-port`). 실센서 검증·충돌 확인 남음 |
 | 6 | 디스플레이 UI·제안 카드·리포트 | 10-12 | 🟡 통합 앱·데모 리포트 완료, 4화면·자동 알림·리포트 MQTT 연결·자동 시작 남음 |
-| 7 | 조명·환기팬·플러그 제어 | 10-05 | 🟡 iLink 램프(main)·디스패처(`feat/hub-swonly`). 스마트 플러그 미선정 |
+| 7 | 조명·환기팬·플러그 제어 | 10-05 | 🟡 iLink 램프(main)·디스패처(`feat/edge-hub-port`). 스마트 플러그 미선정 |
 | 8 | 데이터 수집·ESM 라벨링·임계값 보정 | 10-19 | ⬜ |
 | 9 | 통합 MVP | 10-05 | 🟡 4-A(09-18) 실센서 통과 기록 없음. 제어 1사이클 미재현 |
 | 10 | 시험 평가·최적화 | 10-19 | ⬜ |
@@ -131,7 +131,7 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 1. **[팀·09-19 마감 경과] ToF 연결 경로** — Path A(Pi 4 MIPI CSI-2 풀해상도) vs Path B(ESP32 I2C binning). 결정 기록 없음, 규칙상 B.
 2. **[팀] UART 프레임 TYPE·스키마** — 잠정안(0x20 mmWave·0x10 env·0xF0 heartbeat, `data-spec.md` §13.1)으로 구현·실수신 중. 팀 확정만 남음. 목표 속도 460,800+ 실측.
 3. **[팀·09-28 마감 경과] 스마트 플러그 모델** — 로컬 제어 가능 모델 선정·구매. 통합 MVP(10-05) 제어 1사이클의 게이트.
-9. **[팀] 미머지 브랜치 2건** — `feat/hub-swonly`(baseline·디스패처), `feat/edge-mvp-nodered`(펌웨어·Pi 4 복구·collector) PR·머지.
+9. **[팀] 미머지 작업 PR** — PR #27(`feat/display-hub-followup`) → `feat/edge-hub-port`(펌웨어 C1001 수정·collector envelope·baseline·디스패처, PR #27 위에 쌓음) 순서로 머지.
 4. **[팀] 새 디스플레이 기록** — 모델명·인터페이스(DSI/HDMI)·전원 경로를 `hardware.md`에 적기.
 5. **[기본값] `C_focus` 부호** — 현재 "큰 값 = 집중 저하 증거". 바꾸려면 알려주기.
 6. **[기본값] 개인화 저장소** — 로컬 파일(JSONL) 잠정. opt-in·삭제 정책은 10-19 전.
@@ -156,10 +156,10 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 - 실행: `cd hub && pip install -r requirements.txt && pytest tests/`
 
 진행/예정
-- 🟡 실센서 `SensorFrame` 연결 — `ingest/` 완료, UART 실수신 확인. 실센서 대표 경로 재현 기록은 아직 없음. baseline 은 `feat/hub-swonly`.
+- 🟡 실센서 `SensorFrame` 연결 — `ingest/` 완료, UART 실수신 확인. 실센서 대표 경로 재현 기록은 아직 없음. baseline 은 `feat/edge-hub-port`.
 - ✅ hub 측 MQTT 발행(`state/phase` retain, `interaction/request`, `feedback/user` 구독).
-- ✅ `report.py` 세션 리포트 main 포함. `session/report` 발행·display 연결은 `feat/hub-swonly`.
-- 🟡 `control/` ACTION_* → 실제 제어 — iLink 램프(main), 디스패처(`feat/hub-swonly`), 스마트 플러그 미선정. 10-05.
+- ✅ `report.py` 세션 리포트 main 포함. `session/report` 10 s 스냅샷 발행·display 연결은 PR #27.
+- 🟡 `control/` ACTION_* → 실제 제어 — iLink 램프(main), 디스패처(`feat/edge-hub-port`), 스마트 플러그 미선정. 10-05.
 - ⬜ 2단계 TFLite 확신도 → 게이트 융합 — 10-19, 선택적.
 - 🚧 MONITOR 의 RL 정책 — 고정 규칙 유지. 로그 축적 후.
 
