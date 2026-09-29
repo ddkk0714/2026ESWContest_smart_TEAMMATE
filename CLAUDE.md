@@ -57,7 +57,7 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 
 | 모듈 | 담당 | 상태 | 메모 |
 |---|---|---|---|
-| `hub/inference/` FSM 1단계 | 박소연 | ✅ | 18상태 엔진·`report.py`·리플레이·데모, 엎드림·노딩 시나리오. main hub 테스트 88 통과·1 xfail + **수집 오류 1**(`test_native_mqtt_bridge.py` → `service_bridge._feed_mqtt_line` 누락, 병합 `aec531a`). `feat/hub-swonly` 기준 105 통과 |
+| `hub/inference/` FSM 1단계 | 박소연 | ✅ | 18상태 엔진·`report.py`·리플레이·데모, 엎드림·노딩 시나리오. hub 테스트 94 통과·1 xfail(`feat/display-hub-followup` 기준 — 병합 `aec531a` 이후 옛 API 를 import 하던 `test_native_mqtt_bridge.py` 수집 오류를 이 브랜치에서 수정). `feat/hub-swonly` 기준 105 통과 |
 | `hub/atlas/` Pi 4 native service | 공통 | 🟡 | IPK 로 제한 Python FSM 실행, C++ `uart_rx`(09-16 실수신 rx=132·crc 0), C++ 네이티브 MQTT 브리지. 재부팅·재설치 후 `pi4-hub-activate.sh` 필요(`feat/edge-mvp-nodered`). 자동 시작 없음 |
 | `hub/ingest/` + `live.py` | 이민혁·공통 | ✅ | MQTT·`UART	` 라인 → `SensorCache` → 10 s `SensorFrame` → FSM → `state/phase`·`interaction/request`·`health/hub`. `config/ingest.yaml` 임시 스케일 |
 | `hub/features/` baseline 정규화 | 김태환 | 🟡 | main 은 빈 패키지. 중앙값·MAD `baseline.py` 는 `feat/hub-swonly` 에만 있음 → PR 필요 |
@@ -142,7 +142,7 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 
 ## 6. FSM 추론 엔진(inference/) 개발 현황 — 박소연
 
-**상태: ✅ 1단계 코어 동작 · `main` 머지됨** (09-29 확인: main 테스트 수집 오류 1건 — §3 참고)
+**상태: ✅ 1단계 코어 동작 · `main` 머지됨** (09-29: main 테스트 수집 오류 1건 발견, `feat/display-hub-followup` 에서 수정)
 
 기준 설계: `docs/fsm-spec.md` (VER5, 5계층 18상태, C_fatigue/C_focus 이중 모니터링).
 

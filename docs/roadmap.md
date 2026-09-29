@@ -60,7 +60,7 @@ ToF VL53L9CX ── 연결 경로 결정 전 (Pi 4 CSI-2 또는 ESP32 I2C) — 0
 | G2 mmWave | 🟡 | 펌웨어 main 이관 완료(`firmware/esp32_sensor_node`, C1001 + DrowsyDetector). ESP32 UART2 → Pi 4 C++ `uart_rx` → `UART\t` 라인 → hub 수신 실측(09-16 rx=132·crc 0). 앱 센서 화면에 mmWave 심박 표시(PR #23). C1001 무응답 시 루프 굶김·재시도 백오프 수정은 (`feat/edge-mvp-nodered`) |
 | G3 환경 | 🟡 | SCD41·BH1750·DHT22 드라이버 main(PR #21), 앱 ENV 대시보드·UART 폴백(PR #23). 실장착 맞춤·SCD41 복구는 (`feat/edge-mvp-nodered`). CO₂ → 환기 라우팅 실기 미확인 |
 | G4 키스트로크 | ✅ | `collector/` main 진입(PR #15). 공통 envelope·이식성 설정 문서·입력 타이밍 발행기는 (`feat/edge-mvp-nodered`, 테스트 10 통과). hub ingest 가 평면·envelope payload 수용 |
-| G5 FSM | ✅ | 18상태 엔진·`report.py`·리플레이·데모. main hub 테스트 **88 통과·1 xfail + 수집 오류 1**(`test_native_mqtt_bridge.py` 가 `service_bridge._feed_mqtt_line` 을 찾지 못함 — PR #21·#22 병합 `aec531a` 에서 함수 누락, 수정 필요). (`feat/hub-swonly`) 기준 105 통과·1 xfail |
+| G5 FSM | ✅ | 18상태 엔진·`report.py`·리플레이·데모. hub 테스트 **94 통과·1 xfail**(`feat/display-hub-followup` 기준). main 은 `test_native_mqtt_bridge.py` 가 병합 `aec531a` 에서 사라진 `_feed_mqtt_line` 을 import 해 수집 오류 → 이 브랜치에서 `MqttLineSource` API 로 수정. (`feat/hub-swonly`) 기준 105 통과·1 xfail |
 | G6 개인화 | 🟡 | 중앙값·MAD 기준선 `features/baseline.py` 는 (`feat/hub-swonly`) 에만 있음. main `features/` 는 빈 패키지. `ml/` 비어 있음 |
 | G7 개입 | 🟡 | 게이트 0.45/0.75 config 일치. main `control/` 에는 iLink 블루투스 램프 어댑터(`ilink_light.py`)뿐. 제어 디스패처(auto/suggest/undo/쿨다운)·mock 플러그는 (`feat/hub-swonly`). **스마트 플러그 미선정** |
 | G8 UI | 🟡 | 통합 앱(PR #23): 센서 개요·ENV·음악 UI·블루투스 피드백·세션 리포트(데모)·상태 체류 차트. 저자극/상세 4화면 전환·자동 실행 알림+되돌리기·재부팅 자동 시작 없음 |
@@ -76,7 +76,9 @@ ToF VL53L9CX ── 연결 경로 결정 전 (Pi 4 CSI-2 또는 ESP32 I2C) — 0
 | `feat/edge-mvp-nodered` → `origin/feat/edge-mvp-nodered-followup` | 8커밋(09-18~21) | 펌웨어 C1001·환경센서 수정 5, Pi 4 `rx=0` 복구 스크립트, collector 발행기·설정 문서 | **PR 필요**. main 대비 34커밋 뒤처져 있어 main 위 재배치 후 PR |
 | `base/camera-zone-views` | 12커밋(PR #25 병합, 09-21) | 통합 앱(`display/atlas/app`) + 자세 탭·열화상풍 표시, `docs/posture-camera.md` | I7 결정 후 main 반영 여부 결정 |
 | `integration/unified-app` | 11커밋 | camera-zone-views 의 이전 상태 | `base/camera-zone-views` 로 대체됨 — 정리 대상 |
-| `feat/merge-pending`·`feat/hub-ingest-live`·`integration/pr21-pr22`·`feat/env-ui-integration` | 0 | 모두 main 에 포함 | 삭제 가능 |
+| `feat/display-hub-followup` | 17커밋 | `integration/pr21-pr22` 의 PR #23 이후 미푸시 14커밋(이중 발행 수정·브로커 주소 배포·리포트 10 s 발행과 버그 수정·자세 탭 camtest/ToF풍 화면·camsvc 기동 스크립트) + 테스트 수정 + 이 문서 갱신. main 과 충돌 없음 | **PR 올림** |
+| `integration/pr21-pr22` | 원격 기준 0 (로컬 14커밋은 위 브랜치로 이관) | PR #23 머지·닫힘 | 위 PR 머지 후 로컬·원격 삭제 |
+| `feat/merge-pending`·`feat/hub-ingest-live`·`feat/env-ui-integration` | 0 | 모두 main 에 포함(로컬 브랜치는 09-29 삭제) | 원격 삭제 가능 |
 
 ---
 
@@ -246,7 +248,7 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 - [ ] 4-A MVP 통과 (09-18)
 - [x] Pi 4 native service 에 UART 디코더·C++ MQTT 클라이언트 탑재 — 09-16 실수신, native MQTT 브리지 main(PR #21 계열)
 - [ ] PC 브리지(`tools/uart_mqtt_bridge.py`) 제거 — Pi 4 경로로 실브로커까지 end-to-end 확인 후
-- [ ] **main hub 테스트 수집 오류 수정** — `test_native_mqtt_bridge.py` 가 `service_bridge._feed_mqtt_line` 을 import, 병합 `aec531a` 에서 함수 누락(09-29 발견)
+- [x] **hub 테스트 수집 오류 수정** — `test_native_mqtt_bridge.py` 를 `MqttLineSource` API 로 갱신(09-29, `feat/display-hub-followup`)
 - [ ] 4 신호(ToF·mmWave·환경·키스트로크) 모두 `SensorFrame`·`reasons` 에 등장
 - [ ] 센서 → 피로 판정 → 제안 → 터치 수락 → 플러그 ON → MONITOR → RECOVERY 1사이클 실기 재현
 - [ ] display 를 꺼도 hub 계속 동작, Node-RED 없이 동작, 인터넷 없이 동작
