@@ -76,7 +76,7 @@ ToF VL53L9CX ── 연결 경로 결정 전 (Pi 4 CSI-2 또는 ESP32 I2C) — 0
 | `feat/edge-mvp-nodered` → `origin/feat/edge-mvp-nodered-followup` | 8커밋(09-18~21) | 펌웨어 C1001·환경센서 수정 5, Pi 4 `rx=0` 복구 스크립트, collector 발행기·설정 문서 | **PR 필요**. main 대비 34커밋 뒤처져 있어 main 위 재배치 후 PR |
 | `base/camera-zone-views` | 12커밋(PR #25 병합, 09-21) | 통합 앱(`display/atlas/app`) + 자세 탭·열화상풍 표시, `docs/posture-camera.md` | I7 결정 후 main 반영 여부 결정 |
 | `integration/unified-app` | 11커밋 | camera-zone-views 의 이전 상태 | `base/camera-zone-views` 로 대체됨 — 정리 대상 |
-| `feat/display-hub-followup` | 17커밋 | `integration/pr21-pr22` 의 PR #23 이후 미푸시 14커밋(이중 발행 수정·브로커 주소 배포·리포트 10 s 발행과 버그 수정·자세 탭 camtest/ToF풍 화면·camsvc 기동 스크립트) + 테스트 수정 + 이 문서 갱신. main 과 충돌 없음 | **PR 올림** |
+| `feat/display-hub-followup` | PR 브랜치 | `integration/pr21-pr22` 의 PR #23 이후 미푸시 14커밋(이중 발행 수정·브로커 주소 배포·리포트 10 s 발행과 버그 수정·자세 탭 camtest/ToF풍 화면·camsvc 기동 스크립트) + 테스트 수정 + 이 문서 갱신. main 과 충돌 없음 | **PR 올림** |
 | `integration/pr21-pr22` | 원격 기준 0 (로컬 14커밋은 위 브랜치로 이관) | PR #23 머지·닫힘 | 위 PR 머지 후 로컬·원격 삭제 |
 | `feat/merge-pending`·`feat/hub-ingest-live`·`feat/env-ui-integration` | 0 | 모두 main 에 포함(로컬 브랜치는 09-29 삭제) | 원격 삭제 가능 |
 
