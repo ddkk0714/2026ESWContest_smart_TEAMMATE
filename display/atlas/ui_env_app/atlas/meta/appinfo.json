@@ -11,7 +11,8 @@
             "com.atlas.permission.privileged.mediacontrol",
             "com.atlas.permission.privileged.mediasession",
             "com.atlas.permission.privileged.permission_agent",
-            "com.atlas.permission.privileged.bluetooth_admin"
+            "com.atlas.permission.privileged.bluetooth_admin",
+            "com.atlas.permission.privileged.peripheral"
         ],
         "user_consent": [
             "com.atlas.permission.user_consent.mediaplayer",
