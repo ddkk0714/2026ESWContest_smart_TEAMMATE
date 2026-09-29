@@ -142,6 +142,11 @@ health: `deskmate/health/pc-collector` 에 `{"node","status":"online|offline","r
   "reasons": ["posture_stable", "typing_rhythm_slow", "co2_rising"],
   "sensor_summary": {           // 선택: 화면 표시용 특징 요약. 센서 원본 금지
     "present": true, "co2_ppm": 812, "lux": 310, "valid": true,
+    "mmwave": {                 // 선택: 최신 mmWave 표본이 신선할 때만
+      "motion_state": "still", "motion_level": 5, "distance_cm": 55,
+      "resp_bpm": 15, "resp_valid": true, "heart_bpm": 72, "heart_valid": false,
+      "drowsy_state": "AWAKE"
+    },
     "keystroke": {              // 선택: deskmate/sensor/keystroke 규약 필드 그대로
       "node": "pc-collector", "ts": 1769000001.0,
       "window_s": 60, "event_count": 184,
@@ -158,6 +163,9 @@ health: `deskmate/health/pc-collector` 에 `{"node","status":"online|offline","r
 `sensor_summary`는 display가 별도 센서 topic을 조합하지 않아도 AOD를 그릴 수 있게 하는 선택 필드다.
 ToF raw 54×42 배열이나 키 내용은 이 필드에 넣지 않는다. 현재 미리보기 HTTP API도 이와 동일한
 envelope를 사용하므로 최종 전송 어댑터를 바꿔도 display 모델은 유지한다.
+
+`sensor_summary.mmwave` 의 심박·호흡은 **값과 `*_valid` 가 짝**이다. 락온이 풀린 구간의 값을 그대로
+그리면 "심박 0" 으로 읽히므로, display 는 `*_valid` 가 false 면 값을 표시하지 않는다(순간값은 판정에 쓰지 않는다).
 
 `sensor_summary.keystroke`는 `deskmate/sensor/keystroke`의 `data` 필드를 그대로 옮긴 것이고,
 여기에도 키 값은 들어가지 않는다. display가 collector 브로커에 따로 붙지 않아도 타이핑 지표를

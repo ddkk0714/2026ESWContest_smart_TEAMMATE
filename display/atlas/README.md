@@ -117,6 +117,13 @@ flutter-atlas build atlas --ipk --release \
   --dart-define=DESKMATE_MQTT_PORT=1883
 ```
 
+자세 탭이 볼 Pi 4 자세 노드 주소는 **`DESKMATE_POSTURE_URL`**(배포 스크립트 `ATLAS_POSTURE_URL`)로 따로 준다.
+보통은 비워 둔다 — 비어 있어야 같은 보드의 camsvc(127.0.0.1:8770) → ESP32-CAM 보드 직결 → 데모 순으로 내려간다.
+예전처럼 `DESKMATE_HUB_URL` 을 읽으면 허브 주소로 빌드했을 때 자세 탭이 camsvc·보드 직결을 건너뛴다.
+보드 직결에는 `appinfo.json` 의 `privileged.peripheral` 권한과 UART D-Bus 정책
+(`ui_env_app/atlas/meta/com.atlas.app.deskmate_display.conf` → 보드 `/data/share/usr/share/dbus-1/system.d/`, `systemctl reload dbus`)이 필요하다.
+앱은 연결 선택과 첫 성공·실패를 진단 로그 파일(`<앱 설치 경로>/camtest.log`)에 남긴다 — 이 보드는 앱 표준출력이 journal 에 남지 않는다.
+
 `DESKMATE_MQTT_HOST`와 `DESKMATE_HUB_URL`을 동시에 주면 MQTT를 우선한다. HTTP는 센서 테스트와
 화면·Hub 분리 검증을 위한 개발용 fallback으로만 유지한다.
 

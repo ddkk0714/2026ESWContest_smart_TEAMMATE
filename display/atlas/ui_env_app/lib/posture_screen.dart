@@ -57,10 +57,17 @@ const kRed = Color(0xFF9E4F47);
 const kBlue = Color(0xFF3C6488);
 const kViolet = Color(0xFF63528A);
 
-/// 배포 스크립트(`deploy/device.env` 의 `ATLAS_HUB_URL`)가 그대로 넘겨주는 값.
-/// 여기서는 허브가 아니라 **Pi 4 자세 노드**의 주소다 — 두 API 모양이 같아서
-/// 이름을 그대로 쓴다. 비어 있으면 화면 내장 데모가 돈다.
-const _hubUrl = String.fromEnvironment('DESKMATE_HUB_URL');
+/// **Pi 4 자세 노드**의 주소. 허브(`DESKMATE_HUB_URL`)와 다른 값이다.
+///
+/// camtest 가 따로 앱이었을 때는 둘 다 `DESKMATE_HUB_URL` 을 읽어도 됐다 — 자세 앱에는
+/// 허브 주소를 줄 일이 없었으니까. 통합 앱에서 이름이 겹치면, 허브 주소를 박아 빌드하는
+/// 평범한 배포에서 이 화면이 그 주소를 자세 노드로 알고 붙잡는다. 그러면
+/// `_startBestLocalSource()` 가 "사람이 주소를 찍어 뒀다"고 보고 camsvc 와 보드 직결을
+/// **둘 다 건너뛴다**(PR #24 `91dfc19` 실기 확인).
+///
+/// 비어 있는 것이 정상이다. 그때 판정 서비스 → 보드 직결 → 데모 순으로 내려간다.
+/// 배포 스크립트에서는 `ATLAS_POSTURE_URL`.
+const _hubUrl = String.fromEnvironment('DESKMATE_POSTURE_URL');
 class PostureLook {
   const PostureLook(this.ko, this.en, this.color, this.icon, this.desc);
   final String ko;

@@ -65,6 +65,9 @@ app_id=$(python3 -c 'import json; print(json.load(open("atlas/meta/appinfo.json"
 
 # Hub URL 은 빌드에 박히므로 값이 바뀌면 다시 빌드해야 한다. 비우면 내장 데모가 순환한다.
 defines=()
+if [ -n "$ATLAS_POSTURE_URL" ]; then
+    defines+=("--dart-define=DESKMATE_POSTURE_URL=$ATLAS_POSTURE_URL")
+fi
 if [ -n "$ATLAS_HUB_URL" ]; then
     defines+=("--dart-define=DESKMATE_HUB_URL=$ATLAS_HUB_URL")
 fi
@@ -80,6 +83,7 @@ echo "장치    : $ATLAS_DEVICE_ID ($ATLAS_SSH_USER@$ATLAS_DEVICE_IP:$ATLAS_SSH_
 echo "모드    : $mode"
 echo "MQTT    : ${ATLAS_MQTT_HOST:+$ATLAS_MQTT_HOST:$ATLAS_MQTT_PORT}${ATLAS_MQTT_HOST:-(없음)}"
 echo "Hub URL : ${ATLAS_HUB_URL:-(없음)}"
+echo "자세 노드: ${ATLAS_POSTURE_URL:-(없음 - camsvc → 보드 직결 → 데모)}"
 if [ -z "$ATLAS_MQTT_HOST" ] && [ -z "$ATLAS_HUB_URL" ]; then echo "          -> 둘 다 비어 내장 데모로 뜬다"; fi
 echo "동작    : $action"
 echo
