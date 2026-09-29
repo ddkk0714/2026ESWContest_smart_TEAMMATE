@@ -7,7 +7,7 @@
 #endif
 
 #ifndef DESKMATE_FIRMWARE_VERSION
-#define DESKMATE_FIRMWARE_VERSION 0x0100
+#define DESKMATE_FIRMWARE_VERSION 0x0110
 #endif
 
 namespace deskmate {
@@ -34,15 +34,11 @@ constexpr uint32_t kDht22ReadIntervalMs = 2000;
 constexpr uint32_t kEnvironmentSensorRetryMs = 10000;
 constexpr uint32_t kEnvironmentStaleAfterMs = 15000;
 constexpr uint32_t kC1001RetryMs = 10000;
-// 이만큼 연속으로 응답이 없으면 센서가 죽은 것으로 보고 값싼 probe 재시도로 돌아간다.
-constexpr uint8_t kC1001FailStreakMax = 3;
 // 재시도가 계속 실패하면 간격을 두 배씩 늘려 이 값까지 간다. begin() 은 센서가
 // 응답하다 마는 상태에서 15 s 를 먹으므로 10 s 마다 부르면 루프가 못 돈다.
 constexpr uint32_t kC1001RetryMaxMs = 120000;
 
-// Supplied by platformio.ini build flags so tuning does not require source edits.
-constexpr uint32_t kWarmupMs = DESKMATE_WARMUP_MS;
-constexpr uint32_t kDrowsyStillMs = DESKMATE_DROWSY_STILL_MS;
-constexpr uint8_t kStillMotionLevelMax = DESKMATE_STILL_MOTION_LEVEL_MAX;
+// 졸음 판정 임계값은 실측 근거 주석과 함께 sensors/c1001/DrowsyDetector.h 에 있다.
+// 시연용으로 확정 시간만 줄이려면 -DDESKMATE_DROWSY_HOLD_SCALE_PCT=<퍼센트>.
 
 }  // namespace deskmate

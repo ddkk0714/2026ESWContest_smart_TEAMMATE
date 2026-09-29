@@ -15,6 +15,14 @@ VL53L9CX 는 연결 경로(Path A: Pi 4 CSI-2 / Path B: ESP32 I2C 1 MHz binning)
 > 0x10 환경 0.2 Hz(스텁이면 valid_bits 0) · 0xF0 하트비트 1 Hz). 빌드 플래그 `-DDESKMATE_UART2_TX=1`(기본 켬),
 > `-DDESKMATE_FIRMWARE_VERSION`. Python 코덱(`hub/deskmate_hub/ingest/uart_frame.py`)과 test vector 로 교차 검증했다.
 > **`pio run` 실빌드와 실보드 UART 검증은 아직 안 했다.** 환경 센서 실제 드라이버(SCD41·BH1750·DHT22)는 미구현.
+>
+> **2026-09-29 갱신:** 위 두 항목은 이후 해소됐다(09-16 실보드 플래시·UART 실수신, PR #21 환경 드라이버).
+> C1001 은 벤더 폴링 대신 **수신 전용 논블로킹 파서**(`sensors/c1001/C1001Passive.cpp`)로 읽는다. 능동 보고를
+> 하나도 버리지 않고, 보고가 2 s 넘게 끊기면 질의로 깨운다(`nudgeIfSilent`). 초기화 전에는 300 ms `probe()` 로
+> 생존을 확인하고, 센서가 없으면 10 s 부터 최대 120 s 까지 백오프하며 다시 붙는다. 졸음 판정 임계값은 실측 근거
+> 주석과 함께 `DrowsyDetector.h` 에 있고, 시연용 확정 시간 단축은 `-DDESKMATE_DROWSY_HOLD_SCALE_PCT=<퍼센트>` 하나다.
+> 호스트 테스트: `pio test -e native` (졸음 판정 12 · 환경 검증 9). 이 PC 처럼 gcc 가 없으면 Docker 로
+> `docker run --rm -v "<펌웨어 경로>:/fw:ro" python:3.11 bash -c "apt-get -qq update && apt-get -qq install -y g++ && pip -q install platformio && cp -r /fw /tmp/fw && cd /tmp/fw && pio test -e native"`.
 
 ## 배선·UART 할당 (실측)
 
