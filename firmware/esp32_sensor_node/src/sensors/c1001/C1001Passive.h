@@ -69,17 +69,18 @@ class C1001Passive {
     MmwaveSample sample;
     last_read_timed_out_ = false;
     const uint32_t started = millis();
-    const uint16_t presence = sensor_.smHumanData(DFRobot_HumanDetection::eHumanPresence);
-    const uint16_t movement = sensor_.smHumanData(DFRobot_HumanDetection::eHumanMovement);
-    const uint16_t motion_level = sensor_.smHumanData(DFRobot_HumanDetection::eHumanMovingRange);
-    const uint16_t distance = sensor_.smHumanData(DFRobot_HumanDetection::eHumanDistance);
 
-    // 타임아웃 난 질의는 0 을 돌려주므로 값만 보면 '사람 없음' 과 구분되지 않는다.
-    // 걸린 시간으로 가른다. 여기서 끊으면 남은 세 질의의 타임아웃도 아낀다.
-    if (millis() - started > kReadBudgetMs) {
-      last_read_timed_out_ = true;
-      return sample;  // valid = false
-    }
+    // 질의 **하나마다** 예산을 본다. 넷을 다 부른 뒤에 한 번만 보면 죽은 센서에서
+    // 타임아웃 네 번을 그대로 물어, 한 tick 이 수 초가 된다(실측: env 주기가
+    // 5 s -> 11.8 s). 첫 질의에서 끊으면 비용이 타임아웃 한 번으로 끝난다.
+    const uint16_t presence = sensor_.smHumanData(DFRobot_HumanDetection::eHumanPresence);
+    if (overBudget(started)) return sample;
+    const uint16_t movement = sensor_.smHumanData(DFRobot_HumanDetection::eHumanMovement);
+    if (overBudget(started)) return sample;
+    const uint16_t motion_level = sensor_.smHumanData(DFRobot_HumanDetection::eHumanMovingRange);
+    if (overBudget(started)) return sample;
+    const uint16_t distance = sensor_.smHumanData(DFRobot_HumanDetection::eHumanDistance);
+    if (overBudget(started)) return sample;
 
     if (presence > 1 || movement > 2 || motion_level > 100) return sample;
 
@@ -90,8 +91,11 @@ class C1001Passive {
     sample.distance_cm = distance;
 
     const uint8_t breathe_state = sensor_.getBreatheState();
+    if (overBudget(started)) return sample;
     const uint8_t breathe = sensor_.getBreatheValue();
+    if (overBudget(started)) return sample;
     const uint8_t heart = sensor_.getHeartRate();
+    if (overBudget(started)) return sample;
     const bool measurement_lock = breathe_state >= 1 && breathe_state <= 3;
     sample.resp_valid = sample.present && measurement_lock && breathe > 0;
     sample.heart_valid = sample.present && measurement_lock && heart > 0;
@@ -102,6 +106,13 @@ class C1001Passive {
   }
 
  private:
+  /// 예산을 넘겼으면 '응답 없음' 으로 표시하고 true. 호출부는 바로 빠져나간다.
+  bool overBudget(uint32_t started) {
+    if (millis() - started <= kReadBudgetMs) return false;
+    last_read_timed_out_ = true;
+    return true;
+  }
+
   bool last_read_timed_out_ = false;
   HardwareSerial& serial_;
   DFRobot_HumanDetection sensor_;
