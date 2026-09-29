@@ -1,7 +1,7 @@
 import json
 
 from deskmate_hub.ingest.cache import SensorCache
-from deskmate_hub.service_bridge import _feed_mqtt_line
+from deskmate_hub.ingest.mqtt_lines import MqttLineSource
 
 
 def test_native_mqtt_sensor_line_updates_cache():
@@ -15,8 +15,7 @@ def test_native_mqtt_sensor_line_updates_cache():
         "data": {"typing_active": True, "input_active": True, "idle_ratio": 0.2},
     }
 
-    _feed_mqtt_line(
-        cache,
+    MqttLineSource(cache).feed_line(
         "MQTT\tdeskmate/sensor/keystroke\t" + json.dumps(payload) + "\n",
     )
 
@@ -34,8 +33,7 @@ def test_native_mqtt_feedback_line_accepts_envelope():
         "data": {"request_id": "req-1", "verdict": "accept"},
     }
 
-    _feed_mqtt_line(
-        cache,
+    MqttLineSource(cache).feed_line(
         "MQTT\tdeskmate/feedback/user\t" + json.dumps(payload) + "\n",
     )
 
@@ -57,10 +55,11 @@ def test_native_mqtt_malformed_line_does_not_ack(monkeypatch, capsys):
     monkeypatch.setattr(_sys, "stdin", _Stdin())
     store = BridgeStateStore()
     cache = SensorCache()
-    _read_commands(store, None, cache)
+    lines = MqttLineSource(cache)
+    _read_commands(store, None, lines)
 
     captured = capsys.readouterr()
     assert "ACK" not in captured.out          # 수신 메시지는 명령이 아니므로 ACK 없음
-    assert "MQTT 라인 무시" in captured.err   # feedback JSON 오류는 로그로만
+    assert lines.stats.rejected == 2          # 깨진 JSON 은 통계로만 남긴다
     assert cache.pop_feedback() is None
     assert cache.snapshot().keystroke is None

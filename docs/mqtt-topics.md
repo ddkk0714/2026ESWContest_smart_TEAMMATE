@@ -36,9 +36,10 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 | `deskmate/sensor/keystroke` | PC 수집기 | hub | 1Hz | 키 입력 타이밍 특징 |
 | `deskmate/state/phase` | hub | display, control | 10 s 주기(retain) | 추론 결과 + 신뢰도. `python -m deskmate_hub run` 이 발행 |
 | `deskmate/display/message` | Node-RED/debug | display | 이벤트 | Pi 5 화면에 일회성 텍스트 표시 |
-| `deskmate/session/report` | hub | display | 세션 종료 시 | 화면용 세션 요약. 개별 행동 로그 없음 |
+| `deskmate/session/report` | hub | display | 10 s 주기 스냅샷(retain) + 세션 종료 시 | 화면용 세션 요약. 개별 행동 로그 없음 |
 | `deskmate/interaction/request` | hub | display | 이벤트 | 불확실한 판정의 사용자 확인 질문 |
-| `deskmate/control/cmd` | hub | control | 이벤트 | 기기 제어 명령 |
+| `deskmate/control/cmd` | hub | control 어댑터(플러그) | 이벤트, QoS 1, retain 없음 | 기기 제어 명령 (`control_command`, data-spec §10) |
+| `deskmate/control/result` | control 어댑터 | hub | 이벤트, QoS 1 | 명령 결과 (`control_result`). hub 는 `command_id` 로 매칭 |
 | `deskmate/feedback/user` | display | hub | 이벤트 | 사용자 수락 · 정정 |
 | `deskmate/health/<node>` | 전 장치 | hub | LWT/retain | `{ts,node,status:online|offline,reconnects}`. hub 는 `deskmate/health/hub` |
 
@@ -101,18 +102,23 @@ MVP(2026-09-18) 경로: ESP32 USB(UART0) 1 Hz JSON 라인 → `tools/uart_mqtt_b
 
 키 값은 절대 포함하지 않는다. 타이밍 통계만 보낸다.
 **2026-09-14 `collector/` 구현 기준으로 확정** — 60 s 윈도우 · 1 Hz · QoS 0. 필드 정의는 [`data-spec.md`](data-spec.md) §6.4.
-현재 구현은 아래처럼 **평면 payload** 를 보낸다. 공통 envelope(`schema_version`·`boot_id`·`seq`·`data`) 로의 래핑은 hub ingest 구현 시 함께 추가한다(세부 튜닝).
+현재 구현은 아래 특징값을 공통 envelope(`schema_version`·`boot_id`·`seq`·`data`)의
+`data` 필드에 담아 보낸다.
 
 ```json
 {
-  "ts": 1769000001.0, "node": "pc-collector", "window_s": 60,
-  "dwell_mean_ms": 92.4, "dwell_std_ms": 21.8,
-  "flight_mean_ms": 148.2, "flight_std_ms": 63.5,
-  "idle_ratio": 0.18,          // 입력 공백 비율. keydown 없으면 1.0
-  "correction_rate": 0.07,     // 백스페이스 빈도
-  "typing_active": true,       // false 면 hub 는 키스트로크 신호 미가용으로 재정규화
-  "mouse_active": true, "input_active": true,
-  "flight_cv": 0.43, "mouse_event_rate": 96.0
+  "schema_version": "1.0", "ts": 1769000001.0,
+  "node": "pc-collector", "boot_id": "7f2a91c4", "seq": 1042,
+  "data": {
+    "node": "pc-collector", "window_s": 60,
+    "dwell_mean_ms": 92.4, "dwell_std_ms": 21.8,
+    "flight_mean_ms": 148.2, "flight_std_ms": 63.5,
+    "idle_ratio": 0.18,          // 입력 공백 비율. keydown 없으면 1.0
+    "correction_rate": 0.07,     // 백스페이스 빈도
+    "typing_active": true,       // false 면 hub 는 키스트로크 신호 미가용으로 재정규화
+    "mouse_active": true, "input_active": true,
+    "flight_cv": 0.43, "mouse_event_rate": 96.0
+  }
 }
 ```
 
@@ -182,7 +188,9 @@ Node-RED에서 Pi 5 화면을 확인할 때 쓰는 일회성 안내 문구다. �
 
 ### `deskmate/session/report`
 
-세션이 `END`에 도달했을 때 Hub가 발행하는 화면용 요약이다. Pi 5는 이 값을 메모리에만
+Hub가 발행하는 화면용 세션 요약이다. 세션 종료를 기다리지 않고 **10 s 주기 스냅샷**을 retain 으로
+발행한다(진행 중이면 `t_end` = 발행 시각, START 전이면 `t_start` = 관측 시작 시각). 주기는 hub 환경변수
+`DESKMATE_REPORT_PERIOD_SEC`(기본 10, 0 이면 끔)로 바꾼다. Pi 5는 이 값을 메모리에만
 보관해 세션 리포트 화면에 표시한다. 키 내용, ToF raw, 개인 식별자, 개별 시각의 행동 로그는
 포함하지 않는다.
 
@@ -194,7 +202,7 @@ Node-RED에서 Pi 5 화면을 확인할 때 쓰는 일회성 안내 문구다. �
     "t_start": 1769000000.0, "t_end": 1769003600.0,
     "duration_s": 3600, "focus_time_s": 2100, "focus_ratio": 0.583,
     "state_durations_s": {"FOCUS_PC": 1800, "REST": 300},
-    "fatigue_episodes": [{"t_onset": 1769001800.0, "peak_fatigue": 0.81}],
+    "fatigue_episodes": [{"t_onset": 1769001800.0, "peak_fatigue": 0.81, "t_resolved": 1769002400.0}],
     "intervention_counts": {"total": 2, "recovered": 1},
     "break_accept_rate": 0.5
   }
@@ -202,7 +210,8 @@ Node-RED에서 Pi 5 화면을 확인할 때 쓰는 일회성 안내 문구다. �
 ```
 
 `state_durations_s`는 상태별 누적 시간(초), `fatigue_episodes`는 화면에 필요한 발생 시각과
-최대 피로도만 담는다. 수락률을 아직 계산할 수 없으면 `break_accept_rate`는 생략한다.
+최대 피로도·해소 시각(`t_resolved`, 미해소면 `null`)만 담는다. 휴식 제안에 응답한 적이 없어 수락률을
+계산할 수 없으면 `break_accept_rate`는 `null`(모름)이다 — 0 과 구분한다.
 ### `deskmate/interaction/request`
 
 ```json
@@ -226,17 +235,42 @@ hub 는 현재 질문의 `request_id`(또는 `request_id` 생략·`atlas-display
 
 ### `deskmate/control/cmd`
 
+data-spec §10 `control_command` 필드 그대로(2026-09-16, `hub/deskmate_hub/control/`). 발행 조건은 `config/control.yaml`:
+ACTION_ENV 진입 시 원인별 명령 목록, 게이트 auto 면 즉시 · suggest 면 `feedback/user` accept 후 · none 이면 발행 안 함.
+같은 target/operation 은 `cooldown_sec` 안에 재발행하지 않고, `irreversible_operations` 는 자동 실행하지 않는다.
+
 ```json
 {
-  "schema_version": "1.0", "ts": 1769000002.1,
-  "node": "hub", "boot_id": "a8021bf0", "seq": 203,
+  "schema_version": "1.0", "ts": 1769000002.1, "node": "hub",
   "data": {
-  "target": "desk_lamp",       // desk_lamp | vent_fan | air_purifier | plug_1
-  "cmd": "set_brightness", "value": 70,
-  "origin": "phase:fatigue"
+    "command_id": "9f3c1a2b7d4e",          // 멱등 키. result 가 이 값으로 돌아온다
+    "target_id": "vent_fan",               // vent_fan | desk_lamp | air_purifier | plug_1 (control.yaml)
+    "operation": "set_power", "value": "on",
+    "origin_state": "ACTION_ENV", "cause": "environment",
+    "gate": "auto",                        // auto | suggest(수락 후) | undo(자동 실행 뒤 거절 시 되돌리기)
+    "requires_confirmation": false,        // 비가역 동작만 true — 어댑터는 이 명령을 사용자 확인 없이 실행하면 안 된다
+    "expires_ts_ms": 1769000017100         // 이 시각까지 결과가 없으면 hub 는 timeout 처리
   }
 }
 ```
+
+### `deskmate/control/result`
+
+```json
+{
+  "schema_version": "1.0", "ts": 1769000002.7, "node": "mock-plug",
+  "data": {
+    "command_id": "9f3c1a2b7d4e",
+    "status": "succeeded",                 // accepted | executing | succeeded | failed | timeout | cancelled
+    "actual_value": "on", "error_code": null, "error_message": null,
+    "completed_ts_ms": 1769000002700
+  }
+}
+```
+
+모든 명령이 종료(succeeded/failed/timeout)되거나 제안이 만료(`suggest_timeout_sec`)되면 hub 는 `frame.action_done=true` 로
+FSM 을 MONITOR 로 보낸다. `state/phase.sensor_summary.control` 에 진행 중 에피소드(명령·상태)가 실린다.
+어댑터가 없을 때의 리허설: `python tools/mock_plug.py --broker <ip>` (결과 응답 + `deskmate/control/state/<target>` retain).
 
 ### `deskmate/feedback/user`
 

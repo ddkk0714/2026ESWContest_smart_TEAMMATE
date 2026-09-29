@@ -37,24 +37,43 @@ hub 가 비타이핑 작업과 유휴를 가르는 데 쓴다.
 
 - 키 간격 > 2 s 는 리듬 통계(flight)에서 제외, ≥ 3 s 는 idle 로 집계 (`flight_gap_max_s`, `idle_gap_s`)
 - **미입력 구간**: 윈도우에 keydown 이 없으면 `typing_active=false`, `idle_ratio=1.0`, 통계는 0. hub 는 `typing_active=false` 를 키스트로크 신호 **미가용**으로 보고 가중치를 재정규화한다. `input_active` 는 마우스만 있어도 true.
-- 현재 payload 는 평면 구조다. 공통 envelope 필드(`schema_version`·`boot_id`·`seq`)는 hub ingest 구현 시 추가한다(세부 튜닝 항목).
+- 특징값은 공통 envelope(`schema_version`·`ts`·`node`·`boot_id`·`seq`)의 `data` 에 담아 보낸다. hub ingest 는 평면·envelope 둘 다 받는다.
 
 ```json
 {
-  "ts": 1769000001.0, "node": "pc-collector", "window_s": 60,
-  "dwell_mean_ms": 92.4, "dwell_std_ms": 21.8,
-  "flight_mean_ms": 148.2, "flight_std_ms": 63.5,
-  "idle_ratio": 0.18, "correction_rate": 0.07,
-  "typing_active": true, "mouse_active": true, "input_active": true,
-  "flight_cv": 0.42, "mouse_event_rate": 96.0
+  "schema_version": "1.0", "ts": 1769000001.0,
+  "node": "pc-collector", "boot_id": "7f2a91c4", "seq": 1042,
+  "data": {
+    "node": "pc-collector", "window_s": 60,
+    "dwell_mean_ms": 92.4, "dwell_std_ms": 21.8,
+    "flight_mean_ms": 148.2, "flight_std_ms": 63.5,
+    "idle_ratio": 0.18, "correction_rate": 0.07,
+    "typing_active": true, "mouse_active": true, "input_active": true,
+    "flight_cv": 0.42, "mouse_event_rate": 96.0
+  }
 }
 ```
 
-## 실행
+## 개발 환경 준비
+
+저장소 루트에서 Python 3.10 이상으로 가상환경을 만들고 의존성을 설치한다.
 
 ```bash
-pip install -r requirements.txt
+python -m venv .venv
+python -m pip install -r collector/requirements.txt
+python -m pytest collector/tests -q
+```
 
+가상환경 활성화 명령은 OS에 따라 다르다.
+
+- Windows PowerShell: `.venv\Scripts\Activate.ps1`
+- Linux/macOS: `source .venv/bin/activate`
+
+## 실행
+
+저장소 루트에서 다음과 같이 실행한다.
+
+```bash
 # Pi4(hub) 연동
 python -m collector --broker <pi4-ip>
 
@@ -66,11 +85,13 @@ pytest collector/tests -v
 ```
 
 옵션: `--port`, `--node`, `--window`, `--period`. 환경변수(`DESKMATE_BROKER` 등)로도 지정 가능.
-브로커가 없거나 끊겨도 로컬 `logs/keystroke.jsonl` 로 계속 기록한다(8월 튜닝용 원천 로그).
+브로커를 생략하면 `localhost:1883`을 사용하며, 연결되지 않아도 `logs/keystroke.jsonl`에
+동일한 MQTT envelope를 기록한다. `logs/`는 수집 데이터이므로 Git에 포함하지 않는다.
 
 ## 주의
 
-- OS 별 키 훅 권한: Windows 는 관리자 권한 없이 `pynput` 리스닝 가능. Linux 는 input group/X11.
+- OS별 키 훅 권한이 필요하다. Linux는 데스크톱 세션 및 input 권한, macOS는 손쉬운 사용
+  권한, Windows는 대상 앱의 권한 수준에 따라 관리자 실행이 필요할 수 있다.
 - 전역 키/마우스 후킹은 백신·SmartScreen 이 키로거로 의심할 수 있어 데모 PC 에서 예외 처리.
 
 ## 구조
@@ -81,6 +102,6 @@ collector/
 ├── config.py       기본값 ← 환경변수 ← CLI 인자
 ├── capture.py      pynput 키보드+마우스 → 이벤트(시간·종류만)
 ├── features.py     슬라이딩 윈도 → 특징 → 규약 페이로드(to_payload)
-├── publisher.py    paho-mqtt 발행 + 미연결 시 로컬 폴백 + health(LWT)
+├── publisher.py    공통 envelope 래핑 + paho-mqtt 발행 + 미연결 시 로컬 폴백 + health(LWT)
 └── tests/          합성 이벤트 단위 테스트
 ```

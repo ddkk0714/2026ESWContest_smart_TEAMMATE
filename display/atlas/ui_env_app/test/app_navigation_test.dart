@@ -128,6 +128,25 @@ void main() {
 
     expect(find.textContaining('Pi 4의 실제 FSMEngine'), findsOneWidget);
   });
+
+  testWidgets('연결 배지는 5초 뒤 사라진다', (tester) async {
+    tester.view.physicalSize = const Size(1024, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(const DeskmateApp());
+    await tester.pump();
+
+    // 붙었다는 것은 한 번은 보여 줘야 한다.
+    expect(find.text('내장 데모'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pump();
+
+    // 그 뒤로는 상단을 차지하지 않는다. 시퀀스 번호는 그대로 남는다.
+    expect(find.text('내장 데모'), findsNothing);
+    expect(find.textContaining('#'), findsWidgets);
+  });
 }
 
 class _FakeMusicPlayback implements MusicPlayback {

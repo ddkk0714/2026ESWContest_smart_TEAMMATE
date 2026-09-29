@@ -3,7 +3,7 @@
     python -m pip install amqtt          # 로컬 MQTT 브로커(개발용, tools/requirements.txt 의 선택 항목)
     python tools/rehearsal_local.py [초, 기본 400]
 
-amqtt 브로커(127.0.0.1:18832) + tools/mqtt_scenario_sim.py --scenario short + `python -m deskmate_hub run --config fsm.demo.yaml`
+amqtt 브로커(127.0.0.1:18832) + tools/mock_plug.py + tools/mqtt_scenario_sim.py --scenario short + `python -m deskmate_hub run --config fsm.demo.yaml`
 을 한 번에 띄우고, 끝나면 hub/logs/rehearsal/state-*.jsonl 에서 상태 전이만 뽑아 출력한다.
 Node-RED 를 같은 브로커(포트 18832)에 붙이면 대시보드도 함께 확인할 수 있다. 실기 검증을 대신하지 않는다.
 """
@@ -35,6 +35,9 @@ hub = subprocess.Popen([sys.executable, "-m", "deskmate_hub", "run", "--broker",
                         "--log-dir", LOGDIR], cwd=os.path.join(ROOT, "hub"), env=env,
                        stdout=open(os.path.join(LOGDIR, "hub-console.log"), "a", encoding="utf-8"), stderr=subprocess.STDOUT)
 time.sleep(2)
+plug = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "mock_plug.py"), "--broker", "127.0.0.1",
+                         "--port", str(PORT), "--delay", "0.3"], env=env,
+                        stdout=open(os.path.join(LOGDIR, "plug-console.log"), "a", encoding="utf-8"), stderr=subprocess.STDOUT)
 sim = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "mqtt_scenario_sim.py"), "--broker", "127.0.0.1",
                         "--port", str(PORT), "--scenario", "short"], env=env,
                        stdout=subprocess.DEVNULL, stderr=open(os.path.join(LOGDIR, "sim-console.log"), "a", encoding="utf-8"))
@@ -42,7 +45,7 @@ t0 = time.time()
 while time.time() - t0 < DURATION and sim.poll() is None:
     time.sleep(1)
 sim.terminate(); time.sleep(1)
-hub.terminate(); time.sleep(1)
+hub.terminate(); plug.terminate(); time.sleep(1)
 stop.set()
 
 states = sorted(glob.glob(os.path.join(LOGDIR, "state-*.jsonl")))[-1]
@@ -54,3 +57,9 @@ for line in open(states, encoding="utf-8"):
         print(f"seq={json.loads(line)['seq']:>3} {d['fsm_state']:<16} ctx={d['context']:<5} fat={d['c_fatigue']:.2f} foc={d['c_focus']:.2f} gate={d['gate']} cause={d['cause']}")
         prev = d["fsm_state"]
 print("last sensor_summary:", json.dumps(json.loads(line)["data"]["sensor_summary"], ensure_ascii=False)[:200])
+plog = os.path.join(LOGDIR, "plug-console.log")
+if os.path.exists(plog):
+    lines = [l for l in open(plog, encoding="utf-8") if l.startswith("[plug]")]
+    print(f"== mock plug: {len(lines)} command(s) ==")
+    for l in lines[-6:]:
+        print(l.rstrip())

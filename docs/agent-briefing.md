@@ -1,6 +1,7 @@
 # DESKMATE 개발 브리핑
 
-> 기준일: 2026-09-14. 이 문서는 작업을 시작할 때 읽는 프로젝트 요약이다.
+> 기준일: 2026-09-29 (이전 09-14). 이 문서는 작업을 시작할 때 읽는 프로젝트 요약이다.
+> 현재 상태·브랜치 현황은 [`roadmap.md`](roadmap.md) §2·§2-1 이 기준이다.
 > 세부 계약은 아래의 원본 명세를 우선한다.
 
 ## 1. 현재 제품과 구성
@@ -13,7 +14,8 @@ ESP32 (mmWave·환경) ── UART2 / COBS + CRC-16 ──> Pi 4 Hub
                                                       │ MQTT (LAN, TCP 1883)
 PC 키스트로크 특징 ─────────────── MQTT ─────────────┤
                                                       └────────────> Pi 5 Atlas UI
-ToF VL53L9CX ── 경로 결정 전 (Pi 4 CSI-2 또는 ESP32 I2C)
+ToF VL53L9CX ── 경로 결정 전 (Pi 4 CSI-2 또는 ESP32 I2C) — 미연결
+(임시·결정 필요) ESP32-CAM ─USB─> Pi 5 camsvc 자세 판정  ※ §3 참고
 ```
 
 | 계층 | 장치 | 책임 | 저장소 |
@@ -35,9 +37,13 @@ Docker는 개발 PC의 빌드 환경일 뿐 보드에서 실행하지 않는다.
   raw depth map은 명시적 디버그 UI에서 최대 2 Hz만 허용한다.
 - ToF 자세는 온보드 기하 특징 7종을 우선하고, V2V-PoseNet은 PC 오프라인 검증용이다.
 - ESP32→Pi 4는 UART2(ESP32 GPIO25/26, Pi 4 GPIO15/14, 공통 GND), 115200 8N1,
-  COBS + `0x00` 구분자 + CRC-16/CCITT-FALSE다. UART TYPE과 payload는 아직 확정 전이다.
+  COBS + `0x00` 구분자 + CRC-16/CCITT-FALSE다. TYPE·payload 는 잠정안(§3)으로 구현·실수신 중이다.
 - Pi 4↔Pi 5는 유선 LAN MQTT(TCP 1883), SSH 22를 병행한다. DHCP 주소를 문서의 고정값으로
   취급하지 않는다.
+- 보드(ATLAS)는 루트 FS 읽기 전용·AppArmor·제한 Python(`_socket` 없음)이다. 보드에서 도는 것은
+  전부 IPK 로 배포하고, hub 의 MQTT 는 C++ 네이티브 클라이언트가 맡는다. Python 은 stdin/stdout 라인만.
+- 브로커는 Pi 4 정적 빌드 Mosquitto(`/data/share/deskmate/bin/pi4-broker-start.sh`, PR #18)다.
+  자동 시작이 없어 재부팅 후 브로커 스크립트와 `hub/atlas/tools/pi4-hub-activate.sh` 를 한 번씩 실행한다.
 - FSM은 TFLite가 없어도 완전히 동작해야 한다. 상태·전이·가중치·임계값은
   `hub/deskmate_hub/config/*.yaml`에만 둔다. 신뢰도 계산 주기는 10초다.
 - mmWave는 재실·움직임 중심의 보조 신호다. 호흡은 중앙값·기준선 대비 “소실 여부”만
@@ -47,16 +53,18 @@ Docker는 개발 PC의 빌드 환경일 뿐 보드에서 실행하지 않는다.
 - 환경값은 SCD41(CO₂), DHT22(온습도), BH1750(조도)의 단일 센서 측정값이며 보정값을
   만들어 넣지 않는다.
 - Pi 5 디스플레이는 교체 후 터치가 정상이다. 앱 자동 시작과 실기 release 재검증은 남았다.
+- 임시 제어 기기로 iLink 블루투스 램프(`hub/deskmate_hub/control/ilink_light.py`)를 쓸 수 있다.
 
 ## 3. 아직 결정하지 말아야 할 사항
 
 | 항목 | 현재 상태 |
 |---|---|
+| **카메라 기반 자세 판정** (09-18 main 반영, `display/atlas/camsvc`·`camtest`) | §4 비협상 제약(카메라 영상 미수집)과 충돌. ToF 대역 개발용으로만 둘지, 제품 기능으로 채택하고 포스터 서술을 바꿀지 **팀 결정 전**. 결정 전에는 카메라 경로를 확장하거나 시연·제출 빌드의 기본값으로 만들지 않는다 (`roadmap.md` §3 I7) |
 | UART TYPE·mmWave payload·CRC test vector | **잠정안 기록됨**(`data-spec.md` §13.1, 2026-09-15): mmWave 0x20 · env 0x10 · heartbeat 0xF0, CRC-16/CCITT-FALSE, COBS. 팀이 다른 값을 원하면 `uart_frame.py` 상수와 펌웨어 `frame_types.h` 만 바꾼다. MVP 는 PC USB 브리지로 우회 |
 | `C_focus`의 부호 | 현재 구현의 “큰 값 = 집중 증거”를 임의 변경하지 않음 |
-| ToF 연결 경로 | Pi 4 CSI-2(Path A) / ESP32 I2C binning(Path B) 중 spike 후 결정 |
+| ToF 연결 경로 | Pi 4 CSI-2(Path A) / ESP32 I2C binning(Path B). 09-19 spike 마감 경과, 결정 기록 없음 — 규칙상 Path B, 팀 확인 필요 |
 | 개인화 저장소·동의 | 로컬 opt-in 정책과 저장 방식을 결정 전에는 확장하지 않음 |
-| 스마트 플러그·ThinQ 제어 모델 | 기본은 스마트 플러그 기반 가역 제어, 실기기 모델은 미선정 |
+| 스마트 플러그·ThinQ 제어 모델 | 기본은 스마트 플러그 기반 가역 제어, 실기기 모델은 미선정(09-28 마감 경과). 제어 디스패처·mock 플러그는 `feat/edge-hub-port` 에 있음 |
 
 ## 4. 비협상 제약
 

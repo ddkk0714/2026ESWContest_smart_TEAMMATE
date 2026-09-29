@@ -13,7 +13,7 @@ import 'deskmate_theme.dart';
 import 'fsm_graph.dart';
 import 'keystroke_capture.dart';
 import 'music_playback.dart';
-import 'posture_status_page.dart';
+import 'posture_screen.dart';
 import 'sensor_overview_page.dart';
 import 'sensor_test_page.dart';
 import 'session_report.dart';
@@ -22,6 +22,20 @@ import 'state_source.dart';
 const _hubUrl = String.fromEnvironment('DESKMATE_HUB_URL');
 const _mqttHost = String.fromEnvironment('DESKMATE_MQTT_HOST');
 const _mqttPort = int.fromEnvironment('DESKMATE_MQTT_PORT', defaultValue: 1883);
+
+const _autoScreenCycleInterval = Duration(seconds: 5);
+const _autoScreenPhases = ['idle', 'focus', 'fatigue', 'recovery', 'end'];
+
+/// 화면 강조용 경계값. FSM 판정 임계값이 아니라 색만 바꾸는 힌트다.
+/// 판정 임계값은 hub/deskmate_hub/config/*.yaml 에만 둔다.
+const _ksWarnCv = 0.55;
+const _ksWarnIdle = 0.35;
+const _ksWarnCorrection = 0.09;
+
+/// collector 표본이 이보다 묵으면 값을 흐리고 '수신 끊김' 으로 표시한다.
+/// collector 가 죽어도 hub 는 국면을 계속 내보내므로 이게 없으면
+/// 마지막 값이 화면에 그대로 굳는다.
+const _ksStaleAfter = Duration(seconds: 5);
 
 void main() => runApp(const DeskmateApp());
 
@@ -56,7 +70,25 @@ class _DashboardPageState extends State<DashboardPage> {
   DisplayState? _state;
   String? _error;
   bool _busy = false;
-  bool _demoCyclingEnabled = false;
+  // PR #21 은 기본 true 였지만 지금은 실센서가 붙어 있어 켜 두면 허브의 실제
+  // 국면을 데모 국면이 덮어쓴다. 기본 OFF 로 두고 토글로만 켠다.
+  bool _autoScreenCyclingEnabled = false;
+  int _autoScreenPhaseIndex = 0;
+  // 연결 배지는 붙은 뒤 5 초만 띄운다. '붙었다' 는 한 번 확인하면 되는
+  // 정보인데 계속 떠 있으면 상단을 영구히 차지한다. 끊긴 상태는 계속 띄운다 -
+  // 그건 사람이 손을 써야 하는 정보다.
+  static const _linkBadgeVisible = Duration(seconds: 5);
+  Timer? _linkBadgeTimer;
+  // 배지는 '연결됐다는 플래그' 가 아니라 **상태가 실제로 오고 있는가** 로 본다.
+  // mqtt_client 의 connectionStatus 는 재연결 중에 잠깐씩 흔들려서, 그걸 보고
+  // 되돌리면 배지가 영영 안 사라진다.
+  static const _linkStaleAfter = Duration(seconds: 15);
+  DateTime? _lastStateAt;
+  bool _showLinkLabel = true;
+  // 테스트로 고정한 상태. 있으면 화면은 이것을 그리고, 라이브 갱신은 _state 에만
+  // 쌓인다 - 풀면 곧바로 최신 라이브 상태로 돌아간다.
+  DisplayState? _override;
+  Timer? _screenCycleTimer;
   _AppView _view = _AppView.dashboard;
   late final MusicPlayback _music;
   late final StreamSubscription<bool> _musicChanges;
@@ -104,10 +136,16 @@ class _DashboardPageState extends State<DashboardPage> {
             : HttpStateSource(_hubUrl);
     _refresh();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (_source is! DemoStateSource || _demoCyclingEnabled) _refresh();
+      if (_source is! DemoStateSource || _autoScreenCyclingEnabled) _refresh();
       _sampleKeystroke();
+      _updateLinkLabel();
       unawaited(_feedbackController.reconcileAudioOutput());
     });
+    _updateLinkLabel();
+    _screenCycleTimer = Timer.periodic(
+      _autoScreenCycleInterval,
+      (_) => _advanceAutoScreen(),
+    );
   }
 
   /// 키 이벤트는 소비하지 않는다(항상 false). 타건 수만 즉시 반영해 화면이 살아 보이게 한다.
@@ -132,6 +170,7 @@ class _DashboardPageState extends State<DashboardPage> {
     _busy = true;
     try {
       final next = await _source.fetch();
+      _lastStateAt = DateTime.now();
       if (mounted) {
         setState(() {
           _state = next;
@@ -239,18 +278,51 @@ class _DashboardPageState extends State<DashboardPage> {
         ),
       );
 
-  void _toggleDemoCycling() {
-    if (_source is! DemoStateSource) return;
-    setState(() => _demoCyclingEnabled = !_demoCyclingEnabled);
-    if (_demoCyclingEnabled) _refresh();
+  void _toggleAutoScreenCycling() {
+    setState(() {
+      _autoScreenCyclingEnabled = !_autoScreenCyclingEnabled;
+      if (_autoScreenCyclingEnabled) {
+        _autoScreenPhaseIndex =
+            (_autoScreenPhaseIndex + 1) % _autoScreenPhases.length;
+      }
+    });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         duration: const Duration(seconds: 1),
         content: Text(
-          _demoCyclingEnabled ? '자동 순환을 시작했습니다.' : '자동 순환을 멈췄습니다.',
+          _autoScreenCyclingEnabled ? '자동 화면 순환을 시작했습니다.' : '자동 화면 순환을 멈췄습니다.',
         ),
       ),
     );
+  }
+
+  /// 붙어 있으면 5 초 뒤 배지를 감춘다. 끊기면 다시 띄운다.
+  ///
+  /// 벽시계를 비교하지 않고 타이머로 한 번만 끈다. 시계 비교는 화면에서만
+  /// 확인할 수 있어 테스트로 잡을 수가 없었다.
+  void _updateLinkLabel() {
+    final last = _lastStateAt;
+    final stale =
+        last == null || DateTime.now().difference(last) > _linkStaleAfter;
+    if (stale || !_source.isConnected) {
+      _linkBadgeTimer?.cancel();
+      _linkBadgeTimer = null;
+      if (!_showLinkLabel) setState(() => _showLinkLabel = true);
+      return;
+    }
+    // 이미 예약했거나 이미 감췄으면 그대로 둔다.
+    if (_linkBadgeTimer != null || !_showLinkLabel) return;
+    _linkBadgeTimer = Timer(_linkBadgeVisible, () {
+      if (mounted) setState(() => _showLinkLabel = false);
+    });
+  }
+
+  void _advanceAutoScreen() {
+    if (!mounted || !_autoScreenCyclingEnabled) return;
+    setState(() {
+      _autoScreenPhaseIndex =
+          (_autoScreenPhaseIndex + 1) % _autoScreenPhases.length;
+    });
   }
 
   Future<void> _confirmExit() async {
@@ -276,6 +348,8 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void dispose() {
     _timer?.cancel();
+    _screenCycleTimer?.cancel();
+    _linkBadgeTimer?.cancel();
     HardwareKeyboard.instance.removeHandler(_onKey);
     _clock.stop();
     _source.close();
@@ -288,7 +362,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
   @override
   Widget build(BuildContext context) {
-    final state = _state;
+    final state = _override ?? _state;
     return Scaffold(
       body: SafeArea(
         child: Padding(
@@ -299,14 +373,15 @@ class _DashboardPageState extends State<DashboardPage> {
                   source: _source.label,
                   connectionLabel: _source.connectionLabel,
                   connected: _source.isConnected,
-                  mqttMode: _source is MqttStateSource,
                 )
               : Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _Header(
                         source: _source.label,
-                        connectionLabel: _source.connectionLabel,
+                        connectionLabel: _override != null
+                            ? '테스트 상태 고정'
+                            : (_showLinkLabel ? _source.connectionLabel : ''),
                         online: _source.isConnected,
                         sequence: state.sequence,
                         view: _view,
@@ -320,13 +395,6 @@ class _DashboardPageState extends State<DashboardPage> {
                         onVolume: _showVolumeControl,
                         onExit: _confirmExit),
                     const SizedBox(height: 12),
-                    if (_source is MqttStateSource) ...[
-                      _Pi4MqttLinkCard(
-                        connected: _source.isConnected,
-                        broker: _source.label,
-                      ),
-                      const SizedBox(height: 12),
-                    ],
                     Expanded(
                         child: switch (_view) {
                       _AppView.dashboard => DashboardView(
@@ -339,9 +407,16 @@ class _DashboardPageState extends State<DashboardPage> {
                               : state.timestamp,
                           liveKeys: _localKeystroke != null ? _liveKeys : null,
                           onFeedback: _feedback,
-                          showDemoControl: _source is DemoStateSource,
-                          demoCyclingEnabled: _demoCyclingEnabled,
-                          onToggleDemoCycling: _toggleDemoCycling,
+                          showDemoControl: true,
+                          demoCyclingEnabled: _autoScreenCyclingEnabled,
+                          onToggleDemoCycling: _toggleAutoScreenCycling,
+                          phaseOverride: _source is! DemoStateSource &&
+                                  _autoScreenCyclingEnabled
+                              ? _autoScreenPhases[_autoScreenPhaseIndex]
+                              : null,
+                          // 테스트로 상태를 고정한 동안에는 그 국면 화면을 봐야 한다.
+                          pinAmbient:
+                              !_autoScreenCyclingEnabled && _override == null,
                           showFocusDetail: _showFocusDetail,
                           onShowFocusDetail: (value) =>
                               setState(() => _showFocusDetail = value),
@@ -356,8 +431,16 @@ class _DashboardPageState extends State<DashboardPage> {
                             if (mounted) setState(() => _state = next);
                             unawaited(_feedbackController.apply(next));
                           },
+                          overridden: _override != null,
+                          onOverride: (next) {
+                            if (!mounted) return;
+                            setState(() => _override = next);
+                            if (next != null) {
+                              unawaited(_feedbackController.apply(next));
+                            }
+                          },
                         ),
-                      _AppView.posture => PostureStatusPage(hubUrl: _hubUrl),
+                      _AppView.posture => const PostureScreen(),
                       _AppView.fsmGraph =>
                         FsmGraphPage(currentState: state.fsmState),
                       _AppView.bluetooth => BluetoothControlPage(
@@ -471,8 +554,10 @@ class _Header extends StatelessWidget {
           Tooltip(
               message: source,
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Text(connectionLabel),
-                const SizedBox(width: 4),
+                if (connectionLabel.isNotEmpty) ...[
+                  Text(connectionLabel),
+                  const SizedBox(width: 4),
+                ],
                 Text('#' + sequence.toString())
               ])),
           PopupMenuButton<int>(
@@ -603,20 +688,14 @@ class _Loading extends StatelessWidget {
     required this.source,
     required this.connectionLabel,
     required this.connected,
-    required this.mqttMode,
   });
   final String? error;
   final String source;
   final String connectionLabel;
   final bool connected;
-  final bool mqttMode;
   @override
   Widget build(BuildContext context) => Center(
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-        if (mqttMode) ...[
-          _Pi4MqttLinkCard(connected: connected, broker: source),
-          const SizedBox(height: 22),
-        ],
         const CircularProgressIndicator(),
         const SizedBox(height: 18),
         Text(
@@ -637,59 +716,6 @@ class _Loading extends StatelessWidget {
 
 /// 화면 강조용 경계값. FSM 판정 임계값이 아니라 색만 바꾸는 힌트다.
 /// 판정 임계값은 hub/deskmate_hub/config/*.yaml 에만 둔다.
-/// MQTT 소켓 연결 여부를 화면에서 즉시 확인하는 전용 상태 카드다.
-/// 연결됨은 지정한 Pi4 broker까지 TCP/MQTT 세션이 수립됐다는 뜻이다.
-class _Pi4MqttLinkCard extends StatelessWidget {
-  const _Pi4MqttLinkCard({required this.connected, required this.broker});
-
-  final bool connected;
-  final String broker;
-
-  @override
-  Widget build(BuildContext context) {
-    final color =
-        connected ? DeskmateColors.accentStrong : DeskmateColors.offline;
-    final title = connected ? 'Pi4 MQTT 연결됨' : 'Pi4 MQTT 연결 대기';
-    final detail = connected
-        ? '$broker · 상태/피드백 통신 준비됨'
-        : '$broker · 랜 케이블 · Pi4 주소 · Mosquitto(1883)를 확인하세요';
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: .12),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withValues(alpha: .5)),
-      ),
-      child: Row(children: [
-        Icon(connected ? Icons.link : Icons.link_off, color: color, size: 28),
-        const SizedBox(width: 12),
-        Expanded(
-          child:
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(title,
-                style: TextStyle(
-                    color: color, fontSize: 16, fontWeight: FontWeight.w800)),
-            const SizedBox(height: 3),
-            Text(detail,
-                style: const TextStyle(color: DeskmateColors.inkMuted)),
-          ]),
-        ),
-      ]),
-    );
-  }
-}
-
-const _ksWarnCv = 0.55;
-const _ksWarnIdle = 0.35;
-const _ksWarnCorrection = 0.09;
-
-/// collector 표본이 이보다 묵으면 값을 흐리고 '수신 끊김' 으로 표시한다.
-/// collector 가 죽어도 hub 는 국면을 계속 내보내므로 이게 없으면
-/// 마지막 값이 화면에 그대로 굳는다.
-const _ksStaleAfter = Duration(seconds: 5);
-
-/// 화면이 7인치라 세로가 귀하다. 카드 격자 대신 _SensorPanel 과 같은
-/// 세로 목록으로 두고 가로 한 칸을 차지한다.
 class _KeystrokePanel extends StatelessWidget {
   const _KeystrokePanel({
     required this.metrics,

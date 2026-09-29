@@ -23,6 +23,10 @@ struct ParsedUartFrame {
 };
 
 struct UartRxCounters {
+    // bytes 는 회선에서 읽힌 원시 바이트다. rx(프레임)와 따로 세는 이유는
+    // "선에 아무것도 안 온다"(bytes=0)와 "오는데 못 읽는다"(bytes>0, rx=0 -
+    // 보드율 불일치·다른 프로세스와 분할 수신)를 로그만으로 갈라내기 위해서다.
+    std::atomic<std::uint64_t> bytes{0};
     std::atomic<std::uint64_t> received{0};
     std::atomic<std::uint64_t> discarded{0};
     std::atomic<std::uint64_t> crc_errors{0};

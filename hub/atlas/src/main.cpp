@@ -620,13 +620,19 @@ int main()
         std::mutex bridge_input_mutex;
         deskmate::UartReceiver uart(deskmate::uartRxConfigFromEnvironment(),
             [&hub, &bridge_input_mutex, &native_sensors, &state](const std::string& line) {
+                // 센서 값은 브리지 생사와 무관하게 항상 갱신해 둔다.
+                // 브리지가 죽는 순간 곧바로 대신 내보낼 수 있어야 한다.
                 const bool native_consumed = native_sensors.consume(line);
-                if (native_consumed) {
+                const bool bridge_alive = hub.input_fd >= 0;
+                // 발행은 브리지가 없을 때만 한다. 둘 다 발행하면 같은 토픽으로
+                // 스키마가 다른 payload 가 번갈아 나가고(FSM 판정 vs 고정 IDLE),
+                // /api/state 도 두 스키마를 오간다 - 2026-09-18 실기에서 확인했다.
+                if (native_consumed && !bridge_alive) {
                     const std::string envelope = native_sensors.envelope();
                     { std::lock_guard<std::mutex> lock(state.mutex); state.latest_state = envelope; }
                     if (state.mqtt != nullptr) state.mqtt->publish("deskmate/state/phase", envelope, 1, true);
                 }
-                const bool bridge_consumed = hub.input_fd >= 0 &&
+                const bool bridge_consumed = bridge_alive &&
                     writeBridgeInput(hub.input_fd, bridge_input_mutex, line);
                 return native_consumed || bridge_consumed;
             });
