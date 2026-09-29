@@ -1,9 +1,10 @@
 # DESKMATE 결선 로드맵 — 포스터 수준 완성을 위한 갭 분석과 실행 계획
 
-> 기준일: 2026-09-14 · 결선 제출 2026-10-01~10-30 · 오프라인 발표 2026-11-06
+> 기준일: **2026-09-29** (이전 기준 09-14) · 결선 제출 2026-10-01~10-30 · 오프라인 발표 2026-11-06
 > 목표 기준: 2026 UOS ECE Innovation Fair 출품작 포스터(「DESKMATE : 카메라 없이 읽는 책상 위 인지 상태」)에
 > 서술한 기능 수준. 이 문서는 **그 서술과 현재 구현 사이의 간극**을 관리한다.
 > **2026-09-14 팀 결정 반영**: 신뢰도 주기 10 s · 미머지 브랜치 병합 PR(`feat/merge-pending`) · Pi 5 디스플레이 교체(터치 정상) · 키스트로크 계약 구현 기준 확정 · 환경 센서 보정 없음(단일 센서).
+> **2026-09-29 갱신**: §2 상태표·§2-1 브랜치 현황 신설·§3 I7(카메라 자세 판정)·§4 체크박스·§5 리스크. `origin/main` = `477559b`(PR #23, 09-18). 09-21 이후 저장소 커밋 없음.
 
 ---
 
@@ -12,11 +13,18 @@
 ```text
 ESP32(mmWave·환경) ── UART2 / COBS + CRC ──> Pi 4 Hub ── MQTT / LAN ──> Pi 5 Atlas UI
 PC 키스트로크 특징 ─────────────── MQTT ────────────┘
-ToF VL53L9CX ── 연결 경로 결정 전 (Pi 4 CSI-2 또는 ESP32 I2C)
+ToF VL53L9CX ── 연결 경로 결정 전 (Pi 4 CSI-2 또는 ESP32 I2C) — 09-19 마감 지남, 미연결
+(임시) ESP32-CAM + RP2040 ── USB ──> Pi 5 camsvc(MediaPipe) ──> 앱 `자세` 화면   ※ §3 I7 참고
 ```
 
 - Pi 4는 UART 수신·특징 통합·FSM·제어 판단·Mosquitto를 맡는다. Headless ATLAS native-service
   IPK에서 제한 Python FSM을 실행하며, UART 디코더와 MQTT 연결은 해당 서비스에 둔다.
+  보드 제한 Python 에는 `_socket` 이 없어 **MQTT 는 C++ 네이티브 클라이언트**가 맡는다(09-17).
+- **브로커(09-18 기준)**: Pi 4 에 정적 빌드 Mosquitto 2.0.20 을 `/data/share/deskmate/bin` 에 두고
+  `pi4-broker-start.sh` 로 기동(PR #18). 자동 시작 IPK 는 없어 재부팅 후 한 번 실행해야 한다.
+  PC 브로커(`tools/pc_broker.py`)는 `feat/hub-swonly` 에만 있다.
+- Pi 4 재부팅·IPK 재설치 후 hub 미기동·UART `rx=0` 은 `hub/atlas/tools/pi4-hub-activate.sh` 로 복구한다
+  (uid 변경·D-Bus `User=`·`own` 정책·`/dev/serial0` 권한 4가지 원인, `feat/edge-mvp-nodered` 커밋 `389324b`).
 - Pi 5는 MQTT 상태를 구독하는 Atlas Flutter 표시·피드백 장치다. HTTP 8765은 개발 fallback이고,
   Node-RED는 관찰·테스트 주입용이다.
 - 수직 슬라이스의 목표는 한 센서 신호가 Pi 4 FSM을 통과해 Pi 5 UI와 가역 제어까지 닿는 것이다.
@@ -42,23 +50,33 @@ ToF VL53L9CX ── 연결 경로 결정 전 (Pi 4 CSI-2 또는 ESP32 I2C)
 
 ---
 
-## 2. 현재 위치 (2026-09-14)
+## 2. 현재 위치 (2026-09-29)
 
-범례: ✅ 동작 · 🟡 부분 · ⬜ 없음
+범례: ✅ 동작 · 🟡 부분 · ⬜ 없음 · ⚠ 결정 필요. "main" = `origin/main` `477559b`, 괄호 안 브랜치는 main 미반영.
 
 | # | 상태 | 근거 |
 |---|---|---|
-| G1 ToF | ⬜ | 센서 미연결. 연결 경로(Path A: Pi 4 MIPI CSI-2 / Path B: ESP32 I2C 1 MHz) 미결. 스켈레톤 코드 없음. 기하 특징 7종은 설계만 |
-| G2 mmWave | 🟡 | 09-11 C1001→ESP32 UART1→UART2→Pi 4 `/dev/serial0` 26 B COBS+CRC 프레임 1 Hz 실측 통과. ESP32 코드는 **별도 저장소**, Pi 4 디코더·FSM 연결 없음 |
-| G3 환경 | ⬜ | 펌웨어 없음. SCD41/DHT22 역할 분리 미결 |
-| G4 키스트로크 | 🟡 | `collector/` 수집기·테스트 8개 — `feat/merge-pending` PR 로 main 진입 중. **계약은 구현 기준 확정(09-14)**. hub ingest 없음 |
-| G5 FSM | ✅ | 18상태 엔진, 테스트 46개(45 통과·1 xfail; 병합 PR 기준 54개), `config/fsm.yaml`(`score_period_sec: 10`), 리플레이·데모·`--report` 하네스, 엎드림·노딩 시나리오 |
-| G6 개인화 | ⬜ | `features/` `ml/` 비어 있음 |
-| G7 개입 | 🟡 | 게이트 값(0.45/0.75)은 config 와 일치. `control/` 비어 있음. 제안 카드 수락·거절은 HTTP/MQTT 로 전달됨 |
-| G8 UI | 🟡 | 대시보드·18상태 그래프·키스트로크 패널·오디오·MQTT 구독 완료, release IPK 배포. **디스플레이 교체 후 터치 정상(09-14)**. 리포트 화면·저자극/상세 토글·자동 시작 없음 |
-| G9 HW | ⬜ | CAD·하우징 산출물 없음. 보드 3종·화면·센서는 보유 |
-| G10 제어 | ⬜ | 스마트 플러그 미구매/미연동 |
-| 통신 | 🟡 | Pi 4↔Pi 5 MQTT 확정, display 구독 구현. **hub 측 MQTT 발행 없음**(HTTP 8765 + Node-RED 주입으로 시연). ESP32↔Pi 4 UART2 물리 확정, 프레임 TYPE·스키마 미확정 |
+| G1 ToF | ⬜ ⚠ | VL53L9CX **미연결**, Path A/B 미결(09-19 마감 지남). 기하 특징 7종 코드 없음. 대신 ESP32-CAM 기반 자세 판정(기본·엎드림·뒤로 젖힘·졸음·턱 괴기)이 main 의 `display/atlas/camsvc`·`camtest` 에 있고, 통합 앱 `자세` 탭·열화상풍 54×42 표시는 `base/camera-zone-views`(PR #25) 에만 있음 → §3 I7 |
+| G2 mmWave | 🟡 | 펌웨어 main 이관 완료(`firmware/esp32_sensor_node`, C1001 + DrowsyDetector). ESP32 UART2 → Pi 4 C++ `uart_rx` → `UART\t` 라인 → hub 수신 실측(09-16 rx=132·crc 0). 앱 센서 화면에 mmWave 심박 표시(PR #23). C1001 무응답 시 루프 굶김·재시도 백오프 수정은 (`feat/edge-mvp-nodered`) |
+| G3 환경 | 🟡 | SCD41·BH1750·DHT22 드라이버 main(PR #21), 앱 ENV 대시보드·UART 폴백(PR #23). 실장착 맞춤·SCD41 복구는 (`feat/edge-mvp-nodered`). CO₂ → 환기 라우팅 실기 미확인 |
+| G4 키스트로크 | ✅ | `collector/` main 진입(PR #15). 공통 envelope·이식성 설정 문서·입력 타이밍 발행기는 (`feat/edge-mvp-nodered`, 테스트 10 통과). hub ingest 가 평면·envelope payload 수용 |
+| G5 FSM | ✅ | 18상태 엔진·`report.py`·리플레이·데모. main hub 테스트 **88 통과·1 xfail + 수집 오류 1**(`test_native_mqtt_bridge.py` 가 `service_bridge._feed_mqtt_line` 을 찾지 못함 — PR #21·#22 병합 `aec531a` 에서 함수 누락, 수정 필요). (`feat/hub-swonly`) 기준 105 통과·1 xfail |
+| G6 개인화 | 🟡 | 중앙값·MAD 기준선 `features/baseline.py` 는 (`feat/hub-swonly`) 에만 있음. main `features/` 는 빈 패키지. `ml/` 비어 있음 |
+| G7 개입 | 🟡 | 게이트 0.45/0.75 config 일치. main `control/` 에는 iLink 블루투스 램프 어댑터(`ilink_light.py`)뿐. 제어 디스패처(auto/suggest/undo/쿨다운)·mock 플러그는 (`feat/hub-swonly`). **스마트 플러그 미선정** |
+| G8 UI | 🟡 | 통합 앱(PR #23): 센서 개요·ENV·음악 UI·블루투스 피드백·세션 리포트(데모)·상태 체류 차트. 저자극/상세 4화면 전환·자동 실행 알림+되돌리기·재부팅 자동 시작 없음 |
+| G9 HW | ⬜ | CAD·하우징 산출물 없음 |
+| G10 제어 | 🟡 | iLink 램프 1종 제어 경로만. 스마트 플러그·환기팬 없음 |
+| 통신 | 🟡 | Pi 4 정적 Mosquitto(PR #18)·C++ 네이티브 MQTT 브리지(PR #21 계열) main. UART 프레임은 잠정 규약(0x20/0x10/0xF0) 그대로 사용 중, 팀 확정 기록 없음. 보드 재부팅 시 브로커·hub 수동 기동 필요 |
+
+### 2-1. 브랜치 현황 (2026-09-29, `git fetch` 기준)
+
+| 브랜치 | main 미반영 | 내용 | 조치 |
+|---|---|---|---|
+| `feat/hub-swonly` | 11커밋(09-16~17) | 개인 기준선 `features/baseline.py`, 제어 디스패처 `control/dispatcher.py`, `tools/mock_plug.py`·`pc_broker.py`, `session/report` 발행, 채터링·bridge 프로세스 테스트 | **PR 필요** — G6·G7 의 핵심 코드. main 과 충돌 여부 확인 후 병합 |
+| `feat/edge-mvp-nodered` → `origin/feat/edge-mvp-nodered-followup` | 8커밋(09-18~21) | 펌웨어 C1001·환경센서 수정 5, Pi 4 `rx=0` 복구 스크립트, collector 발행기·설정 문서 | **PR 필요**. main 대비 34커밋 뒤처져 있어 main 위 재배치 후 PR |
+| `base/camera-zone-views` | 12커밋(PR #25 병합, 09-21) | 통합 앱(`display/atlas/app`) + 자세 탭·열화상풍 표시, `docs/posture-camera.md` | I7 결정 후 main 반영 여부 결정 |
+| `integration/unified-app` | 11커밋 | camera-zone-views 의 이전 상태 | `base/camera-zone-views` 로 대체됨 — 정리 대상 |
+| `feat/merge-pending`·`feat/hub-ingest-live`·`integration/pr21-pr22`·`feat/env-ui-integration` | 0 | 모두 main 에 포함 | 삭제 가능 |
 
 ---
 
@@ -72,6 +90,7 @@ ToF VL53L9CX ── 연결 경로 결정 전 (Pi 4 CSI-2 또는 ESP32 I2C)
 | I4 | 호흡·심박 표현 | 포스터는 "호흡·심박 신호" 언급 | 순간값 미사용·중앙값+기준선·"호흡 소실 여부"만 증거로 쓴다고 보고서에 명시. `respiration_enabled` 의미를 이 기준으로 재정의 |
 | I5 | 2단계 "개인 헤드 온보드 학습" | 온보드 학습 / PC 학습 후 TFLite 적재 | PC 학습 + Pi 4 TFLite 추론(선택적 의존). "온보드"는 추론을 의미하도록 서술 조정 |
 | I6 | 공기청정기 제어 | ThinQ 실기 / 스마트 플러그 | 스마트 플러그로 LED·환기팬. 공기청정기는 ThinQ 1기기 선택 시연 |
+| I7 | **카메라 기반 자세 판정(신규, 09-18)** — 포스터·CLAUDE.md 는 "카메라·마이크 미사용"인데 ESP32-CAM 영상 + MediaPipe 스켈레톤 판정과 카메라 영상 보기가 main(`display/atlas/camsvc`·`camtest`)에 있음 | (a) ToF 도착 전 **개발용 대역**으로만 쓰고 시연·제출 빌드에서 제외 (b) 제품 기능으로 채택하고 포스터·보고서의 "카메라 미사용" 서술 변경 (c) 카메라 영상 보기만 빼고 판정은 유지 | **팀 결정 필요.** 핵심 차별점("카메라 없이")과 직결되므로 (a) 가 기본 권장. 어느 쪽이든 `agent-briefing.md` §4 비협상 제약과 `docs/posture-camera.md` 를 같이 고친다 |
 
 ---
 
@@ -98,14 +117,16 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 > **MVP 지름길 두 가지를 명시한다.** ① ESP32 → PC USB 브리지는 Pi 4 C++ UART 디코더(4-B §3)가 생기기 전까지의 임시 경로다.
 > ② hub 는 PC Python 으로 돌려도 된다. Pi 4 native service 배포는 4-B §9 에서 한다. 두 지름길 모두 계약(`data-spec.md`·`mqtt-topics.md`)은 제품 경로와 동일하게 지킨다.
 
+> **09-29 기록**: 마감(09-18)이 지났다. 아래 항목 중 실센서 시나리오·리플레이 재현·MVP 통과 기준은 **실기 확인 기록이 저장소·노션에 없어** 미체크로 둔다. 확인했다면 체크하고 날짜를 적는다.
+
 **일별 목표**
 
 - [ ] **화 09-15 — 센서가 MQTT 에 보인다**
   - [x] `firmware/esp32_sensor_node/` PlatformIO 프로젝트 생성(09-14, PR #12) — 공식 DFRobot C1001 라이브러리 기반 `C1001Passive` + 5상태 `DrowsyDetector`. 원본 저장소 미제공으로 UART2 COBS/CRC 송신은 미이관(핀·baud 초기화만). **`pio run` 빌드는 미검증** — 화요일 실보드에서 확인
   - [x] 펌웨어 UART0(USB) 1 Hz mmWave JSON + 5 s 환경 스텁 JSON(`{"t":"mmwave"|"env", ...}`) — PR #12
   - [x] `tools/uart_mqtt_bridge.py`: `{"t":` 라인 → 공통 envelope → `deskmate/sensor/{mmwave,env}/<node>`, health LWT, 백오프, 날짜별 JSONL. 순수 변환 테스트 9개 — PR #12
-  - [ ] broker 결정·기동: Pi 4 Mosquitto(`hub/mqtt/`) 우선, 안 되면 PC mosquitto. `mosquitto_sub -t 'deskmate/#'` 로 확인
-  - [ ] `feat/merge-pending` PR 머지 → `python -m collector --broker <ip>` 로 키스트로크 토픽 확인
+  - [x] broker 결정·기동 — 09-17 PC 브로커(`pc_broker.py`, `feat/hub-swonly`) → 09-18 **Pi 4 정적 Mosquitto 2.0.20**(`tools/atlas-hotspot-broker/`, PR #18, `/data/share/deskmate/bin/pi4-broker-start.sh`). 자동 시작 없음
+  - [x] `feat/merge-pending` 머지(PR #15 경유). `python -m collector --broker <ip>` 이식성 설정 문서는 `feat/edge-mvp-nodered` `4716ef9`
 - [ ] **수 09-16 — Node-RED 시각화**
   - [x] `tools/node-red-visualizer/flows.json` 대시보드(node-red-dashboard 3.6.6): mmWave·환경·키스트로크·FSM 패널 — PR #12 (화면 캡처는 실센서 연결 후)
   - [x] 토픽별 신선도·seq 갭 표시 — PR #12
@@ -135,47 +156,47 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 ### 4-B. 11월 완전 개발 체크리스트 — 개발계획서 항목 기준
 
 개발계획서 v2 「개발 일정」의 11개 항목을 그대로 작업 단위로 쓴다. 각 항목의 마감은 결선 일정에서 역산했다:
-**통합 MVP 10-05 · 시험 평가 10-19 · 서류 제출 10-30 · 발표 11-06.** ✅ 는 2026-09-14 기준 완료.
+**통합 MVP 10-05 · 시험 평가 10-19 · 서류 제출 10-30 · 발표 11-06.** ✅ 는 2026-09-29 기준 완료. `(브랜치명)` 이 붙은 항목은 그 브랜치에만 있고 main 에는 아직 없다(§2-1).
 
 #### 1. 요구사항 분석 및 시스템 구조 설계 — 마감 09-19
 
 - [x] 요구사항 명세서·데이터 명세서·FSM 명세·MQTT 계약 작성
 - [x] 보드 역할 확정(ESP32 센서 / Pi 4 hub / Pi 5 display), Pi 4↔Pi 5 이더넷+MQTT, ESP32↔Pi 4 UART2
 - [x] 신뢰도 주기 10 s, 키스트로크 계약, 환경 센서 단일 측정 결정
-- [ ] ToF 연결 경로 Path A/B 결정 (09-19 spike, 실패 시 B)
+- [ ] ToF 연결 경로 Path A/B 결정 (09-19 spike, 실패 시 B) — **09-29: 마감 경과, 결정 기록 없음.** 규칙대로면 Path B 자동 확정. 팀 확인 필요
 - [x] UART 프레임 **잠정** 규약 기록(09-15, `data-spec.md` §13.1): mmWave 0x20·env 0x10·heartbeat 0xF0, 헤더·payload 구조체·CRC/COBS test vector. **팀 확정(D1)만 남음** — 값 바꾸려면 `uart_frame.py`·`frame_types.h` 상수만
-- [ ] 스마트 플러그 모델 선정(로컬 제어, 클라우드 의존 없음)·구매
+- [ ] 스마트 플러그 모델 선정(로컬 제어, 클라우드 의존 없음)·구매 — **09-29: 미선정.** 임시로 iLink 블루투스 램프(`control/ilink_light.py`, PR #22)만 제어 가능
 - [ ] 새 Pi 5 디스플레이 모델·인터페이스·전원 경로 기록
 
 #### 2. HW 구성 및 센서 인터페이스 구축 — 마감 09-28
 
 - [x] C1001 mmWave → ESP32 UART1 수신, ESP32 UART2 → Pi 4 `/dev/serial0` 도달 실측(09-11)
 - [x] Pi 5 디스플레이 교체, 터치 정상
-- [ ] ESP32 에 SCD41(I2C `0x62`)·BH1750(I2C)·DHT22(단선) 배선, 각 센서 값 읽기
+- [x] ESP32 에 SCD41(I2C `0x62`)·BH1750(I2C)·DHT22(단선) 드라이버 — PR #21 main. 실장착 맞춤·SCD41 복구(`feat/edge-mvp-nodered` `313815f`·`4583284`). 값 실측 기록은 노션에 남길 것
 - [ ] VL53L9CX 를 결정된 경로에 연결(Path A: Pi 4 CSI-2 + STEVAL flex / Path B: ESP32 I2C 1 MHz), 프레임레이트 실측
 - [ ] ESP32 UART2 460,800 bps 이상 유실률 실측, 힌지 구간 배선 신호 확인
-- [ ] Pi 4 `serial-getty@ttyS0` 영구 비활성(ATLAS 공식 절차)
+- [ ] Pi 4 `serial-getty@ttyS0` 영구 비활성(ATLAS 공식 절차) — 영구 방법 미확보. 재부팅마다 `hub/atlas/tools/pi4-hub-activate.sh` 로 권한·D-Bus 복구(`feat/edge-mvp-nodered` `389324b`). 이 보드는 `/dev/serial0 -> ttyAMA0`
 - [ ] 스마트 플러그 + LED 스탠드/환기팬 배선·전원
 
 #### 3. MQTT 통신 및 데이터 로깅 파이프라인 구축 — 마감 09-28
 
 - [x] Pi 4 Mosquitto 설정, `mqtt-topics.md` 계약, Node-RED 모니터, display MQTT 구독·`feedback/user` 발행
 - [x] Pi 4 native service(`hub/atlas`) IPK 로 제한 Python 실행, HTTP 8765 개발 API
-- [x] ESP32 UART2 프레임 송신 — mmWave 0x20 · 환경 0x10(스텁, valid_bits 0) · 하트비트 0xF0 (`transport/frame.cpp`, 09-16). **`pio run`·실보드 검증 남음**
-- [x] Pi 4 C++ 서비스에 `/dev/serial0` 수신 → COBS 해제 → CRC 검증 → 라인 브리지(`UART\t<json>`) — `hub/atlas/src/uart_rx.cpp`(09-16, 호스트 테스트 포함). **ARC 컴파일·실보드 검증 남음**
+- [x] ESP32 UART2 프레임 송신 — mmWave 0x20 · 환경 0x10 · 하트비트 0xF0 (`transport/frame.cpp`, 09-16). `pio run`·실보드 플래시 09-16 확인
+- [x] Pi 4 C++ 서비스에 `/dev/serial0` 수신 → COBS 해제 → CRC 검증 → 라인 브리지(`UART\t<json>`) — `hub/atlas/src/uart_rx.cpp`(09-16, 호스트 테스트 포함). 09-16 ARC 빌드·Pi 4 실수신 rx=132·crc 0
 - [x] hub `ingest/`: MQTT 센서·키스트로크 + `UART\t` 라인(`uart_source.py`) → `SensorCache` → `SensorFrame`, freshness·seq 갭 (09-14/15)
 - [x] hub MQTT 발행: `state/phase`(retain)·`health/hub`, `feedback/user` 구독 → FSM 반영 (09-14). `interaction/request` 는 충돌 신호 경로(§5)와 함께
-- [ ] 전 토픽·UART 라인 JSONL 로거(`tools/log_recorder.py`), 리플레이 포맷과 동일
-- [ ] collector payload 에 공통 envelope(`schema_version/boot_id/seq`) 추가 (세부 튜닝)
+- [ ] 전 토픽·UART 라인 JSONL 로거, 리플레이 포맷과 동일 — Node-RED 기록 노드(main)·`pc_broker.py --log-dir`(`feat/hub-swonly`). 리플레이 포맷 정합 미확인
+- [x] collector payload 에 공통 envelope(`schema_version/boot_id/seq`) 추가 (`feat/edge-mvp-nodered` `b98703f`, `feat/hub-swonly` `b254430`)
 - [ ] Node-RED 를 끄고도 운영 경로가 동작하는지 확인
 
 #### 4. ToF·환경·키스트로크 특징 추출 모듈 개발 — 마감 10-05
 
 - [x] 키스트로크 특징(dwell·flight·idle·correction + typing/mouse/input_active·flight_cv) 구현·테스트 8개
-- [x] mmWave 체동 이동평균·심박 중앙값·각성 기준선·5상태 DrowsyDetector(별도 저장소)
+- [x] mmWave 체동 이동평균·심박 중앙값·각성 기준선·5상태 DrowsyDetector(`firmware/esp32_sensor_node/src/sensors/c1001/`)
 - [ ] ToF 기하 특징 7종(`presence_count` `centroid_depth` `head_row_index` `shoulder_tilt` `motion_indicator` `posture_change_rate` `baseline_deviation`) → posture enum(`upright/lean_forward/lean_back/slouch/away`)·`motion_score`·`nod_rate_hz`
 - [ ] 환경 특징: CO₂ 절대 구간·시작 대비 누적 상승, 온습도 쾌적 범위 이탈, 조도 구간
-- [ ] `features/` baseline 캘리브레이션: 세션 초기 5분 + 시간대별 중앙값·MAD Modified z-score → `phi/delta` [0,1] (DATA-DEC-005 수식 확정)
+- [x] `features/` baseline 캘리브레이션: START 보정 창 + 시간대 버킷 중앙값·MAD Modified z → `phi/delta`, 기준선 없으면 선형 폴백 (`feat/hub-swonly` `1ee5ce0`, 테스트 5개). z_full·mad_floor 실측 튜닝 남음
 - [ ] mmWave DrowsyDetector 출력을 FSM `presence`·`respiration`(소실 여부) 신호로 매핑
 - [ ] PC 오프라인: 기록한 depth 로 V2V-PoseNet 스켈레톤 추론 → 기본·엎드림·턱 괴기·기울임 그림(보고서용)
 - [ ] `tools/tof_probe.py`: 축소 depth map 실시간 확인(디버그 ≤ 2 Hz)
@@ -185,7 +206,7 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 - [x] VER5 18상태 엔진, 이중 신뢰도·재정규화, PC/MIXED/비PC 컨텍스트·blend, 원인 라우팅, 게이트(0.45/0.75), 타이머·히스테리시스
 - [x] `config/fsm.yaml` 외부화, 리플레이·데모 하네스, 세션 리포트 `report.py`(병합 PR), 테스트 46개 + 리포트 8개
 - [ ] 실센서 `SensorFrame` 로 대표 경로 재현: IDLE→START→CONTEXT_DETECT→FOCUS→FATIGUE_SUSPECT→FATIGUE→CAUSE_ANALYSIS→ACTION→MONITOR→RECOVERY→END
-- [ ] 10 s 주기에서 채터링 검증(임계 근방 진동 입력) → 필요 시 최소 유지 시간·히스테리시스 값 조정(yaml)
+- [x] 10 s 주기에서 채터링 검증(합성 진동 입력) — `tests/test_chattering.py` (`feat/hub-swonly` `464a501`). 실센서 노이즈는 실측 후
 - [ ] 자세 해석 분기(PC 숙임+키입력↓=피로, 비PC 숙임+motion↓=집중 등)를 실센서로 확인
 - [ ] 신호 충돌(ToF 노딩 + mmWave active) 시 `interaction/request` 발행 → 사용자 확인 경로 (제안 게이트 ACTION_* 진입 시 질문 발행·`request_id` 매칭은 09-16 구현)
 - [ ] `C_focus` 부호 최종 결정, 필요 시 문서·테스트 동시 수정
@@ -199,16 +220,16 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 - [ ] 상태 적응형 4화면: 대기(시각·환경·재실) / 집중 저자극 / 터치 시 상세(집중 시간·환경·수동 제어) / 세션 리포트
 - [ ] 자동 실행 알림(≥ 0.75) + 되돌리기 + 실행 이유 문구
 - [ ] 정정(`correct`) 입력 — 4 국면 중 선택, 무응답 기록
-- [ ] 세션 리포트 화면: `report.py` 출력(몰입 시간·피로 에피소드·개입 결과·수용률)을 MQTT 로 받아 표시
+- [ ] 세션 리포트 화면: 데모 리포트·상태 체류 차트 화면은 main(PR #22). hub `session/report` 발행(`feat/hub-swonly`) → display 구독 연결은 `feat/hub-swonly` `b254430` 에 구현, main 미반영
 - [ ] 재부팅 자동 시작(Pi 5 앱 + Pi 4 hub 서비스)
 - [ ] 스피커 알림 음소거·볼륨
 
 #### 7. 조명·환기팬·스마트 플러그 제어 모듈 개발 — 마감 10-05
 
 - [ ] 스마트 플러그 로컬 프로토콜 확인·`control/` 어댑터(명령 ID·대상·값·원인·만료)
-- [ ] `ACTION_ENV` → `deskmate/control/cmd` 발행 → 플러그 ON/OFF → 실행 결과 수신 → 실패·타임아웃·재시도·수동 복구
-- [ ] 게이트 연동: 제안(0.45~0.75) 수락 시 실행 / 자동(≥ 0.75) 실행 후 알림, 동일 명령 쿨다운 300 s
-- [ ] 비가역 동작(전원 차단) 사용자 확인 필수 확인
+- [x] `ACTION_ENV` → `deskmate/control/cmd` → 결과 수신 → 실패·타임아웃 → MONITOR (`control/dispatcher.py`·`tools/mock_plug.py`, `feat/hub-swonly` `74477c2`). 실기 플러그·재시도·수동 복구 UI 남음
+- [x] 게이트 연동: 제안 수락 시 실행 / 자동 즉시 / 거절 시 undo, 쿨다운 300 s (`feat/hub-swonly`). 자동 실행 **알림 화면**은 display 남음
+- [x] 비가역 동작(전원 차단)은 자동 게이트에서 제외, 제안 수락 시에만 `requires_confirmation=true` (`feat/hub-swonly`)
 - [ ] ThinQ 1기기(공기청정기 또는 조명) 연동 여부 결정, 되면 어댑터 추가 (선택)
 - [ ] 자격증명은 `.env`/gitignore `secrets.yaml` 만
 
@@ -223,7 +244,9 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 #### 9. 통합 MVP 구현 — 마감 10-05
 
 - [ ] 4-A MVP 통과 (09-18)
-- [ ] Pi 4 native service 에 UART 디코더·MQTT 클라이언트 탑재, PC 브리지 제거 — 코드는 09-16 준비(uart_rx + bridge live 모드 + paho 동봉), ARC 빌드·설치·실기 확인 남음
+- [x] Pi 4 native service 에 UART 디코더·C++ MQTT 클라이언트 탑재 — 09-16 실수신, native MQTT 브리지 main(PR #21 계열)
+- [ ] PC 브리지(`tools/uart_mqtt_bridge.py`) 제거 — Pi 4 경로로 실브로커까지 end-to-end 확인 후
+- [ ] **main hub 테스트 수집 오류 수정** — `test_native_mqtt_bridge.py` 가 `service_bridge._feed_mqtt_line` 을 import, 병합 `aec531a` 에서 함수 누락(09-29 발견)
 - [ ] 4 신호(ToF·mmWave·환경·키스트로크) 모두 `SensorFrame`·`reasons` 에 등장
 - [ ] 센서 → 피로 판정 → 제안 → 터치 수락 → 플러그 ON → MONITOR → RECOVERY 1사이클 실기 재현
 - [ ] display 를 꺼도 hub 계속 동작, Node-RED 없이 동작, 인터넷 없이 동작
@@ -252,11 +275,12 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 
 | 순위 | 리스크 | 영향 | 대응 |
 |---|---|---|---|
-| 1 | ToF 경로 미결로 4-B §2·§4 착수 지연 | G1 전체 | 09-19 spike 데드라인. 실패 = Path B 자동 확정 |
+| 1 | **ToF 미연결·경로 미결(09-19 마감 경과)** — 카메라 대역(I7)이 자리를 채우는 중 | G1 전체, "카메라 없이" 서술 | Path B 즉시 확정 후 ESP32 I2C 연결. 불가하면 I7 에서 결선 서술을 정한다 |
 | 2 | 실센서 노이즈로 FSM 채터링 (10 s 주기라 30 s 보다 민감) | 시연 신뢰도 | 리플레이 튜닝 + 히스테리시스, 시연 시나리오 임계값 프로파일 별도 |
-| 3 | ESP32 코드가 별도 저장소에 있어 편입 지연 | 통합 MVP | 09-15 첫 작업으로 이관 |
+| 3 | **미머지 브랜치 누적** — G6·G7 핵심(`feat/hub-swonly`)과 펌웨어 수정(`feat/edge-mvp-nodered`)이 main 밖 | 통합 MVP(10-05), 결선 소스 공개 | 이번 주 PR 2건 머지, 정리 대상 브랜치 삭제(§2-1) |
 | 4 | 라벨 부족으로 2단계 미완 | 포스터 G6 미달 | 개념 실증 범위로 사전 고정, 보고서 서술 조정(I5) |
-| 5 | 스마트 플러그 미선정 | G7·G10 제어 시연 | 09-28 까지 로컬 제어 모델 선정·구매 |
+| 5 | **스마트 플러그 미선정(09-28 마감 경과)** | G7·G10 제어 시연, 통합 MVP 1사이클 | 즉시 구매. 도착 전에는 iLink 램프 + mock 플러그로 1사이클 시연 경로 확보 |
+| — | ~~ESP32 코드가 별도 저장소~~ | — | **해소(09-14~16)** `firmware/esp32_sensor_node` 이관·실보드 플래시 |
 | — | ~~Pi 5 터치 컨트롤러 사망~~ | — | **해소(09-14)** 디스플레이 교체 |
 
 ---
