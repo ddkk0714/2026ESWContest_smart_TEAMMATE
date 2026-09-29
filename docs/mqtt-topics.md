@@ -36,7 +36,7 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 | `deskmate/sensor/keystroke` | PC 수집기 | hub | 1Hz | 키 입력 타이밍 특징 |
 | `deskmate/state/phase` | hub | display, control | 10 s 주기(retain) | 추론 결과 + 신뢰도. `python -m deskmate_hub run` 이 발행 |
 | `deskmate/display/message` | Node-RED/debug | display | 이벤트 | Pi 5 화면에 일회성 텍스트 표시 |
-| `deskmate/session/report` | hub | display | 세션 종료 시 | 화면용 세션 요약. 개별 행동 로그 없음 |
+| `deskmate/session/report` | hub | display | 10 s 주기 스냅샷(retain) + 세션 종료 시 | 화면용 세션 요약. 개별 행동 로그 없음 |
 | `deskmate/interaction/request` | hub | display | 이벤트 | 불확실한 판정의 사용자 확인 질문 |
 | `deskmate/control/cmd` | hub | control | 이벤트 | 기기 제어 명령 |
 | `deskmate/feedback/user` | display | hub | 이벤트 | 사용자 수락 · 정정 |
@@ -182,7 +182,9 @@ Node-RED에서 Pi 5 화면을 확인할 때 쓰는 일회성 안내 문구다. �
 
 ### `deskmate/session/report`
 
-세션이 `END`에 도달했을 때 Hub가 발행하는 화면용 요약이다. Pi 5는 이 값을 메모리에만
+Hub가 발행하는 화면용 세션 요약이다. 세션 종료를 기다리지 않고 **10 s 주기 스냅샷**을 retain 으로
+발행한다(진행 중이면 `t_end` = 발행 시각, START 전이면 `t_start` = 관측 시작 시각). 주기는 hub 환경변수
+`DESKMATE_REPORT_PERIOD_SEC`(기본 10, 0 이면 끔)로 바꾼다. Pi 5는 이 값을 메모리에만
 보관해 세션 리포트 화면에 표시한다. 키 내용, ToF raw, 개인 식별자, 개별 시각의 행동 로그는
 포함하지 않는다.
 
@@ -194,7 +196,7 @@ Node-RED에서 Pi 5 화면을 확인할 때 쓰는 일회성 안내 문구다. �
     "t_start": 1769000000.0, "t_end": 1769003600.0,
     "duration_s": 3600, "focus_time_s": 2100, "focus_ratio": 0.583,
     "state_durations_s": {"FOCUS_PC": 1800, "REST": 300},
-    "fatigue_episodes": [{"t_onset": 1769001800.0, "peak_fatigue": 0.81}],
+    "fatigue_episodes": [{"t_onset": 1769001800.0, "peak_fatigue": 0.81, "t_resolved": 1769002400.0}],
     "intervention_counts": {"total": 2, "recovered": 1},
     "break_accept_rate": 0.5
   }
@@ -202,7 +204,8 @@ Node-RED에서 Pi 5 화면을 확인할 때 쓰는 일회성 안내 문구다. �
 ```
 
 `state_durations_s`는 상태별 누적 시간(초), `fatigue_episodes`는 화면에 필요한 발생 시각과
-최대 피로도만 담는다. 수락률을 아직 계산할 수 없으면 `break_accept_rate`는 생략한다.
+최대 피로도·해소 시각(`t_resolved`, 미해소면 `null`)만 담는다. 휴식 제안에 응답한 적이 없어 수락률을
+계산할 수 없으면 `break_accept_rate`는 `null`(모름)이다 — 0 과 구분한다.
 ### `deskmate/interaction/request`
 
 ```json
