@@ -51,7 +51,8 @@ class BluetoothDeviceInfo {
   /// connected, then times out after 25 s ("connected then disconnected").
   bool get isAudioSink =>
       majorDeviceClass == _majorClassAudioVideo ||
-      profiles.any((uuid) => uuid.toLowerCase().startsWith(_a2dpSinkUuidPrefix));
+      profiles
+          .any((uuid) => uuid.toLowerCase().startsWith(_a2dpSinkUuidPrefix));
 
   /// BLE-only record (no inquiry data): candidate for GATT lamp control, never
   /// for A2DP pairing.
@@ -108,15 +109,20 @@ class AtlasBluetoothService {
     }
   }
 
-  Future<void> ensureBluetoothPermission() async {
+  Future<bool> ensureBluetoothPermission({
+    Duration waitForConsent = const Duration(seconds: 20),
+  }) async {
     const scanPermission = 'com.atlas.permission.user_consent.bluetooth_scan';
-    const connectPermission = 'com.atlas.permission.user_consent.bluetooth_connect';
+    const connectPermission =
+        'com.atlas.permission.user_consent.bluetooth_connect';
     final scan = await _hasPermission(scanPermission);
     final connect = await _hasPermission(connectPermission);
-    if (scan && connect) return;
-    // PermissionAgent owns the consent UI. The app never grants itself a
-    // Bluetooth privilege; after the user accepts, they can press scan again.
-    for (final permission in [if (!scan) scanPermission, if (!connect) connectPermission]) {
+    if (scan && connect) return true;
+    // PermissionAgent가 동의를 받은 뒤 권한 상태가 반영될 때까지 기다린다.
+    for (final permission in [
+      if (!scan) scanPermission,
+      if (!connect) connectPermission
+    ]) {
       try {
         await _permission.callMethod(
           _permissionInterface,
@@ -124,14 +130,28 @@ class AtlasBluetoothService {
           [DBusString(permission)],
         );
       } catch (_) {
-        // The final message below is the same for a denied or unavailable UI.
+        // 동의 UI가 거절되거나 없어도 마지막 권한 상태로 판정한다.
       }
     }
-    throw StateError('Atlas Bluetooth 권한 요청을 표시했습니다. 허용한 뒤 다시 기기 검색을 누르세요.');
+    final clock = Stopwatch()..start();
+    while (true) {
+      if (await _hasPermission(scanPermission) &&
+          await _hasPermission(connectPermission)) {
+        return true;
+      }
+      final remaining = waitForConsent - clock.elapsed;
+      if (remaining <= Duration.zero) return false;
+      await Future<void>.delayed(
+        remaining < const Duration(seconds: 1)
+            ? remaining
+            : const Duration(seconds: 1),
+      );
+    }
   }
 
   Future<String> adapterAddress() async {
-    final result = await _bluetooth.callMethod(_adapterInterface, 'GetInfo', []);
+    final result =
+        await _bluetooth.callMethod(_adapterInterface, 'GetInfo', []);
     final values = result.returnValues;
     if (values.isEmpty || values.first is! DBusArray) return '';
     final adapters = values.first as DBusArray;
@@ -144,13 +164,39 @@ class AtlasBluetoothService {
   }
 
   Future<List<BluetoothDeviceInfo>> scan() async {
-    await ensureBluetoothPermission();
+    var latest = <BluetoothDeviceInfo>[];
+    await for (final devices in scanProgressive()) {
+      latest = devices;
+    }
+    return latest;
+  }
+
+  Stream<List<BluetoothDeviceInfo>> scanProgressive({
+    Duration duration = const Duration(seconds: 8),
+    Duration interval = const Duration(seconds: 1),
+  }) async* {
+    if (interval <= Duration.zero || duration < Duration.zero) {
+      throw ArgumentError('scan duration and interval must be nonnegative');
+    }
+    if (!await ensureBluetoothPermission()) {
+      throw StateError(
+          'Atlas Bluetooth 권한이 허용되지 않았습니다. 권한 요청을 허용한 뒤 다시 시도하세요.');
+    }
     final adapter = await adapterAddress();
-    await _bluetooth.callMethod(
-        _adapterInterface, 'StartDiscovery', [DBusString(adapter)]);
     try {
-      await Future<void>.delayed(const Duration(seconds: 8));
-      return _discoverable(adapter);
+      await _bluetooth.callMethod(
+          _adapterInterface, 'StartDiscovery', [DBusString(adapter)]);
+      final clock = Stopwatch()..start();
+      final found = <String, BluetoothDeviceInfo>{};
+      while (true) {
+        for (final device in await _discoverable(adapter)) {
+          found[device.address] = device;
+        }
+        yield List<BluetoothDeviceInfo>.unmodifiable(found.values);
+        final remaining = duration - clock.elapsed;
+        if (remaining <= Duration.zero) break;
+        await Future<void>.delayed(remaining < interval ? remaining : interval);
+      }
     } finally {
       try {
         await _bluetooth.callMethod(
@@ -167,7 +213,8 @@ class AtlasBluetoothService {
       'GetDiscoverableDevices',
       [DBusString(adapter), const DBusString('')],
     );
-    if (result.returnValues.isEmpty || result.returnValues.first is! DBusArray) {
+    if (result.returnValues.isEmpty ||
+        result.returnValues.first is! DBusArray) {
       return const [];
     }
     final devices = <BluetoothDeviceInfo>[];
@@ -195,19 +242,46 @@ class AtlasBluetoothService {
       throw StateError('${device.name}은(는) 오디오 기기가 아닙니다. 스피커를 페어링 모드로 두고 '
           '다시 검색해 오디오 기기 항목을 선택하세요.');
     }
-    await ensureBluetoothPermission();
+    if (!await ensureBluetoothPermission()) {
+      throw StateError(
+          'Atlas Bluetooth 권한이 허용되지 않았습니다. 권한 요청을 허용한 뒤 다시 시도하세요.');
+    }
     final adapter = await adapterAddress();
     if (!device.paired) {
-      await _bluetooth.callMethod(
-          _adapterInterface, 'Pair', [DBusString(adapter), DBusString(device.address)]);
+      await _bluetooth.callMethod(_adapterInterface, 'Pair',
+          [DBusString(adapter), DBusString(device.address)]);
     }
-    await _bluetooth.callMethod(
-        _a2dpInterface, 'Connect', [DBusString(adapter), DBusString(device.address)]);
+    await _bluetooth.callMethod(_a2dpInterface, 'Connect',
+        [DBusString(adapter), DBusString(device.address)]);
+    await _confirmSpeakerConnected(device.address);
+  }
+
+  /// 저장된 클래식 Bluetooth 주소는 이미 페어링된 기기로 취급한다.
+  Future<void> connectSpeakerAddress(String address) async {
+    if (!RegExp(r'^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$').hasMatch(address)) {
+      throw StateError('저장된 스피커 주소가 올바르지 않습니다.');
+    }
+    if (!await ensureBluetoothPermission()) {
+      throw StateError(
+          'Atlas Bluetooth 권한이 허용되지 않았습니다. 권한 요청을 허용한 뒤 다시 시도하세요.');
+    }
+    try {
+      final adapter = await adapterAddress();
+      await _bluetooth.callMethod(_a2dpInterface, 'Connect',
+          [DBusString(adapter), DBusString(address)]);
+      await _confirmSpeakerConnected(address);
+    } catch (error) {
+      if (error is StateError) rethrow;
+      throw StateError('저장된 스피커에 연결하지 못했습니다: $error');
+    }
+  }
+
+  Future<void> _confirmSpeakerConnected(String address) async {
     // Connecting is asynchronous in Bluetooth1. Do not claim success or start
     // feedback music until the A2DP profile reports an actual connection.
     for (var attempt = 0; attempt < 5; attempt++) {
       await Future<void>.delayed(const Duration(seconds: 1));
-      if (await isA2dpConnected(device.address)) {
+      if (await isA2dpConnected(address)) {
         // Verified on ATLAS 26.06: an A2DP connection registers a "bt_speaker"
         // output but the active output stays on hdmi_speaker until switched.
         await selectBluetoothOutput();
@@ -222,8 +296,11 @@ class AtlasBluetoothService {
   Future<bool> selectBluetoothOutput() async {
     for (final entry in await _outputDevices()) {
       final id = entry.$2.toLowerCase();
-      if (id.contains('bt') || id.contains('bluetooth') || id.contains('a2dp')) {
-        await _audio.callMethod(_audioManagerInterface, 'SetActiveOutputDevice', [entry.$1]);
+      if (id.contains('bt') ||
+          id.contains('bluetooth') ||
+          id.contains('a2dp')) {
+        await _audio.callMethod(
+            _audioManagerInterface, 'SetActiveOutputDevice', [entry.$1]);
         return true;
       }
     }
@@ -232,14 +309,17 @@ class AtlasBluetoothService {
 
   /// AudioManager1.OutputDevices is a(oss): (object path, id, name).
   Future<List<(DBusObjectPath, String)>> _outputDevices() async {
-    final value = await _audio.getProperty(_audioManagerInterface, 'OutputDevices');
+    final value =
+        await _audio.getProperty(_audioManagerInterface, 'OutputDevices');
     if (value is! DBusArray) return const [];
     final devices = <(DBusObjectPath, String)>[];
     for (final child in value.children) {
       if (child is! DBusStruct || child.children.length < 2) continue;
       final path = child.children[0];
       final id = child.children[1];
-      if (path is DBusObjectPath && id is DBusString) devices.add((path, id.value));
+      if (path is DBusObjectPath && id is DBusString) {
+        devices.add((path, id.value));
+      }
     }
     return devices;
   }
@@ -258,7 +338,10 @@ class AtlasBluetoothService {
   }
 
   Future<GattConnection> connectLamp(String address) async {
-    await ensureBluetoothPermission();
+    if (!await ensureBluetoothPermission()) {
+      throw StateError(
+          'Atlas Bluetooth 권한이 허용되지 않았습니다. 권한 요청을 허용한 뒤 다시 시도하세요.');
+    }
     final adapter = await adapterAddress();
     final result = await _bluetooth.callMethod(
       _gattInterface,

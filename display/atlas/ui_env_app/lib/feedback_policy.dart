@@ -21,7 +21,9 @@ List<List<int>> ilinkFramesForPhase(String phase) {
   switch (phase) {
     case 'idle':
     case 'end':
-      return [ilinkFrame([0x01, 0x08, 0x05, 0x00])];
+      return [
+        ilinkFrame([0x01, 0x08, 0x05, 0x00])
+      ];
     case 'start':
       return [
         ilinkFrame([0x01, 0x08, 0x05, 0x01]),
@@ -56,23 +58,58 @@ class IlinkLampFeedback {
   final AtlasBluetoothService _bluetooth;
   String? _address;
   GattConnection? _connection;
+  DateTime? _lastOkAt;
+  Object? _lastError;
 
   bool get configured => _address?.isNotEmpty ?? false;
+  String? get address => _address;
+  bool get connected => _connection != null;
+  DateTime? get lastOkAt => _lastOkAt;
+  Object? get lastError => _lastError;
 
   void select(String address) {
     if (_address == address) return;
     _address = address;
     _connection = null;
+    _lastOkAt = null;
+    _lastError = null;
+  }
+
+  Future<bool> connect() async {
+    if (!configured) return false;
+    if (_connection != null) return true;
+    try {
+      _connection = await _bluetooth.connectLamp(_address!);
+      _lastError = null;
+      return true;
+    } catch (error) {
+      _connection = null;
+      _lastError = error;
+      return false;
+    }
   }
 
   Future<void> apply(String phase) async {
     if (!configured) return;
     final frames = ilinkFramesForPhase(phase);
     if (frames.isEmpty) return;
-    final connection = _connection ??= await _bluetooth.connectLamp(_address!);
-    for (final frame in frames) {
-      await _bluetooth.writeCharacteristic(connection,
-          serviceId: ilinkServiceUuid, characteristicId: ilinkWriteUuid, value: frame);
+    // 끊긴 GATT 세션은 재사용하지 않고 한 번만 새 세션으로 되풀이한다.
+    for (var attempt = 0; attempt < 2; attempt++) {
+      if (!await connect()) continue;
+      try {
+        for (final frame in frames) {
+          await _bluetooth.writeCharacteristic(_connection!,
+              serviceId: ilinkServiceUuid,
+              characteristicId: ilinkWriteUuid,
+              value: frame);
+          _lastOkAt = DateTime.now();
+        }
+        _lastError = null;
+        return;
+      } catch (error) {
+        _connection = null;
+        _lastError = error;
+      }
     }
   }
 }
@@ -90,6 +127,7 @@ class FeedbackCoordinator {
   final IlinkLampFeedback lamp;
   final AtlasBluetoothService bluetooth;
   String? _speakerAddress;
+  String? get speakerAddress => _speakerAddress;
   bool enabled = false;
   String? _lastPhase;
 
@@ -101,7 +139,11 @@ class FeedbackCoordinator {
     final address = _speakerAddress;
     if (address == null || !music.isPlaying) return;
     try {
-      if (!await bluetooth.isA2dpConnected(address)) if (music.isPlaying) await music.toggle();
+      if (!await bluetooth.isA2dpConnected(address)) {
+        if (music.isPlaying) {
+          await music.toggle();
+        }
+      }
     } catch (_) {
       // A lost Bluetooth service is treated like a disconnected output.
       if (music.isPlaying) await music.toggle();
@@ -118,7 +160,9 @@ class FeedbackCoordinator {
     }
     if (state.phase == 'fatigue') {
       if (!music.isPlaying) await music.toggle();
-    } else if (state.phase == 'recovery' || state.phase == 'idle' || state.phase == 'end') {
+    } else if (state.phase == 'recovery' ||
+        state.phase == 'idle' ||
+        state.phase == 'end') {
       if (music.isPlaying) await music.toggle();
     }
   }
