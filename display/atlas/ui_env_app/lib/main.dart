@@ -699,7 +699,15 @@ class _DashboardPageState extends State<DashboardPage> {
                             }
                           },
                         ),
-                      _AppView.posture => const PostureScreen(),
+                      _AppView.posture => PostureScreen(
+                          // 전체 리로드·연결 탭의 '다시 찾기' 가 이 값을 올린다.
+                          reconnectSignal: _postureReloadToken,
+                          onLinkStatus: (status) {
+                            if (mounted) {
+                              setState(() => _postureStatus = status);
+                            }
+                          },
+                        ),
                       _AppView.fsmGraph =>
                         FsmGraphPage(currentState: state.fsmState),
                       _AppView.bluetooth => BluetoothControlPage(

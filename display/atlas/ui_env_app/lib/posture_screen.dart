@@ -31,6 +31,8 @@ import 'package:camtest/diag.dart';
 import 'package:camtest/hub_config.dart';
 import 'package:camtest/hub_setup.dart';
 import 'deskmate_theme.dart';
+// camtest 에 같은 이름의 LinkHealth 클래스가 있어 접두어로 불러온다.
+import 'link_status.dart' as link;
 import 'package:camtest/posture_source.dart';
 import 'package:camtest/serial_posture_source.dart';
 import 'package:camtest/camera_view.dart';
@@ -68,6 +70,7 @@ const kViolet = Color(0xFF63528A);
 /// 비어 있는 것이 정상이다. 그때 판정 서비스 → 보드 직결 → 데모 순으로 내려간다.
 /// 배포 스크립트에서는 `ATLAS_POSTURE_URL`.
 const _hubUrl = String.fromEnvironment('DESKMATE_POSTURE_URL');
+
 class PostureLook {
   const PostureLook(this.ko, this.en, this.color, this.icon, this.desc);
   final String ko;
@@ -86,16 +89,16 @@ const kPostureLook = <PostureLabel, PostureLook>{
       '머리가 기준보다 내려간 채로 이어지고 있어요'),
   PostureLabel.recline: PostureLook('뒤로 젖힘', 'RECLINE', kAmber,
       Icons.airline_seat_recline_extra, '센서에서 멀어졌어요. 책상 쪽으로 다시 앉아 보세요'),
-  PostureLabel.drowsy: PostureLook('졸음', 'DROWSY', kViolet, Icons.bedtime_outlined,
-      '머리가 반복해서 끄덕이고 있어요. 잠깐 쉬어 가는 건 어때요?'),
+  PostureLabel.drowsy: PostureLook('졸음', 'DROWSY', kViolet,
+      Icons.bedtime_outlined, '머리가 반복해서 끄덕이고 있어요. 잠깐 쉬어 가는 건 어때요?'),
   PostureLabel.chinRest: PostureLook('턱 괴기', 'CHIN_REST', kAmber,
       Icons.self_improvement, '손으로 턱을 받치고 있어요. 팔을 내려 보세요'),
-  PostureLabel.absent: PostureLook('자리 비움', 'ABSENT', kGray,
-      Icons.person_off_outlined, '책상 앞에 사람이 없어요'),
-  PostureLabel.baseline: PostureLook('기준 측정 중', 'BASELINE', kBlue,
-      Icons.straighten, '바른 자세 기준을 재고 있어요'),
-  PostureLabel.unknown: PostureLook('기준 없음', 'UNKNOWN', kGray,
-      Icons.help_outline, '아직 판정할 기준이 없어요'),
+  PostureLabel.absent: PostureLook(
+      '자리 비움', 'ABSENT', kGray, Icons.person_off_outlined, '책상 앞에 사람이 없어요'),
+  PostureLabel.baseline: PostureLook(
+      '기준 측정 중', 'BASELINE', kBlue, Icons.straighten, '바른 자세 기준을 재고 있어요'),
+  PostureLabel.unknown: PostureLook(
+      '기준 없음', 'UNKNOWN', kGray, Icons.help_outline, '아직 판정할 기준이 없어요'),
 };
 
 /// 노드가 보내는 근거 코드 → 사람이 읽는 한국어.
@@ -132,9 +135,22 @@ String reasonLabel(String raw) {
 }
 
 class PostureScreen extends StatefulWidget {
-  const PostureScreen({super.key, this.source, this.store});
+  const PostureScreen({
+    super.key,
+    this.source,
+    this.store,
+    this.reconnectSignal = 0,
+    this.sourceDiscovery,
+    this.onLinkStatus,
+  });
+
   final PostureSource? source;
   final HubStore? store;
+  final int reconnectSignal;
+  final Future<void> Function()? sourceDiscovery;
+
+  /// 자세 연결 상태가 바뀔 때만 불린다(매초 부르지 않는다). 앱의 연결 탭이 받는다.
+  final ValueChanged<link.LinkStatus>? onLinkStatus;
 
   @override
   State<PostureScreen> createState() => _PostureScreenState();
@@ -144,10 +160,21 @@ class _PostureScreenState extends State<PostureScreen> {
   late final HubStore _store;
   late PostureSource _source;
   Timer? _timer;
+  Timer? _discoveryTimer;
   PostureState? _state;
   LinkHealth? _health;
   String? _error;
   bool _busy = false;
+  bool _discovering = false;
+  // 마지막 수신 성공 시각과 그때의 소스. 소스가 바뀌면 이전 소스의 성공을
+  // 새 소스의 것으로 치지 않는다.
+  DateTime? _lastOk;
+  PostureSource? _lastOkSource;
+  link.LinkStatus? _reported;
+  // 연속 실패 횟수. 1초 주기라 5회면 5초다. 벽시계로 재지 않는 이유: 위젯 테스트의
+  // 가짜 시간이 DateTime.now() 에는 적용되지 않아 규칙을 검증할 수 없다.
+  int _failures = 0;
+  static const _downAfterFailures = 5;
   bool _calibrating = false;
   int _ticks = 0;
 
@@ -171,11 +198,23 @@ class _PostureScreenState extends State<PostureScreen> {
     _refresh();
     // 노드도 1Hz 로 내보낸다. 더 자주 긁어도 새 값이 없다.
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _refresh());
+    _discoveryTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (_source is DemoPostureSource) unawaited(_startBestLocalSource());
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant PostureScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.reconnectSignal != oldWidget.reconnectSignal) {
+      unawaited(_reconnect());
+    }
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _discoveryTimer?.cancel();
     _source.close();
     super.dispose();
   }
@@ -190,8 +229,28 @@ class _PostureScreenState extends State<PostureScreen> {
 
   /// 판정 서비스를 먼저, 안 되면 보드 직결을 본다.
   Future<void> _startBestLocalSource() async {
-    await _startLocalServiceIfIdle();
-    await _startSerialIfIdle();
+    if (_discovering || !mounted) return;
+    _discovering = true;
+    try {
+      final injectedDiscovery = widget.sourceDiscovery;
+      if (injectedDiscovery != null) {
+        await injectedDiscovery();
+      } else {
+        await _startLocalServiceIfIdle();
+        await _startSerialIfIdle();
+      }
+    } finally {
+      _discovering = false;
+      _reportLink();
+    }
+  }
+
+  Future<void> _reconnect() async {
+    if (_source is DemoPostureSource) {
+      await _startBestLocalSource();
+    } else {
+      await _refresh();
+    }
   }
 
   /// 주소가 없으면 **같은 보드에서 도는 판정 서비스** 를 먼저 본다.
@@ -312,6 +371,9 @@ class _PostureScreenState extends State<PostureScreen> {
     _busy = true;
     try {
       final state = await _source.fetch();
+      _lastOk = DateTime.now();
+      _lastOkSource = _source;
+      _failures = 0;
       if (mounted) {
         setState(() {
           _state = state;
@@ -319,15 +381,67 @@ class _PostureScreenState extends State<PostureScreen> {
         });
       }
     } catch (error) {
+      _failures++;
       if (mounted) setState(() => _error = _message(error));
     } finally {
       _busy = false;
     }
+    _reportLink();
     // 링크 상태는 5초에 한 번이면 충분하다. 판정과 같은 주기로 긁으면 요청만
     // 두 배가 되고, 이 값은 그렇게 빨리 바뀌지 않는다.
     if (_ticks++ % 5 != 0) return;
     final health = await _source.health();
     if (mounted) setState(() => _health = health);
+  }
+
+  /// 지금 자세 연결 상태. 규칙은 계획 §4 의 2단계(Codex 프롬프트 표)와 같다.
+  link.LinkStatus _linkStatus() {
+    const id = link.LinkId.posture;
+    final source = _source;
+    if (source is DemoPostureSource) {
+      if (_discovering) {
+        return const link.LinkStatus(id: id, health: link.LinkHealth.checking);
+      }
+      final note = _serialNote ?? '';
+      final denied =
+          note.contains('AccessDenied') || note.contains('Permission');
+      return link.LinkStatus(
+          id: id,
+          health: link.LinkHealth.degraded,
+          cause: denied
+              ? link.LinkCause.permissionDenied
+              : link.LinkCause.deviceNotFound,
+          detail: _serialNote);
+    }
+    final lastOk = identical(_lastOkSource, source) ? _lastOk : null;
+    if (lastOk != null && _failures < _downAfterFailures) {
+      return link.LinkStatus(
+          id: id, health: link.LinkHealth.ok, lastSeen: lastOk);
+    }
+    if (lastOk == null && _error == null) {
+      return const link.LinkStatus(id: id, health: link.LinkHealth.checking);
+    }
+    return link.LinkStatus(
+        id: id,
+        health: link.LinkHealth.down,
+        cause: link.LinkCause.disconnected,
+        lastSeen: lastOk,
+        detail: _error);
+  }
+
+  /// 상태나 원인이 바뀌었을 때만 알린다.
+  void _reportLink() {
+    final callback = widget.onLinkStatus;
+    if (callback == null || !mounted) return;
+    final next = _linkStatus();
+    final previous = _reported;
+    if (previous != null &&
+        previous.health == next.health &&
+        previous.cause == next.cause) {
+      return;
+    }
+    _reported = next;
+    callback(next);
   }
 
   String _message(Object error) {
@@ -368,9 +482,7 @@ class _PostureScreenState extends State<PostureScreen> {
     setState(() => _calibrating = true);
     try {
       await _source.calibrate();
-      _notify(seated
-          ? '지금 자세를 기준으로 잡았습니다'
-          : '기준을 다시 잡습니다 — 화면 안내를 따라 주세요');
+      _notify(seated ? '지금 자세를 기준으로 잡았습니다' : '기준을 다시 잡습니다 — 화면 안내를 따라 주세요');
     } catch (error) {
       _notify('기준 다시 잡기에 실패했습니다: ${_message(error)}');
     } finally {
@@ -475,6 +587,13 @@ class _PostureScreenState extends State<PostureScreen> {
                     child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.restart_alt, size: 18),
             label: const Text('기준 다시 잡기'),
+          ),
+        if (_source is DemoPostureSource || _error != null)
+          TextButton.icon(
+            key: const ValueKey('posture-reconnect'),
+            onPressed: _discovering ? null : _reconnect,
+            icon: const Icon(Icons.sync, size: 18),
+            label: const Text('다시 연결'),
           ),
         if (_source is SerialPostureSource)
           IconButton(
@@ -649,7 +768,9 @@ class _PostureScreenState extends State<PostureScreen> {
       const SizedBox(height: 14),
       SizedBox(
         width: 430,
-        child: VisionPanel(snapshot: snapshot, stale: state.ageFrom(DateTime.now()).inSeconds >= 5),
+        child: VisionPanel(
+            snapshot: snapshot,
+            stale: state.ageFrom(DateTime.now()).inSeconds >= 5),
       ),
       const SizedBox(height: 10),
       Text(
