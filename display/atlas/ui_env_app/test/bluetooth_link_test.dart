@@ -1,11 +1,13 @@
 import 'dart:io';
 
+import 'package:deskmate_display/bluetooth_control_page.dart';
 import 'package:deskmate_display/bluetooth_link.dart';
 import 'package:deskmate_display/bluetooth_service.dart';
 import 'package:deskmate_display/feedback_policy.dart';
 import 'package:deskmate_display/link_status.dart';
 import 'package:deskmate_display/music_playback.dart';
 import 'package:deskmate_display/settings_store.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _speakerInfo = BluetoothDeviceInfo(
@@ -37,6 +39,16 @@ class _FakeBluetooth implements AtlasBluetoothService {
     if (speakerFails) throw StateError('A2DP 연결이 완료되지 않았습니다');
   }
 
+  bool scanDenied = false;
+
+  @override
+  Stream<List<BluetoothDeviceInfo>> scanProgressive(
+      {Duration duration = const Duration(seconds: 8),
+      Duration interval = const Duration(seconds: 1)}) async* {
+    if (scanDenied) throw StateError('Atlas Bluetooth 권한이 허용되지 않았습니다.');
+    yield const [_speakerInfo, _lampInfo];
+  }
+
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
@@ -65,6 +77,9 @@ class _FakeLamp extends IlinkLampFeedback {
 }
 
 class _NoMusic implements MusicPlayback {
+  @override
+  double get volume => 1;
+
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
@@ -200,5 +215,48 @@ void main() {
     expect(ok, isFalse);
     expect(links.lampStatus.health, LinkHealth.down);
     expect(store.load().lamp, isNotNull); // 저장은 한다 — 다음 전환 때 다시 시도
+  });
+
+  group('BluetoothControlPage', () {
+    Future<void> pumpPage(WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1024, 600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: BluetoothControlPage(
+            bluetooth: bluetooth,
+            feedback: feedback,
+            music: _NoMusic(),
+            links: manager(),
+          ),
+        ),
+      ));
+    }
+
+    testWidgets('a denied scan re-enables the scan button', (tester) async {
+      bluetooth.scanDenied = true;
+      await pumpPage(tester);
+      await tester.tap(find.byKey(const ValueKey('bluetooth-scan')));
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('기기 검색'), findsOneWidget);
+      expect(find.textContaining('권한이 허용되지 않았습니다'), findsOneWidget);
+    });
+
+    testWidgets('a found speaker+lamp pair offers one-tap connect',
+        (tester) async {
+      await pumpPage(tester);
+      await tester.tap(find.byKey(const ValueKey('bluetooth-scan')));
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+          find.byKey(const ValueKey('bluetooth-connect-pair')), findsOneWidget);
+      expect(find.text('KLZS-L1 한 번에 연결'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
   });
 }

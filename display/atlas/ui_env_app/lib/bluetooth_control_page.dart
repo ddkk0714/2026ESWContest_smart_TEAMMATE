@@ -54,15 +54,20 @@ class _BluetoothControlPageState extends State<BluetoothControlPage> {
       _devices = const [];
     });
     _scan = widget.bluetooth.scanProgressive().listen(
-          (devices) {
-            if (mounted) setState(() => _devices = devices);
-          },
-          onError: (Object error) => _notice('Bluetooth 검색 실패: $error'),
-          onDone: () {
-            if (mounted) setState(() => _scanning = false);
-          },
-          cancelOnError: true,
-        );
+      (devices) {
+        if (mounted) setState(() => _devices = devices);
+      },
+      // cancelOnError 면 오류 뒤에 onDone 이 오지 않는다. 여기서 풀지 않으면
+      // 권한 거부 같은 실패 뒤에 버튼이 '검색 중…' 에서 영영 멈춘다.
+      onError: (Object error) {
+        if (mounted) setState(() => _scanning = false);
+        _notice('Bluetooth 검색 실패: $error');
+      },
+      onDone: () {
+        if (mounted) setState(() => _scanning = false);
+      },
+      cancelOnError: true,
+    );
   }
 
   Future<void> _connectSpeaker(BluetoothDeviceInfo device) async {
