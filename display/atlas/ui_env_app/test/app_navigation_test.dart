@@ -2,10 +2,12 @@ import 'dart:async';
 
 import 'package:deskmate_display/main.dart';
 import 'package:deskmate_display/music_playback.dart';
+import 'package:deskmate_display/settings_store.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  _connectionTabTest();
   testWidgets('music selector offers all tracks and preserves OFF',
       (tester) async {
     tester.view.physicalSize = const Size(1024, 600);
@@ -146,6 +148,37 @@ void main() {
     // 그 뒤로는 상단을 차지하지 않는다. 시퀀스 번호는 그대로 남는다.
     expect(find.text('내장 데모'), findsNothing);
     expect(find.textContaining('#'), findsWidgets);
+  });
+}
+
+void _connectionTabTest() {
+  testWidgets('connection tab lists every link and demo raises no badge',
+      (tester) async {
+    tester.view.physicalSize = const Size(1024, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(DeskmateApp(
+      music: _FakeMusicPlayback(),
+      settings: SettingsStore(
+          candidates: const [], legacyPostureCandidates: const []),
+    ));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1)); // 연결 스냅샷 1회 갱신
+
+    expect(find.byKey(const ValueKey('link-problem-badge')), findsNothing);
+    expect(find.byKey(const ValueKey('link-status-bar')), findsNothing);
+
+    await tester.tap(find.byTooltip('연결'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('link-row-mqtt')), findsOneWidget);
+    expect(find.byKey(const ValueKey('link-health-mqtt')), findsOneWidget);
+    expect(find.text('화면 내장 데모'), findsOneWidget);
+    // 목록이 600 px 화면보다 길다. 끝까지 내려 마지막 행(램프)까지 그려지는지 본다.
+    await tester.dragUntilVisible(find.byKey(const ValueKey('link-row-lamp')),
+        find.byType(ListView), const Offset(0, -200));
+    expect(find.byKey(const ValueKey('link-row-lamp')), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }
 

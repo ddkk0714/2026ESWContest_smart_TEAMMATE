@@ -9,13 +9,16 @@ import 'atlas_home.dart';
 import 'bluetooth_control_page.dart';
 import 'bluetooth_service.dart';
 import 'connection_guide.dart';
+import 'connection_page.dart';
 import 'display_state.dart';
 import 'feedback_policy.dart';
 import 'dashboard_view.dart';
 import 'deskmate_theme.dart';
 import 'fsm_graph.dart';
 import 'keystroke_capture.dart';
+import 'link_status.dart';
 import 'music_playback.dart';
+import 'mqtt_watchdog.dart';
 import 'posture_screen.dart';
 import 'sensor_overview_page.dart';
 import 'sensor_test_page.dart';
@@ -117,6 +120,14 @@ class _DashboardPageState extends State<DashboardPage> {
   late final SettingsStore _settingsStore;
   DeskmateSettings _settings = DeskmateSettings.empty;
   late final MqttStartupCheck _startupCheck;
+  // 2단계: 연결 상태를 1초마다 스냅샷으로 모아 연결 탭·배지·상태 줄이 같이 읽는다.
+  final _watchdog = MqttWatchdog();
+  final _statusBar = StatusBarDismissal();
+  LinkSnapshot _links = LinkSnapshot(const []);
+  DateTime? _mqttConnectedAt;
+  // 자세 탭이 알려 주는 연결 상태와, 전체 리로드 때 자세 탭에 보내는 신호.
+  LinkStatus? _postureStatus;
+  int _postureReloadToken = 0;
 
   // 보드에 꽂힌 키보드를 앱이 직접 잡는다. hub 가 주는 collector 지표보다 이걸 우선한다.
   final _capture = KeystrokeCapture();
@@ -161,6 +172,7 @@ class _DashboardPageState extends State<DashboardPage> {
       if (_source is! DemoStateSource || _autoScreenCyclingEnabled) _refresh();
       _sampleKeystroke();
       _updateLinkLabel();
+      _updateLinks();
       unawaited(_feedbackController.reconcileAudioOutput());
     });
     _updateLinkLabel();
@@ -193,6 +205,7 @@ class _DashboardPageState extends State<DashboardPage> {
     try {
       final next = await _source.fetch();
       _lastStateAt = DateTime.now();
+      _watchdog.stateReceived();
       if (!_loggedFetchOk) {
         _loggedFetchOk = true;
         _lastLoggedError = null;
@@ -268,13 +281,20 @@ class _DashboardPageState extends State<DashboardPage> {
 
   /// 연결 대상을 바꾸고 화면 상태를 처음부터 다시 받는다. 이전 대상에서 받은 값이
   /// 새 대상의 값인 것처럼 남아 있으면 안 된다.
-  void _replaceSource(StateSource next) {
+  ///
+  /// [keepState] 는 같은 대상에 다시 붙을 때(자동 복구·전체 리로드) 쓴다. 마지막
+  /// 화면을 그대로 두고 새 상태가 오면 바꾼다 — 비우면 복구하는 몇 초 동안 화면이
+  /// 연결 가이드로 튀었다가 돌아온다.
+  void _replaceSource(StateSource next, {bool keepState = false}) {
     final previous = _source;
     setState(() {
       _source = next;
-      _state = null;
+      if (!keepState) {
+        _state = null;
+        _lastStateAt = null;
+      }
       _error = null;
-      _lastStateAt = null;
+      _mqttConnectedAt = null;
       _loggedFetchOk = false;
       _lastLoggedError = null;
       _showLinkLabel = true;
@@ -322,6 +342,92 @@ class _DashboardPageState extends State<DashboardPage> {
   void _continueWithDemo() {
     _replaceSource(DemoStateSource());
     _notify('이번 실행은 데모로 진행합니다. 저장된 연결 설정은 그대로입니다.');
+  }
+
+  /// 같은 주소로 MQTT 클라이언트를 새로 만든다. 화면은 유지한다.
+  void _reconnectMqtt({bool auto = false}) {
+    final source = _source;
+    if (source is! MqttStateSource) return;
+    diag.write(auto
+        ? 'MQTT 자동 재연결 #${_watchdog.attempts} (다음 간격 ${_watchdog.backoff.inSeconds} s)'
+        : 'MQTT 수동 재연결');
+    _replaceSource(MqttStateSource(source.host, port: source.port),
+        keepState: true);
+  }
+
+  /// 앱을 재시작하지 않고 연결을 전부 다시 만든다: 상태 소스·시작 점검·자세 탐색.
+  void _reloadAll() {
+    final source = _source;
+    setState(() => _postureReloadToken++);
+    switch (source) {
+      case MqttStateSource():
+        _replaceSource(MqttStateSource(source.host, port: source.port),
+            keepState: true);
+      case HttpStateSource():
+        _replaceSource(HttpStateSource(_hubUrl), keepState: true);
+      default:
+        _refresh();
+    }
+    _notify('연결을 모두 다시 불러옵니다.');
+  }
+
+  /// 연결 탭의 대상별 조치.
+  void _linkAction(LinkId id) {
+    switch (id) {
+      case LinkId.mqtt || LinkId.hub || LinkId.mmwave || LinkId.environment:
+        if (_source is MqttStateSource) {
+          _reconnectMqtt();
+          _notify('MQTT 에 다시 연결합니다.');
+        } else {
+          unawaited(_changeMqttAddress());
+        }
+      case LinkId.posture:
+        setState(() => _postureReloadToken++);
+        _notify('자세 카메라를 다시 찾습니다.');
+      case LinkId.speaker || LinkId.lamp:
+        setState(() => _view = _AppView.bluetooth);
+      case LinkId.keystroke:
+        break;
+    }
+  }
+
+  /// 1초마다 연결 스냅샷을 새로 만들고, 상태가 끊겼으면 자동 복구를 건다.
+  void _updateLinks() {
+    final now = DateTime.now();
+    final source = _source;
+    if (source is MqttStateSource) {
+      if (source.isConnected) {
+        _mqttConnectedAt ??= now;
+      } else {
+        _mqttConnectedAt = null;
+      }
+      if (_watchdog.shouldReconnect(now, _lastStateAt)) {
+        _reconnectMqtt(auto: true);
+        return;
+      }
+    }
+    final check = _startupCheck.result;
+    final state = _state;
+    final next = assembleLinkSnapshot(
+      now: now,
+      kind: switch (source) {
+        MqttStateSource() => StateSourceKind.mqtt,
+        HttpStateSource() => StateSourceKind.http,
+        _ => StateSourceKind.demo,
+      },
+      mqttAddress: source is MqttStateSource ? source.label : null,
+      mqttConnected: source.isConnected,
+      mqttConnectedAt: _mqttConnectedAt,
+      lastStateAt: _lastStateAt,
+      startupFailure: check != null && !check.ok ? check.cause : null,
+      parseError: source is MqttStateSource ? source.lastParseError : null,
+      hubHealth: source is MqttStateSource ? source.hubHealth : null,
+      hubHealthAt: source is MqttStateSource ? source.hubHealthAt : null,
+      state: state,
+      keystrokeAt: _localKeystroke != null ? now : state?.keystroke?.timestamp,
+      posture: _postureStatus,
+    );
+    if (mounted) setState(() => _links = next);
   }
 
   void _notify(String text) {
@@ -518,6 +624,9 @@ class _DashboardPageState extends State<DashboardPage> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _Header(
+                        links: _links,
+                        onProblems: () =>
+                            setState(() => _view = _AppView.connection),
                         source: _source.label,
                         connectionLabel: _override != null
                             ? '테스트 상태 고정'
@@ -533,8 +642,17 @@ class _DashboardPageState extends State<DashboardPage> {
                         onSelectMusic: _selectMusic,
                         musicVolume: _musicVolume,
                         onVolume: _showVolumeControl,
-                        onConnection: _changeMqttAddress,
                         onExit: _confirmExit),
+                    // 누르면 사라지고, 새 문제가 생기면 다시 뜬다. 연결 탭에서는 겹쳐서 숨긴다.
+                    if (_view != _AppView.connection &&
+                        _statusBar.shouldShow(_links)) ...[
+                      const SizedBox(height: 8),
+                      LinkStatusBar(
+                        snapshot: _links,
+                        onDismiss: () =>
+                            setState(() => _statusBar.dismiss(_links)),
+                      ),
+                    ],
                     const SizedBox(height: 12),
                     Expanded(
                         child: switch (_view) {
@@ -581,7 +699,15 @@ class _DashboardPageState extends State<DashboardPage> {
                             }
                           },
                         ),
-                      _AppView.posture => const PostureScreen(),
+                      _AppView.posture => PostureScreen(
+                          // 전체 리로드·연결 탭의 '다시 찾기' 가 이 값을 올린다.
+                          reconnectSignal: _postureReloadToken,
+                          onLinkStatus: (status) {
+                            if (mounted) {
+                              setState(() => _postureStatus = status);
+                            }
+                          },
+                        ),
                       _AppView.fsmGraph =>
                         FsmGraphPage(currentState: state.fsmState),
                       _AppView.bluetooth => BluetoothControlPage(
@@ -591,6 +717,14 @@ class _DashboardPageState extends State<DashboardPage> {
                         ),
                       _AppView.sessionReport =>
                         SessionReportCard(report: _source.sessionReport),
+                      _AppView.connection => ConnectionPage(
+                          snapshot: _links,
+                          now: DateTime.now(),
+                          sourceLabel: _source.label,
+                          onAction: _linkAction,
+                          onReloadAll: _reloadAll,
+                          onChangeAddress: _changeMqttAddress,
+                        ),
                     }),
                   ],
                 ),
@@ -658,12 +792,15 @@ enum _AppView {
   posture,
   fsmGraph,
   bluetooth,
-  sessionReport
+  sessionReport,
+  connection
 }
 
 class _Header extends StatelessWidget {
   const _Header(
-      {required this.source,
+      {required this.links,
+      required this.onProblems,
+      required this.source,
       required this.connectionLabel,
       required this.online,
       required this.sequence,
@@ -676,8 +813,9 @@ class _Header extends StatelessWidget {
       required this.onSelectMusic,
       required this.musicVolume,
       required this.onVolume,
-      required this.onConnection,
       required this.onExit});
+  final LinkSnapshot links;
+  final VoidCallback onProblems;
   final String source;
   final String connectionLabel;
   final bool online, musicOn, musicBusy;
@@ -685,7 +823,7 @@ class _Header extends StatelessWidget {
   final _AppView view;
   final ValueChanged<_AppView> onViewChanged;
   final ValueChanged<int> onSelectMusic;
-  final VoidCallback onMusic, onVolume, onConnection, onExit;
+  final VoidCallback onMusic, onVolume, onExit;
   final double musicVolume;
   @override
   Widget build(BuildContext context) =>
@@ -735,12 +873,8 @@ class _Header extends StatelessWidget {
               icon: Icon(
                   musicOn ? Icons.volume_up_rounded : Icons.volume_off_rounded),
               label: Text(musicOn ? 'ON' : 'OFF')),
-          // 데모로 떠 있어도 브로커 주소를 넣을 수 있게 둔다(2단계에서 연결 탭으로 옮긴다).
-          IconButton(
-              key: const ValueKey('connection-settings'),
-              tooltip: '연결 설정',
-              onPressed: onConnection,
-              icon: const Icon(Icons.lan_outlined)),
+          // 문제가 있을 때만 보인다. 누르면 연결 탭으로 간다.
+          LinkProblemBadge(snapshot: links, onTap: onProblems),
           IconButton(
               key: const ValueKey('app-exit'),
               tooltip: '\uC571 \uC885\uB8CC',
@@ -783,6 +917,11 @@ class _Header extends StatelessWidget {
               icon: Icons.summarize_outlined,
               label: '\uC138\uC158 \uB9AC\uD3EC\uD2B8',
               onTap: () => onViewChanged(_AppView.sessionReport)),
+          _HeaderNav(
+              selected: view == _AppView.connection,
+              icon: Icons.lan_outlined,
+              label: '연결',
+              onTap: () => onViewChanged(_AppView.connection)),
         ]),
       ]);
 }
