@@ -3,10 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camtest/diag.dart';
+import 'package:camtest/hub_setup.dart' show showHubSetup;
 
 import 'atlas_home.dart';
 import 'bluetooth_control_page.dart';
 import 'bluetooth_service.dart';
+import 'connection_guide.dart';
 import 'display_state.dart';
 import 'feedback_policy.dart';
 import 'dashboard_view.dart';
@@ -18,6 +20,7 @@ import 'posture_screen.dart';
 import 'sensor_overview_page.dart';
 import 'sensor_test_page.dart';
 import 'session_report.dart';
+import 'settings_store.dart';
 import 'state_source.dart';
 
 const _hubUrl = String.fromEnvironment('DESKMATE_HUB_URL');
@@ -41,9 +44,11 @@ const _ksStaleAfter = Duration(seconds: 5);
 void main() => runApp(const DeskmateApp());
 
 class DeskmateApp extends StatelessWidget {
-  const DeskmateApp({super.key, this.music});
+  const DeskmateApp({super.key, this.music, this.settings, this.prober});
 
   final MusicPlayback? music;
+  final SettingsStore? settings;
+  final MqttProber? prober;
 
   @override
   Widget build(BuildContext context) {
@@ -51,15 +56,21 @@ class DeskmateApp extends StatelessWidget {
       title: 'DESKMATE',
       debugShowCheckedModeBanner: false,
       theme: buildDeskmateTheme(),
-      home: DashboardPage(music: music),
+      home: DashboardPage(music: music, settings: settings, prober: prober),
     );
   }
 }
 
 class DashboardPage extends StatefulWidget {
-  const DashboardPage({super.key, this.music});
+  const DashboardPage({super.key, this.music, this.settings, this.prober});
 
   final MusicPlayback? music;
+
+  /// 보드에 저장한 연결 설정. 테스트는 임시 경로의 저장소를 넣는다.
+  final SettingsStore? settings;
+
+  /// 시작 점검에 쓰는 진단기. 테스트는 가짜를 넣어 네트워크를 건드리지 않는다.
+  final MqttProber? prober;
 
   @override
   State<DashboardPage> createState() => _DashboardPageState();
@@ -103,6 +114,9 @@ class _DashboardPageState extends State<DashboardPage> {
   bool _showFocusDetail = false;
   late final AtlasBluetoothService _bluetooth;
   late final FeedbackCoordinator _feedbackController;
+  late final SettingsStore _settingsStore;
+  DeskmateSettings _settings = DeskmateSettings.empty;
+  late final MqttStartupCheck _startupCheck;
 
   // 보드에 꽂힌 키보드를 앱이 직접 잡는다. hub 가 주는 collector 지표보다 이걸 우선한다.
   final _capture = KeystrokeCapture();
@@ -133,14 +147,15 @@ class _DashboardPageState extends State<DashboardPage> {
       bluetooth: _bluetooth,
     );
     HardwareKeyboard.instance.addHandler(_onKey);
-    _source = _mqttHost.trim().isNotEmpty
-        ? MqttStateSource(_mqttHost.trim(), port: _mqttPort)
-        : _hubUrl.trim().isEmpty
-            ? DemoStateSource()
-            : HttpStateSource(_hubUrl);
+    _settingsStore = widget.settings ?? SettingsStore();
+    _startupCheck = MqttStartupCheck(prober: widget.prober);
+    _source = _initialSource();
     // 이 보드는 앱 표준출력이 journal 에도 app_log 에도 안 남는다. 허브에 왜 못
     // 붙었는지 알 방법이 화면밖에 없어서, 첫 판단과 그 결과를 파일로 남긴다.
-    diag.write('state: MQTT="$_mqttHost:$_mqttPort" HUB_URL="$_hubUrl" → ${_source.label}');
+    diag.write(
+        'state: 저장="${_settings.mqttHost ?? ''}" 빌드 MQTT="$_mqttHost:$_mqttPort" '
+        'HUB_URL="$_hubUrl" 설정 파일=${_settingsStore.lastPath ?? '없음'} → ${_source.label}');
+    _startMqttCheck();
     _refresh();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (_source is! DemoStateSource || _autoScreenCyclingEnabled) _refresh();
@@ -181,7 +196,8 @@ class _DashboardPageState extends State<DashboardPage> {
       if (!_loggedFetchOk) {
         _loggedFetchOk = true;
         _lastLoggedError = null;
-        diag.write('state 수신 성공: ${_source.label} seq=${next.sequence} state=${next.fsmState}');
+        diag.write(
+            'state 수신 성공: ${_source.label} seq=${next.sequence} state=${next.fsmState}');
       }
       if (mounted) {
         setState(() {
@@ -219,6 +235,98 @@ class _DashboardPageState extends State<DashboardPage> {
             .showSnackBar(SnackBar(content: Text('전송 실패: $error')));
       }
     }
+  }
+
+  /// 저장된 주소 → 빌드에 넣은 주소 순으로 MQTT 를 고른다. 둘 다 없으면 예전처럼
+  /// HTTP 개발 경로나 데모. 주소를 빌드에 박으면 Pi 4 IP 가 바뀔 때마다 재빌드해야
+  /// 해서, 보드에서 바꾼 값을 먼저 본다.
+  StateSource _initialSource() {
+    _settings = _settingsStore.load();
+    final port = effectiveMqttPort(_settings, _mqttPort);
+    // IPv4 가 아닌 빌드 값(호스트 이름)도 예전처럼 그대로 쓴다.
+    final host = effectiveMqttHost(_settings, _mqttHost) ??
+        (_mqttHost.trim().isEmpty ? null : _mqttHost.trim());
+    if (host != null) return MqttStateSource(host, port: port);
+    return _hubUrl.trim().isEmpty
+        ? DemoStateSource()
+        : HttpStateSource(_hubUrl);
+  }
+
+  /// MQTT 로 붙을 때만 시작 점검을 돌린다. 결과는 대기 화면의 가이드가 그린다.
+  void _startMqttCheck() {
+    final source = _source;
+    if (source is! MqttStateSource) {
+      _startupCheck.reset();
+      return;
+    }
+    unawaited(_startupCheck.run(source.host, source.port).then((result) {
+      diag.write(result.ok
+          ? 'MQTT 점검 통과: ${source.label} (${result.elapsed.inMilliseconds} ms, hub=${result.hubHealth ?? '?'})'
+          : 'MQTT 점검 실패: ${source.label} ${result.failedAt?.name} ${result.cause.name} ${result.detail ?? ''}');
+    }));
+  }
+
+  /// 연결 대상을 바꾸고 화면 상태를 처음부터 다시 받는다. 이전 대상에서 받은 값이
+  /// 새 대상의 값인 것처럼 남아 있으면 안 된다.
+  void _replaceSource(StateSource next) {
+    final previous = _source;
+    setState(() {
+      _source = next;
+      _state = null;
+      _error = null;
+      _lastStateAt = null;
+      _loggedFetchOk = false;
+      _lastLoggedError = null;
+      _showLinkLabel = true;
+    });
+    previous.close();
+    diag.write('state: 연결 대상 변경 → ${next.label}');
+    _startMqttCheck();
+    _refresh();
+  }
+
+  /// 같은 주소로 새 클라이언트를 만든다. 자동 재연결이 멈춘 상태도 이걸로 풀린다.
+  void _retryMqtt() {
+    final source = _source;
+    if (source is MqttStateSource) {
+      _replaceSource(MqttStateSource(source.host, port: source.port));
+    }
+  }
+
+  /// 보드에서 브로커 주소를 바꾼다. 저장에 실패해도 이번 실행에는 적용한다.
+  Future<void> _changeMqttAddress() async {
+    final source = _source;
+    final current =
+        source is MqttStateSource ? source.host : _settings.mqttHost;
+    final result = await showHubSetup(context,
+        currentIp: current,
+        title: 'MQTT 브로커 주소',
+        hint: 'Pi 4 의 IP · 포트는 ${effectiveMqttPort(_settings, _mqttPort)}');
+    if (result == null || !mounted) return;
+    if (result.isEmpty) {
+      _continueWithDemo();
+      return;
+    }
+    final next = _settings.copyWith(mqttHost: result);
+    final saved = _settingsStore.save(next);
+    _settings = next;
+    final port = effectiveMqttPort(_settings, _mqttPort);
+    _replaceSource(MqttStateSource(result, port: port));
+    _notify(saved
+        ? 'MQTT 브로커를 $result:$port 로 저장했습니다.'
+        : '$result:$port 로 연결합니다 — 저장할 곳이 없어 이번 실행에만 적용됩니다.');
+  }
+
+  /// 이번 실행만 데모로 돌린다. 저장된 주소는 지우지 않는다 — 다음에 켤 때는
+  /// 다시 실제 연결을 시도해야 한다.
+  void _continueWithDemo() {
+    _replaceSource(DemoStateSource());
+    _notify('이번 실행은 데모로 진행합니다. 저장된 연결 설정은 그대로입니다.');
+  }
+
+  void _notify(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
   Future<void> _connectHub(String value) async {
@@ -371,6 +479,7 @@ class _DashboardPageState extends State<DashboardPage> {
     HardwareKeyboard.instance.removeHandler(_onKey);
     _clock.stop();
     _source.close();
+    _startupCheck.dispose();
     unawaited(_musicChanges.cancel());
     unawaited(_musicVolumeChanges.cancel());
     unawaited(_music.dispose());
@@ -386,12 +495,25 @@ class _DashboardPageState extends State<DashboardPage> {
         child: Padding(
           padding: const EdgeInsets.fromLTRB(44, 24, 44, 28),
           child: state == null
-              ? _Loading(
-                  error: _error,
-                  source: _source.label,
-                  connectionLabel: _source.connectionLabel,
-                  connected: _source.isConnected,
-                )
+              ? (_source is MqttStateSource
+                  // MQTT 는 시작 점검 결과를 보여 준다. 실패해도 앱은 막지 않고,
+                  // 상태가 오면 곧바로 평소 화면으로 넘어간다.
+                  ? Center(
+                      child: SingleChildScrollView(
+                        child: ConnectionGuidePanel(
+                          check: _startupCheck,
+                          onRetry: _retryMqtt,
+                          onChangeAddress: _changeMqttAddress,
+                          onDemo: _continueWithDemo,
+                        ),
+                      ),
+                    )
+                  : _Loading(
+                      error: _error,
+                      source: _source.label,
+                      connectionLabel: _source.connectionLabel,
+                      connected: _source.isConnected,
+                    ))
               : Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -411,6 +533,7 @@ class _DashboardPageState extends State<DashboardPage> {
                         onSelectMusic: _selectMusic,
                         musicVolume: _musicVolume,
                         onVolume: _showVolumeControl,
+                        onConnection: _changeMqttAddress,
                         onExit: _confirmExit),
                     const SizedBox(height: 12),
                     Expanded(
@@ -553,6 +676,7 @@ class _Header extends StatelessWidget {
       required this.onSelectMusic,
       required this.musicVolume,
       required this.onVolume,
+      required this.onConnection,
       required this.onExit});
   final String source;
   final String connectionLabel;
@@ -561,7 +685,7 @@ class _Header extends StatelessWidget {
   final _AppView view;
   final ValueChanged<_AppView> onViewChanged;
   final ValueChanged<int> onSelectMusic;
-  final VoidCallback onMusic, onVolume, onExit;
+  final VoidCallback onMusic, onVolume, onConnection, onExit;
   final double musicVolume;
   @override
   Widget build(BuildContext context) =>
@@ -611,6 +735,12 @@ class _Header extends StatelessWidget {
               icon: Icon(
                   musicOn ? Icons.volume_up_rounded : Icons.volume_off_rounded),
               label: Text(musicOn ? 'ON' : 'OFF')),
+          // 데모로 떠 있어도 브로커 주소를 넣을 수 있게 둔다(2단계에서 연결 탭으로 옮긴다).
+          IconButton(
+              key: const ValueKey('connection-settings'),
+              tooltip: '연결 설정',
+              onPressed: onConnection,
+              icon: const Icon(Icons.lan_outlined)),
           IconButton(
               key: const ValueKey('app-exit'),
               tooltip: '\uC571 \uC885\uB8CC',

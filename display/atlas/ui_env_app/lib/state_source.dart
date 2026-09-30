@@ -173,6 +173,7 @@ class MqttStateSource implements StateSource {
   static const _requestTopic = 'deskmate/interaction/request';
   static const _messageTopic = 'deskmate/display/message';
   static const _reportTopic = 'deskmate/session/report';
+  static const _hubHealthTopic = 'deskmate/health/hub';
   static const _feedbackTopic = 'deskmate/feedback/user';
 
   final String _host;
@@ -189,6 +190,19 @@ class MqttStateSource implements StateSource {
   String? _lastParseError;
   String? _pendingRequestId;
   int _sequence = 0;
+  String? _hubHealth;
+  DateTime? _hubHealthAt;
+
+  /// 연결 탭·주소 변경 화면이 현재 값을 채우는 데 쓴다.
+  String get host => _host;
+
+  /// `deskmate/health/hub` 의 status(online/offline, LWT·retain). 못 받았으면 null.
+  /// 상태가 안 올 때 hub 가 죽은 건지(offline) FSM 출력이 없는 건지 가르는 근거다.
+  String? get hubHealth => _hubHealth;
+  DateTime? get hubHealthAt => _hubHealthAt;
+
+  /// 마지막 메시지 해석 실패. 없으면 null.
+  String? get lastParseError => _lastParseError;
 
   @override
   String get label => 'MQTT $_host:$port';
@@ -245,6 +259,7 @@ class MqttStateSource implements StateSource {
       _client.subscribe(_requestTopic, MqttQos.atLeastOnce);
       _client.subscribe(_messageTopic, MqttQos.atLeastOnce);
       _client.subscribe(_reportTopic, MqttQos.atLeastOnce);
+      _client.subscribe(_hubHealthTopic, MqttQos.atLeastOnce);
     } catch (_) {
       _client.disconnect();
       rethrow;
@@ -269,6 +284,15 @@ class MqttStateSource implements StateSource {
             if (requestId is String && requestId.isNotEmpty) {
               _pendingRequestId = requestId;
             }
+          }
+        } else if (received.topic == _hubHealthTopic) {
+          // envelope({"data":{"status":..}})과 평면({"status":..}) 둘 다 받는다.
+          final data = envelope['data'];
+          final status =
+              (data is Map ? data['status'] : null) ?? envelope['status'];
+          if (status is String && status.isNotEmpty) {
+            _hubHealth = status;
+            _hubHealthAt = DateTime.now();
           }
         } else if (received.topic == _reportTopic) {
           _sessionReport = SessionReport.fromEnvelope(envelope);
