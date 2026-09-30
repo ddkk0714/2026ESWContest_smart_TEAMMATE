@@ -7,6 +7,7 @@ import 'package:camtest/hub_setup.dart' show showHubSetup;
 
 import 'atlas_home.dart';
 import 'bluetooth_control_page.dart';
+import 'bluetooth_link.dart';
 import 'bluetooth_service.dart';
 import 'connection_guide.dart';
 import 'connection_page.dart';
@@ -120,6 +121,8 @@ class _DashboardPageState extends State<DashboardPage> {
   late final SettingsStore _settingsStore;
   DeskmateSettings _settings = DeskmateSettings.empty;
   late final MqttStartupCheck _startupCheck;
+  // 3단계: 블루투스 기기를 기억하고 시작 때 검색 없이 다시 붙인다.
+  late final BluetoothLinkManager _btLinks;
   // 2단계: 연결 상태를 1초마다 스냅샷으로 모아 연결 탭·배지·상태 줄이 같이 읽는다.
   final _watchdog = MqttWatchdog();
   final _statusBar = StatusBarDismissal();
@@ -166,6 +169,16 @@ class _DashboardPageState extends State<DashboardPage> {
     diag.write(
         'state: 저장="${_settings.mqttHost ?? ''}" 빌드 MQTT="$_mqttHost:$_mqttPort" '
         'HUB_URL="$_hubUrl" 설정 파일=${_settingsStore.lastPath ?? '없음'} → ${_source.label}');
+    _btLinks = BluetoothLinkManager(
+      bluetooth: _bluetooth,
+      feedback: _feedbackController,
+      settings: _settingsStore,
+    );
+    // 저장된 스피커·램프가 있으면 검색 없이 붙는다. 실패해도 앱은 계속 돈다.
+    unawaited(_btLinks.restore().then((_) {
+      diag.write('bluetooth: 복원 스피커=${_btLinks.speakerStatus.health.name} '
+          '램프=${_btLinks.lampStatus.health.name}');
+    }));
     _startMqttCheck();
     _refresh();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -327,7 +340,8 @@ class _DashboardPageState extends State<DashboardPage> {
       _continueWithDemo();
       return;
     }
-    final next = _settings.copyWith(mqttHost: result);
+    // 파일을 다시 읽어 합친다. 블루투스 쪽이 그사이 저장한 기기를 덮어쓰지 않게.
+    final next = _settingsStore.load().copyWith(mqttHost: result);
     final saved = _settingsStore.save(next);
     _settings = next;
     final port = effectiveMqttPort(_settings, _mqttPort);
@@ -385,7 +399,17 @@ class _DashboardPageState extends State<DashboardPage> {
         setState(() => _postureReloadToken++);
         _notify('자세 카메라를 다시 찾습니다.');
       case LinkId.speaker || LinkId.lamp:
-        setState(() => _view = _AppView.bluetooth);
+        // 저장된 기기가 있으면 그 자리에서 다시 붙이고, 없으면 검색하러 보낸다.
+        final saved =
+            id == LinkId.speaker ? _btLinks.savedSpeaker : _btLinks.savedLamp;
+        if (saved == null) {
+          setState(() => _view = _AppView.bluetooth);
+        } else {
+          unawaited(id == LinkId.speaker
+              ? _btLinks.reconnectSpeaker()
+              : _btLinks.reconnectLamp());
+          _notify('${saved.name}에 다시 연결합니다.');
+        }
       case LinkId.keystroke:
         break;
     }
@@ -426,6 +450,8 @@ class _DashboardPageState extends State<DashboardPage> {
       state: state,
       keystrokeAt: _localKeystroke != null ? now : state?.keystroke?.timestamp,
       posture: _postureStatus,
+      speaker: _btLinks.speakerStatus,
+      lamp: _btLinks.lampStatus,
     );
     if (mounted) setState(() => _links = next);
   }
@@ -586,6 +612,7 @@ class _DashboardPageState extends State<DashboardPage> {
     _clock.stop();
     _source.close();
     _startupCheck.dispose();
+    _btLinks.dispose();
     unawaited(_musicChanges.cancel());
     unawaited(_musicVolumeChanges.cancel());
     unawaited(_music.dispose());
@@ -714,6 +741,7 @@ class _DashboardPageState extends State<DashboardPage> {
                           bluetooth: _bluetooth,
                           feedback: _feedbackController,
                           music: _music,
+                          links: _btLinks,
                         ),
                       _AppView.sessionReport =>
                         SessionReportCard(report: _source.sessionReport),
