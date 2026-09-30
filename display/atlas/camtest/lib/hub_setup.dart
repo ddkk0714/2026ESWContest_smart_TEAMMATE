@@ -11,16 +11,26 @@ import 'hub_config.dart';
 import 'palette.dart';
 
 /// 취소하면 null, `데모로` 를 누르면 빈 문자열, 저장하면 정규화된 IP.
-Future<String?> showHubSetup(BuildContext context, {String? currentIp}) {
+///
+/// [title]·[hint] 는 같은 키패드를 다른 주소(예: 통합 앱의 MQTT 브로커)에 쓸 때
+/// 바꾼다. 기본값은 자세 노드 문구다.
+Future<String?> showHubSetup(BuildContext context,
+    {String? currentIp, String title = '자세 노드 주소', String? hint}) {
   return showDialog<String>(
     context: context,
-    builder: (context) => _HubSetupDialog(initial: currentIp ?? ''),
+    builder: (context) => _HubSetupDialog(
+        initial: currentIp ?? '',
+        title: title,
+        hint: hint ?? 'Pi 4 자세 노드의 IP · 포트는 $kHubPort 고정'),
   );
 }
 
 class _HubSetupDialog extends StatefulWidget {
-  const _HubSetupDialog({required this.initial});
+  const _HubSetupDialog(
+      {required this.initial, required this.title, required this.hint});
   final String initial;
+  final String title;
+  final String hint;
 
   @override
   State<_HubSetupDialog> createState() => _HubSetupDialogState();
@@ -64,7 +74,7 @@ class _HubSetupDialogState extends State<_HubSetupDialog> {
       // 넘친다. 여백을 줄여 자리를 벌고, 그래도 모자라면 스크롤되게 둔다.
       insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
       contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-      title: const Text('자세 노드 주소'),
+      title: Text(widget.title),
       content: SizedBox(
         width: 330,
         child: SingleChildScrollView(
@@ -93,7 +103,7 @@ class _HubSetupDialogState extends State<_HubSetupDialog> {
           Text(
             valid == null && _text.isNotEmpty
                 ? '아직 주소가 아닙니다'
-                : 'Pi 4 자세 노드의 IP · 포트는 $kHubPort 고정',
+                : widget.hint,
             style: TextStyle(
                 fontSize: 12, color: valid == null && _text.isNotEmpty ? kAmber : kDim),
           ),
