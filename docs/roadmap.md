@@ -63,7 +63,7 @@ ToF VL53L9CX ── 연결 경로 결정 전 (Pi 4 CSI-2 또는 ESP32 I2C) — 0
 | G3 환경 | 🟡 | 드라이버 main(PR #21). hub 환경 특징 확장 — CO₂ 세션 상승·온습도 쾌적 이탈·조도 부족과 `env_flags` (DI, W2). 실센서 재측정 남음 |
 | G4 키스트로크 | ✅ | `collector/` main. 평면·envelope payload 수용 |
 | G5 FSM | ✅ | 18상태 엔진 main. **재시도 원인은 제안까지만**(`gate.retry_max`, DI). hub 테스트 155 통과·1 xfail(DI). 5분 시연 시나리오·dry-run·동선 시험(DI, W4) |
-| G6 개인화 | 🟡 | 중앙값·MAD 기준선 main(PR #27). ESM 라벨 기록·정량 지표(DI, W3). 2단계 학습용 증강 파이프라인 진행 중(W5, Codex) |
+| G6 개인화 | 🟡 | 중앙값·MAD 기준선 main(PR #27). ESM 라벨 기록·정량 지표(DI, W3). 2단계 학습용 창·증강·증거 리포트(DI, W5 — 합성 기준, 결측 내성 +2.7%p) |
 | G7 개입 | 🟡 | 게이트 0.45/0.75. 디스패처(auto/suggest/undo/쿨다운)·mock 플러그 main. 자동 실행 알림·되돌리기(60 s 창)·제안 카드 이유·남은 시간·정정 입력(DI, W1·W3). **스마트 플러그 미선정** |
 | G8 UI | 🟡 | 통합 앱 main + 연결 탭·연결 배지·MQTT 감시·BT 자동 재연결(PR #30~#32). 대기 위젯(온디바이스 문구·오늘 집중)·개입 카드(DI, W1). 재부팅 자동 시작 없음 |
 | G9 HW | ⬜ | CAD·하우징 산출물 없음 |
@@ -75,8 +75,7 @@ ToF VL53L9CX ── 연결 경로 결정 전 (Pi 4 CSI-2 또는 ESP32 I2C) — 0
 
 | 브랜치 | 상태 | 내용 | 조치 |
 |---|---|---|---|
-| `feat/display-intervention` | 로컬 커밋(미푸시), main 위 | W1 개입 UI · W2 환경 특징(Codex) · W3 ESM·지표·되돌리기 창(Codex) · W4 시연 시나리오 · 재시도 게이트 · W6 결측 시험·판정 주기·데이터셋 조사 · W7 문서 | 묶음 3 끝나면 PR(사용자 요청 시 모아서) |
-| `feat/ml-augment` | Codex 작업 중(미커밋) | W5 학습 창·증강·증거 리포트(`ml/`) | 검토 후 위 브랜치에 커밋 |
+| `feat/display-intervention` | 로컬 커밋(미푸시), main 위 | W1 개입 UI · W2 환경 특징(Codex) · W3 ESM·지표·되돌리기 창(Codex) · W5 학습 창·증강·증거(Codex) · W4 시연 시나리오 · 재시도 게이트 · W6 결측 시험·판정 주기·데이터셋 조사 · W7 문서 | 묶음 3 끝나면 PR(사용자 요청 시 모아서) |
 | `feat/atlas-hotspot-broker` | 로컬 워크트리 | 핫스팟·정적 브로커 산출물(`dist/`) | 보존 |
 | `origin/feat/edge-mvp-nodered-followup`·`origin/feat/hub-swonly` | 원격 | 일부만 이관된 옛 작업 | 보존(필요한 부분 이관 완료) |
 
@@ -244,7 +243,7 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 - [ ] 팀원 실사용 세션 로그 축적(JSONL + 라벨, 비공개 드라이브, 커밋 금지) — 목표 5인 × 3세션 이상
 - [ ] `--replay` 로 임계값·가중치 보정, 정규화 전후 오판정 비교표
 - [ ] 개인화 저장소(로컬 JSONL)·opt-in·삭제 정책 문서화
-- [ ] 증강 데이터 파이프라인 + 증거 리포트(W5, Codex 진행 중) · 공개 데이터셋 조사 `docs/dataset-survey.md`(DI)
+- [x] 증강 데이터 파이프라인 + 증거 리포트 `ml/training/`·`docs/ml-augmentation-evidence.md`, 공개 데이터셋 조사 `docs/dataset-survey.md`(DI, W5·W6)
 - [ ] 2단계 TFLite(선택): PC 학습(1D CNN 백본 동결 + 개인 헤드) → TFLite → Pi 4 선택적 적재 → 게이트 융합. 라벨 부족 시 "개념 실증"으로 고정하고 보고서 서술 조정
 
 #### 9. 통합 MVP 구현 — 마감 10-05

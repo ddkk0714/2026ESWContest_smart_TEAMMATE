@@ -63,7 +63,7 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 | `hub/features/` baseline 정규화 | 김태환 | 🟡 | 중앙값·MAD Modified z `baseline.py`(세션 보정 창·시간대 버킷·opt-in 저장), ingest 기본 `normalization: baseline` — main(PR #27). z_full·mad_floor 실측 튜닝 남음 |
 | `hub/control/` 플러그·ThinQ | 조명희 | 🟡 | iLink 블루투스 램프 어댑터(main, PR #22) + ACTION_ENV 디스패처·mock 플러그·`config/control.yaml`(main, 보드에서는 `CMD	` 라인 → C++ 가 `control/cmd` 발행). 되돌리기 60 s 창·화면 카드 만료 처리는 (DI). **스마트 플러그 미선정** |
 | `hub/inference/` TFLite 2단계 | 조명희 | ⬜ | 선택적 의존. 라벨 축적 후 |
-| `ml/` 학습→TFLite | 조명희 | 🚧 | 학습 창·증강·증거 리포트 파이프라인(W5, Codex 진행 중). 공개 데이터셋 조사 `docs/dataset-survey.md`(DI). 1D CNN·TFLite 는 미착수 |
+| `ml/` 학습→TFLite | 조명희 | 🟡 | 학습 창·증강·증거 리포트 파이프라인(DI, W5) — 합성 180세션, `docs/ml-augmentation-evidence.md`(결측 내성 +2.7%p). 공개 데이터셋 조사 `docs/dataset-survey.md`. 1D CNN·TFLite 는 미착수 |
 | `firmware/` ESP32 | 이민혁·김태환 | 🟡 | C1001 + DrowsyDetector, 환경 센서(SCD41·BH1750·DHT22) 드라이버, USB JSON + UART2 COBS/CRC. 실보드 플래시 09-16. C1001 무응답·재시도·SCD41 수정 5커밋은 `feat/edge-mvp-nodered` |
 | `display/` Atlas UI | 최민경 | 🟡 | 통합 앱 + 연결 탭·연결 배지·MQTT 감시·BT 자동 재연결(PR #30~#32). 자동 실행 알림·되돌리기·제안 카드 이유/남은 시간·정정 입력·대기 위젯(DI). 실기 확인·자동 시작 없음 |
 | `display/atlas/camsvc`·`camtest` 카메라 자세 | 박소연 | ⚠ | ESP32-CAM + MediaPipe 스켈레톤 판정(PR #20). 통합 앱 자세 탭은 `base/camera-zone-views`(PR #25). **"카메라 미사용" 원칙과 충돌 — 팀 결정 필요**(`docs/roadmap.md` §3 I7) |
@@ -97,7 +97,7 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 | 5 | 작업 모드 판단·규칙 FSM 엔진 | 10-12 | ✅ 엔진 완료, 합성 채터링 시험, 재시도 게이트(DI). 실센서 검증·충돌 확인 남음 |
 | 6 | 디스플레이 UI·제안 카드·리포트 | 10-12 | 🟡 통합 앱·리포트 MQTT·연결 안정화 main, 자동 알림·제안 카드·정정·대기 위젯(DI). 실기 확인·자동 시작 남음 |
 | 7 | 조명·환기팬·플러그 제어 | 10-05 | 🟡 iLink 램프·디스패처 main, 되돌리기 창(DI). 스마트 플러그 미선정 |
-| 8 | 데이터 수집·ESM 라벨링·임계값 보정 | 10-19 | 🟡 ESM 스키마·기록·지표(DI), 증강 파이프라인(W5 진행 중). 실사용 로그·보정 남음 |
+| 8 | 데이터 수집·ESM 라벨링·임계값 보정 | 10-19 | 🟡 ESM 스키마·기록·지표(DI), 증강 파이프라인·증거 리포트(DI, W5). 실사용 로그·보정 남음 |
 | 9 | 통합 MVP | 10-05 | 🟡 합성 센서로 피로→제안→수락→팬·조명→회복 1사이클 리허설 통과(DI). 실센서·실기 제어 미재현 |
 | 10 | 시험 평가·최적화 | 10-19 | 🟡 결측·유실 시나리오·판정 주기(PC)·5분 시연 시나리오(DI). Pi 4 실측·연속 구동·정확도 산출 남음 |
 | 11 | 보고서·소개서·시연 영상 | 10-30 | 🟡 보안·프라이버시 절 초안 `docs/security-privacy.md`, 시연 동선 `docs/demo-scenario.md`(DI) |
@@ -131,7 +131,7 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 1. **[팀·09-19 마감 경과] ToF 연결 경로** — Path A(Pi 4 MIPI CSI-2 풀해상도) vs Path B(ESP32 I2C binning). 결정 기록 없음, 규칙상 B.
 2. **[팀] UART 프레임 TYPE·스키마** — 잠정안(0x20 mmWave·0x10 env·0xF0 heartbeat, `data-spec.md` §13.1)으로 구현·실수신 중. 팀 확정만 남음. 목표 속도 460,800+ 실측.
 3. **[팀·09-28 마감 경과] 스마트 플러그 모델** — 로컬 제어 가능 모델 선정·구매. 통합 MVP(10-05) 제어 1사이클의 게이트.
-9. **[팀] 미머지 작업 PR** — PR #27~#32 머지 완료(10-01). 다음은 `feat/display-intervention`(W1~W4·W6·W7, W5 합류 후) 한 PR. `inference/engine.py` 변경(재시도 게이트)은 박소연 님 리뷰.
+9. **[팀] 미머지 작업 PR** — PR #27~#32 머지 완료(10-01). 다음은 `feat/display-intervention`(W1~W7) 한 PR. `inference/engine.py` 변경(재시도 게이트)은 박소연 님 리뷰.
 10. **[기본값 10-01] 재시도 원인 게이트** — 첫 원인이 효과 없어 다른 원인을 시도할 땐 자동 대신 제안(`gate.retry_max: suggest`). 포스터 값 0.45/0.75 유지. 이유: 게이트 입력 C_fatigue 가 FATIGUE 확정(≥0.70) 뒤라 제안 구간이 사실상 없었다(`docs/demo-scenario.md` §4). 바꾸려면 알려주기.
 4. **[팀] 새 디스플레이 기록** — 모델명·인터페이스(DSI/HDMI)·전원 경로를 `hardware.md`에 적기.
 5. **[기본값] `C_focus` 부호** — 현재 "큰 값 = 집중 저하 증거". 바꾸려면 알려주기.
