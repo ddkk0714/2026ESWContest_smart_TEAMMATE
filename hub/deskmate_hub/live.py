@@ -272,10 +272,17 @@ def run_live(broker: str, port: int, *, fsm_config: str | None, ingest_config: s
             hub.esm_log_path = os.path.join(log_dir, f"esm-{hub.boot_id}.jsonl")
         print(f"deskmate hub live — broker {broker}:{port}, period {hub.period:.0f}s, logs {log_dir}/", file=sys.stderr)
         source.start()
+        # 보드 bridge(service_bridge)와 같이 세션 리포트 스냅샷을 주기 발행한다(retain). 없으면 PC 경로에서
+        # 화면의 리포트 탭이 비고 정량 지표(metrics)도 못 본다 — 10-01 실기에서 발견.
+        report_period = float(os.environ.get("DESKMATE_REPORT_PERIOD_SEC", "10"))
         try:
             next_tick = time.time()
+            next_report = next_tick + report_period
             while True:
                 hub.tick_once()
+                if report_period > 0 and time.time() >= next_report:
+                    source.publish_report(hub.report_envelope())
+                    next_report = time.time() + report_period
                 next_tick += hub.period
                 time.sleep(max(0.0, next_tick - time.time()))
         except KeyboardInterrupt:
