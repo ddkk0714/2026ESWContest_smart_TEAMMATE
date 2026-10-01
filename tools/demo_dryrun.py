@@ -17,6 +17,7 @@ import json
 import os
 import random
 import sys
+import time
 from typing import Any
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -35,10 +36,13 @@ T0 = 1_790_000_000.0   # 가상 시계 시작(2026-09 근처). 값 자체는 의
 
 def run_dryrun(name: str = "demo", *, fsm_config: str = DEMO_CONFIG, respond: str | None = "accept",
                respond_delay: float = 4.0, seed: int = 7, offset: int = 0,
-               frame_log=None, undo_at: int | None = None) -> dict[str, Any]:
+               frame_log=None, undo_at: int | None = None, phases=None,
+               tick_times: list[float] | None = None) -> dict[str, Any]:
     """시나리오 하나를 끝까지 돌려 전이·질문·제어·리포트를 돌려준다.
 
     offset: hub tick 과 시나리오 시작의 어긋남(초). 실시간 리허설에서는 둘이 따로 시작하므로 0~period-1 이 다 나온다.
+    phases: 시나리오 이름 대신 Phase 목록을 직접 준다(시험에서 단계를 늘리거나 바꿀 때).
+    tick_times: 주면 tick_once 한 번에 걸린 시간(초)을 모은다(tools/measure_tick.py).
     undo_at: 시나리오 시작 후 이 초에 자동 실행 알림의 '되돌리기'(request_id 없는 reject)를 누른다.
     frame_log: 주면 tick 마다 SensorFrame 을 리플레이 JSONL 로 쓴다(`python -m deskmate_hub --replay` 로 재현).
     """
@@ -62,7 +66,7 @@ def run_dryrun(name: str = "demo", *, fsm_config: str = DEMO_CONFIG, respond: st
     answer_at: tuple[float, str] | None = None
     prev = None
     second = 0
-    for phase in scenario(name):
+    for phase in (phases if phases is not None else scenario(name)):
         for tick in range(int(phase.seconds)):
             pub.elapsed = float(tick)
             pub.second(phase, tick, rnd)
@@ -80,7 +84,10 @@ def run_dryrun(name: str = "demo", *, fsm_config: str = DEMO_CONFIG, respond: st
             if undo_at is not None and second == undo_at:
                 cache.put_feedback({"verdict": "reject", "request_id": "atlas-display"})
             if (second + offset) % period == 0:
+                t_tick = time.perf_counter()
                 env = hub.tick_once(clock["t"])
+                if tick_times is not None:
+                    tick_times.append(time.perf_counter() - t_tick)
                 d = env["data"]
                 if d["fsm_state"] != prev:
                     trace.append({"t": round(clock["t"] - T0), "phase": phase.name, "state": d["fsm_state"],

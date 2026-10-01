@@ -89,3 +89,29 @@ def test_undo_on_the_auto_notice_follows_the_undo_window(seconds_after, undone):
     res = run_dryrun("demo", undo_at=int(t_env) + seconds_after)
     undo = [(c["target_id"], c["value"]) for c in res["commands"] if c["gate"] == "undo"]
     assert undo == ([("vent_fan", "off"), ("desk_lamp", 40)] if undone else [])
+
+
+def test_display_gone_suggestion_expires_and_session_moves_on():
+    # 화면이 꺼져 있으면 아무도 카드에 답하지 않는다(timeout 도 안 온다). hub 는 suggest_timeout_sec 뒤 스스로
+    # 제안을 만료하고 ACTION_ENV 를 벗어난다 — 명령은 나가지 않는다.
+    from deskmate_hub.control import load_control_config
+    from mqtt_scenario_sim import Phase, demo_phases
+
+    phases = demo_phases()
+    tail = phases[-2]                                    # wake_fresh 를 길게 늘려 만료 뒤까지 본다
+    phases[-2] = Phase(**{**tail.__dict__, "seconds": 240.0})
+    res = run_dryrun("demo", respond=None, phases=phases)
+    trace = res["trace"]
+    enter = next(r["t"] for r in trace if r["state"] == "ACTION_ENV")
+    leave = next(r["t"] for r in trace if r["t"] > enter)
+    timeout = float(load_control_config()["suggest_timeout_sec"])
+    assert enter + timeout <= leave <= enter + timeout + 10
+    assert res["commands"] == []
+
+
+def test_tick_latency_is_far_inside_the_500ms_budget():
+    from measure_tick import measure, percentile
+
+    assert percentile([1.0, 2.0, 3.0, 4.0], 0.5) == 2.5
+    res = measure(["demo"], [1])
+    assert res["ticks"] > 20 and res["within_budget"]
