@@ -9,7 +9,8 @@
 | [`node-red-visualizer/`](node-red-visualizer/README.md) | PC 에서 Pi 4 MQTT broker 를 구독·관찰하고 `state/phase`·`feedback/user`·`display/message` 합성 메시지를 주입. hub MQTT 발행이 생기기 전 화면 경로 확인용 |
 | [`uart_mqtt_bridge.py`](uart_mqtt_bridge.py) | ESP32 USB(UART0) JSON 라인을 MQTT 센서 envelope로 변환하고 날짜별 JSONL로 기록 |
 | [`mqtt_scenario_sim.py`](mqtt_scenario_sim.py) | 합성 센서 시나리오(착석→타이핑→정적/졸음→회복→이탈)를 계약 그대로 MQTT 로 발행. ESP32·collector 없이 hub·Node-RED·Pi 5 리허설 |
-| [`rehearsal_local.py`](rehearsal_local.py) | amqtt 로컬 브로커 + mock 플러그 + sim(short) + `hub run --config fsm.demo.yaml` 을 한 번에 띄우고 전이 요약(약 6분) |
+| [`rehearsal_local.py`](rehearsal_local.py) | amqtt 로컬 브로커 + mock 플러그 + sim(short·demo) + `hub run --config fsm.demo.yaml` 을 한 번에 띄우고 전이 요약(약 6분). `--host 0.0.0.0` 이면 Pi 5 앱도 붙는다 |
+| [`demo_dryrun.py`](demo_dryrun.py) | 시연 시나리오를 브로커·실시간 없이 hub 에 흘려 전이·제어·리포트를 수 초 만에 확인. 동선 시험은 `test_demo_scenario.py`, 동선은 [`docs/demo-scenario.md`](../docs/demo-scenario.md) |
 | [`mock_plug.py`](mock_plug.py) | `deskmate/control/cmd` 를 받아 `control/result` 로 응답하는 모의 플러그(지연·실패 옵션, `control/state/<target>` retain). 실기 플러그 모델 선정 전 제어 경로 리허설 |
 | [`uart_frame_tool.py`](uart_frame_tool.py) | UART2 바이너리 프레임(COBS+CRC-16) test vector 출력·인코딩·디코딩, USB-TTL 로 ESP32 UART2 직접 읽기. 코덱은 `hub/deskmate_hub/ingest/uart_frame.py` 공유 |
 | `connect-deskmate-pi4.ps1` | DHCP 로 바뀌는 Pi 4 주소를 탐색해 SSH 별칭(`atlas`·`rpi4`·`deskmate-pi4`)을 갱신 |
@@ -30,6 +31,8 @@ python -m pip install -r tools/requirements.txt
 python tools/uart_mqtt_bridge.py --port COM5 --baud 115200 --broker <pi4-ip> --node esp32
 python tools/mqtt_scenario_sim.py --broker <broker-ip> --scenario default   # 실제 타이머, 약 25분
 python tools/rehearsal_local.py 400                                          # PC 단독, 짧은 타이머 프로파일
+python tools/demo_dryrun.py                                                  # 5분 시연 동선을 수 초 만에 확인
+python tools/rehearsal_local.py --scenario demo --host 0.0.0.0              # 5분 시연 실시간 리허설(+Pi 5 화면)
 python tools/log_recorder.py --broker <pi4-ip> --out logs/
 python tools/plot_session.py logs/2026-08-01.jsonl
 ```
