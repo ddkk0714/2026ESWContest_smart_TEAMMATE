@@ -138,7 +138,7 @@ ToF 원본 2,268-zone 배열은 L0이며 기본 운영 스키마에 포함하지
 | `lux` | float/null, lux | BH1750(SZH-EK070) 조도. |
 | `co2_valid` `temp_valid` `humidity_valid` `lux_valid` | boolean | 물리 측정별 유효성(CRC/체크섬·범위). 센서 부재 = 값 null + false. |
 
-필드명은 `mqtt-topics.md` 의 wire 이름과 같다(2026-09-14 정렬). hub 는 `co2_valid` 인 `co2_ppm` 만 `environment.delta` 로 쓴다.
+필드명은 `mqtt-topics.md` 의 wire 이름과 같다(2026-09-14 정렬). hub 는 유효 표시가 true 이고 값이 있는 측정만 쓴다. `environment.delta` 는 CO₂ 절대값·세션 시작 대비 상승·조도 부족의 최대값, `environment.phi` 는 온도·습도 쾌적 범위 이탈의 최대값이다. 유효 측정이 하나라도 있으면 환경 신호를 가용으로 본다. 화면용 `sensor_summary.env_flags` 는 임계값을 넘은 환경 이유만 순서대로 담고, 해당 이유가 없으면 생략한다. 임계값은 `hub/deskmate_hub/config/ingest.yaml` 에 둔다.
 
 **2026-09-14 확정 — 보정 없이 단일 센서 측정.** 물리량마다 센서 하나만 쓴다(CO₂=SCD41, T/RH=DHT22, lux=BH1750).
 센서 간 교차 보정(예: SCD41 T/RH 로 CO₂ 온도 보정, DHT22 와 SCD41 온습도 비교)은 하지 않는다.
