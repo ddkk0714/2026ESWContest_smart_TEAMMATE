@@ -23,7 +23,7 @@ import 'music_playback.dart';
 import 'mqtt_watchdog.dart';
 import 'posture_screen.dart';
 import 'sensor_overview_page.dart';
-import 'sensor_test_page.dart';
+import 'developer_page.dart';
 import 'session_report.dart';
 import 'settings_store.dart';
 import 'state_source.dart';
@@ -108,6 +108,12 @@ class _DashboardPageState extends State<DashboardPage> {
   // 테스트로 고정한 상태. 있으면 화면은 이것을 그리고, 라이브 갱신은 _state 에만
   // 쌓인다 - 풀면 곧바로 최신 라이브 상태로 돌아간다.
   DisplayState? _override;
+
+  // 개발자 화면: 마지막으로 누른 버튼, 가짜 제안 카드 여부, 환경 이유 플래그.
+  // 고정 중에는 응답을 hub 로 보내지 않는다(실제 ESM 라벨이 섞이지 않게).
+  DevPreset? _devLast;
+  bool _devPending = false;
+  Set<String> _devFlags = const {};
   Timer? _screenCycleTimer;
   _AppView _view = _AppView.dashboard;
   late final MusicPlayback _music;
@@ -223,10 +229,12 @@ class _DashboardPageState extends State<DashboardPage> {
       final next = await _source.fetch();
       _lastStateAt = DateTime.now();
       _watchdog.stateReceived();
-      _intervention.update(next,
-          hasPendingRequest: _source.hasPendingRequest,
-          expiresInS: _source.pendingRequestExpiresInS,
-          now: DateTime.now());
+      if (_override == null) {
+        _intervention.update(next,
+            hasPendingRequest: _source.hasPendingRequest,
+            expiresInS: _source.pendingRequestExpiresInS,
+            now: DateTime.now());
+      }
       if (!_loggedFetchOk) {
         _loggedFetchOk = true;
         _lastLoggedError = null;
@@ -254,6 +262,7 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Future<void> _feedback(String verdict) async {
+    if (_override != null) return _devAnswer(verdict);
     try {
       await _source.feedback(verdict,
           responseMs: _intervention.responseMs(DateTime.now()));
@@ -277,6 +286,7 @@ class _DashboardPageState extends State<DashboardPage> {
   void _checkSuggestionTimeout() {
     final now = DateTime.now();
     if (!_intervention.takeTimeout(now)) return;
+    if (_override != null) return _devAnswer('timeout');
     final ms = _intervention.responseMs(now);
     diag.write('제안 무응답(timeout) ${ms ?? '-'} ms');
     unawaited(_source
@@ -287,6 +297,7 @@ class _DashboardPageState extends State<DashboardPage> {
   /// 자동 실행을 되돌린다: hub 에 reject 를 보내면 제어 디스패처가 undo 명령을 낸다.
   Future<void> _undoAuto() async {
     setState(_intervention.dismissAuto);
+    if (_override != null) return _devAnswer('reject(되돌리기)');
     try {
       await _source.feedback('reject',
           responseMs: _intervention.responseMs(DateTime.now()));
@@ -302,6 +313,7 @@ class _DashboardPageState extends State<DashboardPage> {
   Future<void> _correctState() async {
     final picked = await showCorrectionSheet(context);
     if (picked == null || !mounted) return;
+    if (_override != null) return _devAnswer('correct → $picked');
     try {
       await _source.feedback('correct',
           correctedState: picked,
@@ -311,6 +323,94 @@ class _DashboardPageState extends State<DashboardPage> {
       _notify('전송 실패: $error');
     }
   }
+
+  bool get _hasPendingRequest =>
+      _override != null ? _devPending : _source.hasPendingRequest;
+
+  /// 개발자 화면 버튼 — 그 화면의 상태로 고정하고, 자동 알림·제안 카드 시간도 새로 시작한다.
+  void _applyDevPreset(DevPreset preset) {
+    final base = _state;
+    if (base == null) return;
+    final next = buildOverrideState(preset.fsmState, base,
+        gate: preset.gate, envFlags: _devFlags);
+    final now = DateTime.now();
+    // 같은 알림을 다시 눌러도 새 건으로 뜨도록, 먼저 '끝난 상태'를 한 번 지나가게 한다.
+    _intervention.update(buildOverrideState('MONITOR', base, gate: 'none'),
+        hasPendingRequest: false,
+        now: now.subtract(const Duration(minutes: 1)));
+    _intervention.update(next,
+        hasPendingRequest: preset.pending, expiresInS: 30, now: now);
+    setState(() {
+      _override = next;
+      _devLast = preset;
+      _devPending = preset.pending;
+    });
+    unawaited(_feedbackController.apply(next));
+  }
+
+  void _applyDevFlags(Set<String> flags) {
+    setState(() => _devFlags = flags);
+    final last = _devLast;
+    if (_override != null && last != null) _applyDevPreset(last);
+  }
+
+  void _clearDev() {
+    setState(() {
+      _override = null;
+      _devLast = null;
+      _devPending = false;
+    });
+    final live = _state;
+    if (live != null) {
+      _intervention.update(live,
+          hasPendingRequest: _source.hasPendingRequest,
+          expiresInS: _source.pendingRequestExpiresInS,
+          now: DateTime.now());
+    }
+  }
+
+  /// 개발자 화면에서 누른 응답 — 보내지 않고 알리기만 한다.
+  void _devAnswer(String verdict) {
+    final ms = _intervention.responseMs(DateTime.now());
+    final current = _override;
+    if (current != null) {
+      _intervention.update(current,
+          hasPendingRequest: false, now: DateTime.now());
+    }
+    setState(() => _devPending = false);
+    _notify('개발자 화면: $verdict${ms != null ? ' · $ms ms' : ''} (hub 로 보내지 않음)');
+  }
+
+  Widget _buildDashboard(DisplayState state) => DashboardView(
+        state: state,
+        displayMessage: _source.displayMessage,
+        hasPendingRequest: _hasPendingRequest,
+        keystroke: _localKeystroke ?? state.keystroke,
+        keystrokeReference:
+            _localKeystroke != null ? DateTime.now() : state.timestamp,
+        liveKeys: _localKeystroke != null ? _liveKeys : null,
+        onFeedback: _feedback,
+        autoNotice: _intervention.autoNotice,
+        onUndoAuto: _undoAuto,
+        onDismissAuto: _dismissAuto,
+        suggestionRemaining:
+            _hasPendingRequest ? _intervention.remaining(DateTime.now()) : null,
+        // 데모에는 보낼 곳이 없으니 정정 버튼을 그리지 않는다(개발자 화면 고정 중에는 보여 준다).
+        onCorrect: _source is DemoStateSource && _override == null
+            ? null
+            : _correctState,
+        focusSummary: _focusSummary(),
+        showDemoControl: true,
+        demoCyclingEnabled: _autoScreenCyclingEnabled,
+        onToggleDemoCycling: _toggleAutoScreenCycling,
+        phaseOverride: _source is! DemoStateSource && _autoScreenCyclingEnabled
+            ? _autoScreenPhases[_autoScreenPhaseIndex]
+            : null,
+        // 테스트로 상태를 고정한 동안에는 그 국면 화면을 봐야 한다.
+        pinAmbient: !_autoScreenCyclingEnabled && _override == null,
+        showFocusDetail: _showFocusDetail,
+        onShowFocusDetail: (value) => setState(() => _showFocusDetail = value),
+      );
 
   /// 대기 화면의 오늘 집중 요약. 리포트가 없거나 아직 0분이면 null(기본 인사말).
   String? _focusSummary() {
@@ -520,32 +620,6 @@ class _DashboardPageState extends State<DashboardPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
-  Future<void> _connectHub(String value) async {
-    final text = value.trim();
-    final uri = Uri.tryParse(text);
-    if (uri == null ||
-        !uri.hasAuthority ||
-        !{'http', 'https'}.contains(uri.scheme)) {
-      throw const FormatException('http://<Pi4-IP>:8765 형식으로 입력하세요.');
-    }
-    final nextSource = HttpStateSource(uri.toString());
-    try {
-      final nextState = await nextSource.fetch();
-      _source.close();
-      if (mounted) {
-        setState(() {
-          _source = nextSource;
-          _state = nextState;
-          _error = null;
-        });
-        unawaited(_feedbackController.apply(nextState));
-      }
-    } catch (_) {
-      nextSource.close();
-      rethrow;
-    }
-  }
-
   Future<void> _toggleMusic() async {
     if (_musicBusy) return;
     setState(() => _musicBusy = true);
@@ -742,58 +816,18 @@ class _DashboardPageState extends State<DashboardPage> {
                     const SizedBox(height: 12),
                     Expanded(
                         child: switch (_view) {
-                      _AppView.dashboard => DashboardView(
-                          state: state,
-                          displayMessage: _source.displayMessage,
-                          hasPendingRequest: _source.hasPendingRequest,
-                          keystroke: _localKeystroke ?? state.keystroke,
-                          keystrokeReference: _localKeystroke != null
-                              ? DateTime.now()
-                              : state.timestamp,
-                          liveKeys: _localKeystroke != null ? _liveKeys : null,
-                          onFeedback: _feedback,
-                          autoNotice: _intervention.autoNotice,
-                          onUndoAuto: _undoAuto,
-                          onDismissAuto: _dismissAuto,
-                          suggestionRemaining: _source.hasPendingRequest
-                              ? _intervention.remaining(DateTime.now())
-                              : null,
-                          // 데모에는 보낼 곳이 없으니 정정 버튼을 그리지 않는다.
-                          onCorrect:
-                              _source is DemoStateSource ? null : _correctState,
-                          focusSummary: _focusSummary(),
-                          showDemoControl: true,
-                          demoCyclingEnabled: _autoScreenCyclingEnabled,
-                          onToggleDemoCycling: _toggleAutoScreenCycling,
-                          phaseOverride: _source is! DemoStateSource &&
-                                  _autoScreenCyclingEnabled
-                              ? _autoScreenPhases[_autoScreenPhaseIndex]
-                              : null,
-                          // 테스트로 상태를 고정한 동안에는 그 국면 화면을 봐야 한다.
-                          pinAmbient:
-                              !_autoScreenCyclingEnabled && _override == null,
-                          showFocusDetail: _showFocusDetail,
-                          onShowFocusDetail: (value) =>
-                              setState(() => _showFocusDetail = value),
-                        ),
+                      _AppView.dashboard => _buildDashboard(state),
                       _AppView.sensorOverview =>
                         SensorOverviewPage(state: state),
-                      _AppView.sensorTest => SensorTestPage(
-                          source: _source,
+                      _AppView.sensorTest => DeveloperPage(
                           state: state,
-                          onConnect: _connectHub,
-                          onStateChanged: (next) {
-                            if (mounted) setState(() => _state = next);
-                            unawaited(_feedbackController.apply(next));
-                          },
                           overridden: _override != null,
-                          onOverride: (next) {
-                            if (!mounted) return;
-                            setState(() => _override = next);
-                            if (next != null) {
-                              unawaited(_feedbackController.apply(next));
-                            }
-                          },
+                          activePreset: _devLast?.key,
+                          envFlags: _devFlags,
+                          onPreset: _applyDevPreset,
+                          onEnvFlags: _applyDevFlags,
+                          onClear: _clearDev,
+                          preview: _buildDashboard(state),
                         ),
                       _AppView.posture => PostureScreen(
                           // 전체 리로드·연결 탭의 '다시 찾기' 가 이 값을 올린다.
@@ -991,8 +1025,8 @@ class _Header extends StatelessWidget {
               onTap: () => onViewChanged(_AppView.sensorOverview)),
           _HeaderNav(
               selected: view == _AppView.sensorTest,
-              icon: Icons.tune,
-              label: '\uC13C\uC11C \uD14C\uC2A4\uD2B8',
+              icon: Icons.developer_mode,
+              label: '\uAC1C\uBC1C\uC790',
               onTap: () => onViewChanged(_AppView.sensorTest)),
           _HeaderNav(
               selected: view == _AppView.posture,
