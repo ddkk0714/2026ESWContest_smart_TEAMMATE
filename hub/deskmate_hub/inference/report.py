@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterable
 
+from ..esm import calculate_metrics
 from .engine import FSMEngine
 from .states import FOCUS_STATES, State
 from .types import SensorFrame, TickResult
@@ -125,6 +126,10 @@ class SessionRecorder:
     def finalize(self) -> SessionReport:
         return self.r
 
+    def record_esm(self, record: dict) -> None:
+        """기존 휴식 라벨과 함께 사용자 응답 레코드를 세션에 보존한다."""
+        self.r.esm_labels.append(record)
+
 
 def build_report(
     frames: Iterable[SensorFrame], cfg: dict | None = None, engine: FSMEngine | None = None
@@ -136,7 +141,8 @@ def build_report(
     return rec.finalize()
 
 
-def report_envelope(r: SessionReport, *, now: float, node: str = "hub") -> dict:
+def report_envelope(r: SessionReport, *, now: float, node: str = "hub",
+                    control_episodes: Iterable = ()) -> dict:
     """진행 중인 세션의 스냅샷을 display 가 읽는 봉투로 만든다.
 
     세션이 끝나야만 리포트를 낼 수 있으면 화면의 리포트 탭은 세션 내내 비어
@@ -181,6 +187,10 @@ def report_envelope(r: SessionReport, *, now: float, node: str = "hub") -> dict:
             },
             # 물어본 적이 없으면 0% 가 아니라 "모름" 이다.
             "break_accept_rate": round(accepted / asked, 4) if asked else None,
+            "metrics": calculate_metrics(
+                r.esm_labels, episodes=control_episodes, duration_s=duration,
+                fatigue_episodes=r.episodes,
+            ),
             "state_durations_s": {k: round(v, 3) for k, v in r.durations.items()},
         },
     }

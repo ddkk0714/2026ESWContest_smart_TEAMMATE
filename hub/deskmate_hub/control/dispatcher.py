@@ -61,6 +61,7 @@ class Episode:
     commands: list[ControlCommand] = field(default_factory=list)
     awaiting_user: bool = False
     executed: bool = False
+    executed_ts: float | None = None
     outcome: str | None = None        # executed | skipped | rejected | undone
 
     @property
@@ -79,6 +80,7 @@ class ControlDispatcher:
         self._clock = clock
         self.timeout = float(cfg.get("result_timeout_sec", 15))
         self.suggest_timeout = float(cfg.get("suggest_timeout_sec", 180))
+        self.undo_window = float(cfg.get("undo_window_sec", 60))
         self.cooldown = float(cfg.get("cooldown_sec", 300))
         self.irreversible = set(cfg.get("irreversible_operations") or [])
         self.actions = cfg.get("actions") or {}
@@ -110,19 +112,31 @@ class ControlDispatcher:
     def on_feedback(self, verdict: str, now: float | None = None) -> None:
         now = self._clock() if now is None else now
         ep = self.episode
-        if ep is None:
-            return
-        if ep.awaiting_user:
+        if ep is not None and ep.awaiting_user:
+            if verdict == "timeout":
+                # 앱의 카드 만료는 관측 라벨이다. 실행 판단은 기존 dispatcher 타이머가 한다.
+                return
+            if verdict not in ("accept", "reject"):
+                return
             ep.awaiting_user = False
             if verdict == "accept":
                 self._dispatch(ep, now)
-            else:
+            elif verdict == "reject":
                 for c in ep.commands:
                     c.status = "skipped"
                 ep.outcome = "rejected"
                 self._log(f"[control] 사용자 거절 → {ep.state} 명령 취소")
-        elif ep.executed and verdict == "reject" and ep.outcome == "executed":
-            self._undo(ep, now)
+            return
+        if verdict != "reject":
+            return
+        target = ep if ep is not None and ep.executed and ep.outcome == "executed" else None
+        if target is None and self.history:
+            target = self.history[-1]
+        if (target is not None and target.executed and target.outcome == "executed"
+                and target.executed_ts is not None and now - target.executed_ts <= self.undo_window):
+            self._undo(target, now)
+        else:
+            self._log("[control] 되돌릴 실행이 없거나 되돌리기 창이 지남")
 
     def on_result(self, payload: dict[str, Any], now: float | None = None) -> bool:
         """`deskmate/control/result` 수신. 아는 command_id 면 반영하고 True."""
@@ -202,6 +216,7 @@ class ControlDispatcher:
             self._last_sent[(c.target_id, c.operation)] = now
             self.publish_cmd(c.to_payload())
         ep.executed = True
+        ep.executed_ts = now
         ep.outcome = "executed"
         self._log(f"[control] {ep.state}/{ep.cause}: {len(ep.commands)}건 발행 ({ep.gate.value})")
 

@@ -20,6 +20,7 @@ from .control import ControlDispatcher, MockPlugAdapter, load_control_config
 from .features import BaselineStore
 from .ingest import SensorCache, SessionTracker, build_frame, load_ingest_config, sensor_summary
 from .presentation import state_envelope
+from .esm import make_label, write_label
 
 
 def frame_to_dict(frame: SensorFrame) -> dict[str, Any]:
@@ -78,20 +79,39 @@ class LiveHub:
         self.boot_id = f"{time.time_ns() & 0xFFFFFFFF:08x}"
         self.seq = 0
         self.period = float(self.ingest_cfg.get("frame_period_sec") or self.fsm_cfg["timers"]["score_period_sec"])
+        self.esm_log_path = self.control_cfg.get("esm_log_path") or os.path.join("logs", f"esm-{self.boot_id}.jsonl")
+        self._last_result = None
 
     def tick_once(self, now: float | None = None) -> dict[str, Any]:
         now = time.time() if now is None else now
         view = self.cache.snapshot()
         feedback = self.cache.pop_feedback()
-        if feedback and feedback.get("verdict") in ("accept", "reject"):
+        if feedback:
+            verdict = feedback.get("verdict")
             # request_id 가 오면 현재 질문과 맞는지 본다. 없거나 'atlas-display'(HTTP 시절 기본값)면 그대로 받는다.
             rid = feedback.get("request_id")
             current = self.pending_request["data"]["request_id"] if self.pending_request else None
-            if rid in (None, "", "atlas-display", current):
-                self.tracker.pending_feedback = feedback["verdict"]
+            if verdict not in ("accept", "reject", "correct", "timeout"):
+                print(f"[esm] 알 수 없는 verdict: {verdict!r}", file=self.out)
+            elif verdict == "correct":
+                if feedback.get("corrected_state") not in ("FOCUS_PC", "FATIGUE", "REST", "IDLE"):
+                    print("[esm] 알 수 없는 corrected_state", file=self.out)
+                else:
+                    self._record_feedback(feedback, now, None)
+            elif verdict == "timeout":
+                if current is not None and rid == current:
+                    request = self.pending_request
+                    self.pending_request = None
+                    self._record_feedback(feedback, now, request)
+                    if self.control is not None:
+                        self.control.on_feedback("timeout", now)
+            elif rid in (None, "", "atlas-display", current):
+                request = self.pending_request
+                self.tracker.pending_feedback = verdict
                 self.pending_request = None
                 if self.control is not None:
-                    self.control.on_feedback(feedback["verdict"], now)
+                    self.control.on_feedback(verdict, now)
+                self._record_feedback(feedback, now, request)
 
         if self.control is not None:
             if self.mock_plug is not None:
@@ -106,6 +126,7 @@ class LiveHub:
             frame.break_accepted = None
         prev_state = self.engine.state
         result = self.engine.tick(frame)
+        self._last_result = result
         self.tracker.observe_state(result.state, now)
         self.recorder.observe(frame, result)
         if self.control is not None:
@@ -146,8 +167,54 @@ class LiveHub:
     def report_envelope(self, now: float | None = None) -> dict[str, Any]:
         """지금까지의 세션 요약. 주기 발행과 세션 종료에 같은 모양을 쓴다."""
         return report_envelope(
-            self.recorder.finalize(), now=time.time() if now is None else now
+            self.recorder.finalize(), now=time.time() if now is None else now,
+            control_episodes=(self.control.history + ([self.control.episode] if self.control.episode else []))
+            if self.control is not None else (),
         )
+
+    def _record_feedback(self, feedback: dict[str, Any], now: float,
+                         request: dict[str, Any] | None) -> None:
+        verdict = feedback["verdict"]
+        result = self._last_result
+        scores = result.scores if result is not None else None
+        episode = None
+        if self.control is not None:
+            episode = self.control.episode or (self.control.history[-1] if self.control.history else None)
+        request_data = request["data"] if request is not None else None
+        request_ts = request["ts"] if request is not None else None
+        if request_ts is None and verdict == "reject" and episode is not None:
+            request_ts = episode.executed_ts
+        response_ms = feedback.get("response_ms")
+        if not isinstance(response_ms, int) or isinstance(response_ms, bool):
+            response_ms = None
+        if verdict == "correct":
+            kind = "correction"
+        elif request_data is not None:
+            kind = request_data["kind"]
+        elif verdict == "reject" and episode is not None and episode.gate is GateMode.AUTO and episode.executed:
+            kind = "auto_undo"
+        else:
+            kind = "feedback"
+        record = make_label(
+            label_id=f"{self.boot_id}-{self.seq}", ts=now, verdict=verdict,
+            request_id=feedback.get("request_id") or None,
+            kind=kind,
+            predicted_state=self.engine.state.value,
+            cause=result.cause if verdict == "correct" and result is not None else
+                  request_data.get("cause") if request_data is not None else
+                  episode.cause if episode is not None else result.cause if result is not None else None,
+            gate=result.gate.value if verdict == "correct" and result is not None else
+                 "suggest" if request_data is not None else
+                 episode.gate.value if episode is not None else result.gate.value if result is not None else None,
+            c_fatigue=scores.c_fatigue if scores is not None else None,
+            c_focus=scores.c_focus if scores is not None else None,
+            corrected_state=feedback.get("corrected_state"), response_ms=response_ms,
+            request_ts=request_ts,
+            score_period_sec=float(self.fsm_cfg["timers"]["score_period_sec"]),
+        )
+        self.seq += 1
+        self.recorder.record_esm(record)
+        write_label(record, self.esm_log_path, on_log=lambda m: print(m, file=self.out))
 
     _REQUEST_STATES = {
         State.ACTION_BREAK: ("break_suggest", "take_a_break"),

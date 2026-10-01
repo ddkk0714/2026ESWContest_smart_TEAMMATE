@@ -299,8 +299,11 @@ USB 열거·xHCI 같은 하드웨어 진단 로그는 이 논리 스키마 밖�
 
 `esm_label`:
 
-- `label_id`, `source`, `target_window_start_ms`, `target_window_end_ms`
-- `predicted_state`, `corrected_state`, `answer_code`, `label_confidence`
+- hub 로컬 `logs/esm-<boot_id>.jsonl` 에 한 줄씩 기록한다. 새 MQTT 토픽은 만들지 않는다.
+- `label_id`(hub boot_id-seq), `ts`, `source`(`display`), `request_id`(없으면 null), `kind`(질문 kind 또는 `correction`), `verdict`(`accept`/`reject`/`correct`/`timeout`)
+- `predicted_state`, `cause`, `gate`, `c_fatigue`, `c_focus`, `confidence`(두 점수의 최댓값), `corrected_state`(`correct`만), `response_ms`(없으면 null), `answer_code`(verdict 또는 `correct:<STATE>`)
+- `target_window_start_ms`/`target_window_end_ms`: 질문 응답은 질문 발행~응답, 자발적 정정은 응답 직전 점수 주기. 정정은 FSM 상태를 바꾸지 않는 평가 라벨이다.
+- `session/report.data.metrics`: `suggest_accept_rate`, `timeout_rate`, `auto_undo_rate`, `correction_rate`(시간당), `correction_count`, `median_response_ms`, `recovery_time_s`. 분모나 회복 관측이 없으면 null. 기존 `break_accept_rate` 는 유지한다.
 
 ## 12. 프라이버시·보존
 
