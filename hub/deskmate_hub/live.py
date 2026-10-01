@@ -80,6 +80,8 @@ class LiveHub:
         self.seq = 0
         self.period = float(self.ingest_cfg.get("frame_period_sec") or self.fsm_cfg["timers"]["score_period_sec"])
         self.esm_log_path = self.control_cfg.get("esm_log_path") or os.path.join("logs", f"esm-{self.boot_id}.jsonl")
+        # 라벨 번호는 state/phase seq 와 따로 센다(seq 에 구멍이 나면 수신 측이 유실로 본다).
+        self._esm_seq = 0
         self._last_result = None
 
     def tick_once(self, now: float | None = None) -> dict[str, Any]:
@@ -196,7 +198,7 @@ class LiveHub:
         else:
             kind = "feedback"
         record = make_label(
-            label_id=f"{self.boot_id}-{self.seq}", ts=now, verdict=verdict,
+            label_id=f"{self.boot_id}-esm{self._esm_seq}", ts=now, verdict=verdict,
             request_id=feedback.get("request_id") or None,
             kind=kind,
             predicted_state=self.engine.state.value,
@@ -212,7 +214,7 @@ class LiveHub:
             request_ts=request_ts,
             score_period_sec=float(self.fsm_cfg["timers"]["score_period_sec"]),
         )
-        self.seq += 1
+        self._esm_seq += 1
         self.recorder.record_esm(record)
         write_label(record, self.esm_log_path, on_log=lambda m: print(m, file=self.out))
 
@@ -265,6 +267,9 @@ def run_live(broker: str, port: int, *, fsm_config: str | None, ingest_config: s
             publish_control=source.publish_control,
             frame_log=flog, state_log=slog,
         )
+        if not hub.control_cfg.get("esm_log_path"):
+            # 프레임·상태 로그와 같은 곳에 둔다(--log-dir). 기본 logs/ 는 gitignore.
+            hub.esm_log_path = os.path.join(log_dir, f"esm-{hub.boot_id}.jsonl")
         print(f"deskmate hub live — broker {broker}:{port}, period {hub.period:.0f}s, logs {log_dir}/", file=sys.stderr)
         source.start()
         try:

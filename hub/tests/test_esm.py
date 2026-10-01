@@ -121,3 +121,18 @@ def test_evaluate_sessions_json_cli(tmp_path):
     data = json.loads(completed.stdout)
     assert data["files"][str(path)]["suggest_accept_rate"] == 1.0
     assert data["overall"]["median_response_ms"] == 200
+
+
+def test_labels_do_not_leave_gaps_in_state_seq(tmp_path):
+    # 수신 측(Node-RED·앱)은 state/phase seq 구멍을 유실로 센다. 라벨 번호는 따로 센다.
+    cache = SensorCache()
+    hub = LiveHub(cache, control_cfg={"enabled": False, "esm_log_path": str(tmp_path / "esm.jsonl")},
+                  out=io.StringIO())
+    seqs = [hub.tick_once(100)["seq"]]
+    cache.put_feedback({"verdict": "correct", "corrected_state": "REST"})
+    seqs.append(hub.tick_once(110)["seq"])
+    cache.put_feedback({"verdict": "correct", "corrected_state": "IDLE"})
+    seqs.append(hub.tick_once(120)["seq"])
+    assert seqs == [seqs[0], seqs[0] + 1, seqs[0] + 2]
+    ids = [r["label_id"] for r in hub.recorder.r.esm_labels if "label_id" in r]
+    assert len(set(ids)) == 2
