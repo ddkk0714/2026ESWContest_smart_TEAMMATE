@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 import os
-from statistics import median
+from .mathutil import median
 from typing import Any, Callable, Iterable
 
 
