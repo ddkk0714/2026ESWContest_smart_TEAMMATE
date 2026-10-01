@@ -114,7 +114,8 @@ class LiveHub:
             elif prev_state is State.ACTION_ENV and result.state is not State.ACTION_ENV:
                 self.control.close_episode()
 
-        summary = sensor_summary(view, now, self.ingest_cfg)
+        # tracker 를 넘겨야 세션 시작 대비 CO₂ 상승(co2_rising)도 화면 이유에 실린다.
+        summary = sensor_summary(view, now, self.ingest_cfg, self.tracker)
         if self.control is not None:
             summary["control"] = self.control.summary()
         if self.tracker.baseline is not None:

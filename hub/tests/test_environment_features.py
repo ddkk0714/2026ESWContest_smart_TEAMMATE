@@ -152,3 +152,24 @@ def test_co2_absolute_still_uses_tracker_evidence(cfg, monkeypatch):
     monkeypatch.setattr(tracker, "evidence", evidence)
     assert frame(cache, 0, cfg, tracker).signals["environment"].delta == pytest.approx(0.7)
     assert calls == [("co2_ppm", 900.0, pytest.approx(1 / 7), 0)]
+
+
+def test_live_hub_passes_tracker_so_co2_rising_reaches_the_display(cfg, monkeypatch):
+    """live.py 가 tracker 를 넘기지 않으면 발행 요약에서 co2_rising 이 늘 빠진다(W2 보고)."""
+    import io
+
+    from deskmate_hub import live
+
+    seen = []
+    real = live.sensor_summary
+
+    def spy(view, now, ingest_cfg, tracker=None):
+        seen.append(tracker)
+        return real(view, now, ingest_cfg, tracker)
+
+    monkeypatch.setattr(live, "sensor_summary", spy)
+    cache = SensorCache()
+    cache.put("env", reading(0, co2=700))
+    hub = live.LiveHub(cache, ingest_cfg=cfg, out=io.StringIO())
+    hub.tick_once(now=1.0)
+    assert seen and seen[-1] is hub.tracker

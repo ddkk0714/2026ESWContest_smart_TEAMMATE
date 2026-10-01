@@ -120,9 +120,11 @@ def test_environment_co2_ramp_and_invalid(cfg):
     cache.put("env", env(0.0, co2=(e["co2_ppm_low"] + e["co2_ppm_high"]) / 2))
     f = build_frame(cache.snapshot(), 0.0, cfg, SessionTracker(), fsm_state=State.FOCUS_PC)
     assert f.signals["environment"].delta == pytest.approx(0.5)
+    # W2: 무효 CO₂ 는 증거에서 빠지지만, 다른 측정(쾌적한 온습도·조도)이 유효하면 환경 신호는 가용이다.
     cache.put("env", env(1.0, co2=2000, valid=False))
     f = build_frame(cache.snapshot(), 1.0, cfg, SessionTracker(), fsm_state=State.FOCUS_PC)
-    assert not f.signals["environment"].available
+    assert f.signals["environment"].available
+    assert f.signals["environment"].delta == pytest.approx(0.0)
 
 
 def test_auto_complete_actions_and_feedback(cfg):
