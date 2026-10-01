@@ -294,6 +294,11 @@ class MqttStateSource implements StateSource {
         final text = MqttPublishPayload.bytesToStringAsString(
           publish.payload.message,
         );
+        if (text.isEmpty && received.topic == _reportTopic) {
+          // 빈 retain = 브로커에서 리포트를 지웠다. 지난 숫자를 계속 보여 주지 않는다.
+          _sessionReport = null;
+          continue;
+        }
         final envelope = jsonDecode(text) as Map<String, dynamic>;
         if (received.topic == _stateTopic) {
           _latest = DisplayState.fromEnvelope(envelope);

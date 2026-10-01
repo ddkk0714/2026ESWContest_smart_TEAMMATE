@@ -7,6 +7,7 @@ hub 의 `state/phase`(retain)·`interaction/request`·`session/report` 를 흉�
 대기 → 몰입(환경 이유) → 피로 의심 → 자세 자동 알림 → 환경 자동 알림(되돌리기) → 환경 제안 카드 → 회복 → 몰입 → 리포트.
 화면에서 누른 응답(feedback/user)을 콘솔에 찍는다. **hub 를 같은 브로커에서 돌리는 중이면 먼저 끈다**(상태가 섞인다).
 FSM 판정·제어 경로 검증은 tools/rehearsal_local.py·demo_dryrun.py 가 맡는다 — 이 도구는 화면 확인용이다.
+리포트는 마지막에 한 번, retain 없이 보낸다(실제 10초 갱신은 hub 가 한다). 남은 가짜 retain 지우기: --clear-report
 """
 from __future__ import annotations
 
@@ -57,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--step", type=float, default=10.0, help="단계 간격(초)")
     ap.add_argument("--card", type=int, default=30, help="제안 카드 만료(expires_in_s)")
     ap.add_argument("--loop", action="store_true")
+    ap.add_argument("--clear-report", action="store_true", help="브로커에 retain 된 session/report 를 지우고 끝낸다")
     args = ap.parse_args(argv)
     import paho.mqtt.client as mqtt
 
@@ -79,6 +81,12 @@ def main(argv: list[str] | None = None) -> int:
     client.message_callback_add("deskmate/feedback/user", on_feedback)
     client.connect(args.broker, args.port, keepalive=30)
     client.loop_start()
+    if args.clear_report:
+        client.publish("deskmate/session/report", b"", qos=1, retain=True).wait_for_publish(5)
+        print("retain 된 session/report 를 지웠다", flush=True)
+        client.loop_stop()
+        client.disconnect()
+        return 0
     client.publish("deskmate/health/hub", json.dumps({"ts": time.time(), "node": "hub", "status": "online",
                                                        "source": "ui_step_sim"}), qos=1, retain=True)
     seq = 0
@@ -112,7 +120,8 @@ def main(argv: list[str] | None = None) -> int:
                                "intervention_counts": {"total": 3, "recovered": 1}, "break_accept_rate": None,
                                "metrics": {"suggest_accept_rate": None, "correction_count": 0},
                                "state_durations_s": {"FOCUS_PC": 20.0, "FATIGUE_SUSPECT": 10.0, "RECOVERY": 10.0}}}
-            client.publish("deskmate/session/report", json.dumps(report, ensure_ascii=False), qos=1, retain=True)
+            # retain 하지 않는다 — 가짜 리포트가 브로커에 남으면 이후 실제 hub 가 없을 때 앱이 그 숫자를 계속 보여 준다.
+            client.publish("deskmate/session/report", json.dumps(report, ensure_ascii=False), qos=1, retain=False)
             print(f"{time.strftime('%H:%M:%S')} 리포트 보냄 — 리포트 탭 확인", flush=True)
             if not args.loop:
                 break
