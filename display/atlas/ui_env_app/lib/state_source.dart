@@ -16,8 +16,15 @@ abstract interface class StateSource {
   String? get displayMessage;
   SessionReport? get sessionReport;
   bool get hasPendingRequest;
+
+  /// hub 가 준 질문의 응답 제한 시간(`expires_in_s`). 질문이 없거나 모르면 null.
+  int? get pendingRequestExpiresInS;
   Future<DisplayState> fetch();
-  Future<void> feedback(String verdict);
+
+  /// [verdict] = accept | reject | correct | timeout (mqtt-topics.md `feedback/user`).
+  /// correct 면 [correctedState](FSM 상태 이름), [responseMs] 는 카드를 띄운 뒤 응답까지 걸린 시간.
+  Future<void> feedback(String verdict,
+      {String? correctedState, int? responseMs});
   Future<void> sendTestFrame(TestSensorInput input,
       {required String command, int advanceSeconds = 30, String? event});
   void close();
@@ -86,6 +93,9 @@ class HttpStateSource implements StateSource {
   bool get hasPendingRequest => false;
 
   @override
+  int? get pendingRequestExpiresInS => null;
+
+  @override
   Future<DisplayState> fetch() async {
     final request = await _client.getUrl(_base.resolve('/api/state'));
     request.headers.set(HttpHeaders.acceptHeader, 'application/json');
@@ -98,13 +108,18 @@ class HttpStateSource implements StateSource {
   }
 
   @override
-  Future<void> feedback(String verdict) async {
+  Future<void> feedback(String verdict,
+      {String? correctedState, int? responseMs}) async {
+    // HTTP 미리보기 API 는 accept·reject·correct 만 받는다(개발용 경로). 무응답은
+    // 보낼 곳이 없어 버린다 — 제품 경로(MQTT)에서만 기록된다.
+    if (verdict == 'timeout') return;
     final request = await _client.postUrl(_base.resolve('/api/feedback'));
     request.headers.contentType = ContentType.json;
     final payload = utf8.encode(jsonEncode({
       'request_id': 'atlas-display',
       'verdict': verdict,
-      'response_ms': 0,
+      if (correctedState != null) 'corrected_state': correctedState,
+      'response_ms': responseMs ?? 0,
     }));
     // contentLength 를 안 정하면 Dart 는 chunked 로 보낸다. 허브의 preview_api 는
     // Content-Length 를 필수로 읽어서 없으면 400 invalid_feedback 으로 떨어진다.
@@ -189,6 +204,7 @@ class MqttStateSource implements StateSource {
   /// 마지막으로 해석에 실패한 메시지. 화면이 왜 안 움직이는지 말해 주려고 둔다.
   String? _lastParseError;
   String? _pendingRequestId;
+  int? _pendingExpiresInS;
   int _sequence = 0;
   String? _hubHealth;
   DateTime? _hubHealthAt;
@@ -229,6 +245,10 @@ class MqttStateSource implements StateSource {
 
   @override
   bool get hasPendingRequest => _pendingRequestId != null;
+
+  @override
+  int? get pendingRequestExpiresInS =>
+      _pendingRequestId == null ? null : _pendingExpiresInS;
 
   @override
   Future<DisplayState> fetch() async {
@@ -283,6 +303,8 @@ class MqttStateSource implements StateSource {
             final requestId = data['request_id'];
             if (requestId is String && requestId.isNotEmpty) {
               _pendingRequestId = requestId;
+              final expires = data['expires_in_s'];
+              _pendingExpiresInS = expires is num ? expires.round() : null;
             }
           }
         } else if (received.topic == _hubHealthTopic) {
@@ -315,7 +337,8 @@ class MqttStateSource implements StateSource {
   }
 
   @override
-  Future<void> feedback(String verdict) async {
+  Future<void> feedback(String verdict,
+      {String? correctedState, int? responseMs}) async {
     await _ensureConnected();
     final payload = jsonEncode({
       'schema_version': '1.0',
@@ -326,7 +349,8 @@ class MqttStateSource implements StateSource {
       'data': {
         'request_id': _pendingRequestId ?? 'atlas-display',
         'verdict': verdict,
-        'response_ms': 0,
+        if (correctedState != null) 'corrected_state': correctedState,
+        'response_ms': responseMs ?? 0,
       },
     });
     final builder = MqttClientPayloadBuilder()..addString(payload);
@@ -336,6 +360,7 @@ class MqttStateSource implements StateSource {
       builder.payload!,
     );
     _pendingRequestId = null;
+    _pendingExpiresInS = null;
   }
 
   @override
@@ -493,6 +518,9 @@ class DemoStateSource implements StateSource {
   bool get hasPendingRequest => false;
 
   @override
+  int? get pendingRequestExpiresInS => null;
+
+  @override
   Future<DisplayState> fetch() async {
     final item = _states[_index++ % _states.length];
     final now = DateTime.now();
@@ -531,7 +559,8 @@ class DemoStateSource implements StateSource {
   }
 
   @override
-  Future<void> feedback(String verdict) async {}
+  Future<void> feedback(String verdict,
+      {String? correctedState, int? responseMs}) async {}
 
   @override
   Future<void> sendTestFrame(TestSensorInput input,

@@ -16,6 +16,7 @@ import 'feedback_policy.dart';
 import 'dashboard_view.dart';
 import 'deskmate_theme.dart';
 import 'fsm_graph.dart';
+import 'intervention.dart';
 import 'keystroke_capture.dart';
 import 'link_status.dart';
 import 'music_playback.dart';
@@ -125,6 +126,8 @@ class _DashboardPageState extends State<DashboardPage> {
   late final BluetoothLinkManager _btLinks;
   // 2단계: 연결 상태를 1초마다 스냅샷으로 모아 연결 탭·배지·상태 줄이 같이 읽는다.
   final _watchdog = MqttWatchdog();
+  // W1: 자동 실행 알림·제안 카드의 시간(응답 시간·만료)을 맡는다.
+  final _intervention = InterventionTracker();
   final _statusBar = StatusBarDismissal();
   LinkSnapshot _links = LinkSnapshot(const []);
   DateTime? _mqttConnectedAt;
@@ -187,6 +190,7 @@ class _DashboardPageState extends State<DashboardPage> {
       _updateLinkLabel();
       _updateLinks();
       unawaited(_feedbackController.reconcileAudioOutput());
+      _checkSuggestionTimeout();
     });
     _updateLinkLabel();
     _screenCycleTimer = Timer.periodic(
@@ -219,6 +223,10 @@ class _DashboardPageState extends State<DashboardPage> {
       final next = await _source.fetch();
       _lastStateAt = DateTime.now();
       _watchdog.stateReceived();
+      _intervention.update(next,
+          hasPendingRequest: _source.hasPendingRequest,
+          expiresInS: _source.pendingRequestExpiresInS,
+          now: DateTime.now());
       if (!_loggedFetchOk) {
         _loggedFetchOk = true;
         _lastLoggedError = null;
@@ -247,7 +255,8 @@ class _DashboardPageState extends State<DashboardPage> {
 
   Future<void> _feedback(String verdict) async {
     try {
-      await _source.feedback(verdict);
+      await _source.feedback(verdict,
+          responseMs: _intervention.responseMs(DateTime.now()));
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -261,6 +270,56 @@ class _DashboardPageState extends State<DashboardPage> {
             .showSnackBar(SnackBar(content: Text('전송 실패: $error')));
       }
     }
+  }
+
+  /// 제안 카드가 만료되면 무응답(timeout)을 한 번 보낸다. 무응답도 수락·거절과 다른
+  /// 라벨이다 — 사람이 못 봤거나 무시한 것과 거절한 것은 다르다.
+  void _checkSuggestionTimeout() {
+    final now = DateTime.now();
+    if (!_intervention.takeTimeout(now)) return;
+    final ms = _intervention.responseMs(now);
+    diag.write('제안 무응답(timeout) ${ms ?? '-'} ms');
+    unawaited(_source
+        .feedback('timeout', responseMs: ms)
+        .catchError((Object error) => diag.write('timeout 전송 실패: $error')));
+  }
+
+  /// 자동 실행을 되돌린다: hub 에 reject 를 보내면 제어 디스패처가 undo 명령을 낸다.
+  Future<void> _undoAuto() async {
+    setState(_intervention.dismissAuto);
+    try {
+      await _source.feedback('reject',
+          responseMs: _intervention.responseMs(DateTime.now()));
+      _notify('되돌리기를 요청했어요.');
+    } catch (error) {
+      _notify('되돌리기 전송 실패: $error');
+    }
+  }
+
+  void _dismissAuto() => setState(_intervention.dismissAuto);
+
+  /// "지금 상태가 아니에요" — 고른 국면을 정정 라벨로 보낸다. 판정은 바꾸지 않는다.
+  Future<void> _correctState() async {
+    final picked = await showCorrectionSheet(context);
+    if (picked == null || !mounted) return;
+    try {
+      await _source.feedback('correct',
+          correctedState: picked,
+          responseMs: _intervention.responseMs(DateTime.now()));
+      _notify('알려 주셔서 고마워요. 다음 판단에 참고할게요.');
+    } catch (error) {
+      _notify('전송 실패: $error');
+    }
+  }
+
+  /// 대기 화면의 오늘 집중 요약. 리포트가 없거나 아직 0분이면 null(기본 인사말).
+  String? _focusSummary() {
+    final seconds = _source.sessionReport?.focusSeconds ?? 0;
+    if (seconds < 60) return null;
+    final minutes = seconds ~/ 60;
+    return minutes < 60
+        ? '오늘 집중 $minutes분'
+        : '오늘 집중 ${minutes ~/ 60}시간 ${minutes % 60}분';
   }
 
   /// 저장된 주소 → 빌드에 넣은 주소 순으로 MQTT 를 고른다. 둘 다 없으면 예전처럼
@@ -693,6 +752,16 @@ class _DashboardPageState extends State<DashboardPage> {
                               : state.timestamp,
                           liveKeys: _localKeystroke != null ? _liveKeys : null,
                           onFeedback: _feedback,
+                          autoNotice: _intervention.autoNotice,
+                          onUndoAuto: _undoAuto,
+                          onDismissAuto: _dismissAuto,
+                          suggestionRemaining: _source.hasPendingRequest
+                              ? _intervention.remaining(DateTime.now())
+                              : null,
+                          // 데모에는 보낼 곳이 없으니 정정 버튼을 그리지 않는다.
+                          onCorrect:
+                              _source is DemoStateSource ? null : _correctState,
+                          focusSummary: _focusSummary(),
                           showDemoControl: true,
                           demoCyclingEnabled: _autoScreenCyclingEnabled,
                           onToggleDemoCycling: _toggleAutoScreenCycling,

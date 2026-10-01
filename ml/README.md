@@ -43,6 +43,27 @@ ml/
 `datasets/` 와 `models/` 는 `.gitignore` 로 막혀 있다.
 데이터는 팀 구글 드라이브에 두고, 여기에는 다운로드 스크립트와 체크섬만 커밋한다.
 
+## 학습 창·증강 파이프라인
+
+`training/build_dataset.py` 는 합성 dry-run 또는 짝이 맞는 `frames-*.jsonl`·`state-*.jsonl` 을
+읽어 6 tick × 17특징 창을 만든다. `--esm` 으로 정정 라벨을 덮을 수 있다. 세션 단위로
+학습·평가를 나눈 뒤 **학습 창에만** 잡음·시간 변형·센서 결측·기준선 이동·민감도 배율을 적용한다.
+실제 로그와 ESM 파일은 저장소에 넣지 않는다.
+
+```sh
+python -m pip install -r ml/requirements.txt
+python ml/training/build_dataset.py --name synth-v1 --synthetic default,short,demo --seeds 1-20 --offsets 0,3,7 --augment 4
+python ml/training/evidence.py ml/datasets/synth-v1 --out docs/ml-augmentation-evidence.md
+python -m pytest ml -q
+```
+
+출력은 `ml/datasets/<name>/windows.npz` 와 `manifest.json` 이다. NPZ의 `meta` 는
+학습 창 다음 평가 창 순서의 JSON 문자열 배열이며 세션 ID·시작 tick·라벨 출처·증강 종류·분할을 담는다.
+증거 문서의 정확도는 합성 약한 라벨에 대한 sanity check이며 실사용 성능으로 해석하지 않는다.
+호흡·경과 시간처럼 센서 측정값이 아닌 칸(`augment.EXEMPT`)에는 잡음·오프셋·배율을 넣지 않는다.
+증거 문서에는 클래스 가중 소프트맥스(드문 rest 확인)와 **결측·개인차 내성**(평가 창에 결측·기준선 이동·민감도 차이를 입혀
+원본 학습 vs 증강 학습 비교)이 함께 실린다. 공개 데이터셋 후보는 [`docs/dataset-survey.md`](../docs/dataset-survey.md).
+
 ## ESM 라벨링 체계
 
 디스플레이 단말의 사용자 피드백(`accept` / `reject` / `correct`)이 그대로 라벨이 된다.

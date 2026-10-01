@@ -22,6 +22,7 @@ class DisplayState {
     this.mmwaveMotionLevel,
     this.mmwaveDistanceCm,
     this.mmwaveHeartBpm,
+    this.envFlags = const [],
   });
 
   final String fsmState;
@@ -46,6 +47,10 @@ class DisplayState {
   final int? mmwaveMotionLevel;
   final int? mmwaveDistanceCm;
   final int? mmwaveHeartBpm;
+
+  /// 환경이 왜 문제인지(hub `sensor_summary.env_flags`): co2_high · co2_rising · too_hot ·
+  /// too_cold · too_humid · too_dry · too_dark. 제안·자동 실행 카드의 "이유" 문구가 된다.
+  final List<String> envFlags;
 
   factory DisplayState.fromEnvelope(Map<String, dynamic> envelope) {
     if (envelope['schema_version'] != '1.0') {
@@ -83,6 +88,9 @@ class DisplayState {
       mmwaveHeartBpm: mmwave['heart_valid'] == true
           ? _nullableInt(mmwave['heart_bpm'])
           : null,
+      envFlags: (sensors['env_flags'] as List? ?? const [])
+          .map((value) => value.toString())
+          .toList(growable: false),
     );
   }
 

@@ -1,10 +1,12 @@
 # DESKMATE 결선 로드맵 — 포스터 수준 완성을 위한 갭 분석과 실행 계획
 
-> 기준일: **2026-09-29** (이전 기준 09-14) · 결선 제출 2026-10-01~10-30 · 오프라인 발표 2026-11-06
+> 기준일: **2026-10-01** (이전 기준 09-29) · 결선 제출 2026-10-01~10-30 · 오프라인 발표 2026-11-06
 > 목표 기준: 2026 UOS ECE Innovation Fair 출품작 포스터(「DESKMATE : 카메라 없이 읽는 책상 위 인지 상태」)에
 > 서술한 기능 수준. 이 문서는 **그 서술과 현재 구현 사이의 간극**을 관리한다.
 > **2026-09-14 팀 결정 반영**: 신뢰도 주기 10 s · 미머지 브랜치 병합 PR(`feat/merge-pending`) · Pi 5 디스플레이 교체(터치 정상) · 키스트로크 계약 구현 기준 확정 · 환경 센서 보정 없음(단일 센서).
-> **2026-09-29 갱신**: §2 상태표·§2-1 브랜치 현황 신설·§3 I7(카메라 자세 판정)·§4 체크박스·§5 리스크. `origin/main` = `477559b`(PR #23, 09-18). 09-21 이후 저장소 커밋 없음.
+> **2026-09-29 갱신**: §2 상태표·§2-1 브랜치 현황 신설·§3 I7(카메라 자세 판정)·§4 체크박스·§5 리스크.
+> **2026-10-01 갱신**: PR #27~#32 머지(`origin/main` = `7ab7ea0`) — hub 기준선·제어 디스패처·앱 연결 안정화(연결 탭·배지·BT 재연결) main 진입.
+> 실기 없이 진행하는 다음 계획 W1~W7([`plan/next-development-plan.md`](plan/next-development-plan.md))의 W1~W4·W6 가 `feat/display-intervention`(로컬, PR 예정)에 있다.
 
 ---
 
@@ -50,35 +52,34 @@ ToF VL53L9CX ── 연결 경로 결정 전 (Pi 4 CSI-2 또는 ESP32 I2C) — 0
 
 ---
 
-## 2. 현재 위치 (2026-09-29)
+## 2. 현재 위치 (2026-10-01)
 
-범례: ✅ 동작 · 🟡 부분 · ⬜ 없음 · ⚠ 결정 필요. "main" = `origin/main` `477559b`, 괄호 안 브랜치는 main 미반영.
+범례: ✅ 동작 · 🟡 부분 · ⬜ 없음 · ⚠ 결정 필요. "main" = `origin/main` `7ab7ea0`, `(DI)` = `feat/display-intervention`(로컬, PR 예정).
 
 | # | 상태 | 근거 |
 |---|---|---|
-| G1 ToF | ⬜ ⚠ | VL53L9CX **미연결**, Path A/B 미결(09-19 마감 지남). 기하 특징 7종 코드 없음. 대신 ESP32-CAM 기반 자세 판정(기본·엎드림·뒤로 젖힘·졸음·턱 괴기)이 main 의 `display/atlas/camsvc`·`camtest` 에 있고, 통합 앱 `자세` 탭·열화상풍 54×42 표시는 `base/camera-zone-views`(PR #25) 에만 있음 → §3 I7 |
-| G2 mmWave | 🟡 | 펌웨어 main 이관 완료(`firmware/esp32_sensor_node`, C1001 + DrowsyDetector). ESP32 UART2 → Pi 4 C++ `uart_rx` → `UART\t` 라인 → hub 수신 실측(09-16 rx=132·crc 0). 앱 센서 화면에 mmWave 심박 표시(PR #23). C1001 무응답 시 루프 굶김·재시도 백오프 수정은 (`feat/edge-mvp-nodered`) |
-| G3 환경 | 🟡 | SCD41·BH1750·DHT22 드라이버 main(PR #21), 앱 ENV 대시보드·UART 폴백(PR #23). 환경 드라이버는 main(PR #21) 구현을 기준으로 한다 — `feat/edge-mvp-nodered` 의 `DESKMATE_HAS_*` 스위치 수정(`313815f`·`4583284` 일부)은 다른 구현용이라 이관하지 않음. **main 구현으로 재플래시 후 실측 필요.** CO₂ → 환기 라우팅 실기 미확인 |
-| G4 키스트로크 | ✅ | `collector/` main 진입(PR #15). 공통 envelope 발행·이식성 설정 문서는 (`feat/edge-hub-port`, 테스트 10 통과). hub ingest 가 평면·envelope payload 수용 |
-| G5 FSM | ✅ | 18상태 엔진·`report.py`·리플레이·데모. hub 테스트 **114 통과·1 xfail**(`feat/edge-hub-port` 기준, PR #27 은 94). main 은 `test_native_mqtt_bridge.py` 가 병합 `aec531a` 에서 사라진 `_feed_mqtt_line` 을 import 해 수집 오류 → 이 브랜치에서 `MqttLineSource` API 로 수정. (`feat/hub-swonly`) 기준 105 통과·1 xfail |
-| G6 개인화 | 🟡 | 중앙값·MAD 기준선 `features/baseline.py` + ingest 연동(`feat/edge-hub-port`). `ml/` 비어 있음 |
-| G7 개입 | 🟡 | 게이트 0.45/0.75 config 일치. main `control/` 에는 iLink 블루투스 램프 어댑터(`ilink_light.py`)뿐. 제어 디스패처(auto/suggest/undo/쿨다운)·mock 플러그는 (`feat/hub-swonly`). **스마트 플러그 미선정** |
-| G8 UI | 🟡 | 통합 앱(PR #23): 센서 개요·ENV·음악 UI·블루투스 피드백·세션 리포트(데모)·상태 체류 차트. 저자극/상세 4화면 전환·자동 실행 알림+되돌리기·재부팅 자동 시작 없음 |
+| G1 ToF | ⬜ ⚠ | VL53L9CX **미연결**, Path A/B 미결(09-19 마감 지남). 기하 특징 7종 코드 없음. ESP32-CAM 자세 판정(`display/atlas/camsvc`·`camtest`)은 main → §3 I7 |
+| G2 mmWave | 🟡 | 펌웨어 main(C1001 + DrowsyDetector, PR #28 수동 파서). UART2 → Pi 4 `uart_rx` 실수신(09-16). 앱 심박·호흡 표시. 재플래시 후 실측 남음 |
+| G3 환경 | 🟡 | 드라이버 main(PR #21). hub 환경 특징 확장 — CO₂ 세션 상승·온습도 쾌적 이탈·조도 부족과 `env_flags` (DI, W2). 실센서 재측정 남음 |
+| G4 키스트로크 | ✅ | `collector/` main. 평면·envelope payload 수용 |
+| G5 FSM | ✅ | 18상태 엔진 main. **재시도 원인은 제안까지만**(`gate.retry_max`, DI). hub 테스트 155 통과·1 xfail(DI). 5분 시연 시나리오·dry-run·동선 시험(DI, W4) |
+| G6 개인화 | 🟡 | 중앙값·MAD 기준선 main(PR #27). ESM 라벨 기록·정량 지표(DI, W3). 2단계 학습용 창·증강·증거 리포트(DI, W5 — 합성 기준, 결측 내성 +2.7%p) |
+| G7 개입 | 🟡 | 게이트 0.45/0.75. 디스패처(auto/suggest/undo/쿨다운)·mock 플러그 main. 자동 실행 알림·되돌리기(60 s 창)·제안 카드 이유·남은 시간·정정 입력(DI, W1·W3). **스마트 플러그 미선정** |
+| G8 UI | 🟡 | 통합 앱 main + 연결 탭·연결 배지·MQTT 감시·BT 자동 재연결(PR #30~#32). 대기 위젯(온디바이스 문구·오늘 집중)·개입 카드(DI, W1). 재부팅 자동 시작 없음 |
 | G9 HW | ⬜ | CAD·하우징 산출물 없음 |
-| G10 제어 | 🟡 | iLink 램프 1종 제어 경로만. 스마트 플러그·환기팬 없음 |
-| 통신 | 🟡 | Pi 4 정적 Mosquitto(PR #18)·C++ 네이티브 MQTT 브리지(PR #21 계열) main. UART 프레임은 잠정 규약(0x20/0x10/0xF0) 그대로 사용 중, 팀 확정 기록 없음. 보드 재부팅 시 브로커·hub 수동 기동 필요 |
+| G10 제어 | 🟡 | iLink 램프 + mock 플러그. 스마트 플러그·환기팬 실기 없음 |
+| 통신 | 🟡 | Pi 4 정적 Mosquitto·C++ 네이티브 MQTT 브리지 main. PC 경로 브로커 재시작 자동 재연결 시험(DI, W6). UART 프레임 잠정 규약 그대로, 보드 재부팅 시 수동 기동 |
+| 시험 | 🟡 | 결측·유실 시나리오(센서 분리·브로커 재시작·디스플레이 무응답)·판정 주기 측정(PC p95 ≈ 0.6 ms) (DI, W6). Pi 4 실측·2시간 연속 구동 남음 |
 
-### 2-1. 브랜치 현황 (2026-09-29, `git fetch` 기준)
+### 2-1. 브랜치 현황 (2026-10-01)
 
-| 브랜치 | main 미반영 | 내용 | 조치 |
+| 브랜치 | 상태 | 내용 | 조치 |
 |---|---|---|---|
-| `feat/hub-swonly` | 11커밋(09-16~17) — **핵심은 `feat/edge-hub-port` 로 이관(09-29)** | 개인 기준선 `features/baseline.py`, 제어 디스패처 `control/dispatcher.py`, `tools/mock_plug.py`·`pc_broker.py`, `session/report` 발행, 채터링·bridge 프로세스 테스트 | **PR 필요** — G6·G7 의 핵심 코드. main 과 충돌 여부 확인 후 병합 |
-| `feat/edge-mvp-nodered` → `origin/feat/edge-mvp-nodered-followup` | 8커밋(09-18~21) — **`feat/edge-hub-port` 로 이관(09-29)** | 펌웨어 C1001·환경센서 수정 5, Pi 4 `rx=0` 복구 스크립트, collector 발행기·설정 문서 | **PR 필요**. main 대비 34커밋 뒤처져 있어 main 위 재배치 후 PR |
-| `base/camera-zone-views` | 12커밋(PR #25 병합, 09-21) | 통합 앱(`display/atlas/app`) + 자세 탭·열화상풍 표시, `docs/posture-camera.md` | I7 결정 후 main 반영 여부 결정 |
-| `integration/unified-app` | 11커밋 | camera-zone-views 의 이전 상태 | `base/camera-zone-views` 로 대체됨 — 정리 대상 |
-| `feat/display-hub-followup` | PR 브랜치 | `integration/pr21-pr22` 의 PR #23 이후 미푸시 14커밋(이중 발행 수정·브로커 주소 배포·리포트 10 s 발행과 버그 수정·자세 탭 camtest/ToF풍 화면·camsvc 기동 스크립트) + 테스트 수정 + 이 문서 갱신. main 과 충돌 없음 | **PR 올림** |
-| `integration/pr21-pr22` | 원격 기준 0 (로컬 14커밋은 위 브랜치로 이관) | PR #23 머지·닫힘 | 위 PR 머지 후 로컬·원격 삭제 |
-| `feat/merge-pending`·`feat/hub-ingest-live`·`feat/env-ui-integration` | 0 | 모두 main 에 포함(로컬 브랜치는 09-29 삭제) | 원격 삭제 가능 |
+| `feat/display-intervention` | 로컬 커밋(미푸시), main 위 | W1 개입 UI · W2 환경 특징(Codex) · W3 ESM·지표·되돌리기 창(Codex) · W5 학습 창·증강·증거(Codex) · W4 시연 시나리오 · 재시도 게이트 · W6 결측 시험·판정 주기·데이터셋 조사 · W7 문서 | 묶음 3 끝나면 PR(사용자 요청 시 모아서) |
+| `feat/atlas-hotspot-broker` | 로컬 워크트리 | 핫스팟·정적 브로커 산출물(`dist/`) | 보존 |
+| `origin/feat/edge-mvp-nodered-followup`·`origin/feat/hub-swonly` | 원격 | 일부만 이관된 옛 작업 | 보존(필요한 부분 이관 완료) |
+
+PR #24(옛 앱)·#26 은 닫힘, #27~#32 머지.
 
 ---
 
@@ -207,21 +208,22 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 
 - [x] VER5 18상태 엔진, 이중 신뢰도·재정규화, PC/MIXED/비PC 컨텍스트·blend, 원인 라우팅, 게이트(0.45/0.75), 타이머·히스테리시스
 - [x] `config/fsm.yaml` 외부화, 리플레이·데모 하네스, 세션 리포트 `report.py`(병합 PR), 테스트 46개 + 리포트 8개
+- [x] 합성 센서로 대표 경로 재현 — `tools/demo_dryrun.py`·`test_demo_scenario.py`(DI, W4)
 - [ ] 실센서 `SensorFrame` 로 대표 경로 재현: IDLE→START→CONTEXT_DETECT→FOCUS→FATIGUE_SUSPECT→FATIGUE→CAUSE_ANALYSIS→ACTION→MONITOR→RECOVERY→END
 - [x] 10 s 주기에서 채터링 검증(합성 진동 입력) — `tests/test_chattering.py` (`feat/edge-hub-port`). 실센서 노이즈는 실측 후
 - [ ] 자세 해석 분기(PC 숙임+키입력↓=피로, 비PC 숙임+motion↓=집중 등)를 실센서로 확인
 - [ ] 신호 충돌(ToF 노딩 + mmWave active) 시 `interaction/request` 발행 → 사용자 확인 경로 (제안 게이트 ACTION_* 진입 시 질문 발행·`request_id` 매칭은 09-16 구현)
 - [ ] `C_focus` 부호 최종 결정, 필요 시 문서·테스트 동시 수정
 - [ ] MONITOR 보상 로그 축적(정책 학습은 로그 충분 시, 세션당 개입 상한)
-- [ ] `tick()` ≤ 500 ms Pi 4 실측
+- [ ] `tick()` ≤ 500 ms Pi 4 실측 — PC 측정 도구 `tools/measure_tick.py`(p95 ≈ 0.6 ms, DI). 보드 실측 남음
 
 #### 6. 디스플레이 UI·제안 카드·작업 리포트 개발 — 마감 10-12
 
 - [x] Atlas Flutter 앱, 대시보드 재설계, 18상태 전이 그래프, 키스트로크 패널, 센서 테스트 화면, 오디오 재생, release IPK 배포, MQTT 구독
 - [x] 제안 카드 수락·거절 → hub 전달 (MQTT: hub 가 `interaction/request` 로 `request_id` 를 주고 `feedback/user` 에서 매칭, 09-16)
 - [ ] 상태 적응형 4화면: 대기(시각·환경·재실) / 집중 저자극 / 터치 시 상세(집중 시간·환경·수동 제어) / 세션 리포트
-- [ ] 자동 실행 알림(≥ 0.75) + 되돌리기 + 실행 이유 문구
-- [ ] 정정(`correct`) 입력 — 4 국면 중 선택, 무응답 기록
+- [x] 자동 실행 알림(≥ 0.75) + 되돌리기 + 실행 이유 문구 (DI, W1 — 되돌리기는 W3 의 60 s 창)
+- [x] 정정(`correct`) 입력 — 4 국면 중 선택, 무응답(timeout) 기록 (DI, W1·W3)
 - [ ] 세션 리포트 화면: 데모 리포트·상태 체류 차트 화면은 main(PR #22). hub `session/report` 10 s 스냅샷 발행 → display 구독 연결은 PR #27
 - [ ] 재부팅 자동 시작(Pi 5 앱 + Pi 4 hub 서비스)
 - [ ] 스피커 알림 음소거·볼륨
@@ -237,10 +239,11 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 
 #### 8. 데이터 수집·ESM 라벨링·임계값 보정 — 마감 10-19
 
-- [ ] ESM 라벨 스키마 확정(수락·거절·정정·무응답, 질문 ID·원 판정·응답 시간) — `data-spec.md` §11
+- [x] ESM 라벨 스키마 확정(수락·거절·정정·무응답, 질문 ID·원 판정·응답 시간) — `data-spec.md` §11, `hub/deskmate_hub/esm.py`(DI, W3)
 - [ ] 팀원 실사용 세션 로그 축적(JSONL + 라벨, 비공개 드라이브, 커밋 금지) — 목표 5인 × 3세션 이상
 - [ ] `--replay` 로 임계값·가중치 보정, 정규화 전후 오판정 비교표
 - [ ] 개인화 저장소(로컬 JSONL)·opt-in·삭제 정책 문서화
+- [x] 증강 데이터 파이프라인 + 증거 리포트 `ml/training/`·`docs/ml-augmentation-evidence.md`, 공개 데이터셋 조사 `docs/dataset-survey.md`(DI, W5·W6)
 - [ ] 2단계 TFLite(선택): PC 학습(1D CNN 백본 동결 + 개인 헤드) → TFLite → Pi 4 선택적 적재 → 게이트 융합. 라벨 부족 시 "개념 실증"으로 고정하고 보고서 서술 조정
 
 #### 9. 통합 MVP 구현 — 마감 10-05
@@ -251,15 +254,15 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 - [x] **hub 테스트 수집 오류 수정** — `test_native_mqtt_bridge.py` 를 `MqttLineSource` API 로 갱신(09-29, `feat/display-hub-followup`)
 - [ ] 4 신호(ToF·mmWave·환경·키스트로크) 모두 `SensorFrame`·`reasons` 에 등장
 - [ ] 센서 → 피로 판정 → 제안 → 터치 수락 → 플러그 ON → MONITOR → RECOVERY 1사이클 실기 재현
-- [ ] display 를 꺼도 hub 계속 동작, Node-RED 없이 동작, 인터넷 없이 동작
+- [ ] display 를 꺼도 hub 계속 동작, Node-RED 없이 동작, 인터넷 없이 동작 — PC 경로 시험 완료(DI, W6: 무응답 카드 자동 만료·센서 분리·브로커 재시작). 실기 남음
 - [ ] Dock+Head 하우징에 3보드·센서·화면 조립, Pi 4 발열과 환경 센서 격벽, 부스 전원 1구 기동
 
 #### 10. 시험 평가 및 최적화 — 마감 10-19
 
 - [ ] 2시간 연속 구동: 판정 사이클 ≤ 500 ms(1,000 tick p95), 메모리·온도, 재연결
-- [ ] 상태 분류 정확도·사용자 피드백 일치율·선제 행동 수용률 산출(평가 프로토콜 정의 포함)
-- [ ] 결측·유실·충돌 시나리오(센서 분리, broker 재시작, display 종료)
-- [ ] 5분 시연 시나리오 고정(시작→몰입→피로→개입→회복→종료 리포트) + 시연용 임계값 프로파일 (`config/fsm.demo.yaml` 초안 09-16 — 타이머만 단축)
+- [ ] 상태 분류 정확도·사용자 피드백 일치율·선제 행동 수용률 산출(평가 프로토콜 정의 포함) — 지표 계산·`session/report.metrics`·`tools/evaluate_sessions.py` 준비(DI, W3). 실사용 로그 남음
+- [x] 결측·유실 시나리오(센서 분리, broker 재시작, display 종료) — `hub/tests/test_fault_scenarios.py`·`test_mqtt_reconnect.py`(DI, W6). 충돌(ToF 노딩 + mmWave active)은 ToF 후
+- [x] 5분 시연 시나리오 고정(시작→몰입→피로→개입→회복→리포트) + 시연용 프로파일 — `docs/demo-scenario.md`, `--scenario demo`, 실시간 리허설 1회 통과(DI, W4)
 - [ ] 금지 데이터 미수집·자격증명 스캔
 
 #### 11. 개발 완료 보고서·작품 소개서·시연 영상 — 마감 10-30, 발표 11-06
@@ -279,7 +282,7 @@ MQTT ──► Node-RED (PC)  : 센서 차트·게이지 + FSM 상태 패널
 |---|---|---|---|
 | 1 | **ToF 미연결·경로 미결(09-19 마감 경과)** — 카메라 대역(I7)이 자리를 채우는 중 | G1 전체, "카메라 없이" 서술 | Path B 즉시 확정 후 ESP32 I2C 연결. 불가하면 I7 에서 결선 서술을 정한다 |
 | 2 | 실센서 노이즈로 FSM 채터링 (10 s 주기라 30 s 보다 민감) | 시연 신뢰도 | 리플레이 튜닝 + 히스테리시스, 시연 시나리오 임계값 프로파일 별도 |
-| 3 | **미머지 작업 누적** — G6·G7 핵심과 펌웨어 수정이 PR #27 → `feat/edge-hub-port` 로 쌓여 main 밖 | 통합 MVP(10-05), 결선 소스 공개 | 이번 주 PR 2건 순서대로 머지, 정리 대상 브랜치 삭제(§2-1) |
+| 3 | **실기 미검증 누적** — 앱 연결 안정화·개입 UI·제어·결측 처리가 모두 PC·합성 입력으로만 확인됨 | 통합 MVP(10-05), 시연 신뢰도 | 보드 확보 즉시 PR #30~#32 체크리스트와 `docs/demo-scenario.md` §5 를 한 번에 확인 |
 | 4 | 라벨 부족으로 2단계 미완 | 포스터 G6 미달 | 개념 실증 범위로 사전 고정, 보고서 서술 조정(I5) |
 | 5 | **스마트 플러그 미선정(09-28 마감 경과)** | G7·G10 제어 시연, 통합 MVP 1사이클 | 즉시 구매. 도착 전에는 iLink 램프 + mock 플러그로 1사이클 시연 경로 확보 |
 | — | ~~ESP32 코드가 별도 저장소~~ | — | **해소(09-14~16)** `firmware/esp32_sensor_node` 이관·실보드 플래시 |

@@ -33,6 +33,7 @@ thresholds:
 gate:
   conf_auto: 0.75      # 이상 → 자동 제어
   conf_suggest: 0.45   # 이상 → 제안, 미만 → 무동작
+  retry_max: suggest   # 첫 원인이 효과 없어 다른 원인을 재시도할 땐 자동 대신 제안까지만 (auto = 낮추지 않음)
 
 timers:
   score_period_sec: 10           # 신뢰도 계산 주기 (2026-09-14 팀 결정: 30→10. ingest 가 이 주기로 SensorFrame 을 만든다)

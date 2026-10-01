@@ -138,7 +138,7 @@ ToF 원본 2,268-zone 배열은 L0이며 기본 운영 스키마에 포함하지
 | `lux` | float/null, lux | BH1750(SZH-EK070) 조도. |
 | `co2_valid` `temp_valid` `humidity_valid` `lux_valid` | boolean | 물리 측정별 유효성(CRC/체크섬·범위). 센서 부재 = 값 null + false. |
 
-필드명은 `mqtt-topics.md` 의 wire 이름과 같다(2026-09-14 정렬). hub 는 `co2_valid` 인 `co2_ppm` 만 `environment.delta` 로 쓴다.
+필드명은 `mqtt-topics.md` 의 wire 이름과 같다(2026-09-14 정렬). hub 는 유효 표시가 true 이고 값이 있는 측정만 쓴다. `environment.delta` 는 CO₂ 절대값·세션 시작 대비 상승·조도 부족의 최대값, `environment.phi` 는 온도·습도 쾌적 범위 이탈의 최대값이다. 유효 측정이 하나라도 있으면 환경 신호를 가용으로 본다. 화면용 `sensor_summary.env_flags` 는 임계값을 넘은 환경 이유만 순서대로 담고, 해당 이유가 없으면 생략한다. 임계값은 `hub/deskmate_hub/config/ingest.yaml` 에 둔다.
 
 **2026-09-14 확정 — 보정 없이 단일 센서 측정.** 물리량마다 센서 하나만 쓴다(CO₂=SCD41, T/RH=DHT22, lux=BH1750).
 센서 간 교차 보정(예: SCD41 T/RH 로 CO₂ 온도 보정, DHT22 와 SCD41 온습도 비교)은 하지 않는다.
@@ -299,8 +299,11 @@ USB 열거·xHCI 같은 하드웨어 진단 로그는 이 논리 스키마 밖�
 
 `esm_label`:
 
-- `label_id`, `source`, `target_window_start_ms`, `target_window_end_ms`
-- `predicted_state`, `corrected_state`, `answer_code`, `label_confidence`
+- hub 로컬 `logs/esm-<boot_id>.jsonl` 에 한 줄씩 기록한다. 새 MQTT 토픽은 만들지 않는다.
+- `label_id`(hub `<boot_id>-esm<n>`, state seq 와 별도 번호), `ts`, `source`(`display`), `request_id`(없으면 null), `kind`(질문 kind 또는 `correction`), `verdict`(`accept`/`reject`/`correct`/`timeout`)
+- `predicted_state`, `cause`, `gate`, `c_fatigue`, `c_focus`, `confidence`(두 점수의 최댓값), `corrected_state`(`correct`만), `response_ms`(없으면 null), `answer_code`(verdict 또는 `correct:<STATE>`)
+- `target_window_start_ms`/`target_window_end_ms`: 질문 응답은 질문 발행~응답, 자발적 정정은 응답 직전 점수 주기. 정정은 FSM 상태를 바꾸지 않는 평가 라벨이다.
+- `session/report.data.metrics`: `suggest_accept_rate`, `timeout_rate`, `auto_undo_rate`, `correction_rate`(시간당), `correction_count`, `median_response_ms`, `recovery_time_s`. 분모나 회복 관측이 없으면 null. 기존 `break_accept_rate` 는 유지한다.
 
 ## 12. 프라이버시·보존
 

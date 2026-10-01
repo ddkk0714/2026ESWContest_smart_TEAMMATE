@@ -25,6 +25,40 @@ def _ramp(value: float | None, low: float, high: float) -> float:
     return _clip((float(value) - low) / (high - low))
 
 
+def _environment_values(data: dict[str, Any]) -> dict[str, float]:
+    """무효 표본의 이전 숫자가 환경 증거와 실행 이유에 섞이지 않게 한다."""
+    return {
+        key: float(data[key])
+        for key, valid in (("co2_ppm", "co2_valid"), ("temp_c", "temp_valid"),
+                           ("humidity_pct", "humidity_valid"), ("lux", "lux_valid"))
+        if data.get(valid) is True and data.get(key) is not None
+    }
+
+
+def _comfort_deviation(value: float, low: float, high: float, margin: float) -> float:
+    return _clip(max(low - value, value - high, 0.0) / margin)
+
+
+def _environment_scores(values: dict[str, float], cfg: dict[str, Any],
+                        session_co2_start: float | None = None) -> dict[str, float]:
+    scores: dict[str, float] = {}
+    if "co2_ppm" in values:
+        co2 = values["co2_ppm"]
+        scores["co2_abs"] = _ramp(co2, cfg["co2_ppm_low"], cfg["co2_ppm_high"])
+        scores["co2_rise"] = (_ramp(co2 - session_co2_start, cfg["co2_rise_low"],
+                                    cfg["co2_rise_high"]) if session_co2_start is not None else 0.0)
+    if "temp_c" in values:
+        scores["temp_dev"] = _comfort_deviation(values["temp_c"], cfg["temp_comfort_min"],
+                                                 cfg["temp_comfort_max"], cfg["temp_margin"])
+    if "humidity_pct" in values:
+        scores["humidity_dev"] = _comfort_deviation(
+            values["humidity_pct"], cfg["humidity_comfort_min"],
+            cfg["humidity_comfort_max"], cfg["humidity_margin"])
+    if "lux" in values:
+        scores["lux_dim"] = 1.0 - _ramp(values["lux"], cfg["lux_dim_low"], cfg["lux_dim_high"])
+    return scores
+
+
 @dataclass
 class SessionTracker:
     """프레임 사이에 이어지는 상태 — 재실 엣지, 정적 지속, 호흡 소실, 세션 시작 시각."""
@@ -32,6 +66,7 @@ class SessionTracker:
     still_since: float | None = None
     resp_lost_since: float | None = None
     session_started: float | None = None
+    co2_session_start: float | None = None
     pending_feedback: str | None = None     # accept | reject
     last_state: State = State.IDLE
     baseline: BaselineStore | None = None   # normalization: baseline 일 때만
@@ -41,6 +76,7 @@ class SessionTracker:
             self.session_started = now
         if state in (State.IDLE, State.END):
             self.session_started = None
+            self.co2_session_start = None
         if self.baseline is not None:
             # START(기준선 측정) 진입 → 보정 창 시작, START 이탈 → 확정
             if state is State.START and self.last_state is not State.START:
@@ -134,10 +170,21 @@ def build_frame(
 
     # ---- environment ----
     ecfg = cfg["environment"]
-    if env and env.data.get("co2_valid") and env.data.get("co2_ppm") is not None:
-        delta = tracker.evidence("co2_ppm", env.data["co2_ppm"],
-                                 _ramp(env.data["co2_ppm"], ecfg["co2_ppm_low"], ecfg["co2_ppm_high"]), now=now)
-        signals["environment"] = Signal(phi=0.0, delta=delta, available=True)
+    values = _environment_values(env.data) if env else {}
+    if values:
+        if ("co2_ppm" in values and tracker.session_started is not None
+                and env is not None and env.received >= tracker.session_started
+                and tracker.co2_session_start is None):
+            # 세션 시작 뒤 첫 유효값만 기준으로 고정해 느린 누적 상승을 놓치지 않는다.
+            tracker.co2_session_start = values["co2_ppm"]
+        scores = _environment_scores(values, ecfg, tracker.co2_session_start if tracker.session_started is not None else None)
+        if "co2_ppm" in values:
+            scores["co2_abs"] = tracker.evidence("co2_ppm", values["co2_ppm"],
+                                                  scores["co2_abs"], now=now)
+        signals["environment"] = Signal(
+            phi=max(scores.get("temp_dev", 0.0), scores.get("humidity_dev", 0.0)),
+            delta=max(scores.get("co2_abs", 0.0), scores.get("co2_rise", 0.0),
+                      scores.get("lux_dim", 0.0)), available=True)
     else:
         signals["environment"] = Signal(available=False)
 
@@ -176,7 +223,8 @@ def build_frame(
     )
 
 
-def sensor_summary(view: CacheView, now: float, cfg: dict[str, Any]) -> dict[str, Any]:
+def sensor_summary(view: CacheView, now: float, cfg: dict[str, Any],
+                   tracker: SessionTracker | None = None) -> dict[str, Any]:
     """state/phase 의 sensor_summary — 화면 표시용 특징 요약. 없는 필드는 생략한다."""
     fresh = cfg["freshness_sec"]
     out: dict[str, Any] = {}
@@ -193,9 +241,30 @@ def sensor_summary(view: CacheView, now: float, cfg: dict[str, Any]) -> dict[str
         }
     env = view.fresh("env", now, fresh["env"])
     if env:
-        for k in ("co2_ppm", "temp_c", "humidity_pct", "lux"):
-            if env.data.get(k) is not None:
-                out[k] = env.data[k]
+        values = _environment_values(env.data)
+        for key in values:
+            out[key] = env.data[key]
+        ecfg = cfg["environment"]
+        start = tracker.co2_session_start if tracker is not None and tracker.session_started is not None else None
+        scores = _environment_scores(values, ecfg, start)
+        threshold = ecfg["env_flag_threshold"]
+        flags: list[str] = []
+        if scores.get("co2_abs", 0.0) >= threshold and "co2_ppm" in values:
+            flags.append("co2_high")
+        if start is not None and scores.get("co2_rise", 0.0) >= threshold and "co2_ppm" in values:
+            flags.append("co2_rising")
+        if ("temp_c" in values and scores["temp_dev"] >= threshold
+                and (values["temp_c"] < ecfg["temp_comfort_min"]
+                     or values["temp_c"] > ecfg["temp_comfort_max"])):
+            flags.append("too_hot" if values["temp_c"] > ecfg["temp_comfort_max"] else "too_cold")
+        if ("humidity_pct" in values and scores["humidity_dev"] >= threshold
+                and (values["humidity_pct"] < ecfg["humidity_comfort_min"]
+                     or values["humidity_pct"] > ecfg["humidity_comfort_max"])):
+            flags.append("too_humid" if values["humidity_pct"] > ecfg["humidity_comfort_max"] else "too_dry")
+        if scores.get("lux_dim", 0.0) >= threshold and "lux" in values:
+            flags.append("too_dark")
+        if flags:
+            out["env_flags"] = flags
     ks = view.fresh("keystroke", now, fresh["keystroke"])
     if ks:
         out["keystroke"] = {"ts": ks.ts, **ks.data}

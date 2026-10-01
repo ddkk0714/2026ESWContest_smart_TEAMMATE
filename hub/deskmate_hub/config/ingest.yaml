@@ -61,9 +61,21 @@ mmwave:
   resp_lost_sec: 60
 
 environment:
-  # delta = clip((co2_ppm - co2_low) / (co2_high - co2_low))
+  # 절대 CO₂뿐 아니라 세션 중 상승과 어두움도 피로 증거로 삼는다.
   co2_ppm_low: 800
   co2_ppm_high: 1500
+  co2_rise_low: 200        # 세션 시작 대비 상승 ppm
+  co2_rise_high: 600
+  # 쾌적 범위 밖의 정도는 집중 저하 증거로 쓰며, 실측 후 이 값만 조정한다.
+  temp_comfort_min: 20.0   # °C
+  temp_comfort_max: 26.0
+  temp_margin: 4.0         # 범위에서 이만큼 벗어나면 1.0
+  humidity_comfort_min: 30.0
+  humidity_comfort_max: 60.0
+  humidity_margin: 15.0
+  lux_dim_high: 300        # 이 이상이면 0 (책상 작업 권장 하한)
+  lux_dim_low: 100         # 이 이하면 1.0
+  env_flag_threshold: 0.5  # 화면 이유로 표시할 하위 증거의 최소값
 
 elapsed:
   # delta = clip(세션 경과초 / full_sec)

@@ -141,7 +141,8 @@ health: `deskmate/health/pc-collector` 에 `{"node","status":"online|offline","r
   "cause": "environment",
   "reasons": ["posture_stable", "typing_rhythm_slow", "co2_rising"],
   "sensor_summary": {           // 선택: 화면 표시용 특징 요약. 센서 원본 금지
-    "present": true, "co2_ppm": 812, "lux": 310, "valid": true,
+    "present": true, "co2_ppm": 1200, "lux": 310, "valid": true,
+    "env_flags": ["co2_high"], // 선택: 유효한 환경 측정에서 임계값을 넘은 실행 이유
     "mmwave": {                 // 선택: 최신 mmWave 표본이 신선할 때만
       "motion_state": "still", "motion_level": 5, "distance_cm": 55,
       "resp_bpm": 15, "resp_valid": true, "heart_bpm": 72, "heart_valid": false,
@@ -163,6 +164,12 @@ health: `deskmate/health/pc-collector` 에 `{"node","status":"online|offline","r
 `sensor_summary`는 display가 별도 센서 topic을 조합하지 않아도 AOD를 그릴 수 있게 하는 선택 필드다.
 ToF raw 54×42 배열이나 키 내용은 이 필드에 넣지 않는다. 현재 미리보기 HTTP API도 이와 동일한
 envelope를 사용하므로 최종 전송 어댑터를 바꿔도 display 모델은 유지한다.
+
+`sensor_summary.env_flags` 는 신선하고 유효한 환경 측정으로 계산한 화면용 실행 이유다.
+순서는 `co2_high`, `co2_rising`, `too_hot`/`too_cold`, `too_humid`/`too_dry`, `too_dark` 이며
+해당 이유가 없으면 키를 생략한다. CO₂ 상승은 세션 시작 뒤 첫 유효 CO₂ 값이 있을 때만 계산한다.
+현재 live 발행 경로는 tracker를 전달하지 않으므로 `co2_rising`은 생략하고 나머지 이유를 발행한다.
+환경 신호 자체는 CO₂·온도·습도·조도 중 유효한 측정이 하나라도 있으면 가용이다.
 
 `sensor_summary.mmwave` 의 심박·호흡은 **값과 `*_valid` 가 짝**이다. 락온이 풀린 구간의 값을 그대로
 그리면 "심박 0" 으로 읽히므로, display 는 `*_valid` 가 false 면 값을 표시하지 않는다(순간값은 판정에 쓰지 않는다).
@@ -289,12 +296,19 @@ FSM 을 MONITOR 로 보낸다. `state/phase.sensor_summary.control` 에 진행 �
   "data": {
     "request_id": "session-12-q-3",
     "verdict": "correct",       // accept | reject | correct | timeout
-    "answer": "rhythm",
     "corrected_state": "FOCUS_PC",
     "response_ms": 4200
   }
 }
 ```
+
+`accept`/`reject` 는 현재 질문 ID를 확인하고 처리한다. 자동 실행 알림의 되돌리기 `reject` 는
+`request_id` 가 없거나 `atlas-display` 일 수 있으며, 실행 뒤 `control.yaml` 의 `undo_window_sec` 안에서만
+되돌린다. `timeout` 은 현재 질문 ID가 맞을 때만 질문을 해제하고 무응답 라벨을 남기며, 대기 중인 제안 제어는
+실행 없이 바로 만료한다(화면에 없는 제안을 `suggest_timeout_sec` 까지 붙들지 않는다). `correct` 는 질문이 없어도 받을 수 있으며
+`corrected_state` 는 `FOCUS_PC`·`FATIGUE`·`REST`·`IDLE` 중 하나여야 한다. 정정은 평가용 라벨로만
+저장하고 FSM 판정이나 제어 명령을 바꾸지 않는다. 선택 필드 `response_ms` 는 응답까지 걸린 밀리초다.
+라벨은 hub 로컬 JSONL에 기록하며 별도 MQTT 토픽으로 발행하지 않는다.
 
 ## QoS · 보존
 

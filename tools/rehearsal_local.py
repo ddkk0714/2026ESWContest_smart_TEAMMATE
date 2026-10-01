@@ -1,21 +1,33 @@
 """PC 단독 리허설 — 브로커·센서 없이 전체 소프트웨어 경로를 돌려 FSM 전이를 요약한다.
 
     python -m pip install amqtt          # 로컬 MQTT 브로커(개발용, tools/requirements.txt 의 선택 항목)
-    python tools/rehearsal_local.py [초, 기본 400]
+    python tools/rehearsal_local.py [초, 기본 400] [--scenario short|demo] [--host 0.0.0.0] [--respond accept]
 
 amqtt 브로커(127.0.0.1:18832) + tools/mock_plug.py + tools/mqtt_scenario_sim.py --scenario short + `python -m deskmate_hub run --config fsm.demo.yaml`
 을 한 번에 띄우고, 끝나면 hub/logs/rehearsal/state-*.jsonl 에서 상태 전이만 뽑아 출력한다.
 Node-RED 를 같은 브로커(포트 18832)에 붙이면 대시보드도 함께 확인할 수 있다. 실기 검증을 대신하지 않는다.
+
+5분 시연 리허설(docs/demo-scenario.md):
+    python tools/rehearsal_local.py --scenario demo --host 0.0.0.0
+`--host 0.0.0.0` 이면 같은 망의 Pi 5 앱이 이 PC 의 18832 포트로 붙어 화면까지 볼 수 있다(앱 연결 탭에 PC IP:18832).
+`--respond accept` 는 화면 없이 돌릴 때 제안 카드에 대신 답한다. 기간을 안 주면 시나리오가 끝날 때까지 돈다.
+리플레이로 같은 전이 재현: `cd hub && python -m deskmate_hub --replay logs/rehearsal/frames-<stamp>.jsonl --config deskmate_hub/config/fsm.demo.yaml`
 """
-import asyncio, glob, json, os, subprocess, sys, threading, time
+import argparse, asyncio, glob, json, os, subprocess, sys, threading, time
 from amqtt.broker import Broker
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = 18832
 LOGDIR = os.path.join(ROOT, "hub", "logs", "rehearsal")
-DURATION = float(sys.argv[1]) if len(sys.argv) > 1 else 400
+ap = argparse.ArgumentParser(description="PC 단독 리허설")
+ap.add_argument("seconds", nargs="?", type=float, default=400, help="최대 실행 시간(초). 시나리오가 먼저 끝나면 거기서 멈춘다")
+ap.add_argument("--scenario", default="short", choices=["short", "default", "demo"])
+ap.add_argument("--host", default="127.0.0.1", help="브로커 바인드 주소. Pi 5 앱을 붙이려면 0.0.0.0")
+ap.add_argument("--respond", choices=["accept", "reject"], help="제안 카드 자동 응답(화면 없이 돌릴 때)")
+args = ap.parse_args()
+DURATION = args.seconds
 
-cfg = {"listeners": {"default": {"type": "tcp", "bind": f"127.0.0.1:{PORT}"}},
+cfg = {"listeners": {"default": {"type": "tcp", "bind": f"{args.host}:{PORT}"}},
        "sys_interval": 0, "auth": {"allow-anonymous": True}, "topic-check": {"enabled": False}}
 stop = threading.Event()
 
@@ -38,8 +50,12 @@ time.sleep(2)
 plug = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "mock_plug.py"), "--broker", "127.0.0.1",
                          "--port", str(PORT), "--delay", "0.3"], env=env,
                         stdout=open(os.path.join(LOGDIR, "plug-console.log"), "a", encoding="utf-8"), stderr=subprocess.STDOUT)
-sim = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "mqtt_scenario_sim.py"), "--broker", "127.0.0.1",
-                        "--port", str(PORT), "--scenario", "short"], env=env,
+sim_args = ["--broker", "127.0.0.1", "--port", str(PORT), "--scenario", args.scenario]
+if args.respond:
+    sim_args += ["--respond", args.respond]
+if args.host != "127.0.0.1":
+    print(f"브로커 {args.host}:{PORT} — Pi 5 앱 연결 탭에 이 PC 의 IP 와 {PORT} 를 넣는다.", flush=True)
+sim = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "mqtt_scenario_sim.py"), *sim_args], env=env,
                        stdout=subprocess.DEVNULL, stderr=open(os.path.join(LOGDIR, "sim-console.log"), "a", encoding="utf-8"))
 t0 = time.time()
 while time.time() - t0 < DURATION and sim.poll() is None:
@@ -56,6 +72,10 @@ for line in open(states, encoding="utf-8"):
     if d["fsm_state"] != prev:
         print(f"seq={json.loads(line)['seq']:>3} {d['fsm_state']:<16} ctx={d['context']:<5} fat={d['c_fatigue']:.2f} foc={d['c_focus']:.2f} gate={d['gate']} cause={d['cause']}")
         prev = d["fsm_state"]
+frames = sorted(glob.glob(os.path.join(LOGDIR, "frames-*.jsonl")))
+if frames:
+    print("replay:", f"cd hub && python -m deskmate_hub --replay {os.path.relpath(frames[-1], os.path.join(ROOT, 'hub'))}"
+          " --config deskmate_hub/config/fsm.demo.yaml")
 print("last sensor_summary:", json.dumps(json.loads(line)["data"]["sensor_summary"], ensure_ascii=False)[:200])
 plog = os.path.join(LOGDIR, "plug-console.log")
 if os.path.exists(plog):
