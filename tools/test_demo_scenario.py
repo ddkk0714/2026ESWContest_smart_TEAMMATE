@@ -67,3 +67,12 @@ def test_frames_replay_to_the_same_transitions():
     buf.seek(0)
     replayed = replay(list(iter_frames(buf)), load_config(DEMO_CONFIG))
     assert [e["to"] for e in replayed.trace] == _states(res)[1:]
+
+
+@pytest.mark.parametrize("seconds_after, undone", [(15, True), (70, False)])
+def test_undo_on_the_auto_notice_follows_the_undo_window(seconds_after, undone):
+    # 화면의 '되돌리기'는 request_id 없는 reject. hub 가 제어 건을 닫은 뒤에도 undo_window_sec(60) 안이면 되돌린다.
+    t_env = next(c["t"] for c in run_dryrun("demo")["commands"])
+    res = run_dryrun("demo", undo_at=int(t_env) + seconds_after)
+    undo = [(c["target_id"], c["value"]) for c in res["commands"] if c["gate"] == "undo"]
+    assert undo == ([("vent_fan", "off"), ("desk_lamp", 40)] if undone else [])

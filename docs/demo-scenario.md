@@ -24,6 +24,7 @@
 python tools/demo_dryrun.py                    # 표로 출력
 python tools/demo_dryrun.py --offset 7         # hub tick 과 시나리오 시작이 7 s 어긋난 경우
 python tools/demo_dryrun.py --frames-out demo-frames.jsonl   # 리플레이용 프레임 저장
+python tools/demo_dryrun.py --undo-at 245      # 환경 자동 실행 15 s 뒤 '되돌리기'를 누른 경우
 
 # (2) 실시간 리허설 — PC 단독 (amqtt·paho 필요: tools/requirements.txt)
 python tools/rehearsal_local.py --scenario demo --respond accept
@@ -55,8 +56,9 @@ hub 는 10 s 마다 판정하므로 실시간에서는 각 시각이 0~9 s 늦�
 | 4:10 | wake_fresh | RECOVERY → FOCUS(4:20) | 회복 화면 → 몰입 복귀 | 개입 효과를 확인하고 원래 작업으로 |
 | 4:55 | leave | (이탈) | 리포트 탭: 집중 시간·피로 1회·개입 2회·회복 | 세션 기록은 로컬에만 남는다 |
 
-자동 실행 알림의 **되돌리기**는 hub 에 `reject` 를 보낸다. hub 는 ACTION_ENV 를 벗어나며 제어 건을 닫으므로,
-지금은 알림이 남아 있는 30 s 동안 눌러도 undo 명령이 나가지 않는다 — W3 의 되돌리기 창(`control.undo_window_sec`)이 들어오면 나간다.
+자동 실행 알림의 **되돌리기**는 hub 에 `reject` 를 보낸다. hub 는 ACTION_ENV 를 벗어나며 제어 건을 닫지만,
+실행 후 `control.undo_window_sec`(60 s) 안이면 닫힌 건도 되돌린다 — 팬 OFF·조명 40%(undo 명령 2건).
+알림은 30 s 뒤 사라지므로 화면에서 누를 수 있는 동안은 항상 창 안이다. 확인: `python tools/demo_dryrun.py --undo-at 245`.
 
 ## 4. 이 동선에 제안 카드가 없는 이유 (팀 확인 필요)
 
@@ -77,4 +79,5 @@ FATIGUE 확정 조건이 C_fatigue ≥ `fatigue_confirm`(0.70) 지속이다. 그
 - [ ] `python -m pytest tools -q` 통과(동선 시험 포함)
 - [ ] 리허설 1회: 전이 요약에 ACTION_POSTURE·ACTION_ENV·RECOVERY, 모의 플러그 명령 2건
 - [ ] Pi 5 앱이 PC 브로커(18832)에 붙어 연결 배지 정상, 자동 알림 두 번·리포트 탭 확인
+- [ ] (선택) 환경 자동 알림에서 되돌리기 → 모의 플러그에 undo 2건
 - [ ] 실센서 시연이면 이 시나리오는 백업 — 같은 화면 흐름을 영상으로 녹화해 둔다

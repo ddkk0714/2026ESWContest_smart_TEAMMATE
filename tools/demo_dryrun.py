@@ -35,10 +35,11 @@ T0 = 1_790_000_000.0   # 가상 시계 시작(2026-09 근처). 값 자체는 의
 
 def run_dryrun(name: str = "demo", *, fsm_config: str = DEMO_CONFIG, respond: str | None = "accept",
                respond_delay: float = 4.0, seed: int = 7, offset: int = 0,
-               frame_log=None) -> dict[str, Any]:
+               frame_log=None, undo_at: int | None = None) -> dict[str, Any]:
     """시나리오 하나를 끝까지 돌려 전이·질문·제어·리포트를 돌려준다.
 
     offset: hub tick 과 시나리오 시작의 어긋남(초). 실시간 리허설에서는 둘이 따로 시작하므로 0~period-1 이 다 나온다.
+    undo_at: 시나리오 시작 후 이 초에 자동 실행 알림의 '되돌리기'(request_id 없는 reject)를 누른다.
     frame_log: 주면 tick 마다 SensorFrame 을 리플레이 JSONL 로 쓴다(`python -m deskmate_hub --replay` 로 재현).
     """
     clock = {"t": T0}
@@ -72,6 +73,8 @@ def run_dryrun(name: str = "demo", *, fsm_config: str = DEMO_CONFIG, respond: st
                 cache.put_feedback({"request_id": answer_at[1], "verdict": respond,
                                     "response_ms": int(respond_delay * 1000)})
                 answer_at = None
+            if undo_at is not None and second == undo_at:
+                cache.put_feedback({"verdict": "reject", "request_id": "atlas-display"})
             if (second + offset) % period == 0:
                 env = hub.tick_once(clock["t"])
                 d = env["data"]
@@ -97,13 +100,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--respond", choices=["accept", "reject", "none"], default="accept")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--offset", type=int, default=0, help="hub tick 과 시나리오 시작의 어긋남(초)")
+    ap.add_argument("--undo-at", type=int, metavar="초", help="이 시각에 자동 실행 '되돌리기'를 누른다")
     ap.add_argument("--frames-out", metavar="frames.jsonl", help="리플레이용 SensorFrame JSONL 저장")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     flog = open(args.frames_out, "w", encoding="utf-8") if args.frames_out else None
     res = run_dryrun(args.scenario, fsm_config=args.config,
                      respond=None if args.respond == "none" else args.respond, seed=args.seed,
-                     offset=args.offset, frame_log=flog)
+                     offset=args.offset, frame_log=flog,
+                     undo_at=args.undo_at)
     if flog is not None:
         flog.close()
     if args.json:
