@@ -30,6 +30,7 @@
 | [`atlas-build-handoff.md`](atlas-build-handoff.md) | Pi 5 Atlas IPK 빌드·실기 배포 점검 |
 | [`ilink-bluetooth-lamp.md`](ilink-bluetooth-lamp.md) | iLink BLE 조명 프로토콜·상태 피드백·PC 연결 절차 |
 | [`submission.md`](submission.md) | 결선 제출물·마감·시연 규칙 |
+| [`field-checklist.md`](field-checklist.md) | 실기 체크리스트 — 통신부터 센서·FSM·개입 화면·블루투스·시연까지, 기록표 포함 |
 | [`demo-scenario.md`](demo-scenario.md) | 5분 시연 동선·리허설 명령·무대 전 체크 |
 | [`security-privacy.md`](security-privacy.md) | 보고서용 보안·프라이버시 절 초안(수집하지 않는 것·온디바이스·저장 위치·남은 위험) |
 | [`dataset-survey.md`](dataset-survey.md) | 2단계 학습용 공개 데이터셋 조사 |

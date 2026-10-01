@@ -108,7 +108,7 @@ void main() {
 
     expect(find.byTooltip('상태'), findsOneWidget);
     expect(find.byTooltip('센서 전체'), findsOneWidget);
-    expect(find.byTooltip('센서 테스트'), findsOneWidget);
+    expect(find.byTooltip('개발자'), findsOneWidget);
     expect(find.byTooltip('FSM 전체'), findsOneWidget);
 
     await tester.tap(find.byTooltip('센서 전체'));
@@ -120,15 +120,33 @@ void main() {
     expect(find.byKey(const ValueKey('demo-cycle-toggle')), findsOneWidget);
   });
 
-  testWidgets('sensor test explains that the real Hub connection is required',
-      (tester) async {
+  testWidgets('개발자 탭에서 버튼으로 화면을 바꾸면 상태 탭도 그 화면이 된다', (tester) async {
+    tester.view.physicalSize = const Size(1024, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
     await tester.pumpWidget(const DeskmateApp());
     await tester.pump();
 
-    await tester.tap(find.byTooltip('센서 테스트'));
-    await tester.pump();
+    await tester.tap(find.byTooltip('개발자'));
+    await tester.pumpAndSettle();
+    expect(find.text('개발자 화면'), findsOneWidget);
+    // 예전 Pi 4 HTTP 연결 폼은 없다
+    expect(find.byKey(const ValueKey('hub-url-input')), findsNothing);
 
-    expect(find.textContaining('Pi 4의 실제 FSMEngine'), findsOneWidget);
+    final devList = find.ancestor(
+        of: find.text('국면 화면'), matching: find.byType(Scrollable));
+    await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('dev-suggest-env')), 120,
+        scrollable: devList.first);
+    await tester.tap(find.byKey(const ValueKey('dev-suggest-env')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('ACTION_ENV · gate suggest'), findsOneWidget);
+    expect(find.text('적용할게요'), findsOneWidget); // 미리보기 안의 제안 카드
+
+    await tester.tap(find.byTooltip('상태'));
+    await tester.pumpAndSettle();
+    expect(find.text('적용할게요'), findsOneWidget);
+    expect(find.textContaining('뒤 닫혀요'), findsOneWidget);
   });
 
   testWidgets('연결 배지는 5초 뒤 사라진다', (tester) async {

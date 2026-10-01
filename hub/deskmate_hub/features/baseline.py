@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import json
 import os
-import statistics
 import time
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable
+
+from ..mathutil import median  # statistics 는 보드에 없는 _random 을 끌어온다
 
 MODIFIED_Z_CONST = 0.6745
 
@@ -29,8 +30,8 @@ def median_mad(values: Iterable[float]) -> tuple[float, float]:
     xs = sorted(float(v) for v in values)
     if not xs:
         raise ValueError("no samples")
-    med = statistics.median(xs)
-    mad = statistics.median(abs(x - med) for x in xs)
+    med = median(xs)
+    mad = median(abs(x - med) for x in xs)
     return med, mad
 
 
