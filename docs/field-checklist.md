@@ -12,11 +12,35 @@
 
 | 이름 | 값 | 찾는 법 |
 |---|---|---|
-| `<PI4_IP>` | 교내 LAN `172.16.34.x` | `ssh atlas` 가 되면 그 주소. 안 되면 `powershell -File "$HOME\.ssh\atlas-ip.ps1"` (스캔 후 ssh config 자동 갱신) |
-| `<PI5_IP>` | DHCP | 화면 설정 또는 공유기 목록. 이더넷 직결이면 Pi 5 쪽 링크 주소 |
+| `<PI4_IP>` | 교내 LAN `172.16.34.x` 또는 핫스팟 주소 | 교내: `ssh atlas`(안 되면 `atlas-ip.ps1`). 핫스팟: §0-1a `tools/find-boards.ps1` → `ssh atlas-hs` |
+| `<PI5_IP>` | DHCP 또는 핫스팟 주소 | 핫스팟: §0-1a → `ssh pi5-hs`. 이더넷 직결이면 Pi 5 쪽 링크 주소 |
 | `<PC_IP>` | PC 의 같은 망 주소 | PowerShell `ipconfig` |
 
 주소는 저장소·문서에 고정값으로 적지 않는다(이 표는 현장 메모용).
+
+### 0-1a. 휴대폰 핫스팟에서 보드 찾기 (2026-10-01 확인, 1분)
+
+교내 LAN 이 없을 때는 **PC·Pi 4·Pi 5 를 모두 같은 휴대폰 핫스팟**에 붙이고 그 망으로 점검한다.
+
+1. PC Wi-Fi 를 그 핫스팟으로 바꾼다. **CloudflareWARP 같은 VPN 은 끈다**(사설 주소 접속을 가로챈다).
+2. 보드 찾기 + ssh 별명 갱신:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File tools/find-boards.ps1 -UpdateSshConfig
+   ```
+   → `Pi 4 10.x.x.x ssh22=True`, `Pi 5 10.x.x.x ssh22=True` 가 나오면
+   ```powershell
+   ssh atlas-hs     # Pi 4
+   ssh pi5-hs       # Pi 5
+   ```
+3. 동작 원리와 함정
+   - 보드는 **ping 에 답하지 않는다.** 스크립트는 ping 을 "이웃 표 채우기"로만 쓰고, MAC 으로 보드를 고른다
+     (Pi 4 wlan0 `dc:a6:32:85:f3:73`, Pi 5 wlan0 `88:a2:9e:3c:cc:b4`). 둘 다 호스트 이름이 `atlas` 라 이름으로는 구분이 안 된다.
+   - 주소가 바뀌면 SSH 가 "Host key verification failed" 를 낸다. 스크립트는 예전 교내 LAN 주소로 저장해 둔 키
+     (`HostKeyAlias`)로 검증하므로, **키가 같으면** 경고 없이 붙는다. 키가 정말 다르면 보드가 재설치된 것이니 확인 후 갱신한다.
+   - ATLAS 는 **재부팅하면 핫스팟 접속을 복구하지 않는다.** 보드가 안 보이면 보드 화면/콘솔에서 다시 붙이거나
+     `tools/atlas-hotspot-broker/board_wifi_connect.sh <SSID> <PASS>`(PR #18 워크트리, SSID·비밀번호는 저장소에 적지 않는다).
+   - 스크립트가 못 찾으면 IPv6 링크로컬로 직접: `ssh root@fe80::dea6:32ff:fe85:f373%<Wi-Fi ifIndex>`(Pi 4).
+   - 핫스팟 경유 지연은 Pi 5 → Pi 4 약 40 ms(10-01). 점검에는 충분하고, 시연은 이더넷 직결이 기준이다(1-1).
 
 ### 0-2. PC 도구
 
@@ -48,6 +72,7 @@ python tools/mqtt_watch.py --broker <PI4_IP>
 | - [ ] Pi 4 SSH | `ssh atlas "uname -a; uptime"` | 응답이 온다 |
 | - [ ] Pi 4 ↔ Pi 5 이더넷 | `ssh atlas ping -c 3 <PI5_IP>` | 손실 0% |
 | - [ ] PC ↔ Pi 4 | `ping <PI4_IP>` | 응답 |
+| - [ ] Pi 4 ↔ Pi 5 유선 주소 대역 | `ssh atlas-hs "ip -4 addr show eth0"` / `ssh pi5-hs "ip -4 addr show eth0"` | 두 eth0 이 **같은 대역**. 10-01 에는 Pi 4 `169.254.x`(자동), Pi 5 `172.16.34.198`(옛 교내 주소)로 달라 직결 핑 100% 손실 → 두 보드에 같은 대역 고정 주소를 주고 브로커 주소를 그쪽으로(시연 전 필수) |
 
 안 될 때: IP 가 바뀌었으면 `atlas-ip.ps1`. 핫스팟 망이면 IPv6 링크로컬 `ssh root@fe80::dea6:32ff:fe85:f373%<ifIndex>`(메모 `atlas-board-ssh`). 보드는 BusyBox 라 GNU 옵션(`head -8` 등)이 안 먹는다.
 
