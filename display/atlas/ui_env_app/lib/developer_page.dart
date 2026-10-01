@@ -11,6 +11,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import 'deskmate_theme.dart';
 import 'display_state.dart';
 
 /// 버튼 하나 = 화면 하나. pending 이면 hub 가 질문을 보낸 것처럼 제안 카드를 띄운다.
@@ -229,7 +230,7 @@ class _Section extends StatelessWidget {
               style: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
-                  color: Color(0xFF9DABC2))),
+                  color: DeskmateColors.inkMuted)),
           const SizedBox(height: 6),
           Wrap(spacing: 6, runSpacing: 6, children: children),
         ]),
@@ -245,9 +246,9 @@ class _Panel extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         padding: padding,
         decoration: BoxDecoration(
-          color: const Color(0xFF121D2E),
-          borderRadius: BorderRadius.circular(22),
-          border: Border.all(color: const Color(0xFF24344C)),
+          color: DeskmateColors.surfaceRaised,
+          borderRadius: BorderRadius.circular(DeskmateRadius.panel),
+          border: Border.all(color: DeskmateColors.line),
         ),
         child: child,
       );
