@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'app_motion.dart';
 import 'deskmate_theme.dart';
 import 'display_state.dart';
+import 'intervention.dart';
 
 class DashboardView extends StatelessWidget {
   const DashboardView({
@@ -23,11 +24,32 @@ class DashboardView extends StatelessWidget {
     required this.showFocusDetail,
     required this.onShowFocusDetail,
     this.liveKeys,
+    this.autoNotice,
+    this.onUndoAuto,
+    this.onDismissAuto,
+    this.suggestionRemaining,
+    this.onCorrect,
+    this.focusSummary,
   });
 
   final DisplayState state;
   final String? displayMessage;
   final bool hasPendingRequest;
+
+  /// 자동 실행 뒤 알림. 있으면 다른 화면보다 먼저 띄운다.
+  final AutoNotice? autoNotice;
+  final VoidCallback? onUndoAuto;
+  final VoidCallback? onDismissAuto;
+
+  /// 제안 카드의 남은 응답 시간. 만료되면 앱이 무응답(timeout)을 보낸다.
+  final Duration? suggestionRemaining;
+
+  /// "지금 상태가 아니에요" 정정 입력. null 이면 버튼을 그리지 않는다(데모 등).
+  final VoidCallback? onCorrect;
+
+  /// 대기 화면의 오늘 집중 요약(예: "오늘 집중 38분"). 모르면 null.
+  final String? focusSummary;
+
   /// 국면이 바뀌어도 시계 화면에 묶어 둔다. 자동 순환이 꺼져 있을 때 그렇고,
   /// 테스트로 상태를 고정한 동안에는 그 상태의 화면을 봐야 하므로 풀린다.
   final bool pinAmbient;
@@ -53,27 +75,54 @@ class DashboardView extends StatelessWidget {
         state: state,
         onClose: () => onShowFocusDetail(false),
       );
+    } else if (autoNotice != null) {
+      // 이미 실행한 것은 사람이 알아야 되돌릴 수 있다. 제안보다 먼저 띄운다.
+      transitionKey = 'auto-action';
+      content = AutoActionView(
+        notice: autoNotice!,
+        state: state,
+        onUndo: onUndoAuto ?? () {},
+        onDismiss: onDismissAuto ?? () {},
+      );
     } else if (hasPendingRequest) {
       // 허브가 물어본 것은 답을 받아야 끝난다. 자동 순환과 무관하게 먼저 띄운다.
       transitionKey = 'suggestion';
-      content = SuggestionView(state: state, onFeedback: onFeedback);
+      content = SuggestionView(
+        state: state,
+        onFeedback: onFeedback,
+        remaining: suggestionRemaining,
+        onCorrect: onCorrect,
+      );
     } else if (pinAmbient) {
       // 자동 순환이 꺼져 있으면 국면이 바뀌어도 화면을 바꾸지 않는다.
       // 켜 두면(또는 테스트로 상태를 고정하면) 아래 분기들이 국면을 따라 돈다.
       transitionKey = 'idle';
-      content =
-          AmbientView(state: state, onDetail: () => onShowFocusDetail(true));
+      content = AmbientView(
+        state: state,
+        onDetail: () => onShowFocusDetail(true),
+        focusSummary: focusSummary,
+        onCorrect: onCorrect,
+      );
     } else if (phase == 'idle') {
       transitionKey = 'idle';
-      content =
-          AmbientView(state: state, onDetail: () => onShowFocusDetail(true));
+      content = AmbientView(
+        state: state,
+        onDetail: () => onShowFocusDetail(true),
+        focusSummary: focusSummary,
+        onCorrect: onCorrect,
+      );
     } else if (phase == 'end') {
       transitionKey = 'report';
       content = SessionReportView(state: state);
     } else if (phase == 'fatigue' &&
         (phaseOverride != null || state.gate != 'none')) {
       transitionKey = 'suggestion';
-      content = SuggestionView(state: state, onFeedback: onFeedback);
+      content = SuggestionView(
+        state: state,
+        onFeedback: onFeedback,
+        remaining: suggestionRemaining,
+        onCorrect: onCorrect,
+      );
     } else if (phase == 'recovery') {
       transitionKey = 'recovery';
       content = FocusAmbientView(state: state);
@@ -174,9 +223,17 @@ class DisplayMessageBanner extends StatelessWidget {
 }
 
 class AmbientView extends StatelessWidget {
-  const AmbientView({super.key, required this.state, required this.onDetail});
+  const AmbientView({
+    super.key,
+    required this.state,
+    required this.onDetail,
+    this.focusSummary,
+    this.onCorrect,
+  });
   final DisplayState state;
   final VoidCallback onDetail;
+  final String? focusSummary;
+  final VoidCallback? onCorrect;
 
   @override
   Widget build(BuildContext context) {
@@ -195,10 +252,18 @@ class AmbientView extends StatelessWidget {
             const SizedBox(height: 18),
             Text(_date(now), style: Theme.of(context).textTheme.bodyMedium),
             const SizedBox(height: 6),
-            const Text('오늘도 편안하게 시작해볼까요?'),
+            Text(focusSummary ?? '오늘도 편안하게 시작해볼까요?',
+                key: const ValueKey('ambient-focus-summary')),
             const Spacer(flex: 2),
-            Text('상세 상태는 필요할 때만 확인할 수 있어요.',
-                style: Theme.of(context).textTheme.labelMedium),
+            // 멘토 피드백(09-22): 클라우드를 쓰지 않는다는 점을 화면에서도 보인다.
+            Row(children: [
+              const Icon(Icons.lock_outline_rounded,
+                  size: 15, color: DeskmateColors.inkMuted),
+              const SizedBox(width: 6),
+              Text('모든 처리는 이 기기 안에서 이뤄져요',
+                  key: const ValueKey('ambient-on-device'),
+                  style: Theme.of(context).textTheme.labelMedium),
+            ]),
           ]),
         ),
         const SizedBox(width: 46),
@@ -234,11 +299,14 @@ class AmbientView extends StatelessWidget {
               ]),
             ),
             const SizedBox(height: 26),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                  onPressed: onDetail, child: const Text('상세 보기  ›')),
-            ),
+            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              if (onCorrect != null)
+                TextButton(
+                    key: const ValueKey('correct-open'),
+                    onPressed: onCorrect,
+                    child: const Text('지금 상태가 아니에요')),
+              TextButton(onPressed: onDetail, child: const Text('상세 보기  ›')),
+            ]),
           ]),
         ),
       ]),
@@ -304,10 +372,19 @@ class FocusStatusView extends StatelessWidget {
 }
 
 class SuggestionView extends StatelessWidget {
-  const SuggestionView(
-      {super.key, required this.state, required this.onFeedback});
+  const SuggestionView({
+    super.key,
+    required this.state,
+    required this.onFeedback,
+    this.remaining,
+    this.onCorrect,
+  });
   final DisplayState state;
   final ValueChanged<String> onFeedback;
+
+  /// 응답 제한 시간까지 남은 시간. 모르면 표시하지 않는다.
+  final Duration? remaining;
+  final VoidCallback? onCorrect;
 
   @override
   Widget build(BuildContext context) {
@@ -339,6 +416,9 @@ class SuggestionView extends StatelessWidget {
                     const SizedBox(width: 8),
                     Text('지금의 제안',
                         style: Theme.of(context).textTheme.labelMedium),
+                    const Spacer(),
+                    Text(confidenceLabel(state),
+                        style: Theme.of(context).textTheme.labelMedium),
                   ]),
                   const SizedBox(height: 14),
                   AnimatedSize(
@@ -368,17 +448,29 @@ class SuggestionView extends StatelessWidget {
                       switchOutCurve: AppMotion.reverseCurve,
                       transitionBuilder: AppMotion.fadeTransition,
                       child: Text(
-                        _suggestionBody(state),
+                        '이유: ${interventionReason(state)}',
                         key: ValueKey('body-${state.cause}'),
                         style: Theme.of(context).textTheme.bodyLarge,
                       ),
                     ),
                   ),
                   const Spacer(),
-                  Text('변경은 사용자가 선택할 때만 적용돼요.',
+                  Text(
+                      remaining == null
+                          ? '변경은 사용자가 선택할 때만 적용돼요.'
+                          : '변경은 선택할 때만 적용돼요 · ${remaining!.inSeconds}초 뒤 닫혀요',
+                      key: const ValueKey('suggestion-remaining'),
                       style: Theme.of(context).textTheme.labelMedium),
                   const SizedBox(height: 15),
                   Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                    if (onCorrect != null) ...[
+                      TextButton(
+                        key: const ValueKey('suggestion-correct'),
+                        onPressed: onCorrect,
+                        child: const Text('상태가 달라요'),
+                      ),
+                      const Spacer(),
+                    ],
                     OutlinedButton(
                       onPressed: () => onFeedback('reject'),
                       child: const Text('괜찮아요'),
@@ -963,6 +1055,9 @@ String _date(DateTime time) => '${time.month}월 ${time.day}일';
 String _percent(double value) => '${(value.clamp(0, 1) * 100).round()}%';
 String _environmentInline(DisplayState state) => [
       if (state.co2Ppm != null) 'CO₂ ${state.co2Ppm} ppm',
+      if (state.temperatureC != null)
+        '${state.temperatureC!.toStringAsFixed(1)}°C',
+      if (state.humidityPct != null) '습도 ${state.humidityPct!.round()}%',
       if (state.lux != null) '조도 ${state.lux} lx',
     ].join(' · ');
 String _comfort(DisplayState state) =>
@@ -984,14 +1079,23 @@ String _stateLabel(DisplayState state) =>
     }[state.phase] ??
     state.fsmState;
 String _suggestionTitle(DisplayState state) => switch (state.cause) {
-      'environment' => '조명을 조금 낮춰볼까요?',
+      // 환경은 원인이 여럿이라 플래그로 무엇을 할지 고른다(CO₂ 면 환기, 어두우면 조명).
+      'environment' => _environmentTitle(state.envFlags),
       'posture' => '자세를 가볍게 바로잡아볼까요?',
       'cognitive' => '잠깐 쉬어가는 건 어떨까요?',
       _ => '환경을 잠시 조정해볼까요?',
     };
-String _suggestionBody(DisplayState state) => switch (state.cause) {
-      'environment' => '현재 환경 신호를 바탕으로 작은 조정을 제안드려요.',
-      'posture' => '자세 변화가 이어지고 있어요. 가볍게 몸을 펴면 다시 편안해질 수 있어요.',
-      'cognitive' => '피로 신호가 이어지고 있어요. 짧은 휴식이 다음 집중에 도움이 될 수 있어요.',
-      _ => state.scenario ?? '현재 상태에 맞는 작은 변화를 제안드려요.',
-    };
+
+String _environmentTitle(List<String> flags) {
+  if (flags.contains('co2_high') || flags.contains('co2_rising')) {
+    return '잠깐 환기해 볼까요?';
+  }
+  if (flags.contains('too_dark')) return '조명을 조금 밝혀 볼까요?';
+  if (flags.contains('too_hot') || flags.contains('too_cold')) {
+    return '실내 온도를 맞춰 볼까요?';
+  }
+  if (flags.contains('too_humid') || flags.contains('too_dry')) {
+    return '습도를 맞춰 볼까요?';
+  }
+  return '환경을 잠시 조정해볼까요?';
+}

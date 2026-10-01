@@ -68,8 +68,7 @@ void main() {
 
     // 허브 연결 폼은 그대로 있고, 그 옆에 상태 목록이 함께 나온다.
     expect(find.byKey(const ValueKey('hub-url-input')), findsOneWidget);
-    expect(
-        find.byKey(const ValueKey('override-ACTION_BREAK')), findsOneWidget);
+    expect(find.byKey(const ValueKey('override-ACTION_BREAK')), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('override-ACTION_BREAK')));
     await tester.pump();
@@ -99,6 +98,7 @@ DisplayState _state() => DisplayState(
 class _FakeSource implements StateSource {
   TestSensorInput? lastInput;
   String? lastCommand;
+
   /// Pi 4 가 없는 상황(MQTT·데모 소스)을 흉내 낸다.
   bool sensorTest = true;
 
@@ -114,6 +114,9 @@ class _FakeSource implements StateSource {
   bool get hasPendingRequest => false;
 
   @override
+  int? get pendingRequestExpiresInS => null;
+
+  @override
   bool get supportsSensorTest => sensorTest;
 
   @override
@@ -123,7 +126,8 @@ class _FakeSource implements StateSource {
   Future<DisplayState> fetch() async => _state();
 
   @override
-  Future<void> feedback(String verdict) async {}
+  Future<void> feedback(String verdict,
+      {String? correctedState, int? responseMs}) async {}
 
   @override
   Future<void> sendTestFrame(TestSensorInput input,
