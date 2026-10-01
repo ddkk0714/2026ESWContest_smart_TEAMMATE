@@ -41,9 +41,15 @@ def predict_centroid(train: np.ndarray, labels: np.ndarray, test: np.ndarray) ->
 
 
 def predict_logistic(train: np.ndarray, labels: np.ndarray, test: np.ndarray,
-                     iterations: int = 120) -> np.ndarray:
+                     iterations: int = 120, balanced: bool = False) -> np.ndarray:
+    """balanced=True 면 클래스 빈도의 역수로 표본 가중(드문 rest 를 묻히지 않게)."""
     train, test = _standardize(train, test)
     present = np.unique(labels)
+    if balanced:
+        freq = np.array([np.mean(labels == label) for label in present])
+        sample_w = (1.0 / (len(present) * freq))[np.searchsorted(present, labels)][:, None]
+    else:
+        sample_w = np.ones((len(labels), 1))
     weights = np.zeros((train.shape[1], len(present)), dtype=np.float64)
     bias = np.zeros(len(present), dtype=np.float64)
     targets = (labels[:, None] == present[None, :]).astype(np.float64)
@@ -52,7 +58,7 @@ def predict_logistic(train: np.ndarray, labels: np.ndarray, test: np.ndarray,
         logits -= logits.max(axis=1, keepdims=True)
         probabilities = np.exp(logits)
         probabilities /= probabilities.sum(axis=1, keepdims=True)
-        error = probabilities - targets
+        error = (probabilities - targets) * sample_w
         weights -= 0.1 * (train.T @ error / len(train))
         bias -= 0.1 * error.mean(axis=0)
     return present[(test @ weights + bias).argmax(axis=1)]
@@ -66,6 +72,32 @@ def classification_metrics(truth: np.ndarray, prediction: np.ndarray) -> dict:
                for i, name in enumerate(CLASSES)}
     return {"accuracy": float(np.mean(truth == prediction)) if len(truth) else None,
             "recall": recalls, "confusion": confusion.tolist()}
+
+
+STRESS = ("sensor_dropout", "baseline_shift", "mix_scale")
+
+
+def stress_test(x_train: np.ndarray, y_train: np.ndarray, originals: int,
+                x_test: np.ndarray, y_test: np.ndarray, seed: int = 2026) -> dict:
+    """평가 창에 결측·개인차를 입혀 원본 학습 vs 증강 학습이 얼마나 버티는지 본다.
+
+    같은 시뮬레이터에서 나온 깨끗한 평가 창만으로는 증강의 쓸모(센서 끊김·사람마다 다른 기준선)가 드러나지 않는다.
+    분류기는 소프트맥스(클래스 가중 없음)로 고정한다.
+    """
+    from ml.training import augment
+
+    out: dict[str, dict] = {}
+    for kind in ("clean",) + STRESS:
+        if kind == "clean":
+            stressed = x_test
+        else:
+            rng = np.random.default_rng(seed)
+            stressed = np.stack([augment.OPERATIONS[kind](w, rng) for w in x_test])
+        summary = summarize_windows(stressed)
+        out[kind] = {variant: float(np.mean(predict_logistic(summarize_windows(x_train[:count]),
+                                                              y_train[:count], summary) == y_test))
+                     for variant, count in (("original", originals), ("augmented", len(x_train)))}
+    return out
 
 
 def evaluate(dataset_dir: str | Path) -> tuple[dict, dict]:
@@ -88,11 +120,14 @@ def evaluate(dataset_dir: str | Path) -> tuple[dict, dict]:
                              ks_statistic(first, second)))
     test_summary = summarize_windows(x_test)
     classifiers = {}
-    for method, predictor in (("nearest_centroid", predict_centroid), ("softmax_logistic", predict_logistic)):
+    predictors = (("nearest_centroid", predict_centroid), ("softmax_logistic", predict_logistic),
+                  ("softmax_logistic_balanced", lambda *a: predict_logistic(*a, balanced=True)))
+    for method, predictor in predictors:
         for variant, count in (("original", originals), ("augmented", len(x_train))):
             prediction = predictor(summarize_windows(x_train[:count]), y_train[:count], test_summary)
             classifiers[f"{method}_{variant}"] = classification_metrics(y_test, prediction)
-    return manifest, {"distribution": distribution, "classifiers": classifiers,
+    robustness = stress_test(x_train, y_train, originals, x_test, y_test)
+    return manifest, {"distribution": distribution, "classifiers": classifiers, "robustness": robustness,
                       "label_source": {source: sum(item["label_source"] == source for item in meta)
                                        for source in ("fsm", "esm")}}
 
@@ -125,7 +160,7 @@ def generate_evidence(dataset_dir: str | Path, out: str | Path) -> dict:
         fmt = lambda x: "—" if x is None else f"{x:.4f}"  # noqa: E731
         lines.append(f"| {name} | {fmt(am)} | {fmt(ast)} | {fmt(bm)} | {fmt(bst)} | {fmt(ks)} |")
     lines += ["", "## 기준 분류기 sanity check", "",
-              "창별 평균·표준편차(34차원)를 입력으로 쓴다. 최근접 중심과 소프트맥스 로지스틱 회귀(경사하강)를 원본만/원본+증강으로 학습하고 동일한 세션 분리 평가 창에서 비교했다.", "",
+              "창별 평균·표준편차(34차원)를 입력으로 쓴다. 최근접 중심, 소프트맥스 로지스틱 회귀(경사하강), 클래스 가중 소프트맥스(balanced)를 원본만/원본+증강으로 학습하고 동일한 세션 분리 평가 창에서 비교했다.", "",
               "| 방법 | 학습 | 정확도 | focus 재현율 | fatigue 재현율 | rest 재현율 | idle 재현율 |",
               "|---|---|---:|---:|---:|---:|---:|"]
     for key, result in analysis["classifiers"].items():
@@ -136,18 +171,39 @@ def generate_evidence(dataset_dir: str | Path, out: str | Path) -> dict:
     lines += ["", "혼동행렬(행=실제, 열=예측; 순서: focus, fatigue, rest, idle):", ""]
     for key, result in analysis["classifiers"].items():
         lines += [f"- `{key}`: `{result['confusion']}`"]
+    lines += ["", "## 결측·개인차 내성", "",
+              "깨끗한 평가 창은 학습과 같은 시뮬레이터 분포라 증강의 쓸모가 드러나지 않는다. 평가 창에 센서 결측·기준선 이동·민감도 차이를"
+              " 입혀(시드 고정) 소프트맥스 정확도를 비교했다.", "",
+              "| 평가 조건 | 원본만 학습 | 원본+증강 학습 | 차이 |", "|---|---:|---:|---:|"]
+    for kind, result in analysis["robustness"].items():
+        diff = result["augmented"] - result["original"]
+        lines.append(f"| {kind} | {result['original']:.3f} | {result['augmented']:.3f} | {diff:+.3f} |")
+    gains = {k: v["augmented"] - v["original"] for k, v in analysis["robustness"].items() if k != "clean"}
+    helped = [k for k, d in gains.items() if d >= 0.01]
+    flat = [k for k, d in gains.items() if abs(d) < 0.01]
+    lines += ["", "해석: " + (f"증강 학습은 {', '.join(helped)} 조건에서 1%p 이상 더 버틴다. " if helped else
+                            "증강 학습이 1%p 이상 더 버틴 조건은 없다. ") +
+              (f"{', '.join(flat)} 는 차이가 1%p 미만 — 이 크기의 변화는 표준화된 요약 특징만으로도 견딘다. " if flat else "") +
+              "실데이터에서 사람·날짜가 바뀔 때 같은 비교를 다시 해야 한다."]
     original_accuracy = analysis["classifiers"]["softmax_logistic_original"]["accuracy"]
     augmented_accuracy = analysis["classifiers"]["softmax_logistic_augmented"]["accuracy"]
     rest_recall = analysis["classifiers"]["softmax_logistic_augmented"]["recall"]["rest"]
     rest_text = "평가 표본 없음" if rest_recall is None else f"{rest_recall:.3f}"
+    balanced = analysis["classifiers"]["softmax_logistic_balanced_augmented"]
+    balanced_rest = balanced["recall"]["rest"]
+    balanced_text = "—" if balanced_rest is None else f"{balanced_rest:.3f}"
     lines += ["", "## 한계·다음 단계", "",
               "시나리오와 FSM에서 유래한 약한 라벨이므로 결과가 높아도 실사용 성능을 뜻하지 않는다. 시드·offset 변형은 독립적인 사람이나 환경을 대체하지 못한다."
               f" 이번 기준에서 소프트맥스 정확도는 원본 {original_accuracy:.3f}, 증강 {augmented_accuracy:.3f}이고"
-              f" 증강 후 rest 재현율은 {rest_text}이다."
+              f" 증강 후 rest 재현율은 {rest_text}이다. rest 는 평가 창의 약 6% 이고 RECOVERY 가 1~2 tick 만 이어지는 짧은 상태라"
+              f" 묻히기 쉽다 — 클래스 가중 학습(balanced)에서는 rest 재현율 {balanced_text}, 정확도 {balanced['accuracy']:.3f} 이다."
+              " 라벨이 FSM 판정에서 왔으므로 이 수치는 '분류기가 FSM 을 얼마나 따라 하는가'(일관성)이지 사람 상태 정확도가 아니다."
+              " 증강은 호흡·경과 시간처럼 센서 측정값이 아닌 칸(`augment.EXEMPT`)을 흔들지 않는다."
               " ESM 정정 라벨을 실제 세션에서 축적하고 사람·시간 단위로 재평가해야 한다. 1D CNN 학습과 TFLite 변환은 조명희 님의 후속 범위다.", "",
               f"재현: `python ml/training/build_dataset.py --name {manifest['name']} --synthetic default,short,demo --seeds 1-20 --offsets 0,3,7 --augment 4`", "",
               f"특징 순서: `{', '.join(FEATURES)}`", ""]
-    Path(out).write_text("\n".join(lines), encoding="utf-8")
+    with open(out, "w", encoding="utf-8", newline="\n") as handle:   # Windows 에서도 LF
+        handle.write("\n".join(lines))
     return analysis
 
 

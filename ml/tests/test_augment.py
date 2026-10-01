@@ -35,3 +35,21 @@ def test_dropout_turns_off_exactly_one_present_signal():
     after = changed[:, [2, 5, 8, 11, 14]].sum(axis=0)
     assert np.sum((before > 0) & (after == 0)) == 1
     assert np.array_equal(original[:, 15:], changed[:, 15:])
+
+
+@pytest.mark.parametrize("name", ["jitter", "baseline_shift", "mix_scale", "time_stretch"])
+def test_non_sensor_columns_are_not_perturbed(name):
+    # 호흡·경과의 phi(늘 0)와 호흡 소실 0/1·경과 시계는 흔들지 않는다 — 원본에 없는 값이 생기면 안 된다.
+    from ml.training.frames import FEATURES
+
+    window = sample()
+    cols = [FEATURES.index(c) for c in augment.EXEMPT]
+    window[:, cols] = 0
+    window[:, FEATURES.index("respiration_delta")] = [0, 0, 1, 1, 1, 0]
+    window[:, FEATURES.index("elapsed_delta")] = np.linspace(0.1, 0.2, 6)
+    changed = augment.OPERATIONS[name](window, np.random.default_rng(11))
+    phi_cols = [FEATURES.index("respiration_phi"), FEATURES.index("elapsed_phi")]
+    assert np.all(changed[:, phi_cols] == 0)
+    assert set(np.unique(changed[:, FEATURES.index("respiration_delta")])) <= {0.0, 1.0}
+    if name != "time_stretch":
+        assert np.allclose(changed[:, cols], window[:, cols])

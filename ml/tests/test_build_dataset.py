@@ -7,6 +7,7 @@ import numpy as np
 
 from ml.training.build_dataset import build_dataset, split_sessions
 from ml.training.evidence import generate_evidence
+from ml.training import augment
 
 
 def test_session_split_has_no_overlap():
@@ -40,6 +41,12 @@ def test_small_synthetic_dataset_and_evidence(tmp_path):
     text = report.read_text(encoding="utf-8")
     assert all(section in text for section in ("데이터 규모", "증강 방법", "분포 비교", "기준 분류기", "한계"))
     assert "nearest_centroid_original" in analysis["classifiers"]
+    assert "softmax_logistic_balanced_augmented" in analysis["classifiers"]
+    # 결측·개인차 내성: 깨끗한 평가와 세 가지 교란 조건을 두 학습 방식으로 비교한다
+    assert "결측·개인차 내성" in text and "해석:" in text
+    assert set(analysis["robustness"]) == {"clean", "sensor_dropout", "baseline_shift", "mix_scale"}
+    assert all(set(v) == {"original", "augmented"} for v in analysis["robustness"].values())
+    assert saved["augmentation"]["exempt_from_noise"] == list(augment.EXEMPT)
 
 
 def test_real_frame_state_pair_and_esm_correction(tmp_path):
@@ -60,3 +67,18 @@ def test_real_frame_state_pair_and_esm_correction(tmp_path):
     assert manifest["sessions"]["total"] == 2
     assert manifest["counts"]["label_source"]["esm"] > 0
     assert manifest["counts"]["train_augmented"] == {name: 0 for name in manifest["classes"]}
+
+
+def test_balanced_logistic_recovers_a_rare_class():
+    from ml.training.evidence import predict_logistic
+
+    rng = np.random.default_rng(0)
+    common = rng.normal(0, 1, size=(400, 2))
+    rare = rng.normal([1.2, 1.2], 0.5, size=(12, 2))
+    x = np.vstack([common, rare])
+    y = np.array([0] * 400 + [2] * 12)
+    test = rng.normal([1.2, 1.2], 0.5, size=(40, 2))
+    plain = np.mean(predict_logistic(x, y, test) == 2)
+    balanced = np.mean(predict_logistic(x, y, test, balanced=True) == 2)
+    assert balanced > plain
+

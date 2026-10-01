@@ -131,7 +131,7 @@ def build_dataset(*, name: str, synthetic: str = "default,short,demo", seeds: st
                    "train_augmented": _counts(y_train[original_train:]), "test": _counts(y_test),
                    "label_source": dict(Counter(item["label_source"] for item in meta))},
         "augmentation": {"per_train_window": augment_count, "counts": dict(augmentation_counts),
-                         "parameters": augment.PARAMETERS},
+                         "parameters": augment.PARAMETERS, "exempt_from_noise": list(augment.EXEMPT)},
     }
     (output_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
                                                encoding="utf-8")

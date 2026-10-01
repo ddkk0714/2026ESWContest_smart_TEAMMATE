@@ -60,6 +60,9 @@ python -m pytest ml -q
 출력은 `ml/datasets/<name>/windows.npz` 와 `manifest.json` 이다. NPZ의 `meta` 는
 학습 창 다음 평가 창 순서의 JSON 문자열 배열이며 세션 ID·시작 tick·라벨 출처·증강 종류·분할을 담는다.
 증거 문서의 정확도는 합성 약한 라벨에 대한 sanity check이며 실사용 성능으로 해석하지 않는다.
+호흡·경과 시간처럼 센서 측정값이 아닌 칸(`augment.EXEMPT`)에는 잡음·오프셋·배율을 넣지 않는다.
+증거 문서에는 클래스 가중 소프트맥스(드문 rest 확인)와 **결측·개인차 내성**(평가 창에 결측·기준선 이동·민감도 차이를 입혀
+원본 학습 vs 증강 학습 비교)이 함께 실린다. 공개 데이터셋 후보는 [`docs/dataset-survey.md`](../docs/dataset-survey.md).
 
 ## ESM 라벨링 체계
 
