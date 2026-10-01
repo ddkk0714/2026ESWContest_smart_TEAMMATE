@@ -304,8 +304,8 @@ FSM 을 MONITOR 로 보낸다. `state/phase.sensor_summary.control` 에 진행 �
 
 `accept`/`reject` 는 현재 질문 ID를 확인하고 처리한다. 자동 실행 알림의 되돌리기 `reject` 는
 `request_id` 가 없거나 `atlas-display` 일 수 있으며, 실행 뒤 `control.yaml` 의 `undo_window_sec` 안에서만
-되돌린다. `timeout` 은 현재 질문 ID가 맞을 때만 질문을 해제하고 무응답 라벨을 남긴다. 실행·취소 판단은
-dispatcher 의 기존 `suggest_timeout_sec` 타이머가 맡는다. `correct` 는 질문이 없어도 받을 수 있으며
+되돌린다. `timeout` 은 현재 질문 ID가 맞을 때만 질문을 해제하고 무응답 라벨을 남기며, 대기 중인 제안 제어는
+실행 없이 바로 만료한다(화면에 없는 제안을 `suggest_timeout_sec` 까지 붙들지 않는다). `correct` 는 질문이 없어도 받을 수 있으며
 `corrected_state` 는 `FOCUS_PC`·`FATIGUE`·`REST`·`IDLE` 중 하나여야 한다. 정정은 평가용 라벨로만
 저장하고 FSM 판정이나 제어 명령을 바꾸지 않는다. 선택 필드 `response_ms` 는 응답까지 걸린 밀리초다.
 라벨은 hub 로컬 JSONL에 기록하며 별도 MQTT 토픽으로 발행하지 않는다.

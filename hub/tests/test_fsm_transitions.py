@@ -138,6 +138,40 @@ def test_intervention_failure_escalates_and_forces_rest():
     assert e.tick(frame(t + 1000, sig=sig)).state is State.RECOVERY
 
 
+def _first_and_retry_gates(cfg=None):
+    e = FSMEngine(cfg)
+    t = drive_to_focus(e)
+    sig = {"posture": {"delta": 0.9}, "elapsed": {"delta": 0.9}, "keystroke": {"delta": 0.9}}
+    t = confirm_fatigue(e, t, sig)
+    gates = []
+    for i in range(12):
+        r = e.tick(frame(t + i * 30, sig=sig, action_done=True))
+        if r.state.value.startswith("ACTION_"):
+            gates.append(r.gate)
+    return gates
+
+
+def test_retry_cause_is_suggested_not_automatic():
+    # 첫 원인(C≈0.9)은 자동, 효과가 없어 재시도하는 원인은 근거가 약하니 제안까지만 (gate.retry_max)
+    gates = _first_and_retry_gates()
+    assert gates[0] is GateMode.AUTO
+    assert len(gates) >= 2 and all(g is GateMode.SUGGEST for g in gates[1:])
+
+
+def test_retry_cap_can_be_turned_off_and_resets_per_episode():
+    from deskmate_hub.inference.config import load_config
+
+    cfg = load_config()
+    cfg["gate"] = {k: v for k, v in cfg["gate"].items() if k != "retry_max"}   # 옛 설정(키 없음) = 낮추지 않음
+    assert all(g is GateMode.AUTO for g in _first_and_retry_gates(cfg))
+    e = FSMEngine()
+    e._retry = True
+    t = drive_to_focus(e)
+    sig = {"posture": {"delta": 0.9}, "elapsed": {"delta": 0.9}, "keystroke": {"delta": 0.9}}
+    confirm_fatigue(e, t, sig)              # 새 피로 에피소드 → 재시도 표시 초기화
+    assert e._retry is False
+
+
 # ── 전역/게이트/점수 ───────────────────────────────────────
 def test_absent_forces_idle():
     e = FSMEngine()

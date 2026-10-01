@@ -114,7 +114,8 @@ class ControlDispatcher:
         ep = self.episode
         if ep is not None and ep.awaiting_user:
             if verdict == "timeout":
-                # 앱의 카드 만료는 관측 라벨이다. 실행 판단은 기존 dispatcher 타이머가 한다.
+                # 화면의 카드가 만료됐다(expires_in_s) — 사람이 볼 수 없는 제안을 suggest_timeout 까지 붙들지 않는다.
+                self._expire(ep, "화면 카드 만료(timeout)")
                 return
             if verdict not in ("accept", "reject"):
                 return
@@ -161,15 +162,19 @@ class ControlDispatcher:
             return
         if ep.awaiting_user and now - ep.started_ts > self.suggest_timeout:
             # 제안에 응답이 없으면 만료 — 실행하지 않고 넘어간다(무응답도 하나의 신호로 기록)
-            ep.awaiting_user = False
-            for c in ep.commands:
-                c.status = "skipped"
-            ep.outcome = "expired"
-            self._log(f"[control] 제안 무응답 {self.suggest_timeout:.0f}s → expired")
+            self._expire(ep, f"제안 무응답 {self.suggest_timeout:.0f}s")
         for c in ep.commands:
             if not c.terminal and c.sent_ts is not None and now - c.sent_ts > self.timeout:
                 c.status, c.completed_ts = "timeout", now
                 self._log(f"[control] {c.target_id}.{c.operation} 결과 없음 → timeout")
+
+    def _expire(self, ep: Episode, why: str) -> None:
+        # 제안에 응답이 없으면 만료 — 실행하지 않고 넘어간다(무응답도 하나의 신호로 기록)
+        ep.awaiting_user = False
+        for c in ep.commands:
+            c.status = "skipped"
+        ep.outcome = "expired"
+        self._log(f"[control] {why} → expired")
 
     def action_done(self, now: float | None = None) -> bool:
         """현재 에피소드가 끝났는지(FSM frame.action_done 로 전달)."""

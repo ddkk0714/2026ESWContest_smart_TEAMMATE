@@ -50,6 +50,8 @@ class FSMEngine:
         self._rest_since: float = 0.0
         # 이번 피로 에피소드에서 아직 시도하지 않은 개입 원인
         self._remaining_options: list[str] = []
+        # 첫 원인이 효과가 없어 다른 원인을 재시도하는 중인지 (gate.retry_max 로 자동 실행을 낮춘다)
+        self._retry: bool = False
 
     # ── 내부 헬퍼 ──────────────────────────────────────────────
     def _goto(self, new_state: State, now: float) -> None:
@@ -66,6 +68,14 @@ class FSMEngine:
         if confidence >= g["conf_suggest"]:
             return GateMode.SUGGEST
         return GateMode.NONE
+
+    def _action_gate(self, confidence: float) -> GateMode:
+        """개입 게이트. 재시도 원인은 첫 원인보다 근거가 약하므로 `gate.retry_max: suggest` 면
+        자동 대신 제안으로 낮춘다(사람이 확인한 뒤 실행). 키가 없으면 낮추지 않는다."""
+        gate = self._gate(confidence)
+        if self._retry and gate is GateMode.AUTO and self.cfg["gate"].get("retry_max") == "suggest":
+            return GateMode.SUGGEST
+        return gate
 
     # ── 메인 tick ─────────────────────────────────────────────
     def tick(self, frame: SensorFrame) -> TickResult:
@@ -151,6 +161,7 @@ class FSMEngine:
                     self._fatigue_high_since = now
                 if self._held(self._fatigue_high_since, now, "fatigue_confirm_hold_sec"):
                     self._remaining_options = list(_ALL_CAUSES)
+                    self._retry = False
                     self._goto(State.FATIGUE, now)
                     actions.append("log_fatigue_event")
             else:
@@ -165,7 +176,7 @@ class FSMEngine:
             cause = max(options, key=lambda g: groups.get(g, 0.0)) if options else "cognitive"
             if cause in self._remaining_options:
                 self._remaining_options.remove(cause)
-            gate = self._gate(c.c_fatigue)
+            gate = self._action_gate(c.c_fatigue)
             self._goto(CAUSE_TO_ACTION[cause], now)
             actions.append(f"route:{cause}")
 
@@ -175,7 +186,7 @@ class FSMEngine:
                 State.ACTION_POSTURE: "posture_alert",
                 State.ACTION_BREAK: "break_suggest",
             }[s])
-            gate = self._gate(c.c_fatigue)
+            gate = self._action_gate(c.c_fatigue)
             if s is State.ACTION_BREAK and frame.break_accepted:
                 self._rest_since = now
                 self._goto(State.REST, now)
@@ -206,6 +217,7 @@ class FSMEngine:
         elif s is State.ESCALATE:
             actions.append("log_intervention_fail")
             if self._remaining_options:
+                self._retry = True
                 self._goto(State.CAUSE_ANALYSIS, now)             # 다른 원인 재시도
             else:
                 self._rest_since = now

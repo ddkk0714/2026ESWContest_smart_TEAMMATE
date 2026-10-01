@@ -4,7 +4,7 @@
 
 tools/mqtt_scenario_sim.py 와 **같은 payload** 를 만들어 MQTT 라우팅 함수(route_mqtt_message)로 cache 에 넣고,
 가상 시계로 score_period(10 s)마다 tick 한다. 제어는 hub 안의 mock 플러그가 즉시 성공으로 답한다.
-`--respond` 는 제안 카드(interaction/request)에 사람 대신 답한다(기본 accept, 4 s 뒤).
+`--respond` 는 제안 카드(interaction/request)에 사람 대신 답한다(기본 accept, 4 s 뒤; timeout 은 카드 만료 뒤 무응답).
 
 실시간 리허설(tools/rehearsal_local.py)과 시계만 다르고 경로는 같다. 시나리오나 fsm.demo.yaml 을 바꾸면
 먼저 여기서 전이를 확인하고, tools/test_demo_scenario.py 가 기대 동선을 지킨다.
@@ -68,10 +68,14 @@ def run_dryrun(name: str = "demo", *, fsm_config: str = DEMO_CONFIG, respond: st
             pub.second(phase, tick, rnd)
             if respond and answer_at is None and requests and hub.pending_request is not None \
                     and requests[-1]["request_id"] == hub.pending_request["data"]["request_id"]:
-                answer_at = (clock["t"] + respond_delay, requests[-1]["request_id"])
+                # timeout 은 화면이 카드 만료(expires_in_s) 뒤 보내는 무응답 라벨을 흉내 낸다
+                delay = requests[-1]["expires_in_s"] if respond == "timeout" else respond_delay
+                answer_at = (clock["t"] + delay, requests[-1]["request_id"])
             if answer_at is not None and clock["t"] >= answer_at[0]:
-                cache.put_feedback({"request_id": answer_at[1], "verdict": respond,
-                                    "response_ms": int(respond_delay * 1000)})
+                fb = {"request_id": answer_at[1], "verdict": respond}
+                if respond != "timeout":
+                    fb["response_ms"] = int(respond_delay * 1000)
+                cache.put_feedback(fb)
                 answer_at = None
             if undo_at is not None and second == undo_at:
                 cache.put_feedback({"verdict": "reject", "request_id": "atlas-display"})
@@ -97,7 +101,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--scenario", choices=SCENARIOS, default="demo")
     ap.add_argument("--config", default=DEMO_CONFIG, help="FSM 설정(기본 fsm.demo.yaml)")
-    ap.add_argument("--respond", choices=["accept", "reject", "none"], default="accept")
+    ap.add_argument("--respond", choices=["accept", "reject", "timeout", "none"], default="accept",
+                    help="제안 카드 응답: timeout = 화면 카드 만료 뒤 무응답 전송")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--offset", type=int, default=0, help="hub tick 과 시나리오 시작의 어긋남(초)")
     ap.add_argument("--undo-at", type=int, metavar="초", help="이 시각에 자동 실행 '되돌리기'를 누른다")

@@ -48,10 +48,17 @@ def test_suggest_reject_skips_current_instead_of_undoing_history():
     assert len(sent) == 1
 
 
-def test_timeout_leaves_suggestion_for_dispatcher_timer():
+def test_card_timeout_expires_the_suggestion_without_executing():
+    # 화면 카드가 만료되면(expires_in_s) suggest_timeout_sec 를 기다리지 않고 바로 만료한다.
     dispatcher, sent = setup()
     suggestion = dispatcher.on_enter_action("ACTION_ENV", "environment", GateMode.SUGGEST, 100)
     dispatcher.on_feedback("timeout", 110)
-    assert suggestion.awaiting_user and sent == []
+    assert not suggestion.awaiting_user and suggestion.outcome == "expired" and sent == []
+    assert dispatcher.action_done(110)
+
+
+def test_unanswered_suggestion_still_expires_on_dispatcher_timer():
+    dispatcher, sent = setup()
+    suggestion = dispatcher.on_enter_action("ACTION_ENV", "environment", GateMode.SUGGEST, 100)
     dispatcher.tick(281)
-    assert suggestion.outcome == "expired"
+    assert suggestion.outcome == "expired" and sent == []

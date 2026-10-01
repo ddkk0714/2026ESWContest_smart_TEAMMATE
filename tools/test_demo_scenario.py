@@ -39,14 +39,26 @@ def test_demo_follows_the_story_within_five_and_a_half_minutes(offset):
     assert _in_order(_states(res), STORY), _states(res)
 
 
-def test_environment_action_is_automatic_and_drives_the_devices():
+def test_posture_is_automatic_and_environment_retry_asks_first():
+    # 첫 원인(자세)은 확신도 0.75 이상이라 자동, 재시도 원인(환경)은 gate.retry_max 로 제안 카드
     res = run_dryrun("demo")
+    posture = next(r for r in res["trace"] if r["state"] == "ACTION_POSTURE")
     env = next(r for r in res["trace"] if r["state"] == "ACTION_ENV")
-    assert env["gate"] == "auto" and env["cause"] == "environment"
+    assert posture["gate"] == "auto"
+    assert env["gate"] == "suggest" and env["cause"] == "environment"
     # 화면이 이유를 말할 수 있게 환경 플래그가 실려 있다
     assert {"co2_high", "co2_rising"} <= set(env["env_flags"])
+    assert [q["kind"] for q in res["requests"]] == ["env_suggest"]
+    # 수락하면 팬·조명 명령
     targets = {(c["target_id"], c["gate"]) for c in res["commands"]}
-    assert targets == {("vent_fan", "auto"), ("desk_lamp", "auto")}
+    assert targets == {("vent_fan", "suggest"), ("desk_lamp", "suggest")}
+
+
+@pytest.mark.parametrize("respond", ["reject", "timeout"])
+def test_rejected_or_expired_card_sends_nothing_and_still_recovers(respond):
+    res = run_dryrun("demo", respond=respond)
+    assert res["commands"] == []
+    assert "RECOVERY" in _states(res)
 
 
 def test_session_recovers_and_report_counts_the_episode():
@@ -71,7 +83,8 @@ def test_frames_replay_to_the_same_transitions():
 
 @pytest.mark.parametrize("seconds_after, undone", [(15, True), (70, False)])
 def test_undo_on_the_auto_notice_follows_the_undo_window(seconds_after, undone):
-    # 화면의 '되돌리기'는 request_id 없는 reject. hub 가 제어 건을 닫은 뒤에도 undo_window_sec(60) 안이면 되돌린다.
+    # 수락해 실행된 제어도 '되돌리기'(request_id 없는 reject)로 되돌린다. hub 가 제어 건을 닫은 뒤에도
+    # undo_window_sec(60) 안이면 되돌린다.
     t_env = next(c["t"] for c in run_dryrun("demo")["commands"])
     res = run_dryrun("demo", undo_at=int(t_env) + seconds_after)
     undo = [(c["target_id"], c["value"]) for c in res["commands"] if c["gate"] == "undo"]

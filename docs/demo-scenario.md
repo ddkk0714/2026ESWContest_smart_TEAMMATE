@@ -1,7 +1,7 @@
 # 5분 시연 시나리오 (W4)
 
 > 기준일 2026-10-01. 계획: `docs/plan/next-development-plan.md` §4 W4.
-> 합성 센서로 **시작 → 몰입 → 피로 → 개입(자동) → 회복 → 리포트**를 약 5분(315 s)에 재현한다.
+> 합성 센서로 **시작 → 몰입 → 피로 → 개입(자동 알림 → 제안 카드) → 회복 → 리포트**를 약 5분(315 s)에 재현한다.
 > 실기 검증을 대신하지 않는다. 보드·센서가 없을 때의 리허설, 발표 영상의 백업 경로, 회귀 시험용이다.
 
 ## 1. 구성
@@ -24,7 +24,8 @@
 python tools/demo_dryrun.py                    # 표로 출력
 python tools/demo_dryrun.py --offset 7         # hub tick 과 시나리오 시작이 7 s 어긋난 경우
 python tools/demo_dryrun.py --frames-out demo-frames.jsonl   # 리플레이용 프레임 저장
-python tools/demo_dryrun.py --undo-at 245      # 환경 자동 실행 15 s 뒤 '되돌리기'를 누른 경우
+python tools/demo_dryrun.py --respond reject   # 제안 카드 거절 / --respond timeout: 카드 만료(무응답)
+python tools/demo_dryrun.py --undo-at 255      # 수락해 실행된 환경 제어를 15 s 뒤 '되돌리기'
 
 # (2) 실시간 리허설 — PC 단독 (amqtt·paho 필요: tools/requirements.txt)
 python tools/rehearsal_local.py --scenario demo --respond accept
@@ -51,33 +52,33 @@ hub 는 10 s 마다 판정하므로 실시간에서는 각 시각이 0~9 s 늦�
 | 2:50 | drowsy_stuffy | FATIGUE → CAUSE_ANALYSIS | CO₂ 상승·높음 플래그가 함께 뜸 | 피로 확정 후 원인을 따진다 |
 | 3:10 | 〃 | **ACTION_POSTURE (auto)** | 자동 알림 "자세를 바꿀 때라고 알렸어요" · 이유 · 확신도 | 확신도 0.75 이상이라 묻지 않고 실행 |
 | 3:20~3:40 | 〃 | MONITOR → ESCALATE → CAUSE_ANALYSIS | (알림 유지 30 s) | 효과가 없으면 다른 원인을 시도한다 |
-| 3:50 | 〃 | **ACTION_ENV (auto)** | 자동 알림 "환경을 조정했어요" · "CO₂가 높아요 (… ppm) · CO₂가 빠르게 오르고 있어요 · 방이 더워요" · 되돌리기 | 환기팬 ON·조명 70% 명령이 나간다(모의 플러그 로그) |
-| 4:00 | 〃 | MONITOR | | 실행 뒤 피로가 내려가는지 본다 |
+| 3:50 | 〃 | **ACTION_ENV (suggest)** | 제안 카드 "환경을 잠시 조정해볼까요?" · 이유 "CO₂가 높아요 (… ppm) · CO₂가 빠르게 오르고 있어요 · 방이 더워요" · 남은 시간 → **적용할게요** | 두 번째 원인은 근거가 약하니 묻고 실행한다 |
+| 4:00 | 〃 | MONITOR | 수락 즉시 환기팬 ON·조명 70%(모의 플러그 로그) | 실행 뒤 피로가 내려가는지 본다 |
 | 4:10 | wake_fresh | RECOVERY → FOCUS(4:20) | 회복 화면 → 몰입 복귀 | 개입 효과를 확인하고 원래 작업으로 |
 | 4:55 | leave | (이탈) | 리포트 탭: 집중 시간·피로 1회·개입 2회·회복 | 세션 기록은 로컬에만 남는다 |
 
-자동 실행 알림의 **되돌리기**는 hub 에 `reject` 를 보낸다. hub 는 ACTION_ENV 를 벗어나며 제어 건을 닫지만,
-실행 후 `control.undo_window_sec`(60 s) 안이면 닫힌 건도 되돌린다 — 팬 OFF·조명 40%(undo 명령 2건).
-알림은 30 s 뒤 사라지므로 화면에서 누를 수 있는 동안은 항상 창 안이다. 확인: `python tools/demo_dryrun.py --undo-at 245`.
+제안 카드에서 거절하면 명령 없이, 카드가 만료되면(데모 30 s) 무응답 라벨을 남기고 넘어간다 — 두 경우 모두 이후 회복까지 간다.
+실행된 제어는 hub 가 ACTION_ENV 를 벗어나며 닫지만, 실행 후 `control.undo_window_sec`(60 s) 안이면 `reject`(되돌리기)로
+팬 OFF·조명 40% undo 명령이 나간다. 확인: `python tools/demo_dryrun.py --undo-at 255`.
 
-## 4. 이 동선에 제안 카드가 없는 이유 (팀 확인 필요)
+## 4. 제안 카드가 나오는 자리 — 재시도 원인은 제안까지만 (10-01 결정)
 
-제안 카드(gate suggest)는 원인 분석 시점의 C_fatigue 가 **0.45~0.75** 일 때 뜬다. 그런데 원인 분석은 FATIGUE 확정 뒤에만 오고,
-FATIGUE 확정 조건이 C_fatigue ≥ `fatigue_confirm`(0.70) 지속이다. 그래서 실제로 제안 카드가 뜰 수 있는 구간은 **0.70~0.75** 뿐이다.
+게이트 입력은 원인 분석 시점의 C_fatigue 다. 원인 분석은 FATIGUE 확정(C_fatigue ≥ `fatigue_confirm` 0.70 지속) 뒤에만 오므로,
+첫 원인은 거의 늘 0.70 이상이고 제안 구간(0.45~0.75)을 지나갈 일이 드물다(실측상 0.70~0.75 의 좁은 틈뿐).
 
-- 키 입력이 없는 졸음 구간은 PC 컨텍스트에서 최대 약 0.70+, MIXED 컨텍스트에서 0.77~0.81 이 나와 자동(≥0.75)으로 간다.
-- 시연 5분 안에는 컨텍스트가 PC→MIXED 로 내려가므로(키 입력 비율 창 15분) 제안 구간을 안정적으로 지나가지 않는다.
-- 환경만으로는 원인 1순위가 되지 않는다(PC 가중치 environment 0.10). 그래서 이 동선은 "자세 알림이 효과 없음 → 환경 재시도" 로 환경 제어에 닿는다.
+그래서 포스터의 게이트 값(0.45/0.75)은 그대로 두고, **첫 원인이 효과가 없어 다른 원인을 재시도할 때는 자동 대신 제안까지만**
+가도록 했다(`fsm.yaml` `gate.retry_max: suggest`, fsm-spec "신뢰도 게이트"). 재시도 원인은 처음 고른 원인보다 근거가 약하므로
+사람이 확인하고 실행한다 — 명세의 "엇갈리면 보수적으로 suggest 로 낮춘다"와 같은 원칙이다. `retry_max: auto` 로 끄면 예전 동작.
 
-시연에서 제안 카드를 꼭 보여 주려면 셋 중 하나를 팀이 정한다.
-1. `gate.conf_suggest`·`conf_auto` 를 `fatigue_confirm` 과 맞게 다시 잡는다(예: 자동 0.85). 운영 동작도 바뀌므로 실측과 함께 결정.
-2. FATIGUE_SUSPECT 단계에서 가벼운 제안을 띄우는 경로를 FSM 명세에 추가한다(fsm-spec 변경).
-3. 시연에서는 앱의 데모 소스(`DemoStateSource`)로 제안 카드만 따로 보여 준다(실제 경로가 아님을 밝힘).
+- 이 동선: 자세(1순위, 0.78) 자동 알림 → 효과 없음 → 환경(재시도) 제안 카드 → 수락 → 팬·조명.
+- 환경만으로는 원인 1순위가 되지 않는다(PC 가중치 environment 0.10). 환경 제어는 대개 이 재시도 경로로 닿는다.
+- 제안 카드가 만료되면 앱이 `timeout` 을 보내고 hub 는 그 제안을 바로 만료한다(`suggest_timeout_sec` 까지 붙들지 않음).
+- 남은 과제: 2단계 분류기 확신도가 들어오면 게이트 입력을 C_fatigue 단독에서 융합값으로 바꾼다(fsm-spec).
 
 ## 5. 무대 전 체크
 
 - [ ] `python -m pytest tools -q` 통과(동선 시험 포함)
-- [ ] 리허설 1회: 전이 요약에 ACTION_POSTURE·ACTION_ENV·RECOVERY, 모의 플러그 명령 2건
-- [ ] Pi 5 앱이 PC 브로커(18832)에 붙어 연결 배지 정상, 자동 알림 두 번·리포트 탭 확인
-- [ ] (선택) 환경 자동 알림에서 되돌리기 → 모의 플러그에 undo 2건
+- [ ] 리허설 1회(`--respond accept`): 전이 요약에 ACTION_POSTURE·ACTION_ENV·RECOVERY, 모의 플러그 명령 2건
+- [ ] Pi 5 앱이 PC 브로커(18832)에 붙어 연결 배지 정상, 자세 자동 알림 → 환경 제안 카드(30 s 안에 수락) → 리포트 탭 확인
+- [ ] (선택) 수락 직후 상태 정정 시트·되돌리기 동작 확인
 - [ ] 실센서 시연이면 이 시나리오는 백업 — 같은 화면 흐름을 영상으로 녹화해 둔다

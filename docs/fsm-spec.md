@@ -154,6 +154,11 @@ dominant = argmax(wᵢ · δᵢ)
 | `≥ conf_suggest` (초안 0.45) | 제안 카드만 표시, 사용자 수락 시 실행 |
 | `< conf_suggest` | 무동작 (로그만 기록) |
 
+**재시도 원인은 제안까지만**(`gate.retry_max: suggest`, 2026-10-01): ESCALATE 에서 남은 원인으로 다시 CAUSE_ANALYSIS 에
+들어가면, 그 피로 에피소드가 끝날 때까지 `auto` 를 `suggest` 로 낮춘다. 게이트 입력(C_fatigue)은 FATIGUE 확정(≥ `fatigue_confirm`)
+뒤라 첫 원인은 대개 자동이 되고, 첫 원인이 효과가 없었다면 다음 원인은 근거가 약하므로 사람이 확인하고 실행한다.
+`retry_max: auto`(또는 키 없음)면 낮추지 않는다. 제안 카드가 화면에서 만료되면(`timeout`) 그 제안은 실행 없이 만료한다.
+
 2단계 TFLite 분류기가 활성화되면 FSM 점수와 분류기 확신도를 융합해 같은 게이트에 입력한다.
 두 판정이 엇갈리면 보수적으로 `suggest` 로 낮춘다. 분류기 import 실패 시에도 FSM 은 단독 동작한다.
 
