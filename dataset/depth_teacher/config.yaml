@@ -41,13 +41,13 @@ posture:
   forward_head:             # 거북목: 어깨 대비 머리가 카메라 쪽으로 나옴
     neck_angle_deg: 12
     head_fwd_m: 0.04
-  head_down:                # 고개 숙임 (10-04 프로토콜 실측: 숙임 구간 +10°, 정상 구간 흔들림 ±3°)
-    pitch_deg: 9
+  head_down:                # 고개 숙임 (실측: 숙임 +25~28°, 거북목 동작 중 +9.5°, 정상 ±4°)
+    pitch_deg: 12
     nose_drop_m: 0.025
   slouch:                   # 구부정: 어깨 높이 하강
     sh_drop_m: 0.02          # 10-04 2차: 구부정 구간 -2.4cm, 정상 구간 -1.3cm까지
   lean_forward:             # 상체 전체가 책상 쪽으로
-    sh_fwd_m: 0.08
+    sh_fwd_m: 0.05            # 10-04 3차: 상체 앞으로 7cm, 정상 구간 흔들림 ±1cm (몸통 깊이 도입 후)
   lean_side:                # 좌/우 기울임 (사용자 기준 좌우)
     lat_m: 0.06
     tilt_deg: 8
@@ -75,6 +75,7 @@ drowsiness:                 # 눈/입 신호 없이 머리 동역학만 사용
   nod_body_y_m: 0.022       # 그동안 어깨 높이가 이보다 움직이면 상체 숙임이지 끄덕임이 아님
   nod_body_z_m: 0.08        # 몸통 깊이 변화 한도 (진짜 끄덕임 최대 4.7cm, 상체 숙임 15~20cm)
   nod_window_s: 60
+  pitch_valid_deg: 60       # 기준 대비 이보다 큰 고개 각도는 얼굴 랜드마크 오류로 보고 버림
   nod_count: 2              # window 안에 이만큼 끄덕이면 졸음
   sustained_s: 5            # 고개 떨군 채 정지 상태 지속 시간
   still_window_s: 3
@@ -91,7 +92,7 @@ protocol:                   # protocol.py 가 안내하는 검증용 시나리�
     - {label: normal,       seconds: 8,  text: "바른 자세로 돌아오세요"}
     - {label: head_down,    seconds: 10, text: "고개를 숙여 책상(키보드)을 보세요"}
     - {label: normal,       seconds: 8,  text: "바른 자세로 돌아오세요"}
-    - {label: slouch,       seconds: 10, text: "등을 둥글게 말고 어깨를 늘어뜨리세요"}
+    - {label: slouch,       seconds: 10, text: "허리 힘을 빼고 구부정하게 앉으세요 (어깨는 앞으로 툭, 화면은 그대로)"}
     - {label: normal,       seconds: 8,  text: "바른 자세로 돌아오세요"}
     - {label: lean_forward, seconds: 10, text: "허리를 숙여 상체를 책상 쪽으로 기울이세요"}
     - {label: normal,       seconds: 8,  text: "바른 자세로 돌아오세요"}

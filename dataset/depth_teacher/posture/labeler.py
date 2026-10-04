@@ -139,7 +139,8 @@ class DrowsinessDetector:
         rng = np.nanmax(pts, axis=0) - np.nanmin(pts, axis=0)
         return rng[0] > self.c["nod_body_y_m"] or rng[1] > self.c["nod_body_z_m"]
 
-    def update(self, t, pitch, head_x, head_z, sh_y=float("nan"), sh_z=float("nan"), chin_rest=False):
+    def update(self, t, pitch, head_x, head_z, sh_y=float("nan"), sh_z=float("nan"), chin_rest=False,
+               leaning=False):
         c = self.c
         if _finite(head_x) and _finite(head_z):
             self.pos.append((t, head_x, head_z))
@@ -153,6 +154,9 @@ class DrowsinessDetector:
             self.nods.popleft()
 
         sustained = False
+        # 얼굴 랜드마크가 무너진 프레임(10-04 3차: -67°)은 끄덕임 판단에서 뺀다
+        if _finite(pitch) and abs(pitch) > c["pitch_valid_deg"]:
+            pitch = float("nan")
         if _finite(pitch):
             self.pitch_hist.append((t, pitch))
             while t - self.pitch_hist[0][0] > c["nod_lookback_s"]:
@@ -167,9 +171,10 @@ class DrowsinessDetector:
                     self.peak, self.peak_t = pitch, t
                 back = self.peak - c["nod_recover_frac"] * (self.peak - self.start)
                 if pitch <= back:
-                    # 턱 괴기 중에는 손이 얼굴을 가려 고개 각도가 튀므로 세지 않는다
+                    # 턱 괴기 중에는 손이 얼굴을 가려 고개 각도가 튀므로 세지 않는다.
+                    # 상체를 숙인 채 고개가 흔들리는 것도 세지 않는다 (10-04 3차 상체 앞으로 구간 3회)
                     if (t - self.peak_t <= c["nod_recover_s"] and t - self.drop_t0 <= c["nod_max_s"]
-                            and self.peak >= c["nod_min_peak_deg"] and not chin_rest
+                            and self.peak >= c["nod_min_peak_deg"] and not chin_rest and not leaning
                             and not self._body_moved(self.drop_t0 - c["nod_lookback_s"], t)):
                         self.nods.append(t)
                     self.in_drop = False
@@ -264,5 +269,6 @@ class PostureLabeler:
         if not _finite(pitch) and _finite(d["nose_drop"]):
             pitch = math.degrees(math.asin(np.clip(d["nose_drop"] / 0.10, -1, 1)))
         out.update(self.drowsy.update(t, pitch, f["head_x"], f["head_z"], f["sh_y"], f["sh_z"],
-                                      chin_rest=bool(out["chin_rest"])))
+                                      chin_rest=bool(out["chin_rest"]),
+                                      leaning=bool(out["lean_forward"])))
         return out
