@@ -1,0 +1,109 @@
+# D435if 단독 자세/졸음 판단 파이프라인 설정
+# 거리 단위: m, 각도 단위: deg. 모든 posture 임계값은 캘리브레이션 기준(바른 자세) 대비 변화량.
+
+camera:
+  width: 640
+  height: 480
+  fps: 30
+  imu_seconds: 1.0          # 시작 시 IMU로 중력 방향 측정하는 시간
+
+models:
+  dir: models
+  pose: pose_landmarker_full.task
+  face: face_landmarker.task
+
+landmarks:
+  min_visibility: 0.5
+  depth_patch_px: 4         # 랜드마크 주변 (2r+1)^2 패치에서 깊이 추정
+  depth_min_m: 0.2
+  depth_max_m: 2.5
+  torso_down_ratio: 0.3     # 몸통 깊이 샘플: 어깨 중앙에서 어깨폭 x 0.3 아래 (가슴 중앙)
+  shoulder_inward_steps: [0.15, 0.25, 0.35, 0.45]   # 어깨 깊이 샘플을 목 쪽으로 옮겨 가며 시도
+  shoulder_torso_max_m: 0.08  # 어깨 깊이가 몸통과 이보다 멀면 의자/배경으로 보고 버림
+
+# L9(ToF)로 직접 측정 가능한 얼굴 미세 신호. depth 파이프라인에서는 계산 자체를 하지 않음.
+# (FaceLandmarker blendshape 비활성화, 눈/입 랜드마크 미사용)
+excluded_signals: [eye_blink, eye_closure, gaze, yawn]
+
+calibration:
+  prep_s: 5                 # 기준 측정 전 준비 시간 (자리 잡기)
+  seconds: 8
+  min_valid_ratio: 0.7
+
+smoothing:
+  median_frames: 5          # 특징값 이동 중앙값
+  on_s: 1.0                 # 조건이 이 시간 이상 지속돼야 라벨 ON
+  off_s: 0.7                # 조건이 이 시간 이상 사라져야 라벨 OFF
+
+posture:
+  forward_head:             # 거북목: 어깨 대비 머리가 카메라 쪽으로 나옴
+    neck_angle_deg: 12
+    head_fwd_m: 0.04
+  head_down:                # 고개 숙임 (10-04 프로토콜 실측: 숙임 구간 +10°, 정상 구간 흔들림 ±3°)
+    pitch_deg: 9
+    nose_drop_m: 0.025
+  slouch:                   # 구부정: 어깨 높이 하강
+    sh_drop_m: 0.02          # 10-04 2차: 구부정 구간 -2.4cm, 정상 구간 -1.3cm까지
+  lean_forward:             # 상체 전체가 책상 쪽으로
+    sh_fwd_m: 0.08
+  lean_side:                # 좌/우 기울임 (사용자 기준 좌우)
+    lat_m: 0.06
+    tilt_deg: 8
+  head_tilt:                # 고개 갸웃(roll)
+    roll_deg: 12
+  too_close:
+    dist_m: 0.40            # 절대 거리
+  chin_rest:                # 턱 괴기: 손(손목/손가락)과 턱 사이 3D 거리 + 팔꿈치가 어깨 아래
+    near_m: 0.10            # 팀 camsvc는 2D로 '손목-코 < 어깨폭 0.70배'. 여기선 깊이가 있어
+    release_m: 0.15         # 얼굴 앞을 지나는 손을 걸러낼 수 있으므로 3D 거리로 좁게 잡음 (실측 후 조정)
+  # 단일 라벨(posture)을 정할 때 우선순위. 해당 없으면 normal
+  # 턱괴기는 머리를 조금 내려 엎드림처럼 보이므로 가장 먼저 (팀 camsvc 와 같은 이유).
+  # 상체 숙임은 어깨도 내려가 구부정으로 읽히므로 구부정보다 먼저.
+  # 옆 기울임은 목이 함께 나와 거북목으로 읽히므로 거북목보다 먼저.
+  priority: [chin_rest, lean_forward, lean_left, lean_right, head_down, slouch, forward_head, head_tilt, too_close]
+
+drowsiness:                 # 눈/입 신호 없이 머리 동역학만 사용
+  # 10-04 2차 프로토콜 실측: 0.5~1.5초에 15~44° 낙하, 정점 후 0.5~1초에 반쯤~완전히 복귀
+  nod_lookback_s: 2         # 낙하 시작점 = 직전 이 시간 동안 가장 든 각도
+  nod_amp_deg: 15           # 시작점에서 이만큼 떨어지면 '떨굼' 시작
+  nod_min_peak_deg: 10      # 정점이 기준 자세보다 이만큼은 숙여져야 (위를 봤다 돌아오는 것 제외)
+  nod_recover_frac: 0.6     # 떨어진 폭의 이만큼 되돌아오면 복귀
+  nod_recover_s: 1.5        # 정점 -> 복귀까지 허용 시간 ('번쩍')
+  nod_max_s: 6              # 떨굼~복귀 전체 허용 시간
+  nod_body_y_m: 0.022       # 그동안 어깨 높이가 이보다 움직이면 상체 숙임이지 끄덕임이 아님
+  nod_body_z_m: 0.08        # 몸통 깊이 변화 한도 (진짜 끄덕임 최대 4.7cm, 상체 숙임 15~20cm)
+  nod_window_s: 60
+  nod_count: 2              # window 안에 이만큼 끄덕이면 졸음
+  sustained_s: 5            # 고개 떨군 채 정지 상태 지속 시간
+  still_window_s: 3
+  still_std_m: 0.012
+  sway_window_s: 10
+  sway_ref_m: 0.03
+  hold_s: 6                 # 마지막 끄덕임 뒤 졸음 유지 시간 (조는 사람의 끄덕임 간격 2~4초)
+
+protocol:                   # protocol.py 가 안내하는 검증용 시나리오 (정답 라벨 포함)
+  transition_s: 3           # 각 단계 앞 자세 전환 구간 (평가에서 제외)
+  steps:
+    - {label: normal,       seconds: 15, text: "바른 자세로 화면을 보세요"}
+    - {label: forward_head, seconds: 10, text: "어깨는 그대로, 목만 앞으로 쭉 빼세요 (거북목)"}
+    - {label: normal,       seconds: 8,  text: "바른 자세로 돌아오세요"}
+    - {label: head_down,    seconds: 10, text: "고개를 숙여 책상(키보드)을 보세요"}
+    - {label: normal,       seconds: 8,  text: "바른 자세로 돌아오세요"}
+    - {label: slouch,       seconds: 10, text: "등을 둥글게 말고 어깨를 늘어뜨리세요"}
+    - {label: normal,       seconds: 8,  text: "바른 자세로 돌아오세요"}
+    - {label: lean_forward, seconds: 10, text: "허리를 숙여 상체를 책상 쪽으로 기울이세요"}
+    - {label: normal,       seconds: 8,  text: "바른 자세로 돌아오세요"}
+    - {label: lean_left,    seconds: 8,  text: "고개 말고 상체 전체를 (본인 기준) 왼쪽으로 기울이세요"}
+    - {label: normal,       seconds: 6,  text: "바른 자세로 돌아오세요"}
+    - {label: lean_right,   seconds: 8,  text: "고개 말고 상체 전체를 (본인 기준) 오른쪽으로 기울이세요"}
+    - {label: head_tilt,    seconds: 8,  text: "어깨는 수평 그대로, 고개만 옆으로 갸웃하세요"}
+    - {label: normal,       seconds: 8,  text: "바른 자세로 돌아오세요"}
+    - {label: chin_rest,    seconds: 10, text: "책상에 팔꿈치를 대고 왼손으로 턱을 괴세요"}
+    - {label: normal,       seconds: 6,  text: "바른 자세로 돌아오세요"}
+    - {label: chin_rest,    seconds: 10, text: "책상에 팔꿈치를 대고 오른손으로 턱을 괴세요"}
+    - {label: normal,       seconds: 8,  text: "바른 자세로 돌아오세요"}
+    - {label: normal,       seconds: 8,  text: "바른 자세로 손으로 얼굴(볼·머리)을 잠깐 만지세요"}
+    # 졸음 오탐 확인용: 깨어 있는 사람이 키보드를 힐끗 보는 것은 끄덕임과 모양이 비슷하다
+    - {label: normal,       seconds: 12, text: "바른 자세에서 키보드를 2~3번 힐끗 내려다봤다 화면을 보세요"}
+    - {label: drowsy,       seconds: 30, text: "실제로 조는 것처럼 하세요 (끄덕이다 고개를 떨군 채 있기)"}
+    - {label: normal,       seconds: 10, text: "바른 자세로 화면을 보세요"}
