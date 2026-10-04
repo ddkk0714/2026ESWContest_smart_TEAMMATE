@@ -60,9 +60,18 @@ class LandmarkDetector:
             output_face_blendshapes=False,  # 눈 깜빡임/입 벌림 계수 -> 사용 금지
             output_facial_transformation_matrixes=False))
         self.min_vis = cfg["landmarks"]["min_visibility"]
+        self._t0, self._last_ts = None, -1
 
-    def detect(self, bgr, ts_ms):
-        """{name: (u, v) 픽셀 좌표} - 검출 안 되거나 가시성이 낮은 점은 제외."""
+    def detect(self, bgr, t_dev_ms):
+        """{name: (u, v) 픽셀 좌표} - 검출 안 되거나 가시성이 낮은 점은 제외.
+
+        t_dev_ms: 카메라 프레임 시각(ms). 첫 프레임 기준 경과 시간으로 바꿔 MediaPipe 에 준다
+        (VIDEO 모드는 정수 ms, 엄격히 증가해야 한다).
+        """
+        if self._t0 is None:
+            self._t0 = t_dev_ms
+        ts_ms = max(int(round(t_dev_ms - self._t0)), self._last_ts + 1)
+        self._last_ts = ts_ms
         h, w = bgr.shape[:2]
         img = mp.Image(image_format=mp.ImageFormat.SRGB,
                        data=np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)))
@@ -109,12 +118,24 @@ def lift_to_3d(points2d, depth_m, intr, cfg):
     if "sh_l" in pts and "sh_r" in pts:
         L, R = np.array(pts.pop("sh_l")), np.array(pts.pop("sh_r"))
         mid, w = (L + R) / 2, float(np.linalg.norm(L - R))
-        # 몸통 깊이: 어깨선 아래 가슴 중앙. 사무용 의자 등받이와 맞닿는 몸 가장자리에서 멀어
-        # 의자가 섞이지 않는 가장 안정적인 기준이다.
-        tu, tv = mid[0], mid[1] + lc["torso_down_ratio"] * w
-        torso_z = sample_depth(depth_m, tu, tv, max(r, int(0.08 * w)), dmin, dmax)
-        if np.isfinite(torso_z):
-            out["torso"] = point(tu, tv, torso_z)
+        # 몸통 깊이: 어깨선 아래 가슴 높이. 사무용 의자 등받이와 맞닿는 몸 가장자리에서 멀어
+        # 의자가 섞이지 않는다. 가슴 앞의 손·컵·캔은 몸보다 앞에 있으므로, 가운데와 좌우 세 곳을
+        # 재서 가장 뒤(몸)에 있는 값들만 쓴다 (10-04 2차 녹화: 두 손으로 든 캔이 가슴 중앙에 잡혀
+        # '상체 앞으로'·'구부정' 오탐).
+        tv = mid[1] + lc["torso_down_ratio"] * w
+        across = (L - R) / 2
+        samples = []
+        for k in (0.0, -lc["torso_side_ratio"], lc["torso_side_ratio"]):
+            tu = mid[0] + k * 2 * across[0]
+            z = sample_depth(depth_m, tu, tv, max(r, int(0.06 * w)), dmin, dmax)
+            if np.isfinite(z):
+                samples.append((z, tu))
+        torso_z = np.nan
+        if samples:
+            far = max(z for z, _ in samples)
+            body = [(z, u) for z, u in samples if z >= far - lc["torso_occluder_m"]]
+            torso_z = float(np.median([z for z, _ in body]))
+            out["torso"] = point(float(np.mean([u for _, u in body])), tv, torso_z)
         # 어깨 깊이: 검은 옷과 검은 의자의 경계가 애매해 랜드마크 자리에 등받이가 잡힐 수 있다.
         # 목 쪽으로 조금씩 옮겨 가며, 몸통 깊이와 맞는(등받이처럼 뒤에 있지 않은) 첫 값을 쓴다.
         # x, y 는 원래 랜드마크 픽셀에서 계산해 어깨 폭·기울기가 샘플 위치에 따라 흔들리지 않게 한다.

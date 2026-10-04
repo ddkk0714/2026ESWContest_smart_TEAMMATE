@@ -115,7 +115,9 @@ def run_session(cfg, user, bag_in=None, record_bag=False, save_video=False, reca
             if fr is None:
                 break
             t = fr.t_host if cam.live else fr.t_dev / 1000.0
-            pts2d = det.detect(fr.color, int(fr.index * 1000 / cam.fps))
+            # MediaPipe VIDEO 추적에는 실제 프레임 시각을 준다. 처리가 느려 프레임을 건너뛸 때
+            # '번호 x 33ms' 를 주면 추적기가 움직임을 실제보다 빠르게 보고 놓친다.
+            pts2d = det.detect(fr.color, fr.t_dev)
             P = {k: wf.to_world(v) for k, v in lift_to_3d(pts2d, fr.depth_m, cam.intrinsics, cfg).items()}
             feats = compute_features(P)
             row = {"frame": fr.index, "t_host": fr.t_host, "t_dev": fr.t_dev,

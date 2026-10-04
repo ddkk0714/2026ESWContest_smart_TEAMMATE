@@ -20,7 +20,8 @@ def evaluate(csv_path, skip_s=2.0):
         print("평가할 프로토콜 구간이 없습니다.")
         return None
     # 안내를 보고 자세를 바꾸는 데 걸리는 시간은 채점하지 않는다 (사람 반응이 늦을 수 있음)
-    t = st.t_host
+    # 카메라 프레임 시각 기준: 녹화본 재처리에서는 t_host 가 처리 시각이라 실제 시간과 다르다
+    t = st.t_dev / 1000.0
     st = st[t - t.groupby(st.step_id).transform("min") >= skip_s]
     lines = [f"(각 단계 처음 {skip_s:g}초 제외)"]
     invalid = (st.valid != 1).mean()

@@ -173,6 +173,10 @@ class DrowsinessDetector:
                             and not self._body_moved(self.drop_t0 - c["nod_lookback_s"], t)):
                         self.nods.append(t)
                     self.in_drop = False
+                    # 낙하 시작점을 복귀 지점부터 다시 잡는다. 이전 최저점이 남아 있으면 반쯤 돌아온
+                    # 같은 동작이 바로 다음 프레임에 또 낙하로 잡혀 두 번 세어진다 (10-04 0.1초 간격 2회)
+                    self.pitch_hist.clear()
+                    self.pitch_hist.append((t, pitch))
                 elif t - self.peak_t > c["nod_max_s"]:
                     self.in_drop = False  # 숙인 채 오래 머묾 = 끄덕임 아님. 새 낙하를 다시 찾는다
             if self.in_drop and t - self.drop_t0 >= c["sustained_s"]:
@@ -185,9 +189,11 @@ class DrowsinessDetector:
         # 끄덕임이 일어난 그 순간에만 켠다 (창 안에 2회가 남아 있다고 1분 내내 켜지 않게)
         if len(self.nods) >= c["nod_count"] and self.nods[-1] == t:
             self.last_trigger, self.active = t, True
-        # 졸음이 켜진 상태에서 시작된 떨굼이 이어지는 동안(깊이 조는 중)만 유지
+        # 졸음이 켜진 상태에서 시작된 떨굼이 이어지는 동안(깊이 조는 중)만 유지.
+        # 몸통이 움직였으면 상체를 숙인 것이지 조는 것이 아니다 (10-04 상체 앞으로 구간 전체가 이어 붙음)
         hanging = (self.active and self.in_drop and self.drop_t0 <= self.last_trigger + c["hold_s"]
-                   and _finite(pitch) and pitch >= c["nod_min_peak_deg"])
+                   and _finite(pitch) and pitch >= c["nod_min_peak_deg"]
+                   and not self._body_moved(self.drop_t0 - c["nod_lookback_s"], t))
         if hanging:
             self.last_trigger = t
         drowsy = t - self.last_trigger <= c["hold_s"]

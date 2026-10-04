@@ -17,7 +17,9 @@ landmarks:
   depth_patch_px: 4         # 랜드마크 주변 (2r+1)^2 패치에서 깊이 추정
   depth_min_m: 0.2
   depth_max_m: 2.5
-  torso_down_ratio: 0.3     # 몸통 깊이 샘플: 어깨 중앙에서 어깨폭 x 0.3 아래 (가슴 중앙)
+  torso_down_ratio: 0.3     # 몸통 깊이 샘플: 어깨 중앙에서 어깨폭 x 0.3 아래 (가슴 높이)
+  torso_side_ratio: 0.25    # 가운데 + 좌우로 어깨폭 x 0.25 떨어진 곳, 세 곳에서 잰다
+  torso_occluder_m: 0.04    # 가장 뒤의 값보다 이만큼 이상 앞이면 가슴 앞 물체(손·컵)로 보고 버림
   shoulder_inward_steps: [0.15, 0.25, 0.35, 0.45]   # 어깨 깊이 샘플을 목 쪽으로 옮겨 가며 시도
   shoulder_torso_max_m: 0.08  # 어깨 깊이가 몸통과 이보다 멀면 의자/배경으로 보고 버림
 
