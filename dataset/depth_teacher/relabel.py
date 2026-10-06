@@ -7,7 +7,6 @@ config 임계값이나 geometry.py 의 특징 계산을 바꾼 뒤, 영상 재�
 """
 import argparse
 import json
-import warnings
 from pathlib import Path
 
 import numpy as np
@@ -16,7 +15,7 @@ import pandas as pd
 from evaluate import evaluate
 from posture.app import LABEL_COLS, load_config
 from posture.geometry import FEATURES, compute_features
-from posture.labeler import PostureLabeler
+from posture.labeler import PostureLabeler, build_baseline
 from posture.landmarks import POINT_NAMES
 
 
@@ -41,9 +40,9 @@ def relabel(sdir, cfg):
     calib = df[(df.phase == "calib") & (df.valid == 1)]
     if calib.empty:
         raise SystemExit("캘리브레이션 구간이 없는 세션입니다 (저장된 기준 자세로 실행된 세션).")
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
-        baseline = {k: float(np.nanmedian(calib[k])) for k in FEATURES}
+    baseline = build_baseline(cfg, [feats[i] for i in df.index[df.phase == "calib"]])
+    if baseline is None:
+        raise SystemExit("캘리브레이션의 유효 프레임 또는 고개 기준이 부족합니다. 다시 측정하세요.")
     times = (df.t_dev / 1000.0) if meta.get("bag_in") else df.t_host
     labeler = PostureLabeler(cfg, baseline)
     rows = []

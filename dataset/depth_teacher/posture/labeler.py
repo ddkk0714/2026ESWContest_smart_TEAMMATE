@@ -28,6 +28,32 @@ def _any(*checks):
     return any(v >= t for v, t in vals)
 
 
+def baseline_usable(baseline):
+    """숙임·졸음에 쓸 고개 기준이 하나도 없으면 재측정한다."""
+    return any(_finite(baseline.get(k)) for k in ("head_pitch", "nose_drop"))
+
+
+def build_baseline(cfg, rows):
+    """프레임 가용성과 고개 특징별 가용성을 함께 확인한다."""
+    valid = [r for r in rows if r is not None]
+    ratio = cfg["calibration"]["min_valid_ratio"]
+    if not rows or len(valid) < ratio * len(rows):
+        return None
+    usable = {k: sum(_finite(r[k]) for r in valid) >= ratio * len(rows)
+              for k in ("head_pitch", "nose_drop")}
+    if not any(usable.values()):
+        return None
+    arr = np.array([[r[k] for k in FEATURES] for r in valid], float)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        med = np.nanmedian(arr, axis=0)
+    baseline = {k: float(v) for k, v in zip(FEATURES, med)}
+    for k, ok in usable.items():
+        if not ok:
+            baseline[k] = float("nan")
+    return baseline
+
+
 class Hysteresis:
     def __init__(self, on_s, off_s):
         self.on_s, self.off_s = on_s, off_s
@@ -54,6 +80,7 @@ class Calibrator:
     """
 
     def __init__(self, cfg):
+        self.cfg = cfg
         c = cfg["calibration"]
         self.seconds, self.min_ratio = c["seconds"], c["min_valid_ratio"]
         self.prep_s = c.get("prep_s", 0)
@@ -75,19 +102,15 @@ class Calibrator:
         if self.t0 is None:
             self.t0 = t
         self.n_total += 1
-        if feats is not None:
-            self.rows.append(feats)
+        self.rows.append(feats)
         if t - self.t0 < self.seconds:
             return None
-        if len(self.rows) < self.min_ratio * self.n_total:
-            print(f"[calib] 유효 프레임 부족({len(self.rows)}/{self.n_total}) - 다시 측정")
+        baseline = build_baseline(self.cfg, self.rows)
+        if baseline is None:
+            print("[calib] 유효 프레임 또는 고개 기준 부족 - 다시 측정")
             self.reset()
             return None
-        arr = np.array([[r[k] for k in FEATURES] for r in self.rows], float)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            med = np.nanmedian(arr, axis=0)
-        return {k: float(v) for k, v in zip(FEATURES, med)}
+        return baseline
 
     def progress(self, t):
         return 0.0 if self.t0 is None else min(1.0, (t - self.t0) / self.seconds)
@@ -183,7 +206,12 @@ class DrowsinessDetector:
                     self.pitch_hist.clear()
                     self.pitch_hist.append((t, pitch))
                 elif t - self.peak_t > c["nod_max_s"]:
-                    self.in_drop = False  # 숙인 채 오래 머묾 = 끄덕임 아님. 새 낙하를 다시 찾는다
+                    # 끄덕임으로 이미 켜진 졸음은 깊이 떨군 동안 유지한다.
+                    # 끄덕임 검출 제한 시간으로 이 유지 상태까지 끊지 않는다.
+                    if not (self.active and pitch >= c["nod_min_peak_deg"]
+                            and not chin_rest and not leaning
+                            and not self._body_moved(self.drop_t0 - c["nod_lookback_s"], t)):
+                        self.in_drop = False
             if self.in_drop and t - self.drop_t0 >= c["sustained_s"]:
                 still = self._std(c["still_window_s"], t)
                 sustained = _finite(still) and still <= c["still_std_m"]
@@ -198,6 +226,7 @@ class DrowsinessDetector:
         # 몸통이 움직였으면 상체를 숙인 것이지 조는 것이 아니다 (10-04 상체 앞으로 구간 전체가 이어 붙음)
         hanging = (self.active and self.in_drop and self.drop_t0 <= self.last_trigger + c["hold_s"]
                    and _finite(pitch) and pitch >= c["nod_min_peak_deg"]
+                   and not chin_rest and not leaning
                    and not self._body_moved(self.drop_t0 - c["nod_lookback_s"], t))
         if hanging:
             self.last_trigger = t
@@ -212,11 +241,20 @@ class DrowsinessDetector:
 
 class PostureLabeler:
     def __init__(self, cfg, baseline):
+        if not baseline_usable(baseline):
+            raise ValueError("고개 기준이 없는 캘리브레이션입니다. 다시 측정하세요.")
         self.cfg, self.base = cfg, baseline
         s = cfg["smoothing"]
         self.buf = deque(maxlen=s["median_frames"])
         self.hyst = {k: Hysteresis(s["on_s"], s["off_s"]) for k in FLAGS}
         self.drowsy = DrowsinessDetector(cfg)
+        self.last_t = None
+
+    def _reset_tracking(self):
+        self.buf.clear()
+        for h in self.hyst.values():
+            h.state, h.since = False, None
+        self.drowsy = DrowsinessDetector(self.cfg)
 
     def _smooth(self, feats):
         self.buf.append([feats[k] for k in FEATURES])
@@ -238,7 +276,12 @@ class PostureLabeler:
         return d <= near and f["arm_folded"] != 0  # NaN(팔꿈치 안 보임) 허용
 
     def update(self, t, feats):
+        if self.last_t is not None and (t <= self.last_t
+                                       or t - self.last_t > self.cfg["smoothing"]["max_gap_s"]):
+            self._reset_tracking()
+        self.last_t = t
         if feats is None:
+            self._reset_tracking()
             out = {k: None for k in FLAGS}
             out.update(posture="invalid", drowsy=None, drowsy_score=None, nods_window=None,
                        head_sway=None)

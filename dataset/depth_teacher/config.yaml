@@ -34,6 +34,7 @@ calibration:
 
 smoothing:
   median_frames: 5          # 특징값 이동 중앙값
+  max_gap_s: 0.5            # 이보다 긴 관측 공백은 연속 자세·끄덕임 증거로 잇지 않음
   on_s: 1.0                 # 조건이 이 시간 이상 지속돼야 라벨 ON
   off_s: 0.7                # 조건이 이 시간 이상 사라져야 라벨 OFF
 

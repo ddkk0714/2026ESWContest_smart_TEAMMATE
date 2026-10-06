@@ -11,7 +11,7 @@ import yaml
 
 from .camera import RealSenseCamera, measure_up_vector_isolated, orientation_from_up
 from .geometry import FEATURES, WorldFrame, compute_features
-from .labeler import FLAGS, LABEL_KO, Calibrator, PostureLabeler
+from .labeler import FLAGS, LABEL_KO, Calibrator, PostureLabeler, baseline_usable
 from .landmarks import POINT_NAMES, LandmarkDetector, lift_to_3d
 from .viz import render
 
@@ -90,7 +90,11 @@ def run_session(cfg, user, bag_in=None, record_bag=False, save_video=False, reca
     bpath = baseline_path(user)
     if not (recalibrate or schedule) and bpath.exists():
         baseline = json.loads(bpath.read_text(encoding="utf-8"))
-        print(f"[app] 저장된 기준 자세 사용: {bpath}")
+        if baseline_usable(baseline):
+            print(f"[app] 저장된 기준 자세 사용: {bpath}")
+        else:
+            print("[app] 저장된 고개 기준 없음 -> 다시 측정")
+            baseline = None
     calib = None if baseline else Calibrator(cfg)
     labeler = PostureLabeler(cfg, baseline) if baseline else None
 
