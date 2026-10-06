@@ -9,7 +9,7 @@
 - Pi 5는 ATLAS Video Profile, Pi 4는 ATLAS Headless Profile이다. 보드에서 Docker를 실행하지 않는다.
 - UI는 대시보드·18상태 그래프·키스트로크 패널·오디오·MQTT 구독을 포함한다.
 - 교체된 디스플레이의 터치는 정상 동작한다. 이전 USB 터치 장애 기록은 더 이상 운영 절차가 아니다.
-- Pi 5 앱은 아직 재부팅 자동 시작이 아니다. 실기 release 재검증과 자동 시작 등록이 남았다.
+- Pi 5 앱 자동 시작 설치기와 복구 unit을 구현했다(2026-10-06). 보드 영구 등록·재부팅 확인과 실기 release 재검증은 남았다.
 - 제품 통신은 Pi 4 Mosquitto를 경유한 MQTT다. `DESKMATE_MQTT_HOST`를 사용해 연결하며,
   HTTP Hub URL은 개발 fallback으로만 유지한다.
 
@@ -39,3 +39,7 @@
 
 자격증명·개인키·고정 IP 요청은 채팅이나 저장소에 넣지 않는다. 네트워크가 바뀌면 DHCP 예약 또는
 현장 주소 확인으로 대응한다.
+
+## Reboot recovery (2026-10-06)
+
+Automatic startup units and fault recovery scripts are implemented; board installation and reboot verification remain pending. See [deployment guide](reboot-recovery.md).

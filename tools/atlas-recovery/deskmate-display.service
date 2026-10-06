@@ -1,0 +1,18 @@
+# DESKMATE managed
+[Unit]
+Description=DESKMATE Atlas display startup
+After=dbus.service network.target
+StartLimitIntervalSec=120
+StartLimitBurst=6
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=DESKMATE_RECOVERY_PREFIX=@PREFIX@
+ExecStart=/bin/sh @PREFIX@/lifecycle.sh display-start
+ExecStop=/bin/sh @PREFIX@/lifecycle.sh display-stop
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=30
+TimeoutStopSec=15
+[Install]
+WantedBy=multi-user.target

@@ -160,3 +160,7 @@ docker tag atlas-dev:latest deskmate-atlas-dev:local
 | `abusctl` 없음 경고 | Pi 가 ATLAS 이미지가 아니다. 일반 Raspberry Pi OS 에는 PackageManager 가 없어 ipk 설치가 되지 않는다 |
 | 앱 폴더를 찾지 못한다 | 앱은 레포 안에 있어야 한다. `ATLAS_APP_DIR` 은 레포 루트 기준 상대 경로다 |
 | `bad interpreter: No such file` | `.sh` 가 CRLF 로 체크아웃됐다. 레포 루트 `.gitattributes` 적용 여부를 확인한다 |
+
+## Reboot recovery (2026-10-06)
+
+Automatic startup units and fault recovery scripts are implemented; board installation and reboot verification remain pending. See [deployment guide](../../../docs/reboot-recovery.md).

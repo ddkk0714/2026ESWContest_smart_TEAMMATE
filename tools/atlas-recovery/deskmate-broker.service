@@ -1,0 +1,15 @@
+# DESKMATE managed
+[Unit]
+Description=DESKMATE local MQTT broker
+After=local-fs.target network.target
+StartLimitIntervalSec=120
+StartLimitBurst=6
+[Service]
+Type=simple
+Environment=DESKMATE_RECOVERY_PREFIX=@PREFIX@
+ExecStart=/bin/sh @PREFIX@/lifecycle.sh broker-run
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=15
+[Install]
+WantedBy=multi-user.target
