@@ -69,3 +69,17 @@ python -m pytest ml -q
 디스플레이 단말의 사용자 피드백(`accept` / `reject` / `correct`)이 그대로 라벨이 된다.
 별도 라벨링 앱을 만들기보다 피드백 UI 를 라벨 수집 채널로 쓰는 편이
 라벨 양 확보에 유리하다. 라벨 스키마는 이 문서에 확정 후 기록한다.
+
+
+## 2단계 개인화 다음 개발
+
+개발 순서는 [개인화 2단계 계획](../docs/plan/personalization-stage2-plan.md),
+입출력·metadata 계약은 [모델 계약](../docs/personalization-model-contract.md)을 따른다.
+공통 1D CNN과 개인 head 재학습·비교·폴백 구현 및 실행 검증을 완료했다. TFLite 변환과 PC 실제 추론 검증까지 완료했으며 hub 관찰 연결은 기본 비활성이다.
+학습 명령과 결과는 [공통 모델 학습](../docs/common-model-training.md)에 있다.
+
+개인 head 명령과 결과는 [개인 head 재학습](../docs/personal-head-training.md)에 있다.
+
+변환 명령과 결과는 [TFLite 검증](../docs/tflite-export-validation.md)에 있다.
+
+관찰 비교 명령과 결과는 [동일 프레임 비교](../docs/model-replay-comparison.md)에 있다. fusion은 적용하지 않는다.

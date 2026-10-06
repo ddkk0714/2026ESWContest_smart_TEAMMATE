@@ -317,3 +317,12 @@ FSM 을 MONITOR 로 보낸다. `state/phase.sensor_summary.control` 에 진행 �
 - `state/phase` 는 retain 을 켜서 디스플레이 재시작 시 즉시 현재 상태를 받는다
 - `display/message` 는 retain 을 끈다. 이전 문구가 재시작 뒤 다시 표시되거나 broker에 남지 않게 한다.
 - 노드는 재연결 시 지수 백오프(1s → 최대 30s)
+
+
+### 선택적 개인화 관찰 진단
+
+`deskmate/state/phase`의 `data.sensor_summary.personalization`은 개인화 활성화 시에만 추가한다.
+`mode: observe`, `decision_source: fsm`, `status: warming_up|predicted|unavailable`을 포함한다.
+정상 추론에는 label, confidence, probabilities(focus/fatigue/rest/idle), inference_ms를 추가한다.
+모델 confidence는 기존 행동 게이트의 confidence를 대체하지 않는다.
+기본 비활성에서는 기존 payload를 유지한다. 상세 계약은 `personalization-model-contract.md`를 따른다.

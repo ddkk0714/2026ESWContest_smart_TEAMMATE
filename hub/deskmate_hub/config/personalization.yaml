@@ -1,0 +1,10 @@
+# Enable only after explicit model deployment. Never changes FSM gates.
+enabled: false
+mode: observe
+model_path: ml/models/personalized.tflite
+metadata_path: ml/models/personalized.metadata.json
+window_ticks: 6
+max_period_jitter_sec: 2
+max_inference_ms: 500
+probability_sum_tolerance: 0.001
+probability_range_tolerance: 0.000001

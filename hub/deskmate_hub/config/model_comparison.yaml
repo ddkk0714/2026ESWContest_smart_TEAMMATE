@@ -1,0 +1,3 @@
+# Offline diagnostics only; never an action gate.
+low_confidence: 0.75
+max_interval_gap_sec: 12

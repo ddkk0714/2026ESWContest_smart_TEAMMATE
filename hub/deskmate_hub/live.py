@@ -21,6 +21,7 @@ from .features import BaselineStore
 from .ingest import SensorCache, SessionTracker, build_frame, load_ingest_config, sensor_summary
 from .presentation import state_envelope
 from .esm import make_label, write_label
+from .personalization import PersonalizationRuntime, load_personalization_config
 
 
 def frame_to_dict(frame: SensorFrame) -> dict[str, Any]:
@@ -43,6 +44,8 @@ class LiveHub:
         publish_request=None,
         publish_control=None,
         control_cfg: dict[str, Any] | None = None,
+        personalization_cfg: dict[str, Any] | None = None,
+        personalization_backend_factory=None,
         frame_log: TextIO | None = None,
         state_log: TextIO | None = None,
         out: TextIO = sys.stdout,
@@ -81,6 +84,12 @@ class LiveHub:
         self.period = float(self.ingest_cfg.get("frame_period_sec") or self.fsm_cfg["timers"]["score_period_sec"])
         self.esm_log_path = self.control_cfg.get("esm_log_path") or os.path.join("logs", f"esm-{self.boot_id}.jsonl")
         # 라벨 번호는 state/phase seq 와 따로 센다(seq 에 구멍이 나면 수신 측이 유실로 본다).
+        self.personalization_cfg = personalization_cfg if personalization_cfg is not None else load_personalization_config()
+        self.personalization = PersonalizationRuntime(
+            self.personalization_cfg, period=self.period,
+            normalization=self.ingest_cfg.get("normalization", "linear"),
+            backend_factory=personalization_backend_factory,
+        )
         self._esm_seq = 0
         self._last_result = None
 
@@ -145,6 +154,10 @@ class LiveHub:
             snap = self.tracker.baseline.snapshot()
             summary["baseline"] = {"calibrating": snap["calibrating"], "ready": sorted(snap["session"]),
                                    "seeded": sorted({m for b in snap["buckets"].values() for m in b})}
+        if self.personalization_cfg.get("enabled"):
+            summary["personalization"] = self.personalization.observe(
+                frame_to_dict(frame), reset=(result.state in (State.START, State.END) and result.state is not prev_state),
+            )
         envelope = state_envelope(result, boot_id=self.boot_id, seq=self.seq, ts=now, sensor_summary=summary)
         self.seq += 1
         self.publish(envelope)

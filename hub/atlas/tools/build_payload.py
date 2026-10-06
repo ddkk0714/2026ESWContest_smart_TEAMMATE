@@ -57,8 +57,9 @@ def main() -> None:
     with args.ingest_config.open(encoding="utf-8") as source:
         ingest_config = yaml.safe_load(source)
 
-    with tempfile.NamedTemporaryFile(suffix=".zip") as payload:
-        with zipfile.ZipFile(payload.name, "w", zipfile.ZIP_DEFLATED) as archive:
+    with tempfile.TemporaryDirectory() as payload_dir:
+        payload_path = Path(payload_dir) / "hub.zip"
+        with zipfile.ZipFile(payload_path, "w", zipfile.ZIP_DEFLATED) as archive:
             add_pure_stdlib(archive, args.stdlib)
             add_python_tree(archive, args.hub, "deskmate_hub")
             # paho-mqtt 는 순수 Python 이라 빌드 환경에 설치돼 있으면 그대로 동봉한다(live 모드 MQTT 발행용).
@@ -86,7 +87,15 @@ def main() -> None:
                     "deskmate_hub/config/control.json",
                     json.dumps(control_config, ensure_ascii=False, separators=(",", ":")),
                 )
-        with args.executable.open("ab") as executable, open(payload.name, "rb") as built:
+            personalization_yaml = args.config.with_name("personalization.yaml")
+            if personalization_yaml.exists():
+                with personalization_yaml.open(encoding="utf-8") as source:
+                    personalization_config = yaml.safe_load(source)
+                archive.writestr(
+                    "deskmate_hub/config/personalization.json",
+                    json.dumps(personalization_config, ensure_ascii=False, separators=(",", ":")),
+                )
+        with args.executable.open("ab") as executable, open(payload_path, "rb") as built:
             executable.write(built.read())
 
 

@@ -1,0 +1,10 @@
+# PC-only eligibility and comparison policy; does not enable hub inference.
+min_train_groups: 2
+min_validation_groups: 1
+min_test_groups: 1
+min_train_per_class: 10
+min_validation_per_class: 5
+min_test_per_class: 5
+min_real_esm_train: 10
+min_macro_f1_gain: 0.0
+max_class_recall_regression: 0.0
