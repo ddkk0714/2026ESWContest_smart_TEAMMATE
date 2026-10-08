@@ -395,3 +395,11 @@ Pi 4 C++ 서비스는 COBS 해제·CRC 검증·헤더 파싱까지만 하고 `UA
 - DFRobot SEN0623/C1001: https://wiki.dfrobot.com/sen0623/
 - DFRobot SEN0536/SCD41: https://wiki.dfrobot.com/sen0536/
 - SZH-EK070/BH1750: https://www.devicemart.co.kr/goods/view?no=1289977
+
+## 개입 사이클 보완 (2026-10-06)
+
+ESM source는 display 또는 hub이다. hub는 화면 응답 없이 질문이 만료되면 source=hub, verdict=timeout, 원래 request_id·kind·질문 시각을 기록한다. hub 만료에는 사람이 측정한 response_ms를 만들어 넣지 않는다. 같은 질문의 늦은 응답은 중복 라벨로 기록하지 않는다. 정정은 기존처럼 라벨이며 FSM 판정과 제어 승인을 덮어쓰지 않는다.
+
+피드백·제어 결과의 hub 수신 시각은 큐와 함께 메모리에 보관하며 메시지의 사용자 timestamp를 신뢰해 기한을 연장하지 않는다. 보드와 PC MQTT 경로가 같은 라우터를 사용한다.
+
+session/report.data.control_results는 forward·undo 각각 total, executing, succeeded, failed, timeout, cancelled 정수 집계다. 발행한 명령만 세고 개별 기기·값·ID는 전송하지 않는다. 상세 계약은 [MQTT 개입 사이클 결과](mqtt-topics.md#개입-사이클-결과-보완-2026-10-06)를 참고한다.

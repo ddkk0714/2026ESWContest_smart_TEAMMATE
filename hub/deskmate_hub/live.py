@@ -96,39 +96,43 @@ class LiveHub:
     def tick_once(self, now: float | None = None) -> dict[str, Any]:
         now = time.time() if now is None else now
         view = self.cache.snapshot()
-        feedback = self.cache.pop_feedback()
-        if feedback:
-            verdict = feedback.get("verdict")
-            # request_id 가 오면 현재 질문과 맞는지 본다. 없거나 'atlas-display'(HTTP 시절 기본값)면 그대로 받는다.
-            rid = feedback.get("request_id")
-            current = self.pending_request["data"]["request_id"] if self.pending_request else None
-            if verdict not in ("accept", "reject", "correct", "timeout"):
-                print(f"[esm] 알 수 없는 verdict: {verdict!r}", file=self.out)
-            elif verdict == "correct":
-                if feedback.get("corrected_state") not in ("FOCUS_PC", "FATIGUE", "REST", "IDLE"):
-                    print("[esm] 알 수 없는 corrected_state", file=self.out)
-                else:
-                    self._record_feedback(feedback, now, None)
-            elif verdict == "timeout":
-                if current is not None and rid == current:
+        for feedback, received in self.cache.pop_feedback_events():
+            feedback_now = now if received is None else min(now, received)
+            self._expire_pending_request(feedback_now)
+            if feedback:
+                verdict = feedback.get("verdict")
+                # request_id 가 오면 현재 질문과 맞는지 본다. 없거나 'atlas-display'(HTTP 시절 기본값)면 그대로 받는다.
+                rid = feedback.get("request_id")
+                current = self.pending_request["data"]["request_id"] if self.pending_request else None
+                if verdict not in ("accept", "reject", "correct", "timeout"):
+                    print(f"[esm] 알 수 없는 verdict: {verdict!r}", file=self.out)
+                elif verdict == "correct":
+                    if feedback.get("corrected_state") not in ("FOCUS_PC", "FATIGUE", "REST", "IDLE"):
+                        print("[esm] 알 수 없는 corrected_state", file=self.out)
+                    else:
+                        self._record_feedback(feedback, now, None)
+                elif verdict == "timeout":
+                    if current is not None and rid == current:
+                        request = self.pending_request
+                        self.pending_request = None
+                        self._record_feedback(feedback, now, request)
+                        if self.control is not None:
+                            self.control.on_feedback("timeout", now)
+                elif rid in (None, "", "atlas-display", current):
                     request = self.pending_request
+                    self.tracker.pending_feedback = verdict
                     self.pending_request = None
-                    self._record_feedback(feedback, now, request)
                     if self.control is not None:
-                        self.control.on_feedback("timeout", now)
-            elif rid in (None, "", "atlas-display", current):
-                request = self.pending_request
-                self.tracker.pending_feedback = verdict
-                self.pending_request = None
-                if self.control is not None:
-                    self.control.on_feedback(verdict, now)
-                self._record_feedback(feedback, now, request)
+                        self.control.on_feedback(verdict, now, received_at=feedback_now)
+                    self._record_feedback(feedback, now, request)
 
+        self._expire_pending_request(now)
         if self.control is not None:
             if self.mock_plug is not None:
                 self.mock_plug.tick()
-            for res in self.cache.pop_control_results():
-                self.control.on_result(res, now)
+            for res, received in self.cache.pop_control_result_events():
+                self.control.on_result(res, now if received is None else min(now, received))
+            self.control.tick(now)
 
         frame = build_frame(view, now, self.ingest_cfg, self.tracker, fsm_state=self.engine.state)
         if self.control is not None and self.engine.state is State.ACTION_ENV:
@@ -187,8 +191,21 @@ class LiveHub:
             if self.control is not None else (),
         )
 
+    def _expire_pending_request(self, now: float) -> None:
+        request = self.pending_request
+        if request is None:
+            return
+        expiry = request["data"].get("expires_in_s")
+        if expiry is None or now < request["ts"] + expiry:
+            return
+        self.pending_request = None
+        self._record_feedback({"verdict": "timeout", "request_id": request["data"]["request_id"]},
+                              now, request, source="hub")
+        if self.control is not None:
+            self.control.on_feedback("timeout", now)
+
     def _record_feedback(self, feedback: dict[str, Any], now: float,
-                         request: dict[str, Any] | None) -> None:
+                         request: dict[str, Any] | None, *, source: str = "display") -> None:
         verdict = feedback["verdict"]
         result = self._last_result
         scores = result.scores if result is not None else None
@@ -227,6 +244,7 @@ class LiveHub:
             request_ts=request_ts,
             score_period_sec=float(self.fsm_cfg["timers"]["score_period_sec"]),
         )
+        record["source"] = source
         self._esm_seq += 1
         self.recorder.record_esm(record)
         write_label(record, self.esm_log_path, on_log=lambda m: print(m, file=self.out))
@@ -249,11 +267,14 @@ class LiveHub:
             self.pending_request = None
             return
         kind, prompt = self._REQUEST_STATES[result.state]
+        expires = float(self.fsm_cfg["timers"].get("focus_break_poll_sec", 180))
+        if result.state is State.ACTION_ENV and self.control is not None:
+            expires = min(expires, self.control.suggest_timeout)
         self.pending_request = {
             "schema_version": "1.0", "ts": now, "node": "hub", "boot_id": self.boot_id, "seq": self.seq,
             "data": {
                 "request_id": f"{self.boot_id}-{self.seq}", "kind": kind, "prompt_code": prompt,
-                "options": ["accept", "reject"], "expires_in_s": int(self.fsm_cfg["timers"].get("focus_break_poll_sec", 180)),
+                "options": ["accept", "reject"], "expires_in_s": expires,
                 "evidence": list(result.actions), "cause": result.cause,
                 "c_fatigue": round(float(result.scores.c_fatigue), 4),
             },

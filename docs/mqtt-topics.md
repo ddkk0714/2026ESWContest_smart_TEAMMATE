@@ -326,3 +326,19 @@ FSM 을 MONITOR 로 보낸다. `state/phase.sensor_summary.control` 에 진행 �
 정상 추론에는 label, confidence, probabilities(focus/fatigue/rest/idle), inference_ms를 추가한다.
 모델 confidence는 기존 행동 게이트의 confidence를 대체하지 않는다.
 기본 비활성에서는 기존 payload를 유지한다. 상세 계약은 `personalization-model-contract.md`를 따른다.
+
+## 개입 사이클 결과 보완 (2026-10-06)
+
+- interaction/request의 expires_in_s는 환경 제어의 경우 timers.focus_break_poll_sec와 control.suggest_timeout_sec 중 짧은 값이다. 다른 제안은 기존 FSM 설정을 따른다. 만료되면 hub가 timeout 라벨을 기록하며 늦게 도착한 수락·거절·중복 timeout은 같은 질문에 다시 적용하지 않는다.
+- 판단은 hub 수신 시각을 기준으로 한다. MQTT payload에 새 timestamp 필드를 요구하지 않는다. tick 직전에 도착한 유효한 수락·결과가 다음 tick에서 만료로 바뀌지 않는다.
+- control/cmd의 expires_ts_ms는 실제 명령 발행 시각 + result_timeout_sec이다. 결과가 기한 후 도착하면 성공으로 되살리지 않는다. 결과에 명시한 actual_value가 요청 값과 다르면 failed로 처리한다.
+- session/report.data.control_results는 아래 집계를 추가한다. 기존 metrics와 화면 필드는 유지한다. 제어 성공과 회복 관측은 독립된 결과이다.
+
+```json
+"control_results": {
+  "forward": {"total": 2, "executing": 0, "succeeded": 2, "failed": 0, "timeout": 0, "cancelled": 0},
+  "undo": {"total": 0, "executing": 0, "succeeded": 0, "failed": 0, "timeout": 0, "cancelled": 0}
+}
+```
+
+발행한 명령만 집계하며 제안 거절·무응답·쿨다운으로 생략한 명령은 total에 포함하지 않는다. forward는 원래 제어, undo는 되돌리기 명령이다. 기기별 동작 로그와 command_id는 추가하지 않는다. 종료된 에피소드의 되돌리기도 결과·타임아웃이 반영된다.

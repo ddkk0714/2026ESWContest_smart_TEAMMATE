@@ -155,6 +155,14 @@ def report_envelope(r: SessionReport, *, now: float, node: str = "hub",
     # START 전이라도 '보고 있던 시간' 은 흘러간다. t_start 만 보면 duration 이
     # 계속 0 이라 화면의 리포트가 갱신되지 않는 것처럼 보인다(실측: IDLE 45분
     # 인데 duration_s 0.0).
+    control_episodes = list(control_episodes)
+    control_results = {}
+    for kind in ("forward", "undo"):
+        commands = [command for episode in control_episodes for command in episode.commands
+                    if command.sent_ts is not None and (command.gate == "undo") == (kind == "undo")]
+        control_results[kind] = {"total": len(commands), **{
+            status: sum(c.status == status for c in commands)
+            for status in ("executing", "succeeded", "failed", "timeout", "cancelled")}}
     start = r.t_start if r.t_start is not None else (r.t_first or now)
     end = r.t_end if r.t_end is not None else now
     duration = max(0.0, end - start)
@@ -187,6 +195,7 @@ def report_envelope(r: SessionReport, *, now: float, node: str = "hub",
             },
             # 물어본 적이 없으면 0% 가 아니라 "모름" 이다.
             "break_accept_rate": round(accepted / asked, 4) if asked else None,
+            "control_results": control_results,
             "metrics": calculate_metrics(
                 r.esm_labels, episodes=control_episodes, duration_s=duration,
                 fatigue_episodes=r.episodes,
