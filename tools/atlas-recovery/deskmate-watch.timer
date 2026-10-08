@@ -1,0 +1,9 @@
+# DESKMATE managed
+[Unit]
+Description=DESKMATE periodic recovery check
+[Timer]
+OnBootSec=60
+OnUnitInactiveSec=30
+Unit=deskmate-watch.service
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,17 @@
+# DESKMATE managed
+[Unit]
+Description=DESKMATE Atlas D-Bus hub supervisor
+After=dbus.service deskmate-broker.service
+Wants=deskmate-broker.service
+StartLimitIntervalSec=120
+StartLimitBurst=6
+[Service]
+Type=simple
+Environment=DESKMATE_RECOVERY_PREFIX=@PREFIX@
+ExecStart=/bin/sh @PREFIX@/lifecycle.sh hub-supervise
+ExecStop=/bin/sh @PREFIX@/lifecycle.sh hub-stop
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=15
+[Install]
+WantedBy=multi-user.target

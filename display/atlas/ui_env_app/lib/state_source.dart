@@ -7,6 +7,7 @@ import 'package:mqtt_client/mqtt_server_client.dart';
 
 import 'display_state.dart';
 import 'session_report.dart';
+import 'privacy_state.dart';
 
 abstract interface class StateSource {
   String get label;
@@ -165,7 +166,7 @@ class HttpStateSource implements StateSource {
 /// HTTP source는 Atlas 앱과 Hub를 따로 검증하기 위한 개발용 대체 수단으로
 /// 남겨 둔다. MQTT가 끊겨도 display는 재연결할 뿐, Pi 4의 FSM에는 영향을
 /// 주지 않는다.
-class MqttStateSource implements StateSource {
+class MqttStateSource implements StateSource, PrivacySource {
   MqttStateSource(this._host, {required this.port})
       : _bootId = 'display-${DateTime.now().microsecondsSinceEpoch}',
         _client = MqttServerClient.withPort(
@@ -203,6 +204,47 @@ class MqttStateSource implements StateSource {
 
   /// 마지막으로 해석에 실패한 메시지. 화면이 왜 안 움직이는지 말해 주려고 둔다.
   String? _lastParseError;
+  PrivacyState? _privacyState;
+  final Map<String, Completer<PrivacyState>> _privacyRequests = {};
+  @override
+  PrivacyState? get privacyState => _privacyState;
+
+  @override
+  Future<PrivacyState> changePrivacy(String action) async {
+    if (!['grant', 'revoke', 'delete'].contains(action)) {
+      throw ArgumentError('Unknown privacy action');
+    }
+    final state = _privacyState;
+    if (state?.available != true ||
+        (action == 'grant' && state?.policyReady != true)) {
+      throw StateError('Privacy policy or service unavailable');
+    }
+    await _ensureConnected();
+    final requestId = 'privacy-$_bootId-${++_sequence}';
+    final completion = Completer<PrivacyState>();
+    _privacyRequests[requestId] = completion;
+    try {
+      final payload = jsonEncode({
+        'schema_version': '1.0',
+        'node': 'display',
+        'data': {
+          'kind': 'personalization',
+          'request_id': requestId,
+          'action': action,
+          'confirmed': true,
+          'policy_version': state!.policyVersion,
+          'hub_boot_id': state.hubBootId
+        }
+      });
+      final builder = MqttClientPayloadBuilder()..addString(payload);
+      _client.publishMessage(
+          _feedbackTopic, MqttQos.atLeastOnce, builder.payload!);
+      return await completion.future.timeout(const Duration(seconds: 35));
+    } finally {
+      _privacyRequests.remove(requestId);
+    }
+  }
+
   String? _pendingRequestId;
   int? _pendingExpiresInS;
   int _sequence = 0;
@@ -302,6 +344,17 @@ class MqttStateSource implements StateSource {
         final envelope = jsonDecode(text) as Map<String, dynamic>;
         if (received.topic == _stateTopic) {
           _latest = DisplayState.fromEnvelope(envelope);
+          final data = envelope['data'];
+          final summary = data is Map ? data['sensor_summary'] : null;
+          _privacyState = PrivacyState.fromSummary(summary);
+          final acknowledged = _privacyState;
+          if (acknowledged != null &&
+              ['succeeded', 'failed'].contains(acknowledged.status)) {
+            final waiter = _privacyRequests[acknowledged.requestId];
+            if (waiter != null && !waiter.isCompleted) {
+              waiter.complete(acknowledged);
+            }
+          }
         } else if (received.topic == _requestTopic) {
           final data = envelope['data'];
           if (data is Map<String, dynamic>) {
@@ -376,6 +429,12 @@ class MqttStateSource implements StateSource {
 
   @override
   void close() {
+    for (final request in _privacyRequests.values) {
+      if (!request.isCompleted) {
+        request.completeError(StateError('Connection closed'));
+      }
+    }
+    _privacyRequests.clear();
     _updates?.cancel();
     _client.disconnect();
   }

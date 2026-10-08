@@ -173,3 +173,9 @@ dominant = argmax(wᵢ · δᵢ)
 - 1단계 규칙 FSM 은 완전 오프라인 동작. 2단계 TFLite 는 RasPi 탑재 성공 시 오프라인.
 - 판정 사이클 ≤ 500ms, 신뢰도 계산 주기 10s(`score_period_sec`).
 - 장시간 구동: deque 버퍼 상한 · 주기적 정리 · systemd 자동 재시작.
+
+## 개입 응답 처리 보완 (2026-10-06)
+
+FSM 상태·가중치·임계값은 유지한다. LiveHub에서 질문 만료 시 timeout ESM을 한 번 기록하고, ACTION_ENV의 제어 디스패처가 만료·실패·결과 타임아웃을 action_done으로 전달한다. 결과가 실패했더라도 MONITOR에서 센서 회복을 관측할 수 있으며, 제어 성공과 같은 의미로 보고하지 않는다. 리포트 control_results에서 실제 성공·실패·타임아웃을 구분한다. 정정은 상태 전이를 강제로 바꾸지 않는다.
+
+설정은 기존 config/control.yaml과 config/fsm.yaml을 따른다. 제어 명령 기한은 수락 후 실제 발행 시점부터 계산하며, 기한 전에 수신한 결과는 다음 tick에서도 유효하다. 닫힌 에피소드의 되돌리기 결과도 추적한다. [mock·MQTT 검증 절차](intervention-cycle-check.md)를 참고한다.

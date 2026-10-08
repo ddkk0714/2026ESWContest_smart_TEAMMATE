@@ -1,0 +1,9 @@
+# DESKMATE managed
+[Unit]
+Description=DESKMATE bounded progress and permission recovery
+After=deskmate-hub.service deskmate-display.service
+[Service]
+Type=oneshot
+Environment=DESKMATE_RECOVERY_PREFIX=@PREFIX@
+ExecStart=/bin/sh @PREFIX@/lifecycle.sh watch
+TimeoutStartSec=30

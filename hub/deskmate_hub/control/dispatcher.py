@@ -109,10 +109,13 @@ class ControlDispatcher:
             ep.outcome = "skipped"
         return ep
 
-    def on_feedback(self, verdict: str, now: float | None = None) -> None:
+    def on_feedback(self, verdict: str, now: float | None = None, *, received_at: float | None = None) -> None:
         now = self._clock() if now is None else now
         ep = self.episode
         if ep is not None and ep.awaiting_user:
+            if (now if received_at is None else received_at) - ep.started_ts >= self.suggest_timeout:
+                self._expire(ep, "suggestion deadline reached")
+                return
             if verdict == "timeout":
                 # 화면의 카드가 만료됐다(expires_in_s) — 사람이 볼 수 없는 제안을 suggest_timeout 까지 붙들지 않는다.
                 self._expire(ep, "화면 카드 만료(timeout)")
@@ -146,7 +149,12 @@ class ControlDispatcher:
         for ep in ([self.episode] if self.episode else []) + self.history[-5:]:
             for c in ep.commands:
                 if c.command_id == cid and not c.terminal:
+                    if c.sent_ts is not None and now >= c.expires_ts:
+                        c.status, c.completed_ts = "timeout", now
+                        return False
                     status = str(payload.get("status", "")).lower()
+                    if status == "succeeded" and "actual_value" in payload and payload["actual_value"] != c.value:
+                        status = "failed"
                     c.status = status if status in ("executing", "succeeded", "failed", "cancelled") else "failed"
                     if c.terminal:
                         c.completed_ts = now
@@ -158,15 +166,15 @@ class ControlDispatcher:
         """타임아웃 처리. 매 프레임 호출."""
         now = self._clock() if now is None else now
         ep = self.episode
-        if ep is None:
-            return
-        if ep.awaiting_user and now - ep.started_ts > self.suggest_timeout:
-            # 제안에 응답이 없으면 만료 — 실행하지 않고 넘어간다(무응답도 하나의 신호로 기록)
-            self._expire(ep, f"제안 무응답 {self.suggest_timeout:.0f}s")
-        for c in ep.commands:
-            if not c.terminal and c.sent_ts is not None and now - c.sent_ts > self.timeout:
-                c.status, c.completed_ts = "timeout", now
-                self._log(f"[control] {c.target_id}.{c.operation} 결과 없음 → timeout")
+        if ep is not None and ep.awaiting_user and now - ep.started_ts >= self.suggest_timeout:
+            self._expire(ep, "suggestion deadline reached")
+        # Closed episodes can still receive an undo command in MONITOR/RECOVERY.
+        episodes = self.history + ([ep] if ep is not None else [])
+        for episode in episodes:
+            for c in episode.commands:
+                if not c.terminal and c.sent_ts is not None and now >= c.expires_ts:
+                    c.status, c.completed_ts = "timeout", now
+                    self._log(f"[control] {c.target_id}.{c.operation} result timeout")
 
     def _expire(self, ep: Episode, why: str) -> None:
         # 제안에 응답이 없으면 만료 — 실행하지 않고 넘어간다(무응답도 하나의 신호로 기록)
@@ -218,6 +226,7 @@ class ControlDispatcher:
     def _dispatch(self, ep: Episode, now: float) -> None:
         for c in ep.commands:
             c.sent_ts, c.status = now, "executing"
+            c.expires_ts = now + self.timeout
             self._last_sent[(c.target_id, c.operation)] = now
             self.publish_cmd(c.to_payload())
         ep.executed = True
@@ -226,7 +235,8 @@ class ControlDispatcher:
         self._log(f"[control] {ep.state}/{ep.cause}: {len(ep.commands)}건 발행 ({ep.gate.value})")
 
     def _undo(self, ep: Episode, now: float) -> None:
-        for c in ep.commands:
+        sent = False
+        for c in list(ep.commands):
             if c.undo_value is None or c.status not in ("succeeded", "executing"):
                 continue
             undo = ControlCommand(
@@ -236,6 +246,10 @@ class ControlDispatcher:
             )
             ep.commands.append(undo)
             self.publish_cmd(undo.to_payload())
+            sent = True
+        if not sent:
+            self._log("[control] no eligible command to undo")
+            return
         ep.outcome = "undone"
         self._log(f"[control] 사용자 거절 → 자동 실행 되돌림")
 

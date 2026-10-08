@@ -24,6 +24,11 @@ BOARD_MODULES = (
     "deskmate_hub.features.baseline",
     "deskmate_hub.control.dispatcher",
     "deskmate_hub.inference.report",
+    "deskmate_hub.personalization.runtime",
+    "deskmate_hub.personalization.tflite_backend",
+    "deskmate_hub.personalization.portable",
+    "deskmate_hub.personalization.ondevice",
+    "deskmate_hub.personalization.self_check",
 )
 
 
@@ -31,7 +36,7 @@ def test_board_path_imports_without_missing_c_extensions():
     # 새 인터프리터에서 C 확장을 막은 뒤 import 한다(이 프로세스는 이미 random 등을 불러 놓았을 수 있다).
     code = textwrap.dedent(f"""
         import sys
-        for name in {MISSING_ON_BOARD!r}:
+        for name in {MISSING_ON_BOARD!r} + ("numpy", "tflite_runtime", "tensorflow", "hashlib"):
             sys.modules[name] = None          # import 하면 ImportError
         for name in ("random", "socket", "ssl", "statistics", "uuid", "tempfile"):
             sys.modules.pop(name, None)
