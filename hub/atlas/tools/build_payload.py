@@ -95,6 +95,18 @@ def main() -> None:
                     "deskmate_hub/config/personalization.json",
                     json.dumps(personalization_config, ensure_ascii=False, separators=(",", ":")),
                 )
+            privacy_yaml = args.config.with_name("privacy.yaml")
+            if privacy_yaml.exists():
+                with privacy_yaml.open(encoding="utf-8") as source:
+                    privacy_config = yaml.safe_load(source)
+                archive.writestr("deskmate_hub/config/privacy.json",
+                                 json.dumps(privacy_config, ensure_ascii=False, separators=(",", ":")))
+            ondevice_yaml = args.config.with_name("ondevice.yaml")
+            if ondevice_yaml.exists():
+                with ondevice_yaml.open(encoding="utf-8") as source:
+                    ondevice_config = yaml.safe_load(source)
+                archive.writestr("deskmate_hub/config/ondevice.json",
+                                 json.dumps(ondevice_config, ensure_ascii=False, separators=(",", ":")))
         with args.executable.open("ab") as executable, open(payload_path, "rb") as built:
             executable.write(built.read())
 

@@ -27,6 +27,8 @@ import 'developer_page.dart';
 import 'session_report.dart';
 import 'settings_store.dart';
 import 'state_source.dart';
+import 'privacy_page.dart';
+import 'privacy_state.dart';
 
 const _hubUrl = String.fromEnvironment('DESKMATE_HUB_URL');
 const _mqttHost = String.fromEnvironment('DESKMATE_MQTT_HOST');
@@ -848,6 +850,10 @@ class _DashboardPageState extends State<DashboardPage> {
                         ),
                       _AppView.sessionReport =>
                         SessionReportCard(report: _source.sessionReport),
+                      _AppView.privacy => PrivacyPage(
+                          source: _source is PrivacySource
+                              ? _source as PrivacySource
+                              : null),
                       _AppView.connection => ConnectionPage(
                           snapshot: _links,
                           now: DateTime.now(),
@@ -924,6 +930,7 @@ enum _AppView {
   fsmGraph,
   bluetooth,
   sessionReport,
+  privacy,
   connection
 }
 
@@ -1006,6 +1013,11 @@ class _Header extends StatelessWidget {
               label: Text(musicOn ? 'ON' : 'OFF')),
           // 문제가 있을 때만 보인다. 누르면 연결 탭으로 간다.
           LinkProblemBadge(snapshot: links, onTap: onProblems),
+          IconButton(
+              key: const ValueKey('privacy-open'),
+              tooltip: '\uAC1C\uC778\uD654 \uAD00\uB9AC',
+              onPressed: () => onViewChanged(_AppView.privacy),
+              icon: const Icon(Icons.privacy_tip_outlined)),
           IconButton(
               key: const ValueKey('app-exit'),
               tooltip: '\uC571 \uC885\uB8CC',

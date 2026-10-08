@@ -46,3 +46,9 @@ sensor_summary.personalization은 진단용이며 source·FSM 점수·게이트�
 native invoke hang을 선점/강제 종료하지 못하므로 실기 latency 검증 전에는 활성화하지 않는다.
 
 변환 모델 metadata의 model_sha256이 있으면 backend에서 fingerprint를 검증한다. PC 검사에는 Interpreter factory를 주입할 수 있으며 기본은 tflite_runtime이다. 확률 범위 반올림 허용값은 personalization.yaml에 두고 유효 출력만 [0,1]로 제한한다.
+
+## 동의 관리 연결 (2026-10-07)
+
+2026-10-08 온디바이스 학습 경로를 추가했다. `backend: portable_cnn`은 동일 입출력 계약을 유지하는 고정 공통 CNN을 JSON 가중치로 실행하고 내부 16차원 embedding에 대한 개인 head만 Pi 4에서 학습한다. 별도 ondevice.yaml·동의·등록 파일 조건이 필요하며, 기존 `backend: tflite` 경로도 유지한다. 두 경로 모두 observe 전용이고 실제 보드 검증은 남았다. [온디바이스 구현·제한](ondevice-personalization.md)을 참고한다.
+
+privacy 관리 기능을 켜면 승인된 정책의 사용자 동의가 있어야 선택적 모델을 로딩한다. 동의 취소·삭제는 backend 참조와 입력 창을 초기화하고 FSM을 계속 사용한다. 파일 삭제는 등록된 개인 bundle만 대상으로 하며 공통 모델을 등록하지 않는다. 기본은 관리 기능·모델 추론 모두 꺼짐이다. [개인화 동의·삭제 흐름](personalization-privacy-flow.md)에 설정과 제한을 정리했다.

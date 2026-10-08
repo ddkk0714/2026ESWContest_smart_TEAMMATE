@@ -1,6 +1,8 @@
 # Enable only after explicit model deployment. Never changes FSM gates.
 enabled: false
 mode: observe
+# tflite (legacy PC verification) or portable_cnn (stdlib board learning path).
+backend: tflite
 model_path: ml/models/personalized.tflite
 metadata_path: ml/models/personalized.metadata.json
 window_ticks: 6

@@ -386,3 +386,9 @@ docs/ml-augmentation-evidence.md 는 `--synthetic default,short,demo --seeds 1-2
 ## 2026-10-06 추가 진행: 개입 한 사이클 마무리
 
 별도 로컬 개입 검증 도구를 통합하고 mock MQTT의 응답 5종·화면 무응답·제어 실패·결과 누락을 검증한다. 수락 시 명령 기한 갱신, hub의 timeout 기록, 수신 시각 기준 기한 처리, 종료된 에피소드의 되돌리기 타임아웃, 리포트의 forward·undo 결과 집계를 보완했다. 실센서·Pi 5 터치·실기 제어는 미검증이다. [절차와 제한](../intervention-cycle-check.md)을 참고한다.
+
+## 2026-10-07 추가 진행: 개인화 동의·삭제 흐름
+
+2026-10-08 방향 변경: 사용자 요청으로 운영 개인화는 Pi 4에서 개인 head 학습·평가·적용한다. 이전 PC 개인 head 실험은 개발 검증 이력이며 사용자 PC 파일 복사 흐름으로 채택하지 않는다. [현재 개인화 계획](personalization-stage2-plan.md)이 W5 당시 PC 범위를 대체한다. 순수 Python 실행·유휴 학습·앱 상태 표시를 구현했으며 실기·사용자 효과·FSM 결합은 다음 단계로 둔다. [PR·실기 인계](../ondevice-field-validation.md)에 보드 점검 범위를 정리했다.
+
+개인화 관리 화면과 hub 동의·철회·등록 파일 삭제, baseline·모델 메모리 초기화, 정책 버전 확인과 MQTT 처리 확인을 구현했다. 기본 꺼짐·정책 미승인으로 유지하며 저장 기간·사용자 분리·ESM/PC 자료 삭제 정책은 결정하지 않았다. [구현 범위와 검증](../personalization-privacy-flow.md)을 참고한다.

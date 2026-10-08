@@ -37,8 +37,15 @@ class PersonalizationRuntime:
                 if not source.read(1):
                     raise ValueError("empty model")
             if backend_factory is None:
-                from .tflite_backend import TFLiteBackend
-                backend_factory = TFLiteBackend
+                backend_name = config.get("backend", "tflite")
+                if backend_name == "portable_cnn":
+                    from .portable import PortableBackend
+                    backend_factory = PortableBackend
+                elif backend_name == "tflite":
+                    from .tflite_backend import TFLiteBackend
+                    backend_factory = TFLiteBackend
+                else:
+                    raise ValueError("unsupported backend")
             self.backend = backend_factory(config["model_path"], metadata)
             self.status = "warming_up"
         except Exception:

@@ -403,3 +403,9 @@ ESM source는 display 또는 hub이다. hub는 화면 응답 없이 질문이 �
 피드백·제어 결과의 hub 수신 시각은 큐와 함께 메모리에 보관하며 메시지의 사용자 timestamp를 신뢰해 기한을 연장하지 않는다. 보드와 PC MQTT 경로가 같은 라우터를 사용한다.
 
 session/report.data.control_results는 forward·undo 각각 total, executing, succeeded, failed, timeout, cancelled 정수 집계다. 발행한 명령만 세고 개별 기기·값·ID는 전송하지 않는다. 상세 계약은 [MQTT 개입 사이클 결과](mqtt-topics.md#개입-사이클-결과-보완-2026-10-06)를 참고한다.
+
+## 개인화 동의 기록 (2026-10-07)
+
+2026-10-08 온디바이스 학습 데이터: 동의 후 최신 16차원 embedding·정정 클래스·내부 tick/세션 번호를 제한된 RAM 표본으로 관리하며 MQTT나 디스크 표본 로그로 내보내지 않는다. 재부팅 시 이 표본은 사라진다. 검증 후 저장하는 `deskmate-personal-head/1` JSON은 backbone_sha256과 head(weights `[16,4]`, bias `[4]`)만 포함한다. 개인 head와 저장 임시 파일 모두 삭제 등록 대상이다. 공통 frozen CNN·입력/출력 계약은 [온디바이스 구현](ondevice-personalization.md)을 따른다. 기본 비활성·observe 전용이며 영구 표본 보존·사용자 분리 정책은 미정이다.
+
+정책 승인 후 활성화할 로컬 프로토타입은 privacy.yaml의 consent_file에 consented bool과 policy_version 문자열만 저장한다. 정책 버전 불일치·누락·손상은 미동의로 처리한다. baseline·개인 모델 삭제 대상은 서버 설정의 명시적 파일 목록이며 요청에서 경로를 받지 않는다. 사용자별 저장·조회·보존 기간과 ESM/PC 자료 삭제는 아직 확정하지 않는다. [개발 범위](personalization-privacy-flow.md)를 참고한다.

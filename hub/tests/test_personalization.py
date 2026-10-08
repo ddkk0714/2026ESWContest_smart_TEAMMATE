@@ -194,5 +194,9 @@ def test_packaged_personalization_config(tmp_path):
     assert result.returncode == 0, result.stderr
     with zipfile.ZipFile(executable) as archive:
         packaged = json.loads(archive.read("deskmate_hub/config/personalization.json"))
+        privacy = json.loads(archive.read("deskmate_hub/config/privacy.json"))
+        ondevice = json.loads(archive.read("deskmate_hub/config/ondevice.json"))
         assert "deskmate_hub/personalization/runtime.py" in archive.namelist()
     assert packaged == yaml.safe_load((config_dir / "personalization.yaml").read_text(encoding="utf-8"))
+    assert privacy == yaml.safe_load((config_dir / "privacy.yaml").read_text(encoding="utf-8"))
+    assert ondevice == yaml.safe_load((config_dir / "ondevice.yaml").read_text(encoding="utf-8"))

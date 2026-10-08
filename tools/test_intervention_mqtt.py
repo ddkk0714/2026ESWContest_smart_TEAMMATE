@@ -240,3 +240,42 @@ def test_feedback_control_recovery_and_report_over_mqtt(broker_port, tmp_path, c
         actor.disconnect()
         actor.loop_stop()
         source.stop()
+
+
+def test_personalization_consent_acknowledgements_over_mqtt(broker_port, tmp_path):
+    clock = {"t": T0}
+    source = ClockedSource(SensorCache(), broker_port, clock)
+    actor = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"privacy-ui-{time.time_ns()}")
+    ready = threading.Event()
+    states = []
+    actor.on_connect = lambda client, *_: client.subscribe(STATE, 1)
+    actor.on_subscribe = lambda *_: ready.set()
+    actor.on_message = lambda _c, _u, message: states.append(json.loads(message.payload))
+    ingest = load_ingest_config()
+    ingest["baseline"]["persist"] = {"enabled": True, "path": str(tmp_path / "baseline.json")}
+    privacy = {"enabled": True, "policy_approved": True, "policy_version": "test-v1",
+               "data_root": str(tmp_path), "consent_file": str(tmp_path / "consent.json"), "personal_model_files": []}
+    hub = LiveHub(source.cache, privacy_cfg=privacy, ingest_cfg=ingest,
+                  personalization_cfg={"enabled": False}, control_cfg={"enabled": False},
+                  publish=source.publish_state, out=io.StringIO())
+    source.start()
+    actor.connect("127.0.0.1", broker_port)
+    actor.loop_start()
+    try:
+        assert ready.wait(5) and source.subscribed.wait(5)
+        for index, action in enumerate(("grant", "revoke"), 1):
+            rid = f"privacy-{index}"
+            actor.publish(FEEDBACK, json.dumps({"data": {"kind": "personalization", "request_id": rid,
+                "action": action, "confirmed": True, "policy_version": "test-v1", "hub_boot_id": hub.boot_id}}), qos=1)
+            wait_for(lambda: source.received[FEEDBACK] >= index)
+            hub.tick_once(clock["t"])
+            wait_for(lambda: any(envelope["data"]["sensor_summary"]["privacy"].get("request_id") == rid for envelope in states))
+            ack = next(envelope["data"]["sensor_summary"]["privacy"] for envelope in states
+                       if envelope["data"]["sensor_summary"]["privacy"].get("request_id") == rid)
+            assert ack["status"] == "succeeded" and ack["consented"] == (action == "grant")
+            clock["t"] += 10
+        assert not hub.recorder.r.esm_labels
+    finally:
+        actor.disconnect()
+        actor.loop_stop()
+        source.stop()

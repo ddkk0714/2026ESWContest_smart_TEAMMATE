@@ -22,6 +22,8 @@ from .ingest import SensorCache, SessionTracker, build_frame, load_ingest_config
 from .presentation import state_envelope
 from .esm import make_label, write_label
 from .personalization import PersonalizationRuntime, load_personalization_config
+from .personalization.privacy import PersonalizationPrivacy, load_privacy_config
+from .personalization.ondevice import OnDeviceLearner, load_ondevice_config
 
 
 def frame_to_dict(frame: SensorFrame) -> dict[str, Any]:
@@ -45,6 +47,8 @@ class LiveHub:
         publish_control=None,
         control_cfg: dict[str, Any] | None = None,
         personalization_cfg: dict[str, Any] | None = None,
+        privacy_cfg: dict[str, Any] | None = None,
+        ondevice_cfg: dict[str, Any] | None = None,
         personalization_backend_factory=None,
         frame_log: TextIO | None = None,
         state_log: TextIO | None = None,
@@ -55,6 +59,13 @@ class LiveHub:
         self.ingest_cfg = ingest_cfg or load_ingest_config()
         self.engine = FSMEngine(self.fsm_cfg)
         self.tracker = SessionTracker()
+        self.privacy_cfg = privacy_cfg if privacy_cfg is not None else load_privacy_config()
+        self._personalization_factory = personalization_backend_factory
+        self.privacy = PersonalizationPrivacy(
+            self.privacy_cfg,
+            baseline_file=((self.ingest_cfg.get("baseline") or {}).get("persist") or {}).get("path"),
+            on_reset=self._reset_personalization, on_grant=self._grant_personalization,
+        )
         # 리포트는 세션이 끝나야 나오는 게 아니라 진행 중에도 스냅샷을 낼 수 있어야
         # 한다. 화면의 리포트 탭이 세션 내내 비어 있으면 아무도 안 본다.
         self.recorder = SessionRecorder()
@@ -62,7 +73,7 @@ class LiveHub:
             bcfg = dict(self.ingest_cfg.get("baseline") or {})
             persist = bcfg.get("persist") or {}
             self.tracker.baseline = BaselineStore(
-                bcfg, persist_path=persist.get("path") if persist.get("enabled") else None,
+                bcfg, persist_path=persist.get("path") if persist.get("enabled") and (not self.privacy.enabled or self.privacy.consented) else None,
             )
         self.publish = publish or (lambda envelope: None)
         self.publish_request = publish_request or (lambda envelope: None)
@@ -80,23 +91,29 @@ class LiveHub:
                 self.control = ControlDispatcher(self.control_cfg, publish_cmd=publish_control, on_log=log)
         self.frame_log, self.state_log, self.out = frame_log, state_log, out
         self.boot_id = f"{time.time_ns() & 0xFFFFFFFF:08x}"
+        self.privacy.boot_id = self.boot_id
         self.seq = 0
         self.period = float(self.ingest_cfg.get("frame_period_sec") or self.fsm_cfg["timers"]["score_period_sec"])
         self.esm_log_path = self.control_cfg.get("esm_log_path") or os.path.join("logs", f"esm-{self.boot_id}.jsonl")
         # 라벨 번호는 state/phase seq 와 따로 센다(seq 에 구멍이 나면 수신 측이 유실로 본다).
         self.personalization_cfg = personalization_cfg if personalization_cfg is not None else load_personalization_config()
         self.personalization = PersonalizationRuntime(
-            self.personalization_cfg, period=self.period,
+            self._effective_model_config(), period=self.period,
             normalization=self.ingest_cfg.get("normalization", "linear"),
             backend_factory=personalization_backend_factory,
         )
         self._esm_seq = 0
         self._last_result = None
+        self.ondevice_cfg = ondevice_cfg if ondevice_cfg is not None else load_ondevice_config()
+        self.ondevice = OnDeviceLearner(self.ondevice_cfg, self.privacy)
 
     def tick_once(self, now: float | None = None) -> dict[str, Any]:
         now = time.time() if now is None else now
         view = self.cache.snapshot()
         for feedback, received in self.cache.pop_feedback_events():
+            if feedback.get("kind") == "personalization":
+                self.privacy.handle(feedback)
+                continue
             feedback_now = now if received is None else min(now, received)
             self._expire_pending_request(feedback_now)
             if feedback:
@@ -158,10 +175,18 @@ class LiveHub:
             snap = self.tracker.baseline.snapshot()
             summary["baseline"] = {"calibrating": snap["calibrating"], "ready": sorted(snap["session"]),
                                    "seeded": sorted({m for b in snap["buckets"].values() for m in b})}
+        if self.privacy.enabled:
+            summary["privacy"] = self.privacy.snapshot()
         if self.personalization_cfg.get("enabled"):
+            if self.ondevice_cfg.get("enabled"):
+                self.ondevice.bind(self.personalization)
             summary["personalization"] = self.personalization.observe(
                 frame_to_dict(frame), reset=(result.state in (State.START, State.END) and result.state is not prev_state),
             )
+        if self.ondevice_cfg.get("enabled"):
+            self.ondevice.observe(self.personalization, result.state.value, now)
+            self.ondevice.advance(result.state.value)
+            summary["ondevice_learning"] = self.ondevice.snapshot()
         envelope = state_envelope(result, boot_id=self.boot_id, seq=self.seq, ts=now, sensor_summary=summary)
         self.seq += 1
         self.publish(envelope)
@@ -189,6 +214,33 @@ class LiveHub:
             self.recorder.finalize(), now=time.time() if now is None else now,
             control_episodes=(self.control.history + ([self.control.episode] if self.control.episode else []))
             if self.control is not None else (),
+        )
+
+    def _effective_model_config(self):
+        cfg = dict(self.personalization_cfg)
+        if self.privacy.enabled and not self.privacy.consented:
+            cfg["enabled"] = False
+        return cfg
+
+    def _reset_personalization(self):
+        if hasattr(self, "ondevice"):
+            self.ondevice.reset()
+        if self.tracker.baseline is not None:
+            self.tracker.baseline = BaselineStore(self.tracker.baseline.cfg)
+        self.personalization = PersonalizationRuntime(
+            dict(self.personalization_cfg, enabled=False), period=self.period,
+            normalization=self.ingest_cfg.get("normalization", "linear"),
+        )
+
+    def _grant_personalization(self):
+        baseline = self.tracker.baseline
+        if baseline is not None:
+            persist = baseline.cfg.get("persist") or {}
+            baseline.persist_path = persist.get("path") if persist.get("enabled") else None
+        self.personalization = PersonalizationRuntime(
+            self._effective_model_config(), period=self.period,
+            normalization=self.ingest_cfg.get("normalization", "linear"),
+            backend_factory=self._personalization_factory,
         )
 
     def _expire_pending_request(self, now: float) -> None:
@@ -247,6 +299,7 @@ class LiveHub:
         record["source"] = source
         self._esm_seq += 1
         self.recorder.record_esm(record)
+        self.ondevice.correct(record)
         write_label(record, self.esm_log_path, on_log=lambda m: print(m, file=self.out))
 
     _REQUEST_STATES = {
