@@ -77,6 +77,26 @@ PlatformIO (Arduino 프레임워크) 또는 ESP-IDF.
 
 ESP32 는 Pi 4 와 유선이므로 Wi-Fi 자격증명이 기본 경로에 필요 없다. 필요해지면 `include/secrets.h.example` 를 복사해 `include/secrets.h` 로 쓰고 커밋하지 않는다.
 
+## ToF 자세 추정 (Path B 전처리)
+
+`src/preprocess/tof/TofPosture.{h,cpp}` — 멀티존 거리 프레임 → roadmap §4-4 기하 특징 7종 →
+`docs/data-spec.md` §6.1 `tof_feature`(posture enum · `motion_score` · `head_delta_mm` · `nod_rate_hz`).
+Arduino 의존이 없는 순수 C++ 이고, 원본 zone 배열은 여기서 소비하고 내보내지 않는다.
+
+- **격자 무관.** VL53L9CX 54×42 원본, binning 축소(24×20 · 8×6 …), VL53L8CX 8×8 을 같은 코드로 처리한다.
+  RAM 은 `DESKMATE_TOF_MAX_ZONES`(기본 2268 → 약 35 KB)로 정한다. 객체는 전역·정적으로 둔다.
+- **흐름.** zone 상태값 판정(5·9, 선택 6·10) → 3프레임 중앙값 · 짧은 결측 유지 → 빈 자리에서 배운 배경 대비
+  전경 분리 → 특징 7종 → 앉은 뒤 처음 조용한 10 s 를 "바른 자세" 기준선으로 → 기준선 대비 머리 거리·높이로
+  분류 → 1 s 디바운스.
+- **분류.** 머리 꼭대기 행이 격자 높이의 20% 이상 내려감 = `slouch`(엎드림 포함), 머리가 80 mm 이상 가까워짐 =
+  `lean_forward`, 100 mm 이상 멀어짐 = `lean_back`, 그 외 `upright`. 기준선 전에는 `unknown`, 3 s 비면 `away`.
+- **노딩.** 머리 거리가 느린 추세(τ 3 s)보다 30 mm 이상 가까워질 때마다 1회, 최근 20 s 집계 → `nod_rate_hz`.
+- **임계값**은 전부 `TofPostureConfig` 에 있다. 기본값은 합성 장면으로만 맞춘 잠정값이라 실측 후 교체한다.
+- **호스트 테스트:** `pio test -e native -f test_tof_posture` (21개 — 배경 분리 · 기준선 · 4자세 · 디바운스 ·
+  결측/튐 내성 · 노딩 · 격자 4종 동일 판정 등).
+
+아직 하지 않은 것: 센서 드라이버 연결(`main.cpp`), UART TYPE 0x03/0x04 payload 정의, hub 매핑.
+
 ## 통신 계약
 
 논리 스키마는 [`docs/data-spec.md`](../docs/data-spec.md), Pi 4 이후 MQTT 매핑은 [`docs/mqtt-topics.md`](../docs/mqtt-topics.md) 참조.

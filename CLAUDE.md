@@ -69,7 +69,7 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 | `display/atlas/camsvc`·`camtest` 카메라 자세 | 박소연 | ⚠ | ESP32-CAM + MediaPipe 스켈레톤 판정(PR #20). 통합 앱 자세 탭은 `base/camera-zone-views`(PR #25). **"카메라 미사용" 원칙과 충돌 — 팀 결정 필요**(`docs/roadmap.md` §3 I7) |
 | `collector/` 키스트로크 | 최민경 | ✅ | main 진입(PR #15). 공통 envelope 발행·이식성 설정 문서는 `feat/edge-hub-port`(테스트 10) |
 | `tools/` | 공통 | ✅ | `uart_mqtt_bridge.py`, Node-RED 대시보드, Pi 4 정적 Mosquitto·핫스팟 스크립트(PR #18), 시나리오 sim·로컬 리허설. 5분 시연(`--scenario demo`·`demo_dryrun.py`)·판정 주기 측정·ESM 집계는 (DI) |
-| ToF 파이프라인 | 김태환 | ⬜ | **미연결, Path A/B 미결(09-19 마감 경과).** 기하 특징 7종 코드 없음 |
+| ToF 파이프라인 | 김태환 | 🚧 | **미연결, Path A/B 미결(09-19 마감 경과).** 기하 특징 7종 → 자세 분류 알고리즘·호스트 테스트는 `feat/tof-posture`(`firmware/esp32_sensor_node/src/preprocess/tof/`, 격자 무관). 센서 드라이버·UART 0x03/0x04·hub 매핑 남음 |
 ---
 
 ## 4. 실행 계획 (2026-09-14 재기준)
