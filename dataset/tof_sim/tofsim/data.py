@@ -8,6 +8,7 @@ Model input per frame (also what the board would compute):
 
 from __future__ import annotations
 
+import multiprocessing as mp
 import os
 import queue
 import time
@@ -55,25 +56,34 @@ def worker_main(worker: int, streams: list[int], q, chunk_len: int, sensor: str,
     for s in streams:
         its[s] = _session_iter(_seed(base_seed, s, 0), sensor)
         fresh[s] = True
+    parent = mp.parent_process()
     while not stop_event.is_set():
+        if parent is not None and not parent.is_alive():
+            return  # the trainer is gone; do not linger as an orphan
         for s in streams:
+            # Exactly one chunk per stream per round — the trainer relies on it.
             frames = []
-            while len(frames) < chunk_len:
-                try:
-                    frames.append(next(its[s]))
-                except StopIteration:
+            while True:
+                while len(frames) < chunk_len:
+                    try:
+                        frames.append(next(its[s]))
+                    except StopIteration:
+                        break
+                if frames:
                     break
+                # The session ended exactly on a chunk boundary: start the next one now.
+                session_no[s] += 1
+                its[s] = _session_iter(_seed(base_seed, s, session_no[s]), sensor)
+                fresh[s] = True
             reset = fresh[s]
             fresh[s] = False
             n_real = len(frames)
             if n_real < chunk_len:
-                # Session over: the next chunk of this stream starts a new one
-                # (and resets the recurrent state). Pad this one with weight 0.
+                # Session over mid-chunk: pad with weight 0; the next chunk of this
+                # stream starts a new session and resets the recurrent state.
                 session_no[s] += 1
                 its[s] = _session_iter(_seed(base_seed, s, session_no[s]), sensor)
                 fresh[s] = True
-                if n_real == 0:
-                    continue
                 frames = frames + [frames[-1]] * (chunk_len - n_real)
             dist = np.stack([f[1] for f in frames])
             status = np.stack([f[2] for f in frames])

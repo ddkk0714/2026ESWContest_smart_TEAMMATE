@@ -17,6 +17,7 @@ validation set).
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import multiprocessing as mp
 import os
@@ -24,6 +25,7 @@ import queue
 import signal
 import sys
 import time
+import traceback
 
 import numpy as np
 import torch
@@ -128,6 +130,8 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--lr-half-life-h", type=float, default=48.0)
     ap.add_argument("--transition-weight", type=float, default=0.3)
+    ap.add_argument("--replay", type=int, default=3, help="extra updates per fresh batch, drawn from recent batches")
+    ap.add_argument("--replay-size", type=int, default=64, help="recent batches kept for replay")
     ap.add_argument("--eval-min", type=float, default=30.0)
     ap.add_argument("--ckpt-min", type=float, default=10.0)
     ap.add_argument("--val-sessions", type=int, default=24)
@@ -205,28 +209,30 @@ def main():
     trained_at_start = state["train_seconds"]
     window = {"loss": 0.0, "correct": 0.0, "weight": 0.0, "frames": 0, "t": time.time()}
     counts = np.array(state["label_counts"], dtype=np.float64)
+    replay = collections.deque(maxlen=args.replay_size)
+    pending = {s: collections.deque() for s in range(B)}
+    exit_code = 0
 
     try:
         while not interrupted["flag"]:
             if args.hours and (time.time() - t_start) / 3600 >= args.hours:
                 log(f"reached --hours {args.hours}")
                 break
-            # One chunk per stream
-            chunks = {}
+            # One chunk per stream, matched by stream id. Chunks that arrive early
+            # (a stream's next chunk before another stream's current one) wait in
+            # `pending` for the next step, so a batch never mixes up streams.
             for w in range(W):
-                for _ in streams_of[w]:
-                    while True:
-                        try:
-                            c = queues[w].get(timeout=5.0)
-                            chunks[c.stream] = c
-                            break
-                        except queue.Empty:
-                            if not procs[w].is_alive():
-                                log(f"worker {w} died (exit {procs[w].exitcode}), restarting")
-                                procs[w] = spawn(w)
-                            if interrupted["flag"]:
-                                raise KeyboardInterrupt
-            batch = [chunks[s] for s in range(B)]
+                while any(not pending[s] for s in streams_of[w]):
+                    try:
+                        c = queues[w].get(timeout=5.0)
+                        pending[c.stream].append(c)
+                    except queue.Empty:
+                        if not procs[w].is_alive():
+                            log(f"worker {w} died (exit {procs[w].exitcode}), restarting")
+                            procs[w] = spawn(w)
+                        if interrupted["flag"]:
+                            raise KeyboardInterrupt
+            batch = [pending[s].popleft() for s in range(B)]
             x = torch.from_numpy(np.stack([c.x for c in batch]))
             y = torch.from_numpy(np.stack([c.y for c in batch]))
             wt = torch.from_numpy(np.stack([c.w for c in batch]))
@@ -244,15 +250,27 @@ def main():
             cw = 1.0 / np.sqrt(counts / counts.sum() + 1e-3)
             cw = torch.tensor(cw / cw.mean(), dtype=torch.float32)
 
-            logits, h_new = model(x, h)
-            ce = F.cross_entropy(logits.reshape(-1, len(LABELS)), y.reshape(-1), reduction="none")
-            wflat = wt.reshape(-1) * cw[y.reshape(-1)]
-            loss = (ce * wflat).sum() / wflat.sum().clamp_min(1e-6)
-            opt.zero_grad(set_to_none=True)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            opt.step()
+            def update(xb, yb, wb, hb):
+                logits_b, h_out = model(xb, hb)
+                ce = F.cross_entropy(logits_b.reshape(-1, len(LABELS)), yb.reshape(-1), reduction="none")
+                wflat = wb.reshape(-1) * cw[yb.reshape(-1)]
+                loss_b = (ce * wflat).sum() / wflat.sum().clamp_min(1e-6)
+                opt.zero_grad(set_to_none=True)
+                loss_b.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                opt.step()
+                return logits_b, h_out, loss_b
+
+            h_in = h.clone()
+            logits, h_new, loss = update(x, y, wt, h)
             h = h_new.detach()
+            # Generation is the bottleneck; reuse recent batches for extra updates.
+            # Each keeps the recurrent state it started from, so replays stay in context.
+            replay.append((x, y, wt, h_in))
+            for _ in range(args.replay if len(replay) >= 8 else 0):
+                xb, yb, wb, hb = replay[int(np.random.randint(len(replay)))]
+                update(xb, yb, wb, hb)
+            state["updates"] = state.get("updates", 0) + 1 + (args.replay if len(replay) >= 8 else 0)
 
             state["step"] += 1
             state["frames"] += B * T
@@ -302,7 +320,11 @@ def main():
                 save(last_path)
                 t_last_eval = time.time()
     except KeyboardInterrupt:
-        pass
+        log("stopped by request")
+    except Exception:
+        # Log the traceback to train.log as well: stderr of a background run is easy to lose.
+        log("crashed:\n" + traceback.format_exc())
+        exit_code = 1
     finally:
         save(last_path)
         log(f"saved {last_path} at step {state['step']}")
@@ -311,6 +333,7 @@ def main():
             p.join(timeout=5)
             if p.is_alive():
                 p.terminate()
+    return exit_code   # non-zero makes run_forever.ps1 restart with --resume
 
 
 if __name__ == "__main__":
