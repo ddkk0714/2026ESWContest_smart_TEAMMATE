@@ -55,7 +55,7 @@ ToF 원본 54×42 배열은 전송하지 않는다. 운영 경로는 특징값�
   "node": "tof-adapter", "boot_id": "7f2a91c4", "seq": 1042,
   "data": {
   "present": true,
-  "posture": "upright",        // upright | slouch | lean_back | away
+  "posture": "upright",        // upright | lean_forward | recline | face_down | chin_rest | drowsy | away | unknown
   "motion_score": 0.42,        // 모션 변화율 0.0~1.0
   "valid_zones": 2014,         // 유효 zone 개수 (원본 전체 2268)
   "grid_width": 54, "grid_height": 42,

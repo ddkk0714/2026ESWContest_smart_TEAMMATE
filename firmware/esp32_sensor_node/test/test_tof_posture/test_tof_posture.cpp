@@ -1,12 +1,14 @@
-// ToF 자세 추정기의 판정 구조를 합성 장면으로 고정한다.
+// ToF 자세·졸음 추정기의 판정 구조를 합성 장면으로 고정한다.
 //
-// 장면: 뒤쪽 벽(1600 mm) 앞에 머리(원)와 상체(직사각형)로 된 사람을 그리고,
-// zone 중심이 어느 도형에 들어가는지로 거리 격자를 만든다. 15 Hz, ±5 mm 잡음.
-// 실측이 아니므로 임계값의 "정답"을 증명하지 않는다. 대신 배경 분리·기준선·
-// 분류·디바운스·노딩 집계와 격자 크기 무관성이라는 구조를 붙잡는다.
+// 장면: 뒤쪽 벽(1600 mm) 앞에 머리(원)·상체(직사각형)·팔(직사각형)로 된 사람을
+// 그린다. zone 중심에 걸리는 도형 중 가장 가까운 것의 거리를 쓴다(VL53 Closest 모드).
+// 15 Hz, ±5 mm 잡음. 실측이 아니므로 임계값의 "정답"을 증명하지 않는다.
+// 대신 배경 분리·기준선·자세 판정 순서·히스테리시스·유지 시간·끄덕임/졸음 판정과
+// 격자 크기 무관성이라는 구조를 붙잡는다.
 #include <unity.h>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -21,6 +23,8 @@ namespace {
 
 constexpr uint32_t kFrameMs = 67;  // ≈ 15 Hz
 
+enum class Arm { None, ChinRight, ChinLeft, Typing };
+
 struct Person {
   float head_top = 0.15f;   // 머리 꼭대기, 격자 높이 대비 (0 = 맨 위)
   float head_r = 0.14f;     // 머리 반지름, 정규화 좌표
@@ -28,6 +32,7 @@ struct Person {
   int head_mm = 650;
   int torso_mm = 700;
   int tilt_mm = 0;          // 상체 오른쪽 절반은 +tilt/2, 왼쪽 절반은 -tilt/2
+  Arm arm = Arm::None;
 };
 
 struct Scene {
@@ -37,6 +42,26 @@ struct Scene {
   bool desk_edge = false;   // 맨 아래 행에 60 mm 짜리 책상 모서리
   int chair_mm = 0;         // > 0 이면 아래쪽 가운데에 사람 거리 안의 정지 물체
 };
+
+// 시간에 따라 머리를 움직이는 함수: (경과 ms) → (머리 꼭대기 이동, 머리 거리 이동, 몸통 거리 이동)
+struct Motion {
+  float head_top = 0.0f;
+  int head_mm = 0;
+  int torso_mm = 0;
+};
+using MotionFn = std::function<Motion(uint32_t)>;
+
+// depth_teacher 실측 모양의 끄덕임: 0.8 s 에 떨어지고 0.2 s 머문 뒤 0.5 s 에 돌아온다
+Motion nodShape(uint32_t t, float drop = 0.08f, int closer = 50) {
+  float k = 0.0f;
+  if (t < 800) k = t / 800.0f;
+  else if (t < 1000) k = 1.0f;
+  else if (t < 1500) k = 1.0f - (t - 1000) / 500.0f;
+  Motion m;
+  m.head_top = drop * k;
+  m.head_mm = (int)(-closer * k);
+  return m;
+}
 
 class Sim {
  public:
@@ -56,12 +81,14 @@ class Sim {
     run(s, ms, [](uint32_t, int16_t *, uint8_t *) {});
   }
 
-  // 머리 거리를 시간에 따라 바꿔 가며 흘린다(노딩).
-  template <typename F>
-  void runHead(Scene s, uint32_t ms, F head_offset_mm) {
-    const int base = s.p.head_mm;
+  // 머리·몸통을 시간에 따라 움직이며 흘린다.
+  void runMotion(Scene s, uint32_t ms, const MotionFn &fn) {
+    const Person base = s.p;
     for (uint32_t elapsed = 0; elapsed < ms; elapsed += kFrameMs) {
-      s.p.head_mm = base + head_offset_mm(elapsed);
+      const Motion m = fn(elapsed);
+      s.p.head_top = base.head_top + m.head_top;
+      s.p.head_mm = base.head_mm + m.head_mm;
+      s.p.torso_mm = base.torso_mm + m.torso_mm;
       render(s);
       push();
       frame_++;
@@ -70,10 +97,6 @@ class Sim {
 
   const TofFeatures &f() const { return est_->features(); }
   TofPostureEstimator &est() { return *est_; }
-  uint8_t width() const { return w_; }
-  uint8_t height() const { return h_; }
-  std::vector<int16_t> &dist() { return dist_; }
-  std::vector<uint8_t> &status() { return status_; }
 
   void render(const Scene &s) {
     for (uint8_t r = 0; r < h_; r++) {
@@ -81,17 +104,30 @@ class Sim {
         const float u = (c + 0.5f) / w_;
         const float v = (r + 0.5f) / h_;
         int d = s.bg_mm;
-        if (s.chair_mm > 0 && u > 0.3f && u < 0.7f && v > 0.6f) d = s.chair_mm;
+        if (s.chair_mm > 0 && u > 0.3f && u < 0.7f && v > 0.6f) d = std::min(d, s.chair_mm);
         if (s.person) {
           const Person &p = s.p;
           const float cu = 0.5f + p.shift;
           const float cv = p.head_top + p.head_r;
           const float du = u - cu, dv = v - cv;
           const float shoulder = p.head_top + 2.0f * p.head_r + 0.02f;
-          if (du * du + dv * dv <= p.head_r * p.head_r) {
-            d = p.head_mm;
-          } else if (v >= shoulder && u >= cu - 0.3f && u <= cu + 0.3f) {
-            d = p.torso_mm + (u >= cu ? p.tilt_mm / 2 : -p.tilt_mm / 2);
+          if (du * du + dv * dv <= p.head_r * p.head_r) d = std::min(d, p.head_mm);
+          if (v >= shoulder && u >= cu - 0.3f && u <= cu + 0.3f)
+            d = std::min(d, p.torso_mm + (u >= cu ? p.tilt_mm / 2 : -p.tilt_mm / 2));
+          const int arm_mm = p.torso_mm - 120;  // 팔뚝은 가슴보다 앞에 있다
+          const float chin = p.head_top + 2.0f * p.head_r - 0.04f;
+          switch (p.arm) {
+            case Arm::ChinRight:
+              if (v >= chin && u >= cu + 0.06f && u <= cu + 0.18f) d = std::min(d, arm_mm);
+              break;
+            case Arm::ChinLeft:
+              if (v >= chin && u >= cu - 0.18f && u <= cu - 0.06f) d = std::min(d, arm_mm);
+              break;
+            case Arm::Typing:
+              if (v >= 0.86f && u >= cu - 0.35f && u <= cu + 0.35f) d = std::min(d, p.torso_mm - 150);
+              break;
+            case Arm::None:
+              break;
           }
         }
         if (s.desk_edge && r == h_ - 1) d = 60;
@@ -138,19 +174,50 @@ Scene seated(Person p = Person()) {
   return s;
 }
 
-// 빈 자리로 배경을 배우고, 앉아서 기준선이 잡힐 때까지 흘린다.
+// 빈 자리로 배경을 배우고, 앉아서 기준선이 잡히고(재실 0.5 s + 10 s)
+// 바른자세가 확정될(1.5 s) 때까지 흘린다.
 void calibrate(Sim &sim, Person p = Person()) {
   sim.run(empty(), 5000);
-  sim.run(seated(p), 12000);
+  sim.run(seated(p), 13000);
 }
 
 void assertPosture(TofPosture expected, const TofFeatures &f) {
   TEST_ASSERT_EQUAL_STRING(tofPostureName(expected), tofPostureName(f.posture));
 }
 
+Person leanForward() {
+  Person p;
+  p.head_mm -= 150;
+  p.torso_mm -= 100;
+  return p;
+}
+
+Person recline() {
+  Person p;
+  p.head_mm += 150;
+  p.torso_mm += 100;
+  p.head_top += 0.05f;
+  return p;
+}
+
+Person faceDown() {
+  Person p;
+  p.head_top += 0.45f;
+  p.head_mm -= 150;
+  p.torso_mm -= 120;
+  return p;
+}
+
+Person chinRest(Arm side = Arm::ChinRight) {
+  Person p;
+  p.arm = side;
+  return p;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
+// 재실·배경
 
 void test_empty_scene_is_away() {
   Sim sim(8, 8);
@@ -170,6 +237,27 @@ void test_near_objects_are_not_a_person() {
   TEST_ASSERT_FALSE(sim.f().present);
 }
 
+void test_static_object_needs_background_capture() {
+  // 켤 때부터 의자가 사람 거리 안에 있으면 배경을 몰라 재실로 잡힌다
+  Sim sim(8, 8);
+  Scene s = empty();
+  s.chair_mm = 1000;
+  sim.run(s, 3000);
+  TEST_ASSERT_TRUE(sim.f().present);
+
+  sim.est().requestBackgroundCapture();
+  sim.run(s, 4000);
+  TEST_ASSERT_FALSE(sim.f().present);
+
+  Scene sit = s;
+  sit.person = true;
+  sim.run(sit, 1000);
+  TEST_ASSERT_TRUE(sim.f().present);
+}
+
+// ---------------------------------------------------------------------------
+// 기준선·자세
+
 void test_unknown_until_baseline_then_upright() {
   Sim sim(8, 8);
   sim.run(empty(), 5000);
@@ -178,12 +266,13 @@ void test_unknown_until_baseline_then_upright() {
   TEST_ASSERT_FALSE(sim.f().baseline_ready);
   assertPosture(TofPosture::Unknown, sim.f());
 
-  sim.run(seated(), 9000);
+  sim.run(seated(), 10000);
   TEST_ASSERT_TRUE(sim.f().baseline_ready);
   assertPosture(TofPosture::Upright, sim.f());
   TEST_ASSERT_TRUE(sim.f().head_delta_valid);
   TEST_ASSERT_FLOAT_WITHIN(15.0f, 0.0f, sim.f().head_delta_mm);
   TEST_ASSERT_FLOAT_WITHIN(15.0f, 650.0f, sim.f().head_depth_mm);
+  TEST_ASSERT_FLOAT_WITHIN(1.0f, 0.0f, sim.f().head_drop_mm);
 
   // 확신도는 확정 뒤 일치가 쌓이면서 오른다(EMA τ 2 s)
   sim.run(seated(), 5000);
@@ -193,53 +282,71 @@ void test_unknown_until_baseline_then_upright() {
 void test_lean_forward_detected() {
   Sim sim(8, 8);
   calibrate(sim);
-  Person p;
-  p.head_mm -= 150;
-  p.torso_mm -= 100;
-  sim.run(seated(p), 2000);
+  sim.run(seated(leanForward()), 2500);
   assertPosture(TofPosture::LeanForward, sim.f());
   TEST_ASSERT_FLOAT_WITHIN(15.0f, -150.0f, sim.f().head_delta_mm);
   TEST_ASSERT_TRUE(sim.f().baseline_deviation >= 1.0f);
 }
 
-void test_lean_back_detected() {
+void test_recline_detected() {
   Sim sim(8, 8);
   calibrate(sim);
-  Person p;
-  p.head_mm += 180;
-  p.torso_mm += 120;
-  sim.run(seated(p), 2000);
-  assertPosture(TofPosture::LeanBack, sim.f());
-  TEST_ASSERT_FLOAT_WITHIN(15.0f, 180.0f, sim.f().head_delta_mm);
+  sim.run(seated(recline()), 2500);
+  assertPosture(TofPosture::Recline, sim.f());
+  TEST_ASSERT_FLOAT_WITHIN(15.0f, 150.0f, sim.f().head_delta_mm);
 }
 
-void test_slouch_detected() {
+void test_face_down_detected() {
   Sim sim(8, 8);
   calibrate(sim);
-  Person p;
-  p.head_top += 0.3f;  // 머리가 화면 아래로 내려감
-  sim.run(seated(p), 2000);
-  assertPosture(TofPosture::Slouch, sim.f());
+  sim.run(seated(faceDown()), 2500);
+  assertPosture(TofPosture::FaceDown, sim.f());
+  TEST_ASSERT_TRUE(sim.f().head_drop_mm > 135.0f);
+  // 상체째 접은 것이라 끄덕임·졸음이 아니다
+  TEST_ASSERT_FALSE(sim.f().drowsy);
 }
 
-void test_face_down_counts_as_slouch() {
-  // 엎드림: 머리가 크게 내려가면서 가까워진다. enum 에 별도 값이 없어 slouch 로 낸다
+void test_chin_rest_detected_on_either_side() {
+  Sim right(8, 8);
+  calibrate(right);
+  right.run(seated(chinRest(Arm::ChinRight)), 2500);
+  assertPosture(TofPosture::ChinRest, right.f());
+  TEST_ASSERT_EQUAL_INT8(1, right.f().chin_arm_side);
+  TEST_ASSERT_TRUE(right.f().chin_arm_ratio >= 0.6f);
+
+  Sim left(8, 8);
+  calibrate(left);
+  left.run(seated(chinRest(Arm::ChinLeft)), 2500);
+  assertPosture(TofPosture::ChinRest, left.f());
+  TEST_ASSERT_EQUAL_INT8(-1, left.f().chin_arm_side);
+}
+
+void test_typing_forearms_are_not_chin_rest() {
+  // 키보드 위 팔뚝은 맨 아래 행에만 걸린다
   Sim sim(8, 8);
   calibrate(sim);
   Person p;
-  p.head_top += 0.4f;
-  p.head_mm -= 200;
-  sim.run(seated(p), 2000);
-  assertPosture(TofPosture::Slouch, sim.f());
+  p.arm = Arm::Typing;
+  sim.run(seated(p), 3000);
+  assertPosture(TofPosture::Upright, sim.f());
+  TEST_ASSERT_EQUAL_FLOAT(0.0f, sim.f().chin_arm_ratio);
+}
+
+void test_face_down_wins_over_chin_rest() {
+  // 팔이 보여도 머리가 엎드림만큼 내려갔으면 엎드림 (camsvc: chin && !dropped)
+  Sim sim(8, 8);
+  calibrate(sim);
+  Person p = faceDown();
+  p.arm = Arm::ChinRight;
+  sim.run(seated(p), 2500);
+  assertPosture(TofPosture::FaceDown, sim.f());
 }
 
 void test_short_lean_does_not_switch() {
   Sim sim(8, 8);
   calibrate(sim);
-  Person p;
-  p.head_mm -= 150;
-  sim.run(seated(p), 500);  // posture_hold_ms(1 s) 보다 짧다
-  sim.run(seated(), 1500);
+  sim.run(seated(leanForward()), 1000);  // posture_hold_ms(1.5 s) 보다 짧다
+  sim.run(seated(), 2000);
   assertPosture(TofPosture::Upright, sim.f());
   TEST_ASSERT_EQUAL_FLOAT(0.0f, sim.f().posture_change_rate_per_min);
 }
@@ -259,17 +366,85 @@ void test_dropouts_and_spikes_do_not_flip() {
   TEST_ASSERT_TRUE(sim.f().present);
   assertPosture(TofPosture::Upright, sim.f());
   TEST_ASSERT_EQUAL_FLOAT(0.0f, sim.f().posture_change_rate_per_min);
+  TEST_ASSERT_FALSE(sim.f().drowsy);
+}
+
+// ---------------------------------------------------------------------------
+// 끄덕임·졸음
+
+void test_single_nod_is_not_drowsy() {
+  Sim sim(8, 8);
+  calibrate(sim);
+  sim.runMotion(seated(), 4000, [](uint32_t t) { return nodShape(t); });
+  TEST_ASSERT_EQUAL_UINT8(1, sim.f().nods_in_window);
+  TEST_ASSERT_FALSE(sim.f().drowsy);
+  assertPosture(TofPosture::Upright, sim.f());
+}
+
+void test_two_nods_in_a_minute_are_drowsy_then_clear() {
+  Sim sim(8, 8);
+  calibrate(sim);
+  sim.runMotion(seated(), 4000, [](uint32_t t) { return nodShape(t); });
+  sim.run(seated(), 10000);
+  sim.runMotion(seated(), 4000, [](uint32_t t) { return nodShape(t); });
+  TEST_ASSERT_EQUAL_UINT8(2, sim.f().nods_in_window);
+  TEST_ASSERT_TRUE(sim.f().drowsy);
+  assertPosture(TofPosture::Drowsy, sim.f());
+
+  // 끄덕임이 창(60 s)을 벗어나고 유지 시간(5 s)이 지나면 풀린다
+  sim.run(seated(), 70000);
+  TEST_ASSERT_FALSE(sim.f().drowsy);
+  assertPosture(TofPosture::Upright, sim.f());
+}
+
+void test_nod_then_head_held_down_is_drowsy() {
+  // 끄덕이듯 떨군 뒤 그대로 5 s 넘게 정지
+  Sim sim(8, 8);
+  calibrate(sim);
+  sim.runMotion(seated(), 9000, [](uint32_t t) {
+    Motion m = nodShape(std::min<uint32_t>(t, 900));  // 정점에서 멈춘다
+    return m;
+  });
+  TEST_ASSERT_EQUAL_UINT8(0, sim.f().nods_in_window);
+  TEST_ASSERT_TRUE(sim.f().drowsy);
+  assertPosture(TofPosture::Drowsy, sim.f());
+}
+
+void test_quick_lean_with_torso_is_not_a_nod() {
+  // 상체째 숙였다 일어나는 것은 머리 신호가 커도 끄덕임이 아니다 (몸통 거리 변화)
+  Sim sim(8, 8);
+  calibrate(sim);
+  for (int i = 0; i < 3; i++) {
+    sim.runMotion(seated(), 3000, [](uint32_t t) {
+      Motion m = nodShape(t, 0.0f, 120);
+      m.torso_mm = m.head_mm;
+      return m;
+    });
+  }
+  TEST_ASSERT_EQUAL_UINT8(0, sim.f().nods_in_window);
+  TEST_ASSERT_FALSE(sim.f().drowsy);
+}
+
+void test_head_forward_held_is_not_drowsy() {
+  // 고개만 앞으로 빼고 가만히 있는 것(거북목)은 떨굼이 아니다
+  Sim sim(8, 8);
+  calibrate(sim);
+  sim.runMotion(seated(), 9000, [](uint32_t t) {
+    Motion m;
+    m.head_mm = t < 800 ? -(int)(t * 60 / 800) : -60;
+    return m;
+  });
+  TEST_ASSERT_FALSE(sim.f().drowsy);
 }
 
 void test_nod_rate() {
   Sim sim(8, 8);
   calibrate(sim);
-  // 2 초마다 0.6 초 동안 머리가 60 mm 가까워진다 = 0.5 Hz
-  sim.runHead(seated(), 20000, [](uint32_t t) { return (t % 2000) < 600 ? -60 : 0; });
+  // 6 초마다 한 번씩 60 초 = 창(60 s) 안에 10회
+  sim.runMotion(seated(), 60000, [](uint32_t t) { return nodShape(t % 6000); });
   TEST_ASSERT_TRUE(sim.f().nod_rate_valid);
-  TEST_ASSERT_FLOAT_WITHIN(0.1f, 0.5f, sim.f().nod_rate_hz);
-  // 숙임 폭이 lean_forward 임계보다 작고 짧아 자세는 그대로다
-  assertPosture(TofPosture::Upright, sim.f());
+  TEST_ASSERT_EQUAL_UINT8(10, sim.f().nods_in_window);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 10.0f / 60.0f, sim.f().nod_rate_hz);
 }
 
 void test_no_nods_when_still() {
@@ -278,7 +453,11 @@ void test_no_nods_when_still() {
   sim.run(seated(), 20000);
   TEST_ASSERT_TRUE(sim.f().nod_rate_valid);
   TEST_ASSERT_EQUAL_FLOAT(0.0f, sim.f().nod_rate_hz);
+  TEST_ASSERT_FALSE(sim.f().drowsy);
 }
+
+// ---------------------------------------------------------------------------
+// 특징
 
 void test_shoulder_tilt_sign() {
   Sim sim(8, 8);
@@ -295,7 +474,11 @@ void test_motion_score_still_vs_moving() {
   TEST_ASSERT_TRUE(sim.f().motion_score < 0.05f);  // ±5 mm 잡음은 데드밴드 안
 
   // 상체가 프레임마다 ±40 mm 씩 흔들림
-  sim.runHead(seated(), 3000, [](uint32_t t) { return ((t / kFrameMs) % 2) ? 40 : -40; });
+  sim.runMotion(seated(), 3000, [](uint32_t t) {
+    Motion m;
+    m.head_mm = m.torso_mm = ((t / kFrameMs) % 2) ? 40 : -40;
+    return m;
+  });
   TEST_ASSERT_TRUE(sim.f().motion_score > 0.3f);
 }
 
@@ -307,7 +490,7 @@ void test_short_absence_keeps_baseline() {
   assertPosture(TofPosture::Away, sim.f());
   TEST_ASSERT_TRUE(sim.f().baseline_ready);
 
-  sim.run(seated(), 2000);
+  sim.run(seated(), 2500);
   assertPosture(TofPosture::Upright, sim.f());
 }
 
@@ -323,34 +506,16 @@ void test_long_absence_drops_baseline() {
 void test_posture_change_rate_counts_transitions() {
   Sim sim(8, 8);
   calibrate(sim);
-  Person fwd;
-  fwd.head_mm -= 150;
   for (int i = 0; i < 3; i++) {
-    sim.run(seated(fwd), 3000);
+    sim.run(seated(recline()), 3000);
     sim.run(seated(), 3000);
   }
-  // upright→forward→upright 3번 = 전환 6회 (창 60 s 안)
+  // upright→recline→upright 3번 = 전환 6회 (창 60 s 안)
   TEST_ASSERT_FLOAT_WITHIN(0.01f, 6.0f, sim.f().posture_change_rate_per_min);
 }
 
-void test_static_object_needs_background_capture() {
-  // 켤 때부터 의자가 사람 거리 안에 있으면 배경을 몰라 재실로 잡힌다
-  Sim sim(8, 8);
-  Scene s = empty();
-  s.chair_mm = 1000;
-  sim.run(s, 3000);
-  TEST_ASSERT_TRUE(sim.f().present);
-
-  sim.est().requestBackgroundCapture();
-  sim.run(s, 4000);
-  TEST_ASSERT_FALSE(sim.f().present);
-
-  // 의자 앞에 사람이 앉으면 다시 잡힌다
-  Scene sit = s;
-  sit.person = true;
-  sim.run(sit, 1000);
-  TEST_ASSERT_TRUE(sim.f().present);
-}
+// ---------------------------------------------------------------------------
+// 입력 형식
 
 void test_strict_validity_ignores_semi_valid_status() {
   TofPostureConfig cfg;
@@ -368,7 +533,7 @@ void test_row_flip_gives_same_posture() {
   cfg.row0_is_top = false;
   Sim sim(8, 8, cfg);
   // 센서가 뒤집혀 달린 것처럼 행 순서를 뒤집어 넣는다
-  auto flip = [&sim](uint32_t, int16_t *d, uint8_t *) {
+  auto flip = [](uint32_t, int16_t *d, uint8_t *) {
     for (uint8_t r = 0; r < 4; r++)
       for (uint8_t c = 0; c < 8; c++) {
         int16_t tmp = d[r * 8 + c];
@@ -378,10 +543,8 @@ void test_row_flip_gives_same_posture() {
   };
   sim.run(empty(), 5000, flip);
   sim.run(seated(), 12000, flip);
-  Person p;
-  p.head_top += 0.3f;
-  sim.run(seated(p), 2000, flip);
-  assertPosture(TofPosture::Slouch, sim.f());
+  sim.run(seated(faceDown()), 2500, flip);
+  assertPosture(TofPosture::FaceDown, sim.f());
 }
 
 void test_same_postures_on_other_grids() {
@@ -394,15 +557,21 @@ void test_same_postures_on_other_grids() {
     TEST_ASSERT_EQUAL_UINT8(sz[0], sim.f().grid_width);
     TEST_ASSERT_EQUAL_UINT8(sz[1], sim.f().grid_height);
 
-    Person fwd;
-    fwd.head_mm -= 150;
-    sim.run(seated(fwd), 2000);
+    sim.run(seated(leanForward()), 2500);
     assertPosture(TofPosture::LeanForward, sim.f());
+    sim.run(seated(recline()), 2500);
+    assertPosture(TofPosture::Recline, sim.f());
+    sim.run(seated(faceDown()), 2500);
+    assertPosture(TofPosture::FaceDown, sim.f());
+    sim.run(seated(chinRest()), 2500);
+    assertPosture(TofPosture::ChinRest, sim.f());
+    sim.run(seated(), 2500);
+    assertPosture(TofPosture::Upright, sim.f());
 
-    Person low;
-    low.head_top += 0.3f;
-    sim.run(seated(low), 2000);
-    assertPosture(TofPosture::Slouch, sim.f());
+    sim.runMotion(seated(), 4000, [](uint32_t t) { return nodShape(t); });
+    sim.run(seated(), 5000);
+    sim.runMotion(seated(), 4000, [](uint32_t t) { return nodShape(t); });
+    assertPosture(TofPosture::Drowsy, sim.f());
 
     sim.run(empty(), 4000);
     assertPosture(TofPosture::Away, sim.f());
@@ -426,13 +595,21 @@ int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_empty_scene_is_away);
   RUN_TEST(test_near_objects_are_not_a_person);
+  RUN_TEST(test_static_object_needs_background_capture);
   RUN_TEST(test_unknown_until_baseline_then_upright);
   RUN_TEST(test_lean_forward_detected);
-  RUN_TEST(test_lean_back_detected);
-  RUN_TEST(test_slouch_detected);
-  RUN_TEST(test_face_down_counts_as_slouch);
+  RUN_TEST(test_recline_detected);
+  RUN_TEST(test_face_down_detected);
+  RUN_TEST(test_chin_rest_detected_on_either_side);
+  RUN_TEST(test_typing_forearms_are_not_chin_rest);
+  RUN_TEST(test_face_down_wins_over_chin_rest);
   RUN_TEST(test_short_lean_does_not_switch);
   RUN_TEST(test_dropouts_and_spikes_do_not_flip);
+  RUN_TEST(test_single_nod_is_not_drowsy);
+  RUN_TEST(test_two_nods_in_a_minute_are_drowsy_then_clear);
+  RUN_TEST(test_nod_then_head_held_down_is_drowsy);
+  RUN_TEST(test_quick_lean_with_torso_is_not_a_nod);
+  RUN_TEST(test_head_forward_held_is_not_drowsy);
   RUN_TEST(test_nod_rate);
   RUN_TEST(test_no_nods_when_still);
   RUN_TEST(test_shoulder_tilt_sign);
@@ -440,7 +617,6 @@ int main(int, char **) {
   RUN_TEST(test_short_absence_keeps_baseline);
   RUN_TEST(test_long_absence_drops_baseline);
   RUN_TEST(test_posture_change_rate_counts_transitions);
-  RUN_TEST(test_static_object_needs_background_capture);
   RUN_TEST(test_strict_validity_ignores_semi_valid_status);
   RUN_TEST(test_row_flip_gives_same_posture);
   RUN_TEST(test_same_postures_on_other_grids);

@@ -88,7 +88,7 @@ VL53L9CX는 54×42(2,268 zone) ToF 센서이며 실제 운영률은 Pi 4 MIPI CS
 | 필드 | 타입·단위 | 정의 |
 |---|---|---|
 | `present` | boolean | ToF 재실. |
-| `posture` | enum | `upright`, `lean_forward`, `lean_back`, `slouch`, `away`, `unknown`. |
+| `posture` | enum | `upright`(바른자세), `lean_forward`(상체 앞으로), `recline`(뒤로 젖힘), `face_down`(엎드림), `chin_rest`(턱괴기), `drowsy`(꾸벅 졸음), `away`, `unknown`. camsvc 자세 범주(젖힘·엎드림·턱괴기)와 depth_teacher 졸음을 따른다. 이전 값 `lean_back`→`recline`, `slouch`→`face_down` (`feat/tof-posture` 제안, 팀 확인 필요). |
 | `motion_score` | float, 0..1 | zone 거리 변화율. |
 | `head_delta_mm` | float/null, mm | baseline 대비 머리·상체 거리 변화. |
 | `nod_rate_hz` | float/null, Hz | 반복 숙임 주기. |
