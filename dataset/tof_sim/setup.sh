@@ -7,8 +7,8 @@ PY="${PYTHON:-python3}"
 echo "[1/4] 가상환경 만드는 중 ($PY)"
 "$PY" -m venv .venv
 .venv/bin/python -m pip install -q --upgrade pip
-echo "[2/4] numpy, mujoco 설치 중"
-.venv/bin/python -m pip install -q "numpy>=1.26,<2.0" "mujoco>=3.2"
+echo "[2/4] numpy, mujoco, onnx 설치 중"
+.venv/bin/python -m pip install -q "numpy>=1.26,<2.0" "mujoco>=3.2" onnx onnxruntime
 # 모델이 약 7만 파라미터이고 병목은 CPU 데이터 생성이라 CPU 판 torch 로 충분하다.
 echo "[3/4] torch(CPU) 설치 중"
 .venv/bin/python -m pip install -q torch --index-url https://download.pytorch.org/whl/cpu

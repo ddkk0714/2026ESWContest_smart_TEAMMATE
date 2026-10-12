@@ -78,7 +78,20 @@ sbatch --export=ALL,RUN=mj_trial,TOTAL_H=336 slurm_train.sh   # 이어서 할 �
 ```
 
 `slurm_train.sh` 는 작업 하나가 시간 제한으로 끝나면 전체 마감(`TOTAL_H`) 전까지 자기 자신을 다시
-제출한다. 완전히 멈추려면 `scancel <작업번호>` 후 `touch runs/<RUN>/STOP`. 연속 5번 실패하면 스스로 멈춘다.
+제출한다. 연속 5번 실패하면 스스로 멈춘다.
+
+### 중간에 멈추기·뽑아내기
+
+| 하고 싶은 것 | 방법 |
+|---|---|
+| 지금 상태를 바로 저장 (학습은 계속) | `touch runs/<RUN>/SNAPSHOT` — 몇 초 안에 `ckpt_last.pt` 저장 |
+| 저장하고 멈춤 (다시 제출·재시작도 안 함) | `touch runs/<RUN>/STOP` — 이번 단계를 마치고 저장 후 종료. Ctrl+C·`scancel`(SIGTERM)도 저장하고 끝남 |
+| 모델 뽑아내기 (학습 중에도 됨) | `python export.py --run <RUN>` (최고 모델) / `--which last` (최신) |
+| 다시 이어서 | `STOP` 파일을 지우고 같은 이름으로 다시 실행/제출 (`train.py` 를 직접 시작하면 남은 `STOP` 을 알아서 지움) |
+
+`export.py` 결과는 `runs/<RUN>/export_<시각>_<best|last>/` 와 같은 이름의 `.zip` 이다.
+`posture_net.pt`(가중치+정보), `weights.npz`(numpy), `posture_net.onnx`(한 프레임 스트리밍 추론, PyTorch 와
+오차 1e-6 확인), `report.md`(클래스별 점수·혼동행렬·학습 중 점수 변화), `model_card.json`(입력·출력 형식).
 
 ### 출력 (`runs/<run>/`, 커밋 안 함)
 

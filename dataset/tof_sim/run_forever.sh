@@ -17,6 +17,10 @@ deadline=$(( $(date +%s) + ${HOURS%.*} * 3600 ))
 echo "실행 '$RUN' — ${HOURS}시간, 생성 프로세스 ${WORKERS}개 (코어 ${CORES}개). 로그: runs/$RUN/train.log"
 
 while [ "$(date +%s)" -lt "$deadline" ]; do
+    if [ -f "runs/$RUN/STOP" ]; then
+        echo "runs/$RUN/STOP 이 있어서 멈춤 (다시 돌리려면 이 파일을 지우고 실행)"
+        break
+    fi
     left=$(awk -v d="$deadline" -v n="$(date +%s)" 'BEGIN { printf "%.3f", (d - n) / 3600 }')
     .venv/bin/python -u train.py --run "$RUN" --resume --hours "$left" --workers "$WORKERS"
     code=$?

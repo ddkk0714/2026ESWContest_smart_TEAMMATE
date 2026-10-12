@@ -19,6 +19,10 @@ New-Item -ItemType Directory -Force $runDir | Out-Null
 $deadline = (Get-Date).AddHours($Hours)
 
 while ((Get-Date) -lt $deadline) {
+    if (Test-Path (Join-Path $runDir "STOP")) {
+        Write-Host "runs\$Run\STOP 이 있어서 멈춤 (다시 돌리려면 이 파일을 지우고 실행)"
+        break
+    }
     $left = [math]::Round(($deadline - (Get-Date)).TotalHours, 3)
     & $py $train --run $Run --sensor $Sensor --resume --hours $left
     if ($LASTEXITCODE -eq 0) { break }   # finished, or stopped with Ctrl+C

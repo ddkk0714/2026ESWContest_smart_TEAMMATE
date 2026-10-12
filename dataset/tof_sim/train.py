@@ -35,9 +35,9 @@ import traceback
 
 import numpy as np
 
-from tofsim.data import build_valset, load_valset, to_input, worker_main
+from tofsim.data import build_valset, load_valset, worker_main
 from tofsim.sensor import PRESETS
-from tofsim.session import FLAG_TRANSITION, LABELS
+from tofsim.session import LABELS
 
 # Windows starts worker processes by re-importing this file as "__mp_main__".
 # They only generate frames, so keep PyTorch out of them.
@@ -45,6 +45,7 @@ if __name__ == "__main__":
     import torch
     import torch.nn.functional as F
 
+    from tofsim.evaluate import evaluate, format_eval
     from tofsim.model import PostureNet, count_params
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -72,61 +73,6 @@ def write_json(path, obj):
     with open(tmp, "w", encoding="utf-8") as fp:
         json.dump(obj, fp, ensure_ascii=False, indent=1)
     os.replace(tmp, path)
-
-
-# ---------------------------------------------------------------------------
-# Evaluation
-
-
-def evaluate(model, data: dict, warmup_frames: int = 45, chunk: int = 600) -> dict:
-    """Per-frame scores over whole sessions, each run from a fresh state.
-
-    Frames in transitions and the first `warmup_frames` of each session are
-    not scored (the label is ambiguous there).
-    """
-    with torch.no_grad():
-        return _evaluate(model, data, warmup_frames, chunk)
-
-
-def _evaluate(model, data, warmup_frames, chunk):
-    model.eval()
-    dist, status, label = data["dist"], data["status"], data["label"].astype(np.int64)
-    flags = data.get("flags", np.zeros(len(label), dtype=np.uint8))
-    starts = list(data.get("starts", np.array([0])))
-    ends = starts[1:] + [len(label)]
-    C = len(LABELS)
-    conf = np.zeros((C, C), dtype=np.int64)
-    for s, e in zip(starts, ends):
-        x = torch.from_numpy(to_input(dist[s:e], status[s:e]))[None]
-        h = None
-        preds = []
-        for i in range(0, x.shape[1], chunk):
-            logits, h = model(x[:, i:i + chunk], h)
-            preds.append(logits.argmax(-1)[0].numpy())
-        pred = np.concatenate(preds)
-        y = label[s:e]
-        keep = (flags[s:e] & FLAG_TRANSITION) == 0
-        keep[:warmup_frames] = False
-        np.add.at(conf, (y[keep], pred[keep]), 1)
-    model.train()
-    tp = np.diag(conf).astype(float)
-    recall = tp / np.maximum(conf.sum(1), 1)
-    precision = tp / np.maximum(conf.sum(0), 1)
-    f1 = 2 * recall * precision / np.maximum(recall + precision, 1e-9)
-    present = conf.sum(1) > 0
-    return {
-        "accuracy": float(tp.sum() / max(conf.sum(), 1)),
-        "macro_f1": float(f1[present].mean()) if present.any() else 0.0,
-        "recall": {LABELS[i]: round(float(recall[i]), 4) for i in range(C) if present[i]},
-        "precision": {LABELS[i]: round(float(precision[i]), 4) for i in range(C) if present[i]},
-        "confusion": conf.tolist(),
-        "frames": int(conf.sum()),
-    }
-
-
-def format_eval(ev: dict) -> str:
-    rec = " ".join(f"{k}:{v:.2f}" for k, v in ev["recall"].items())
-    return f"acc {ev['accuracy']:.3f} macroF1 {ev['macro_f1']:.3f} | recall {rec}"
 
 
 # ---------------------------------------------------------------------------
@@ -211,11 +157,23 @@ def main():
     h = torch.zeros(1, B, model.gru.hidden_size)
     interrupted = {"flag": False}
 
-    def on_sigint(_sig, _frm):
+    def on_stop_signal(sig, _frm):
         interrupted["flag"] = True
-        log("stop requested, finishing the step and saving")
+        log(f"멈춤 요청({signal.Signals(sig).name}): 이번 단계를 마치고 저장")
 
-    signal.signal(signal.SIGINT, on_sigint)
+    # Ctrl+C, 그리고 Slurm scancel·시간 제한이 보내는 SIGTERM 모두 저장하고 끝낸다
+    signal.signal(signal.SIGINT, on_stop_signal)
+    signal.signal(signal.SIGTERM, on_stop_signal)
+    # 파일로도 조작할 수 있다 (서버에서 프로세스를 직접 건드리기 어려울 때)
+    stop_file = os.path.join(run_dir, "STOP")          # 있으면 저장하고 종료
+    snapshot_file = os.path.join(run_dir, "SNAPSHOT")  # 있으면 바로 저장하고 파일은 지움
+    for leftover in (stop_file, snapshot_file):
+        # 지난번 멈출 때 남은 표시는 지운다. train.py 를 새로 시작했다는 것 자체가 다시 돌리겠다는 뜻이다
+        # (slurm_train.sh·run_forever.sh 는 STOP 이 있으면 train.py 를 아예 부르지 않는다)
+        if os.path.exists(leftover):
+            os.remove(leftover)
+            log(f"지난번에 남은 {os.path.basename(leftover)} 파일을 지움")
+    t_last_file_check = 0.0
 
     def save(path):
         atomic_save({"model": model.state_dict(), "opt": opt.state_dict(), "state": state,
@@ -316,6 +274,19 @@ def main():
                 write_json(os.path.join(run_dir, "status.json"), msg)
                 window = {"loss": 0.0, "correct": 0.0, "weight": 0.0, "frames": 0, "t": now}
                 t_last_status = now
+            if now - t_last_file_check >= 5:
+                t_last_file_check = now
+                if os.path.exists(stop_file):
+                    log("STOP 파일 발견: 저장하고 종료")
+                    break
+                if os.path.exists(snapshot_file):
+                    save(last_path)
+                    t_last_ckpt = now
+                    try:
+                        os.remove(snapshot_file)
+                    except OSError:
+                        pass
+                    log(f"SNAPSHOT 요청: {last_path} 저장 (step {state['step']})")
             if now - t_last_ckpt >= args.ckpt_min * 60:
                 save(last_path)
                 t_last_ckpt = now
