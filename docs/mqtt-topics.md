@@ -38,8 +38,8 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 | `deskmate/display/message` | Node-RED/debug | display | 이벤트 | Pi 5 화면에 일회성 텍스트 표시 |
 | `deskmate/session/report` | hub | display | 10 s 주기 스냅샷(retain) + 세션 종료 시 | 화면용 세션 요약. 개별 행동 로그 없음 |
 | `deskmate/interaction/request` | hub | display | 이벤트 | 불확실한 판정의 사용자 확인 질문 |
-| `deskmate/control/cmd` | hub | control 어댑터(플러그) | 이벤트, QoS 1, retain 없음 | 기기 제어 명령 (`control_command`, data-spec §10) |
-| `deskmate/control/result` | control 어댑터 | hub | 이벤트, QoS 1 | 명령 결과 (`control_result`). hub 는 `command_id` 로 매칭 |
+| `deskmate/control/cmd` | hub | control 어댑터, Pi 5 앱(조명) | 이벤트, QoS 1, retain 없음 | 기기 제어 명령 (`control_command`, data-spec §10) |
+| `deskmate/control/result` | control 어댑터, Pi 5 앱(조명) | hub | 이벤트, QoS 1 | 명령 결과 (`control_result`). hub 는 `command_id` 로 매칭 |
 | `deskmate/feedback/user` | display | hub | 이벤트 | 사용자 수락 · 정정 |
 | `deskmate/health/<node>` | 전 장치 | hub | LWT/retain | `{ts,node,status:online|offline,reconnects}`. hub 는 `deskmate/health/hub` |
 
@@ -293,6 +293,21 @@ ACTION_ENV 진입 시 원인별 명령 목록, 게이트 auto 면 즉시 · sugg
 모든 명령이 종료(succeeded/failed/timeout)되거나 제안이 만료(`suggest_timeout_sec`)되면 hub 는 `frame.action_done=true` 로
 FSM 을 MONITOR 로 보낸다. `state/phase.sensor_summary.control` 에 진행 중 에피소드(명령·상태)가 실린다.
 어댑터가 없을 때의 리허설: `python tools/mock_plug.py --broker <ip>` (결과 응답 + `deskmate/control/state/<target>` retain).
+
+Pi 5 앱은 `desk_lamp`의 `set_brightness`(iLink 원시 밝기 정수 **0~255**, 퍼센트 아님)와
+`set_power`(`on`/`off`)를 실행하고 `display-control` 노드의 결과를 QoS 1·retain 없음으로
+돌려준다. 기존 설정의 밝기 70은 약 27%, 되돌림 40은 약 16%다. 다른 대상은 해당 어댑터가
+처리하며, 앱이 환기팬 등의 성공 응답을 대신 만들지 않는다.
+
+앱의 자동 피드백 스위치가 꺼졌거나 램프가 미설정·실패·만료이면 `failed`와 `error_code`를
+응답한다. `requires_confirmation=true` 명령과 지원하지 않는 동작은 실행하지 않는다.
+retain으로 들어온 명령은 무시한다. 최근 128개 `command_id`의 처리 결과(진행 중 포함)를
+메모리에 보관해 QoS 1 중복 수신 시 BLE를 다시 쓰지 않고 같은 결과를 재발행한다.
+`succeeded`는 GATT 쓰기 호출 완료를 뜻하며 실제 밝기를 센서로 측정했다는 뜻은 아니다.
+
+제안 명령의 `expires_ts_ms`는 **수락 후 발행 시각 + result_timeout_sec**로 정한다.
+카드가 30초 동안 대기했다고 수락 즉시 만료되는 일이 없어야 한다. 앱은 큐 대기·재연결
+뒤에도 만료를 확인한다. PC·Pi 4·Pi 5 시계 동기화가 필요하다.
 
 ### `deskmate/feedback/user`
 

@@ -218,6 +218,9 @@ class ControlDispatcher:
     def _dispatch(self, ep: Episode, now: float) -> None:
         for c in ep.commands:
             c.sent_ts, c.status = now, "executing"
+            # A suggestion can wait 180 s before dispatch; its execution timeout
+            # starts when the user accepts, not when the card was created.
+            c.expires_ts = now + self.timeout
             self._last_sent[(c.target_id, c.operation)] = now
             self.publish_cmd(c.to_payload())
         ep.executed = True
