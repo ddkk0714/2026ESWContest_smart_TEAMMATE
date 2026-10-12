@@ -61,3 +61,26 @@ def test_pure_median_matches_statistics():
         assert median(xs) == statistics.median(xs)
     with pytest.raises(ValueError):
         median([])
+
+
+def test_pure_sha256_matches_hashlib():
+    import hashlib
+
+    from deskmate_hub.personalization.portable import pure_sha256_hex
+
+    # 55/56/64 바이트는 패딩이 블록 하나·둘로 갈리는 경계다.
+    for data in (b"", b"abc", b"a" * 55, b"a" * 56, b"a" * 64, bytes(range(256)) * 160):
+        assert pure_sha256_hex(data) == hashlib.sha256(data).hexdigest()
+
+
+def test_portable_fingerprint_without_hashlib_sha256():
+    # 10-12 Pi 4 실측: 제한 Python 의 hashlib 에 sha256 이 없어(AttributeError) 공통 모델이 unavailable 이 됐다.
+    code = textwrap.dedent("""
+        import sys, types
+        sys.modules["hashlib"] = types.ModuleType("hashlib")
+        from deskmate_hub.personalization.portable import sha256_hex
+        print(sha256_hex(b"abc"))
+    """)
+    result = subprocess.run([sys.executable, "-c", code], cwd=HUB, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert result.stdout.strip() == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
