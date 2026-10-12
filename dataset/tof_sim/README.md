@@ -21,6 +21,11 @@ MuJoCo 로 책상 앞에 앉은 사람을 자세별로 세우고, 그 장면을 
 위 줄은 옆모습, 가운데는 정면, 아래는 가상 L8 의 8×8 거리다(노랑 = 가까움, 보라 = 먼 배경).
 `python view.py --png docs/view.png` 로 만든다.
 
+**시연 영상** [`docs/demo.mp4`](docs/demo.mp4) (91 s): 자세를 바꿔 가는 사람 + 가상 L8 8×8 + 프레임마다
+정답·규칙(펌웨어 재판정)·AI(MLP) 판정. 영상 속 사람은 학습에 쓰지 않은 새 체형이다.
+`python train_mlp.py data/sessions/sim* --save models/mlp_sim60.npz` 뒤
+`python animate.py --out docs/demo.mp4` 로 만든다(`--pitch`·`--dist`·`--seed` 로 조건을 바꾼다).
+
 ## 무엇을 흉내 내나
 
 | 요소 | 모델 | 무작위 범위 |
@@ -43,6 +48,7 @@ python evaluate.py data/sessions/sim* --set lean_forward_mm=60   # 임계값 바
 python train_mlp.py data/sessions/sim* --folds 4        # AI 기준선(사람 단위 k-겹)
 python view.py --png poses.png                          # 자세 그림 + 8×8
 python view.py --viewer --labels chin_rest              # MuJoCo 뷰어로 돌려 보기
+python animate.py --out demo.mp4                        # 시연 영상(정답·규칙·AI 판정 자막)
 python ../tof_logger/inspect_session.py data/sessions/<세션>   # 실기 세션과 같은 점검
 ```
 
@@ -97,6 +103,6 @@ python ../tof_logger/inspect_session.py data/sessions/<세션>   # 실기 세션
 | `tofsim/motion.py` | 프로토콜 → 프레임별 자세·재실·정답, 꾸벅임·힐끗·흔들림 |
 | `tofsim/l8.py` | 가상 VL53L8CX |
 | `tofsim/rule.py`, `replay/tof_replay.cpp` | 펌웨어 규칙 재판정기 |
-| `generate.py` · `evaluate.py` · `train_mlp.py` · `view.py` | CLI |
+| `generate.py` · `evaluate.py` · `train_mlp.py` · `view.py` · `animate.py` | CLI |
 
 테스트: `python -m pytest tests -q` (10개. 규칙 재판정 2개는 g++/WSL 이 없으면 건너뛴다).
