@@ -16,11 +16,17 @@ validation set).
 
 from __future__ import annotations
 
+import os
+
+# One math-library thread per process: ten generator workers each spinning up
+# their own BLAS/OpenMP pool only fight over the cores. Must precede numpy.
+for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ.setdefault(_var, "1")
+
 import argparse
 import collections
 import json
 import multiprocessing as mp
-import os
 import queue
 import signal
 import sys
@@ -28,13 +34,18 @@ import time
 import traceback
 
 import numpy as np
-import torch
-import torch.nn.functional as F
 
 from tofsim.data import build_valset, load_valset, to_input, worker_main
-from tofsim.model import PostureNet, count_params
 from tofsim.sensor import PRESETS
 from tofsim.session import FLAG_TRANSITION, LABELS
+
+# Windows starts worker processes by re-importing this file as "__mp_main__".
+# They only generate frames, so keep PyTorch out of them.
+if __name__ == "__main__":
+    import torch
+    import torch.nn.functional as F
+
+    from tofsim.model import PostureNet, count_params
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -67,13 +78,17 @@ def write_json(path, obj):
 # Evaluation
 
 
-@torch.no_grad()
 def evaluate(model, data: dict, warmup_frames: int = 45, chunk: int = 600) -> dict:
     """Per-frame scores over whole sessions, each run from a fresh state.
 
     Frames in transitions and the first `warmup_frames` of each session are
     not scored (the label is ambiguous there).
     """
+    with torch.no_grad():
+        return _evaluate(model, data, warmup_frames, chunk)
+
+
+def _evaluate(model, data, warmup_frames, chunk):
     model.eval()
     dist, status, label = data["dist"], data["status"], data["label"].astype(np.int64)
     flags = data.get("flags", np.zeros(len(label), dtype=np.uint8))
@@ -121,6 +136,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run", required=True)
     ap.add_argument("--sensor", default="vl53l8cx", choices=list(PRESETS))
+    ap.add_argument("--backend", default="mujoco", choices=["mujoco", "numpy"], help="scene/ray-cast engine")
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--hours", type=float, default=0.0, help="stop after this many hours (0 = run until stopped)")
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) - 2))
@@ -130,7 +146,7 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--lr-half-life-h", type=float, default=48.0)
     ap.add_argument("--transition-weight", type=float, default=0.3)
-    ap.add_argument("--replay", type=int, default=3, help="extra updates per fresh batch, drawn from recent batches")
+    ap.add_argument("--replay", type=int, default=5, help="extra updates per fresh batch, drawn from recent batches")
     ap.add_argument("--replay-size", type=int, default=64, help="recent batches kept for replay")
     ap.add_argument("--eval-min", type=float, default=30.0)
     ap.add_argument("--ckpt-min", type=float, default=10.0)
@@ -147,11 +163,12 @@ def main():
     spec = PRESETS[args.sensor]
 
     ctx = mp.get_context("spawn")
-    val_path = os.path.join(HERE, "runs", f"valset_{args.sensor}_{args.val_sessions}x{int(args.val_seconds)}.npz")
+    val_path = os.path.join(HERE, "runs", f"valset_{args.backend}_{args.sensor}_{args.val_sessions}x{int(args.val_seconds)}.npz")
     if not os.path.exists(val_path):
         log(f"building validation set -> {val_path}")
         with ctx.Pool(args.workers) as pool:
-            build_valset(val_path, args.sensor, args.val_sessions, args.val_seconds, log=log, pool=pool)
+            build_valset(val_path, args.sensor, args.val_sessions, args.val_seconds, log=log, pool=pool,
+                         backend=args.backend)
     val = load_valset(val_path)
     reals = {os.path.basename(p): load_valset(p) for p in args.real}
     log(f"validation set: {len(val['label'])} frames, {len(val['starts'])} sessions")
@@ -183,7 +200,7 @@ def main():
     def spawn(w):
         p = ctx.Process(target=worker_main, daemon=True,
                         args=(w, streams_of[w], queues[w], T, args.sensor, base_seed + 1_000 * w + int(time.time()) % 997,
-                              args.transition_weight, stop))
+                              args.transition_weight, stop, args.backend))
         p.start()
         return p
 

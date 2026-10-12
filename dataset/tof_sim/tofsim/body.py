@@ -86,7 +86,10 @@ class Pose:
     head_yaw: float = 0.0
     head_roll: float = 0.0
     breath: float = 0.0             # chest expansion, metres
-    arms: str = "typing"            # typing | lap | chin_right | chin_left | pillow | cup_right
+    # typing | lap | crossed | behind_head | phone | hanging | pillow | chin_right | chin_left | cup_right
+    # (behind_head/crossed/phone/hanging are MuJoCo-only; the numpy backend draws them as lap)
+    arms: str = "typing"
+    other_arms: str = "typing"      # the free arm while one arm props the chin or holds a cup
     arm_jitter: float = 0.0         # small hand motion while typing, metres
     hip_shift: float = 0.0          # sliding the chair forward(+)/back(-), metres
 
@@ -200,6 +203,8 @@ def _person_surfaces(room: Room, p: Person, q: Pose, hip_z: float) -> list[Surfa
                 arm(shoulder, elbow, wrist)
                 continue
             mode = "typing"
+        if mode not in ("typing", "lap", "pillow"):
+            mode = "lap"
         if mode == "typing":
             elbow = elbow_down(shoulder, 0.05) + np.array([0.04 * sign, 0.0, 0.0])
             elbow[1] = max(elbow[1], desk_top + 0.04)

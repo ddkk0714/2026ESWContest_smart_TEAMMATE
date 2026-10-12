@@ -39,22 +39,22 @@ class Chunk:
     w: np.ndarray        # (T,) float32 per-frame loss weight
 
 
-def _session_iter(seed: int, sensor: str):
+def _session_iter(seed: int, sensor: str, backend: str = "mujoco"):
     rng = np.random.default_rng(seed)
     cfg = sample_session(rng, sensor)
     total = float(rng.uniform(*SESSION_SECONDS))
-    yield from generate_frames(cfg, total, rng)
+    yield from generate_frames(cfg, total, rng, backend=backend)
 
 
 def worker_main(worker: int, streams: list[int], q, chunk_len: int, sensor: str, base_seed: int,
-                transition_weight: float, stop_event):
+                transition_weight: float, stop_event, backend: str = "mujoco"):
     """Runs forever: round-robin over its streams, one chunk per stream per round."""
     import signal
     signal.signal(signal.SIGINT, signal.SIG_IGN)   # the trainer handles Ctrl+C
     session_no = {s: 0 for s in streams}
     its, fresh = {}, {}
     for s in streams:
-        its[s] = _session_iter(_seed(base_seed, s, 0), sensor)
+        its[s] = _session_iter(_seed(base_seed, s, 0), sensor, backend)
         fresh[s] = True
     parent = mp.parent_process()
     while not stop_event.is_set():
@@ -73,7 +73,7 @@ def worker_main(worker: int, streams: list[int], q, chunk_len: int, sensor: str,
                     break
                 # The session ended exactly on a chunk boundary: start the next one now.
                 session_no[s] += 1
-                its[s] = _session_iter(_seed(base_seed, s, session_no[s]), sensor)
+                its[s] = _session_iter(_seed(base_seed, s, session_no[s]), sensor, backend)
                 fresh[s] = True
             reset = fresh[s]
             fresh[s] = False
@@ -82,7 +82,7 @@ def worker_main(worker: int, streams: list[int], q, chunk_len: int, sensor: str,
                 # Session over mid-chunk: pad with weight 0; the next chunk of this
                 # stream starts a new session and resets the recurrent state.
                 session_no[s] += 1
-                its[s] = _session_iter(_seed(base_seed, s, session_no[s]), sensor)
+                its[s] = _session_iter(_seed(base_seed, s, session_no[s]), sensor, backend)
                 fresh[s] = True
                 frames = frames + [frames[-1]] * (chunk_len - n_real)
             dist = np.stack([f[1] for f in frames])
@@ -109,21 +109,22 @@ def _seed(base: int, stream: int, session: int) -> int:
 
 
 def _val_session(args):
-    seed, sensor, seconds = args
+    seed, sensor, seconds, backend = args
     rng = np.random.default_rng(seed)
     cfg = sample_session(rng, sensor)
-    frames = list(generate_frames(cfg, seconds, rng))
+    frames = list(generate_frames(cfg, seconds, rng, backend=backend))
     return (np.stack([f[1] for f in frames]), np.stack([f[2] for f in frames]),
             np.array([f[3] for f in frames], dtype=np.int8), np.array([f[4] for f in frames], dtype=np.uint8))
 
 
-def build_valset(path: str, sensor: str, sessions: int, seconds: float, seed: int = 424242, log=print, pool=None):
+def build_valset(path: str, sensor: str, sessions: int, seconds: float, seed: int = 424242, log=print, pool=None,
+                 backend: str = "mujoco"):
     if os.path.exists(path):
         return load_valset(path)
     dists, stats, labels, flagss, starts = [], [], [], [], []
     t0 = time.time()
     pos = 0
-    jobs = [(seed + i, sensor, seconds) for i in range(sessions)]
+    jobs = [(seed + i, sensor, seconds, backend) for i in range(sessions)]
     results = pool.imap(_val_session, jobs) if pool is not None else map(_val_session, jobs)
     for i, (d, s, y, f) in enumerate(results):
         dists.append(d)

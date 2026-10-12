@@ -122,26 +122,45 @@ class Segment:
     lookalikes: list = field(default_factory=list) # (start_s, kind, length_s, amount)
 
 
+# Where the hands are in each posture: (mode, weight). People do not keep their
+# hands on the keyboard when they lean back or doze, and the classifier must not
+# learn "hands on the desk" as part of a posture.
+ARMS = {
+    "upright": [("typing", 0.55), ("lap", 0.15), ("crossed", 0.10), ("phone", 0.12), ("hanging", 0.08)],
+    "lean_forward": [("typing", 0.65), ("phone", 0.15), ("crossed", 0.10), ("lap", 0.10)],
+    "recline": [("lap", 0.25), ("behind_head", 0.25), ("crossed", 0.20), ("phone", 0.15), ("hanging", 0.10),
+                ("typing", 0.05)],
+    "face_down": [("pillow", 0.8), ("hanging", 0.2)],
+    "chin_rest_other": [("typing", 0.55), ("lap", 0.25), ("crossed", 0.20)],
+    "drowsy": [("lap", 0.30), ("typing", 0.25), ("crossed", 0.25), ("hanging", 0.15), ("behind_head", 0.05)],
+}
+
+
+def _arms(kind: str, rng) -> str:
+    modes, w = zip(*ARMS[kind])
+    w = np.array(w) / sum(w)
+    return str(rng.choice(modes, p=w))
+
+
 def _target_pose(kind: str, rng) -> Pose:
     deg = np.radians
     if kind == "upright":
-        return Pose(trunk_pitch=deg(rng.normal(0, 4)), neck_pitch=deg(rng.normal(6, 5)),
-                    arms="typing" if rng.random() < 0.7 else "lap")
+        return Pose(trunk_pitch=deg(rng.normal(0, 4)), neck_pitch=deg(rng.normal(6, 5)), arms=_arms("upright", rng))
     if kind == "lean_forward":
-        return Pose(trunk_pitch=deg(_u(rng, 15, 32)), neck_pitch=deg(_u(rng, 0, 15)), arms="typing")
+        return Pose(trunk_pitch=deg(_u(rng, 15, 32)), neck_pitch=deg(_u(rng, 0, 15)), arms=_arms("lean_forward", rng))
     if kind == "recline":
         return Pose(trunk_pitch=-deg(_u(rng, 15, 38)), neck_pitch=deg(_u(rng, -12, 10)),
-                    arms="lap" if rng.random() < 0.6 else "typing", hip_shift=_u(rng, 0.0, 0.12))
+                    arms=_arms("recline", rng), hip_shift=_u(rng, 0.0, 0.12))
     if kind == "face_down":
-        return Pose(trunk_pitch=deg(_u(rng, 35, 58)), neck_pitch=deg(_u(rng, 30, 60)), arms="pillow",
+        return Pose(trunk_pitch=deg(_u(rng, 35, 58)), neck_pitch=deg(_u(rng, 30, 60)), arms=_arms("face_down", rng),
                     hip_shift=-_u(rng, 0.0, 0.08))
     if kind == "chin_rest":
         side = "chin_right" if rng.random() < 0.5 else "chin_left"
         roll = deg(_u(rng, 3, 12)) * (1 if side == "chin_right" else -1)
-        return Pose(trunk_pitch=deg(_u(rng, 4, 16)), neck_pitch=deg(_u(rng, 5, 20)), arms=side, head_roll=roll)
+        return Pose(trunk_pitch=deg(_u(rng, 4, 16)), neck_pitch=deg(_u(rng, 5, 20)), arms=side, head_roll=roll,
+                    other_arms=_arms("chin_rest_other", rng))
     if kind == "drowsy":
-        return Pose(trunk_pitch=deg(_u(rng, -6, 10)), neck_pitch=deg(_u(rng, 4, 15)),
-                    arms="lap" if rng.random() < 0.5 else "typing")
+        return Pose(trunk_pitch=deg(_u(rng, -6, 10)), neck_pitch=deg(_u(rng, 4, 15)), arms=_arms("drowsy", rng))
     return Pose()
 
 
@@ -207,6 +226,7 @@ def _lerp_pose(a: Pose, b: Pose, w: float) -> Pose:
     for f in _LERP_FIELDS:
         setattr(out, f, getattr(a, f) * (1 - w) + getattr(b, f) * w)
     out.arms = b.arms if w >= 0.5 else a.arms
+    out.other_arms = b.other_arms if w >= 0.5 else a.other_arms
     return out
 
 
@@ -226,9 +246,33 @@ def _nod_offset(nod, t: float) -> tuple[float, bool]:
     return 0.0, False
 
 
-def generate_frames(cfg: SessionConfig, total_s: float, rng: np.random.Generator):
-    """Yields (t_ms, distance_mm[H,W], status[H,W], label, flags) at cfg.fps."""
+def generate_frames(cfg: SessionConfig, total_s: float, rng: np.random.Generator,
+                    backend: str = "mujoco", desk=None):
+    """Yields (t_ms, distance_mm[H,W], status[H,W], label, flags) at cfg.fps.
+
+    backend "mujoco": articulated body + mj_multiRay (mj_scene.py). Pass `desk`
+    (an MjDesk built from cfg) to watch the same scene in a viewer.
+    backend "numpy": the original primitive ray caster (body.py).
+    """
     sensor = Sensor(cfg.spec, cfg.model, rng)
+    if backend == "mujoco":
+        from .mj_scene import MjDesk, sensor_frame
+        if desk is None:
+            desk = MjDesk(cfg.room, cfg.person)
+        origin, R = sensor_frame(cfg.sensor_pose)
+
+        def measure(pose):
+            desk.set_pose(pose)
+            return sensor.measure(desk.cast, origin, R)
+    elif backend == "numpy":
+        def measure(pose):
+            if pose is None:
+                surfaces = build_scene(cfg.room, None, None, seat_person=cfg.person)
+            else:
+                surfaces = build_scene(cfg.room, cfg.person, pose)
+            return sensor.measure_surfaces(surfaces, cfg.sensor_pose)
+    else:
+        raise ValueError(f"unknown backend {backend!r}")
     segs = plan_timeline(total_s, rng)
     dt = 1.0 / cfg.fps
     breath_f = _u(rng, 0.2, 0.33)
@@ -248,7 +292,7 @@ def generate_frames(cfg: SessionConfig, total_s: float, rng: np.random.Generator
             if seg.kind == "drowsy" and (not seg.nods or ts < seg.nods[0][0]):
                 label = L["upright"]
             if seg.kind == "away":
-                surfaces = build_scene(cfg.room, None, None, seat_person=cfg.person)
+                frame_pose = None
             else:
                 w = 1.0 if trans <= 0 else min(1.0, ts / trans)
                 if w < 1.0:
@@ -275,11 +319,12 @@ def generate_frames(cfg: SessionConfig, total_s: float, rng: np.random.Generator
                             pose.neck_pitch += amount * min(1.0, 2 * k)
                         elif what == "turn":
                             pose.head_yaw += amount * k
-                        elif what == "cup" and pose.arms in ("typing", "lap"):
+                        elif what == "cup" and pose.arms in ("typing", "lap", "crossed", "phone", "hanging"):
+                            pose.other_arms = pose.arms
                             pose.arms = "cup_right"
-                surfaces = build_scene(cfg.room, cfg.person, pose)
+                frame_pose = pose
                 prev_pose = pose
-            dist, status = sensor.measure(surfaces, cfg.sensor_pose)
+            dist, status = measure(frame_pose)
             yield int(round((t_global + ts) * 1000)), dist, status, label, flags
         if seg.kind == "away":
             prev_pose = None

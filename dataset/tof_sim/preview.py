@@ -29,6 +29,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--sensor", default="vl53l8cx")
+    ap.add_argument("--backend", default="mujoco", choices=["mujoco", "numpy"])
     ap.add_argument("--seconds", type=float, default=600)
     ap.add_argument("--bench", type=int, default=0, help="time this many frames instead of printing")
     args = ap.parse_args()
@@ -42,7 +43,7 @@ def main():
     if args.bench:
         t0 = time.perf_counter()
         n = 0
-        for _ in generate_frames(cfg, args.bench / cfg.fps + 1, rng):
+        for _ in generate_frames(cfg, args.bench / cfg.fps + 1, rng, backend=args.backend):
             n += 1
             if n >= args.bench:
                 break
@@ -53,7 +54,7 @@ def main():
     seen = set()
     counts = np.zeros(len(LABELS), dtype=int)
     last_label, steady = None, 0
-    for t_ms, dist, status, label, flags in generate_frames(cfg, args.seconds, rng):
+    for t_ms, dist, status, label, flags in generate_frames(cfg, args.seconds, rng, backend=args.backend):
         counts[label] += 1
         steady = steady + 1 if label == last_label and not (flags & FLAG_TRANSITION) else 0
         last_label = label

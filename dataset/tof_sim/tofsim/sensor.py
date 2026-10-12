@@ -25,6 +25,10 @@ import numpy as np
 
 from .raycast import Surface, cast
 
+# A caster takes (origin (3,), unit directions (N,3)) and returns per ray
+# (distance m, inf = miss), (reflectivity 0..1), (cosine of incidence 0..1).
+# The numpy primitives and MuJoCo (mj_multiRay) both provide one.
+
 
 @dataclass
 class SensorSpec:
@@ -46,7 +50,7 @@ PRESETS = {
 
 @dataclass
 class SensorModel:
-    sub_rays: int = 5                 # k → k×k rays per zone
+    sub_rays: int = 4                 # k → k×k rays per zone (cost ∝ k²; 4 is enough for 8×8 mixed pixels)
     separation_m: float = 0.60        # peaks closer than this merge
     threshold: float = 0.015          # signal units (reflectivity / m²) at no ambient
     ambient: float = 1.0              # threshold multiplier (sunlight 2–4)
@@ -95,27 +99,48 @@ class Sensor:
         rows = ty - (np.arange(H) + 0.5) * self.cell_h
         cx, cy = np.meshgrid(cols, rows)                      # (H,W)
         self.zone_xy = np.stack([cx.ravel(), cy.ravel()], 1)  # (Z,2)
+        Z = self.zone_xy.shape[0]
+        self._zone_base = (np.arange(Z) * self.k2)[:, None]    # flat (zone, peak) index base
+        self._cell = np.array([self.cell_w, self.cell_h])
+        self._ones = np.ones((Z, self.k2, 1))
+
+    def zone_centers(self, R: np.ndarray) -> np.ndarray:
+        """Unit direction through each zone centre, (Z,3) in world, row-major."""
+        local = np.concatenate([self.zone_xy, np.ones((self.zone_xy.shape[0], 1))], axis=1)
+        local /= np.linalg.norm(local, axis=1, keepdims=True)
+        return local @ R.T
 
     def _directions(self, R: np.ndarray) -> np.ndarray:
         Z = self.zone_xy.shape[0]
         k2 = self.k2
-        jitter = self.rng.uniform(-0.5, 0.5, size=(Z, k2, 2)) * np.array([self.cell_w, self.cell_h])
+        jitter = self.rng.uniform(-0.5, 0.5, size=(Z, k2, 2)) * self._cell
         xy = self.zone_xy[:, None, :] + jitter                # (Z,k2,2)
-        local = np.concatenate([xy, np.ones((Z, k2, 1))], axis=2)
-        local /= np.linalg.norm(local, axis=2, keepdims=True)
-        return (local.reshape(-1, 3) @ R.T)                   # (Z*k2,3)
+        local = np.concatenate([xy, self._ones], axis=2).reshape(-1, 3)
+        local /= np.sqrt(np.einsum("ij,ij->i", local, local))[:, None]
+        return local @ R.T                                    # (Z*k2,3)
 
-    def measure(self, surfaces: list[Surface], pose: SensorPose):
-        """One frame. Returns (distance_mm int16 [H,W], status uint8 [H,W]); -1 / 255 = no target."""
+    def measure_surfaces(self, surfaces: list[Surface], pose: SensorPose):
+        """numpy-primitive backend (Y-up world of body.py)."""
+        def caster(origin, dirs):
+            t, _part, refl = cast(surfaces, origin, dirs)
+            return t, refl, np.ones_like(t)
+        return self.measure(caster, pose.position, _rot(pose))
+
+    def measure(self, caster, origin: np.ndarray, R: np.ndarray):
+        """One frame. R maps sensor-local (right, up, forward) to world.
+
+        Returns (distance_mm int16 [H,W], status uint8 [H,W]); -1 / 255 = no target.
+        """
         m, spec = self.model, self.spec
-        R = _rot(pose)
         dirs = self._directions(R)
-        t, _part, refl = cast(surfaces, pose.position, dirs)
+        t, refl, cosang = caster(origin, dirs)
         Z, k2 = self.zone_xy.shape[0], self.k2
         t = t.reshape(Z, k2)
         refl = refl.reshape(Z, k2)
+        cosang = cosang.reshape(Z, k2)
         t = np.where(t <= m.max_range_m, t, np.inf)
-        sig = np.where(np.isfinite(t), refl / np.maximum(t, 0.05) ** 2, 0.0)
+        # Lambertian return: grazing surfaces send less light back
+        sig = np.where(np.isfinite(t), refl * np.maximum(cosang, 0.15) / np.maximum(t, 0.05) ** 2, 0.0)
 
         order = np.argsort(t, axis=1)
         t = np.take_along_axis(t, order, 1)
@@ -123,16 +148,14 @@ class Sensor:
         gaps = np.diff(np.where(np.isfinite(t), t, 1e9), axis=1) > m.separation_m
         cid = np.concatenate([np.zeros((Z, 1), dtype=int), np.cumsum(gaps, axis=1)], axis=1)
 
-        zi = np.repeat(np.arange(Z), k2)
-        flat = cid.ravel()
+        # Per-(zone, peak) sums. bincount over a flat index is ~10× faster than np.add.at.
+        idx = (self._zone_base + cid).ravel()
         tf = np.where(np.isfinite(t), t, 0.0).ravel()
         sf = sig.ravel()
-        s_sum = np.zeros((Z, k2))
-        st_sum = np.zeros((Z, k2))
-        stt_sum = np.zeros((Z, k2))
-        np.add.at(s_sum, (zi, flat), sf)
-        np.add.at(st_sum, (zi, flat), sf * tf)
-        np.add.at(stt_sum, (zi, flat), sf * tf * tf)
+        n = Z * k2
+        s_sum = np.bincount(idx, weights=sf, minlength=n).reshape(Z, k2)
+        st_sum = np.bincount(idx, weights=sf * tf, minlength=n).reshape(Z, k2)
+        stt_sum = np.bincount(idx, weights=sf * tf * tf, minlength=n).reshape(Z, k2)
 
         thr = m.threshold * m.ambient
         peak_sig = s_sum / k2
