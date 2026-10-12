@@ -63,6 +63,22 @@ python -m venv .venv
 ```
 
 2주 돌릴 때: Windows 절전(잠자기)을 꺼 둔다. 기본 설정은 CPU 코어 − 2 개를 생성 워커로 쓴다(`--workers`).
+노트북은 배터리로 돌면 CPU 가 크게 느려진다(i5-1335U 실측 약 1/5). 충전기를 꽂고 돌린다.
+
+### 리눅스 서버 (UBAI 등)
+
+GPU 는 거의 필요 없다. 병목은 CPU 데이터 생성이라 **CPU 코어를 많이** 받는다.
+
+```
+bash setup.sh                                   # 가상환경·패키지 설치 + 생성 속도 측정 (한 번)
+tmux new -s tof                                 # 직접 실행하는 경우
+bash run_forever.sh l8_2weeks 336               #   정해진 시간 동안 계속, 죽으면 이어서
+sbatch slurm_train.sh                           # Slurm 인 경우 (파티션·CPU·시간은 파일 위쪽에서 수정)
+sbatch --export=ALL,RUN=mj_trial,TOTAL_H=336 slurm_train.sh   # 이어서 할 모델 지정
+```
+
+`slurm_train.sh` 는 작업 하나가 시간 제한으로 끝나면 전체 마감(`TOTAL_H`) 전까지 자기 자신을 다시
+제출한다. 완전히 멈추려면 `scancel <작업번호>` 후 `touch runs/<RUN>/STOP`. 연속 5번 실패하면 스스로 멈춘다.
 
 ### 출력 (`runs/<run>/`, 커밋 안 함)
 
