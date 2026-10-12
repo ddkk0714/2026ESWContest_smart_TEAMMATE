@@ -109,6 +109,11 @@ Arduino 의존이 없는 순수 C++ 이고, 원본 zone 배열은 여기서 소�
 
 아직 하지 않은 것: 센서 드라이버 연결(`main.cpp`), UART TYPE 0x03/0x04 payload 정의, hub 매핑.
 
+**학습 데이터 수집 모드(`env:tof_logger`, 운영 아님).** VL53L8CX 8×8 을 ST 공식 라이브러리로 읽어 원본 zone 과
+규칙 판정을 USB 한 줄 JSON(`{"t":"tof",...}`, 921600)으로 PC 에 보낸다. `src/tof_logger/` 는 운영 빌드에서 빠진다
+(`env:esp32dev` 의 `build_src_filter`). PC 쪽 수집기·배선·방향 확인은 [`dataset/tof_logger/README.md`](../dataset/tof_logger/README.md).
+줄 형식 시험: `pio test -e native -f test_tof_line`.
+
 ## 통신 계약
 
 논리 스키마는 [`docs/data-spec.md`](../docs/data-spec.md), Pi 4 이후 MQTT 매핑은 [`docs/mqtt-topics.md`](../docs/mqtt-topics.md) 참조.
