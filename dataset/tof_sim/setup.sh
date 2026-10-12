@@ -3,6 +3,7 @@
 #   bash setup.sh
 set -euo pipefail
 cd "$(dirname "$0")"
+mkdir -p runs          # git 에는 없는 폴더. 체크포인트·로그·검증셋이 여기 쌓인다
 PY="${PYTHON:-python3}"
 echo "[1/4] 가상환경 만드는 중 ($PY)"
 "$PY" -m venv .venv

@@ -10,16 +10,21 @@
 # 로그 보기:   tail -f runs/<RUN>/train.log
 # 완전히 멈추기: scancel <작업번호>  그리고  touch runs/<RUN>/STOP   (다시 제출하지 않게)
 #
-# ▼ 서버 안내에 맞춰 고칠 곳 ─────────────────────────────────────────────
-#   --partition : UBAI 파티션 이름 (주석 해제). GPU 는 필요 없다(병목은 CPU 데이터 생성).
-#   --cpus-per-task : 받을 수 있는 만큼. 생성 프로세스 = 이 값 - 2
-#   --time : 작업당 최대 시간. 바꾸면 아래 JOB_H 도 그보다 조금 짧게
+# ▼ UBAI 기준 (2026-10-12 확인) ────────────────────────────────────────
+#   --partition cpu2 : CPU 전용(노드당 256코어·1 TB). cpu1 은 노드당 48코어. GPU 는 필요 없다
+#                      (병목은 CPU 데이터 생성)
+#   --cpus-per-task  : 생성 프로세스 = 이 값 - 2. 계정 한도 CPU 640개라 64 로 올려도 된다
+#                      (그때는 --mem 도 24G 정도로)
+#   --time 2-00:00:00: 계정의 작업당 최대 시간이 2일. 넘기면 작업이 대기 상태로 남는다.
+#                      바꾸면 아래 JOB_H 도 그보다 30분쯤 짧게
+#   --output         : tof_sim 폴더 바로 아래. runs/ 는 git 에 없어서 막 clone 하면 아직 없고,
+#                      Slurm 은 없는 폴더에 로그를 못 만들어 작업이 바로 실패한다
 #SBATCH --job-name=tof_sim
+#SBATCH --partition=cpu2
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=16G
 #SBATCH --time=2-00:00:00
-#SBATCH --output=runs/slurm-%j.out
-##SBATCH --partition=<파티션 이름>
+#SBATCH --output=slurm-%j.out
 
 set -uo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(dirname "$0")}"
