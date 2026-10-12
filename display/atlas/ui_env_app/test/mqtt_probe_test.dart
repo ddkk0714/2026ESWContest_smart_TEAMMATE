@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:deskmate_display/link_status.dart';
 import 'package:deskmate_display/mqtt_probe.dart';
+import 'package:deskmate_display/state_source.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _short = Duration(milliseconds: 300);
@@ -20,6 +21,43 @@ Future<MqttProbeResult> _probe(_FakeBroker broker,
         onStep: onStep);
 
 void main() {
+  test('display receives PC samples independently of phase messages', () async {
+    final sample = {
+      'schema_version': '1.0',
+      'node': 'pc-collector',
+      'ts': DateTime.now().millisecondsSinceEpoch / 1000,
+      'data': {'dwell_mean_ms': 92.4, 'typing_active': true, 'window_s': 60},
+    };
+    final broker =
+        await _FakeBroker.start(keystrokePayload: jsonEncode(sample));
+    addTearDown(broker.close);
+    final source = MqttStateSource('127.0.0.1', port: broker.port);
+    addTearDown(source.close);
+    // Connecting can finish before the first publications arrive.
+    try {
+      await source.fetch();
+    } on StateError {/* Wait below. */}
+    for (var i = 0; i < 100 && source.pcKeystroke == null; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(source.pcKeystroke?.node, 'pc-collector');
+    expect(source.pcKeystroke?.dwellMeanMs, 92.4);
+    expect(source.pcKeystroke?.timestamp?.millisecondsSinceEpoch,
+        ((sample['ts'] as double) * 1000).round());
+    final phase = await source.fetch();
+    broker.publishKeystroke(jsonEncode({
+      ...sample,
+      'ts': (sample['ts'] as double) + 1,
+      'data': {'dwell_mean_ms': 123.0, 'typing_active': false},
+    }));
+    for (var i = 0; i < 100 && source.pcKeystroke?.dwellMeanMs != 123; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(source.pcKeystroke?.dwellMeanMs, 123);
+    expect(source.pcKeystroke?.typingActive, isFalse);
+    expect((await source.fetch()).sequence, phase.sequence);
+  });
+
   group('probeMqtt', () {
     test('passes all four steps in order when broker, hub and state respond',
         () async {
@@ -139,6 +177,7 @@ class _FakeBroker {
     required this.envelopeHealth,
     required this.sendState,
     required this.statePayload,
+    required this.keystrokePayload,
   }) {
     _server.listen((socket) {
       _sockets.add(socket);
@@ -153,6 +192,7 @@ class _FakeBroker {
   final bool envelopeHealth;
   final bool sendState;
   final String? statePayload;
+  final String? keystrokePayload;
   final Set<Socket> _sockets = {};
 
   int get port => _server.port;
@@ -164,6 +204,7 @@ class _FakeBroker {
     bool envelopeHealth = false,
     bool sendState = true,
     String? statePayload,
+    String? keystrokePayload,
   }) async =>
       _FakeBroker(
         await ServerSocket.bind(InternetAddress.loopbackIPv4, 0),
@@ -173,6 +214,7 @@ class _FakeBroker {
         envelopeHealth: envelopeHealth,
         sendState: sendState,
         statePayload: statePayload,
+        keystrokePayload: keystrokePayload,
       );
 
   /// 진단이 끝나면 클라이언트가 연결을 모두 닫아야 한다(누수 없음).
@@ -222,6 +264,9 @@ class _FakeBroker {
               } else if (topic == 'deskmate/state/phase' && sendState) {
                 publications
                     .add((topic, statePayload ?? jsonEncode(_stateEnvelope)));
+              } else if (topic == 'deskmate/sensor/keystroke' &&
+                  keystrokePayload != null) {
+                publications.add((topic, keystrokePayload!));
               }
             }
             socket.add([0x90, id.length + reasons.length, ...id, ...reasons]);
@@ -285,6 +330,12 @@ class _FakeBroker {
       encodedLength.add(digit);
     } while (remaining > 0);
     socket.add([0x31, ...encodedLength, ...body]); // QoS 0, retain
+  }
+
+  void publishKeystroke(String payload) {
+    for (final socket in _sockets) {
+      _publish(socket, 'deskmate/sensor/keystroke', payload);
+    }
   }
 
   Future<void> close() async {

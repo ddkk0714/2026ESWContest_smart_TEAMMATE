@@ -18,6 +18,7 @@ import 'deskmate_theme.dart';
 import 'fsm_graph.dart';
 import 'intervention.dart';
 import 'keystroke_capture.dart';
+import 'keystroke_page.dart';
 import 'link_status.dart';
 import 'music_playback.dart';
 import 'mqtt_watchdog.dart';
@@ -819,6 +820,16 @@ class _DashboardPageState extends State<DashboardPage> {
                       _AppView.dashboard => _buildDashboard(state),
                       _AppView.sensorOverview =>
                         SensorOverviewPage(state: state),
+                      _AppView.keystroke => KeystrokePage(
+                          metrics: _source is MqttStateSource
+                              ? (_source as MqttStateSource).pcKeystroke
+                              : _state?.keystroke,
+                          now: DateTime.now(),
+                          demo: _source is DemoStateSource,
+                          sourceLabel: _source.label,
+                          onConnection: () =>
+                              setState(() => _view = _AppView.connection),
+                        ),
                       _AppView.sensorTest => DeveloperPage(
                           state: state,
                           overridden: _override != null,
@@ -919,6 +930,7 @@ class _MusicVolumeDialogState extends State<_MusicVolumeDialog> {
 enum _AppView {
   dashboard,
   sensorOverview,
+  keystroke,
   sensorTest,
   posture,
   fsmGraph,
@@ -1023,6 +1035,11 @@ class _Header extends StatelessWidget {
               icon: Icons.sensors_rounded,
               label: '\uC13C\uC11C \uC804\uCCB4',
               onTap: () => onViewChanged(_AppView.sensorOverview)),
+          _HeaderNav(
+              selected: view == _AppView.keystroke,
+              icon: Icons.keyboard_outlined,
+              label: 'PC 키스트로크',
+              onTap: () => onViewChanged(_AppView.keystroke)),
           _HeaderNav(
               selected: view == _AppView.sensorTest,
               icon: Icons.developer_mode,
