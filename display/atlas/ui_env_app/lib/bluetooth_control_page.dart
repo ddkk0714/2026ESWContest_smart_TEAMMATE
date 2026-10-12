@@ -32,6 +32,30 @@ class _BluetoothControlPageState extends State<BluetoothControlPage> {
   bool _scanning = false;
   StreamSubscription<List<BluetoothDeviceInfo>>? _scan;
   late double _volume;
+  bool _testing = false;
+
+  Future<void> _testBrightness(int value) async {
+    setState(() => _testing = true);
+    try {
+      final ok = await widget.feedback.lamp.setBrightness(value);
+      _notice(ok
+          ? '밝기 명령을 전송했습니다. 실제 조명 변화를 확인하세요.'
+          : '조명 쓰기 실패: ${widget.feedback.lamp.lastError ?? '램프를 먼저 연결하세요'}');
+    } catch (error) {
+      _notice('조명 테스트 실패: $error');
+    } finally {
+      if (mounted) setState(() => _testing = false);
+    }
+  }
+
+  Future<void> _testMusic() async {
+    try {
+      final playing = await widget.music.toggle();
+      _notice(playing ? '음악 재생을 요청했습니다. 스피커 소리를 확인하세요.' : '음악을 일시정지했습니다.');
+    } catch (error) {
+      _notice('음악 테스트 실패: $error');
+    }
+  }
 
   @override
   void initState() {
@@ -90,14 +114,16 @@ class _BluetoothControlPageState extends State<BluetoothControlPage> {
     final ok = await widget.links.selectLamp(device);
     _notice(ok
         ? '${device.name}을(를) 램프로 연결하고 저장했습니다.'
-        : '${device.name}을(를) 램프로 저장했습니다. 연결은 다음 상태 전환 때 다시 시도합니다.');
+        : '${device.name}을(를) 램프로 저장했지만 연결에 실패했습니다. 다시 연결 또는 조명 테스트를 눌러 주세요.');
   }
 
   Future<void> _connectPair(
       BluetoothDeviceInfo speaker, BluetoothDeviceInfo lamp) async {
     try {
-      await widget.links.connectPair(speaker, lamp);
-      _notice('${speaker.name} 스피커와 램프를 한 번에 연결했습니다.');
+      final lampOk = await widget.links.connectPair(speaker, lamp);
+      _notice(lampOk
+          ? '${speaker.name} 스피커와 램프를 한 번에 연결했습니다.'
+          : '스피커는 연결했지만 램프 연결에 실패했습니다. 램프 다시 연결 또는 조명 테스트를 확인하세요.');
     } on Object catch (error) {
       _notice('일체형 연결 실패: $error');
     }
@@ -125,7 +151,7 @@ class _BluetoothControlPageState extends State<BluetoothControlPage> {
                   style: Theme.of(context).textTheme.headlineSmall),
               const SizedBox(height: 8),
               const Text(
-                  '스피커는 Atlas A2DP 출력으로 연결됩니다. 램프와 음악의 자동 피드백은 아래 스위치를 켠 뒤 FSM phase가 바뀔 때만 실행됩니다. '
+                  '스피커는 Atlas A2DP 출력으로 연결됩니다. 자동 피드백은 아래 스위치를 켜야 합니다. 피로 제안은 수락 뒤, 자동 개입은 허브 명령에 따라 실행됩니다. '
                   '연결한 기기는 저장되어 다음에 앱을 켜면 검색 없이 다시 연결됩니다.'),
               const SizedBox(height: 12),
               _SavedDevices(links: widget.links),
@@ -139,7 +165,7 @@ class _BluetoothControlPageState extends State<BluetoothControlPage> {
                       contentPadding: EdgeInsets.zero,
                       title: const Text('상태 기반 조명·음악 피드백'),
                       subtitle: const Text(
-                          'fatigue에서 음악 재생, recovery/idle/end에서 일시정지'),
+                          '제안 수락·자동 개입 뒤 실행, recovery/idle/end에서 음악 정지'),
                       value: widget.feedback.enabled,
                       onChanged: (value) =>
                           setState(() => widget.feedback.enabled = value),
@@ -157,6 +183,32 @@ class _BluetoothControlPageState extends State<BluetoothControlPage> {
                       ),
                       Text('${(_volume * 100).round()}%'),
                     ]),
+                    Wrap(spacing: 8, runSpacing: 8, children: [
+                      OutlinedButton(
+                        key: const ValueKey('lamp-test-dim'),
+                        onPressed: _testing || !widget.feedback.lamp.configured
+                            ? null
+                            : () => _testBrightness(64),
+                        child: const Text('조명 25% 테스트'),
+                      ),
+                      OutlinedButton(
+                        key: const ValueKey('lamp-test-bright'),
+                        onPressed: _testing || !widget.feedback.lamp.configured
+                            ? null
+                            : () => _testBrightness(255),
+                        child: const Text('조명 100% 테스트'),
+                      ),
+                      OutlinedButton(
+                        key: const ValueKey('music-test'),
+                        onPressed: _testMusic,
+                        child: const Text('음악 재생/정지 테스트'),
+                      ),
+                    ]),
+                    if (widget.feedback.lastControlError != null)
+                      const Text(
+                          '자동 조명 제어에 실패했습니다. 피드백 스위치·연결 상태와 수동 밝기 테스트를 확인하세요.'),
+                    if (widget.feedback.lastAudioError != null)
+                      const Text('자동 음악 재생에 실패했습니다. 스피커 연결·음악 테스트·볼륨을 확인하세요.'),
                   ]),
                 ),
               ),

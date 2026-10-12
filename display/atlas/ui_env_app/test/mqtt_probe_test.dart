@@ -5,6 +5,9 @@ import 'dart:io';
 import 'package:deskmate_display/link_status.dart';
 import 'package:deskmate_display/mqtt_probe.dart';
 import 'package:deskmate_display/state_source.dart';
+import 'package:deskmate_display/bluetooth_service.dart';
+import 'package:deskmate_display/feedback_policy.dart';
+import 'package:deskmate_display/music_playback.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _short = Duration(milliseconds: 300);
@@ -21,6 +24,62 @@ Future<MqttProbeResult> _probe(_FakeBroker broker,
         onStep: onStep);
 
 void main() {
+  test('display executes a hub command once and returns QoS 1 results',
+      () async {
+    final broker = await _FakeBroker.start();
+    addTearDown(broker.close);
+    final bluetooth = _CommandBluetooth();
+    final coordinator = FeedbackCoordinator(
+        music: _NoCommandMusic(),
+        lamp: IlinkLampFeedback(bluetooth)..select('AA:BB:CC:DD:EE:01'),
+        bluetooth: bluetooth)
+      ..enabled = true;
+    final source = MqttStateSource('127.0.0.1',
+        port: broker.port, onControlCommand: coordinator.handleControlCommand);
+    addTearDown(source.close);
+    try {
+      await source.fetch();
+    } on StateError {/* Wait for subscriptions. */}
+    for (var i = 0;
+        i < 100 && !broker.subscriptions.contains('deskmate/control/cmd');
+        i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(broker.subscriptions, contains('deskmate/control/cmd'));
+    final command = jsonEncode({
+      'schema_version': '1.0',
+      'node': 'hub',
+      'data': {
+        'command_id': 'lamp-1',
+        'target_id': 'desk_lamp',
+        'operation': 'set_brightness',
+        'value': 70,
+        'gate': 'suggest',
+        'requires_confirmation': false,
+        'expires_ts_ms': DateTime.now()
+            .add(const Duration(seconds: 15))
+            .millisecondsSinceEpoch,
+      }
+    });
+    broker.publishControl(command);
+    broker.publishControl(command);
+    for (var i = 0; i < 100 && broker.controlResults.length < 2; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(broker.controlResults, hasLength(2));
+    expect(broker.controlResults.first['data']['command_id'], 'lamp-1');
+    expect(broker.controlResults.first['data']['status'], 'succeeded');
+    expect(bluetooth.frames, [
+      ilinkFrame([1, 8, 5, 1]),
+      ilinkFrame([1, 8, 1, 70])
+    ]);
+    broker.publishControl(command, retain: true);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(broker.controlResults, hasLength(2),
+        reason: 'Retained control must not replay');
+    expect(bluetooth.frames, hasLength(2));
+  });
+
   test('display receives PC samples independently of phase messages', () async {
     final sample = {
       'schema_version': '1.0',
@@ -194,6 +253,8 @@ class _FakeBroker {
   final String? statePayload;
   final String? keystrokePayload;
   final Set<Socket> _sockets = {};
+  final subscriptions = <String>{};
+  final controlResults = <Map<String, dynamic>>[];
 
   int get port => _server.port;
 
@@ -251,6 +312,7 @@ class _FakeBroker {
               offset += 2;
               if (offset + size + 1 > packet.length) break;
               final topic = utf8.decode(packet.sublist(offset, offset + size));
+              subscriptions.add(topic);
               offset += size + 1; // 필터 뒤 요청 QoS 1바이트
               reasons.add(0x00);
               if (topic == 'deskmate/health/hub' && hubStatus != null) {
@@ -274,6 +336,20 @@ class _FakeBroker {
             await Future<void>.delayed(const Duration(milliseconds: 10));
             for (final (topic, payload) in publications) {
               _publish(socket, topic, payload);
+            }
+          case 3: // PUBLISH from display
+            final topicSize = packet[0] * 256 + packet[1];
+            final topic = utf8.decode(packet.sublist(2, 2 + topicSize));
+            var offset = 2 + topicSize;
+            if ((header >> 1) & 3 == 1) {
+              socket.add([0x40, 2, packet[offset], packet[offset + 1]]);
+              offset += 2;
+            }
+            if (topic == 'deskmate/control/result') {
+              expect((header >> 1) & 3, 1);
+              expect(header & 1, 0);
+              controlResults.add(jsonDecode(utf8.decode(packet.sublist(offset)))
+                  as Map<String, dynamic>);
             }
           case 14: // DISCONNECT
             return;
@@ -313,7 +389,8 @@ class _FakeBroker {
     return body;
   }
 
-  void _publish(Socket socket, String topic, String payload) {
+  void _publish(Socket socket, String topic, String payload,
+      {bool retain = true}) {
     final topicBytes = utf8.encode(topic);
     final body = [
       topicBytes.length >> 8,
@@ -329,12 +406,18 @@ class _FakeBroker {
       if (remaining > 0) digit |= 0x80;
       encodedLength.add(digit);
     } while (remaining > 0);
-    socket.add([0x31, ...encodedLength, ...body]); // QoS 0, retain
+    socket.add([retain ? 0x31 : 0x30, ...encodedLength, ...body]); // QoS 0
   }
 
   void publishKeystroke(String payload) {
     for (final socket in _sockets) {
       _publish(socket, 'deskmate/sensor/keystroke', payload);
+    }
+  }
+
+  void publishControl(String payload, {bool retain = false}) {
+    for (final socket in _sockets) {
+      _publish(socket, 'deskmate/control/cmd', payload, retain: retain);
     }
   }
 
@@ -344,6 +427,28 @@ class _FakeBroker {
     }
     await _server.close();
   }
+}
+
+class _CommandBluetooth implements AtlasBluetoothService {
+  final frames = <List<int>>[];
+  @override
+  Future<GattConnection> connectLamp(String address) async =>
+      const GattConnection(adapter: 'test', clientId: 'client');
+  @override
+  Future<void> writeCharacteristic(GattConnection connection,
+      {required String serviceId,
+      required String characteristicId,
+      required List<int> value}) async {
+    frames.add(List.of(value));
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+}
+
+class _NoCommandMusic implements MusicPlayback {
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 }
 
 const _stateEnvelope = {

@@ -166,7 +166,7 @@ class HttpStateSource implements StateSource {
 /// 남겨 둔다. MQTT가 끊겨도 display는 재연결할 뿐, Pi 4의 FSM에는 영향을
 /// 주지 않는다.
 class MqttStateSource implements StateSource {
-  MqttStateSource(this._host, {required this.port})
+  MqttStateSource(this._host, {required this.port, this.onControlCommand})
       : _bootId = 'display-${DateTime.now().microsecondsSinceEpoch}',
         _client = MqttServerClient.withPort(
           _host,
@@ -191,9 +191,14 @@ class MqttStateSource implements StateSource {
   static const _hubHealthTopic = 'deskmate/health/hub';
   static const _keystrokeTopic = 'deskmate/sensor/keystroke';
   static const _feedbackTopic = 'deskmate/feedback/user';
+  static const _controlTopic = 'deskmate/control/cmd';
+  static const _controlResultTopic = 'deskmate/control/result';
 
   final String _host;
   final int port;
+  final Future<Map<String, dynamic>?> Function(Map<String, dynamic>)?
+      onControlCommand;
+  bool _closed = false;
   final String _bootId;
   final MqttServerClient _client;
   StreamSubscription<List<MqttReceivedMessage<MqttMessage?>>>? _updates;
@@ -286,6 +291,9 @@ class MqttStateSource implements StateSource {
       _client.subscribe(_reportTopic, MqttQos.atLeastOnce);
       _client.subscribe(_hubHealthTopic, MqttQos.atLeastOnce);
       _client.subscribe(_keystrokeTopic, MqttQos.atMostOnce);
+      if (onControlCommand != null) {
+        _client.subscribe(_controlTopic, MqttQos.atLeastOnce);
+      }
     } catch (_) {
       _client.disconnect();
       rethrow;
@@ -308,8 +316,22 @@ class MqttStateSource implements StateSource {
         final envelope = jsonDecode(text) as Map<String, dynamic>;
         if (received.topic == _stateTopic) {
           _latest = DisplayState.fromEnvelope(envelope);
+          if (!_latest!.fsmState.startsWith('ACTION_')) {
+            _pendingRequestId = null;
+            _pendingExpiresInS = null;
+          }
         } else if (received.topic == _keystrokeTopic) {
           _pcKeystroke = KeystrokeMetrics.fromEnvelope(envelope);
+        } else if (received.topic == _controlTopic) {
+          // Control events must never replay from retained messages on startup.
+          if (publish.header?.retain == true ||
+              envelope['schema_version'] != '1.0') {
+            continue;
+          }
+          final data = envelope['data'];
+          if (data is Map<String, dynamic>) {
+            unawaited(_handleControl(data));
+          }
         } else if (received.topic == _requestTopic) {
           final data = envelope['data'];
           if (data is Map<String, dynamic>) {
@@ -349,6 +371,28 @@ class MqttStateSource implements StateSource {
     }
   }
 
+  Future<void> _handleControl(Map<String, dynamic> command) async {
+    final handler = onControlCommand;
+    if (_closed || handler == null) return;
+    try {
+      final result = await handler(command);
+      if (result == null || _closed || !isConnected) return;
+      final builder = MqttClientPayloadBuilder()
+        ..addString(jsonEncode({
+          'schema_version': '1.0',
+          'ts': DateTime.now().millisecondsSinceEpoch / 1000,
+          'node': 'display-control',
+          'boot_id': _bootId,
+          'seq': ++_sequence,
+          'data': result,
+        }));
+      _client.publishMessage(
+          _controlResultTopic, MqttQos.atLeastOnce, builder.payload!);
+    } catch (error) {
+      stderr.writeln('[display] 제어 명령 처리 실패: $error');
+    }
+  }
+
   @override
   Future<void> feedback(String verdict,
       {String? correctedState, int? responseMs}) async {
@@ -384,6 +428,7 @@ class MqttStateSource implements StateSource {
 
   @override
   void close() {
+    _closed = true;
     _updates?.cancel();
     _client.disconnect();
   }
