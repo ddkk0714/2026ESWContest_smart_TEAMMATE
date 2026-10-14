@@ -8,3 +8,6 @@ viewer/*.json
 !viewer/device.json
 snaps/
 *.mp4
+person_scene.xml
+models/
+*.step
