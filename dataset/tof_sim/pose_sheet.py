@@ -24,6 +24,11 @@ POSES = [
     ("chin_rest", lambda rng: _target_pose("chin_rest", rng)),
     ("face_down", lambda rng: _target_pose("face_down", rng)),
     ("drowsy", lambda rng: _target_pose("drowsy", rng)),
+    ("mouse", lambda rng: Pose(arms="mouse")),
+    ("book", lambda rng: Pose(trunk_pitch=np.radians(-8), neck_pitch=np.radians(20), arms="book")),
+    ("phone_call / other typing", lambda rng: Pose(arms="phone_call", other_arms="typing")),
+    ("eat (phase 0.5) / other lap", lambda rng: Pose(arms="eat", other_arms="lap", arm_phase=0.5)),
+    ("bag (lean right)", lambda rng: Pose(trunk_roll=np.radians(-22), trunk_pitch=np.radians(10), arms="bag", other_arms="lap")),
 ]
 VIEWS = [("front", 90, -8, 1.5), ("left side", 180, -6, 1.5), ("back-left 3/4", 240, -18, 1.7)]
 
@@ -34,7 +39,7 @@ def main():
     ap.add_argument("--out", default="pose_sheet.png")
     args = ap.parse_args()
     rng = np.random.default_rng(args.seed)
-    cfg = sample_session(rng)
+    cfg = sample_session(rng, scene="plain")      # no desk/room furniture on the sheet
     desk = MjDesk(cfg.room, cfg.person)
     m = desk.model
     m.geom_rgba[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "monitor")][3] = 0.0   # the monitor would hide the front view
@@ -42,6 +47,8 @@ def main():
     r = mujoco.Renderer(m, height=480, width=640)
     cam = mujoco.MjvCamera()
     cam.type = mujoco.mjtCamera.mjCAMERA_FREE
+    opt = mujoco.MjvOption()
+    opt.geomgroup[3] = 1            # props / bystanders live in group 3 (rays see them, the default render does not)
     p = cfg.person
     cam.lookat[:] = [p.x_offset, cfg.room.desk_depth + p.hip_z - 0.15, p.seat_height + 0.5]
     rows = []
@@ -50,13 +57,14 @@ def main():
         tiles = []
         for _, az, el, dist in VIEWS:
             cam.azimuth, cam.elevation, cam.distance = az, el, dist
-            r.update_scene(desk.data, cam)
+            r.update_scene(desk.data, cam, opt)
             tiles.append(r.render())
         rows.append(np.concatenate(tiles, axis=1))
         print("rendered", name)
     grid = np.concatenate([np.concatenate(rows[i:i + 2], axis=0) for i in range(0, len(rows), 2)], axis=1) if False else None
     # 5 rows x 2 poses: each cell = two views side by side
-    cells = [np.concatenate([rows[i], rows[i + 1]], axis=1) if i + 1 < len(rows) else rows[i] for i in range(0, len(rows), 2)]
+    cells = [np.concatenate([rows[i], rows[i + 1] if i + 1 < len(rows) else np.zeros_like(rows[i])], axis=1)
+             for i in range(0, len(rows), 2)]
     sheet = np.concatenate(cells, axis=0)
     imageio.imwrite(args.out, sheet)
     print(f"wrote {args.out} {sheet.shape[1]}x{sheet.shape[0]} | body: {p.smplx['gender'] if p.smplx else 'capsule'}, "

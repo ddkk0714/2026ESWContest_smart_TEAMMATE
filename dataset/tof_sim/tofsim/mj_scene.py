@@ -123,6 +123,11 @@ def build_mjcf(room: Room, person: Person, body=None) -> tuple[str, dict]:
       {geom("walker_head", 0.35, type="sphere", pos=_v(0, 0, 1.58 * ws), size=_v(0.11), rgba="0.9 0.75 0.65 1", group="3")}
     </body>"""
 
+    prop = f"""
+    <body name="prop" mocap="true" pos="0 0 -10">
+      {geom("prop_book", 0.6, type="box", size=_v(0.10, 0.012, 0.125), rgba="0.9 0.88 0.8 1", group="3")}
+    </body>"""
+
     person_xml = f"""
     <body name="pelvis" pos="{_v(person.x_offset, chair_y, hip_z)}">
       <joint name="hip_shift" type="slide" axis="0 1 0" range="-0.3 0.8"/>
@@ -175,6 +180,7 @@ def build_mjcf(room: Room, person: Person, body=None) -> tuple[str, dict]:
     </body>
     {chair}
     {walker}
+    {prop}
     {person_xml}
   </worldbody>
 </mujoco>"""
@@ -328,6 +334,7 @@ class MjDesk:
         self._geomgroup_all = np.array([1, 1, 0, 1, 0, 0], dtype=np.uint8)     # group 2 = monitor, never hit; 3 = bystander
         self._geomgroup_empty = np.array([1, 0, 0, 1, 0, 0], dtype=np.uint8)
         self._walker = self.model.body_mocapid[self.body("walker")]
+        self._prop = self.model.body_mocapid[self.body("prop")]
 
     # ------------------------------------------------------------------ pose
     def set_walker(self, pos):
@@ -337,6 +344,7 @@ class MjDesk:
     def set_pose(self, pose: Pose | None):
         m, d = self.model, self.data
         d.qpos[:] = 0.0
+        d.mocap_pos[self._prop] = (0.0, 0.0, -10.0)
         for side in ("l", "r"):
             d.qpos[self.jnt[f"shoulder_{side}"]] = 1.0        # identity quaternion
         if pose is None:
@@ -348,11 +356,11 @@ class MjDesk:
         q, j = d.qpos, self.jnt
         q[j["hip_shift"]] = pose.hip_shift
         q[j["trunk_pitch"]] = pose.trunk_pitch      # + = toward the desk (top moves to -y)
-        q[j["trunk_roll"]] = -pose.trunk_roll       # + = person's left = sensor's right (+x)
+        q[j["trunk_roll"]] = pose.trunk_roll        # + = lean to the person's left = sensor's right (+x); hinge y points to -y (body faces the desk)
         q[j["breath"]] = pose.breath
         q[j["neck_pitch"]] = pose.neck_pitch
         q[j["head_yaw"]] = pose.head_yaw
-        q[j["head_roll"]] = -pose.head_roll
+        q[j["head_roll"]] = pose.head_roll          # + = tilt to the person's left (+x), same sense as trunk_roll
         # office-chair recline: the seat tips back about a third of the lean (knees rise), the
         # backrest follows the trunk; the trunk still ends at the requested world angle
         seat = 0.35 * min(0.0, pose.trunk_pitch)
@@ -417,6 +425,7 @@ class MjDesk:
             S = d.xpos[self.body(f"uarm_{side}")].copy()
             mode = pose.arms
             active_cup = mode == "cup_right" and side == "l"
+            active_one = self.ONE_HANDED.get(mode) == side
             if side in chin_sides and self._chin is not None:
                 W, E = self._chin[side]
                 pole = E                                   # |E-S| = upper arm, |E-W| = forearm: the elbow lands on E
@@ -426,11 +435,52 @@ class MjDesk:
             elif active_cup:
                 W = mouth + np.array([0.0, -0.05, -0.02])
                 pole = S + np.array([0.08 * sign, 0.05, -0.4])
+            elif active_one:
+                W, pole = self._one_hand_target(mode, sign, S, trunk_R, kb_y, desk_top, pose, mouth)
             else:
-                if mode in self.CHIN_ARMS or mode == "cup_right":
-                    mode = pose.other_arms     # the arm that is not propping the chin / holding the cup
+                if mode in self.CHIN_ARMS or mode == "cup_right" or mode in self.ONE_HANDED:
+                    mode = pose.other_arms     # the arm that is not propping the chin / holding the cup / busy
                 W, pole = self._arm_target(mode, side, sign, S, trunk_R, kb_y, desk_top)
             self._ik_arm(side, S, W, pole, trunk_R)
+        if pose.arms == "book":
+            self._place_book(trunk_R)
+
+    # one-handed activities: which arm is busy ("r" = the person's right, at -x); the other follows other_arms
+    ONE_HANDED = {"phone_call": "r", "eat": "r", "bag": "r"}
+
+    def _one_hand_target(self, mode, sign, S, trunk_R, kb_y, desk_top, pose, mouth):
+        """Wrist target and elbow pole for the busy arm of a one-handed activity."""
+        d, room, p = self.data, self.room, self.person
+        k = p.scale
+        if mode == "phone_call":
+            # hand at the ear on the same side; elbow out and forward
+            head_b = self.body("head")
+            ear = d.xpos[head_b] + d.xmat[head_b].reshape(3, 3) @ np.array([0.085 * sign * k, 0.0, 0.17 * k])
+            return ear + np.array([0.02 * sign, -0.01, -0.02]), S + np.array([0.22 * sign, -0.28, -0.10])
+        if mode == "eat":
+            # hand goes from the desk (snack in front of the keyboard) to the mouth and back; arm_phase 0..1
+            s = 0.5 - 0.5 * np.cos(2 * np.pi * pose.arm_phase)
+            on_desk = np.array([p.x_offset + 0.06 * sign, kb_y - 0.04, desk_top + 0.04])
+            at_mouth = mouth + np.array([0.0, -0.09, -0.09])     # wrist below the mouth, fingers reach it
+            return on_desk * (1 - s) + at_mouth * s, S + np.array([0.10 * sign, 0.05, -0.4])
+        if mode == "bag":
+            # reaching down to a bag on the floor beside the chair (the trunk leans that way via trunk_roll)
+            chair_y = d.xpos[self.body("pelvis")][1]
+            return np.array([S[0] + 0.32 * sign, chair_y + 0.05, 0.15]), S + np.array([0.30 * sign, 0.10, -0.25])
+        raise ValueError(mode)
+
+    def _place_book(self, trunk_R):
+        """A book held in both hands in front of the chest, tilted back toward the face."""
+        d, p = self.data, self.person
+        k = p.scale
+        trunk_o = d.xpos[self.body("trunk")]
+        centre = trunk_o + trunk_R @ np.array([0.0, -0.30 * k, 0.52 * k * 0.74])
+        tilt = np.radians(35.0)
+        R = trunk_R @ np.array([[1, 0, 0], [0, np.cos(tilt), -np.sin(tilt)], [0, np.sin(tilt), np.cos(tilt)]])
+        q = np.zeros(4)
+        mujoco.mju_mat2Quat(q, np.ascontiguousarray(R).reshape(-1))
+        d.mocap_pos[self._prop] = centre
+        d.mocap_quat[self._prop] = q
 
     def _arm_target(self, mode, side, sign, S, trunk_R, kb_y, desk_top):
         """Wrist target and elbow pole for a free arm. sign = +1 for the arm at +x."""
@@ -442,7 +492,17 @@ class MjDesk:
         head_c = d.xpos[head_b] + d.xmat[head_b].reshape(3, 3) @ np.array([0.0, -0.01 * k, 0.19 * k])
         # trunk frame: +y is the person's back, -y their front, +z up the spine
         chest_front = trunk_o + trunk_R @ np.array([0.0, -0.13 * k, spine * 0.45])
-        if mode == "pillow":
+        if mode == "mouse":
+            if sign > 0:                                   # left hand stays on the keyboard
+                return self._arm_target("typing", side, sign, S, trunk_R, kb_y, desk_top)
+            jit = kb_y - (room.desk_depth - 0.20)          # the typing jitter, reused as mouse motion
+            W = np.array([p.x_offset - 0.30 + 1.5 * jit, room.desk_depth - 0.16 - 1.0 * jit, desk_top + 0.03])
+            pole = S + np.array([0.06 * sign, 0.10, -0.35])
+        elif mode == "book":
+            # both hands hold a book in front of the chest (prop placed by _place_book)
+            W = trunk_o + trunk_R @ np.array([0.11 * sign, -0.28 * k, spine * 0.70 - 0.04 * k])
+            pole = S + trunk_R @ np.array([0.10 * sign, -0.05, -0.30])
+        elif mode == "pillow":
             W = np.array([-0.05 * sign + p.x_offset, room.desk_depth - 0.30, desk_top + 0.05])
             pole = S + np.array([0.25 * sign, -0.1, -0.2])
         elif mode == "lap":
@@ -473,7 +533,7 @@ class MjDesk:
                 W = np.array([p.x_offset + 0.17, kb_y + 0.05, desk_top + 0.0])
         else:  # typing
             W = np.array([S[0] * 0.55, kb_y, desk_top + 0.03])
-        if mode in ("typing", "writing"):
+        if mode in ("typing", "writing", "mouse"):
             # Keep the elbow bent: a keyboard beyond the relaxed reach is not chased with a
             # straight arm; the hands rest nearer on the desk (between keyboard and desk edge).
             R = p.reach * (self.ua + self.fa)

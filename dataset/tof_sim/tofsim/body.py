@@ -92,13 +92,14 @@ class Pose:
     trunk_roll: float = 0.0         # rad, + = lean to the person's left (sensor's right)
     neck_pitch: float = 0.0         # rad, + = head flexed forward/down
     head_yaw: float = 0.0
-    head_roll: float = 0.0
+    head_roll: float = 0.0          # rad, + = tilt to the person's left (sensor's right), same sense as trunk_roll
     breath: float = 0.0             # chest expansion, metres
     # typing | lap | crossed | behind_head | phone | hanging | pillow | chin_right | chin_left | chin_both | cup_right
     # (behind_head/crossed/phone/hanging are MuJoCo-only; the numpy backend draws them as lap)
     arms: str = "typing"
     other_arms: str = "typing"      # the free arm while one arm props the chin or holds a cup
     arm_jitter: float = 0.0         # small hand motion while typing, metres
+    arm_phase: float = 0.0          # 0..1 cycle position for repeating arm actions (eat: hand to mouth and back)
     hip_shift: float = 0.0          # sliding the chair forward(+)/back(-), metres
 
 

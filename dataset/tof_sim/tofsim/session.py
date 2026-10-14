@@ -87,7 +87,7 @@ FLAG_BYSTANDER = 8    # a second person is in the room (walking behind or standi
 
 # Relative frequency and duration range (s) of each segment type
 SEGMENTS = {
-    "upright": (0.30, (15, 90)),
+    "upright": (0.26, (15, 90)),
     "lean_forward": (0.12, (5, 30)),
     "recline": (0.12, (5, 40)),
     "face_down": (0.10, (5, 40)),
@@ -100,9 +100,12 @@ SEGMENTS = {
     "elbows": (0.05, (5, 30)),         # lean_forward, propped on both forearms, eyes on the screen
     "stretch": (0.04, (3, 7)),         # recline, a short stretch with the hands behind the head
     "writing": (0.07, (10, 60)),       # lean_forward, studying on paper: head down over the desk, pencil hand moving
+    "reading": (0.06, (15, 90)),       # upright, a book held at chest height, eyes on it
+    "mouse_work": (0.08, (10, 60)),    # upright, left hand on the keyboard, right hand on the mouse
+    "phone_call": (0.05, (10, 60)),    # upright, the right hand holds the phone at the ear, head tilted to it
 }
 SEGMENT_LABEL = {"armrest": "upright", "look_aside": "upright", "elbows": "lean_forward", "stretch": "recline",
-                 "writing": "lean_forward"}
+                 "writing": "lean_forward", "reading": "upright", "mouse_work": "upright", "phone_call": "upright"}
 
 
 @dataclass
@@ -428,7 +431,13 @@ ARMS = {
     "elbows": [("writing", 0.70), ("typing", 0.30)],
     "stretch": [("behind_head", 1.0)],
     "writing": [("writing", 1.0)],
+    "reading": [("book", 1.0)],
+    "mouse_work": [("mouse", 1.0)],
+    "phone_call": [("phone_call", 1.0)],
+    "phone_other": [("lap", 0.4), ("typing", 0.3), ("hanging", 0.2), ("writing", 0.1)],   # the free arm during a call
 }
+# Two-handed modes a look-alike may interrupt with one hand (a cup, a snack, the bag on the floor)
+TWO_HANDED_FREE = ("typing", "lap", "crossed", "phone", "hanging", "writing", "mouse")
 
 
 def _arms(kind: str, rng) -> str:
@@ -461,6 +470,15 @@ def _target_pose(kind: str, rng, limits: dict | None = None) -> Pose:
     if kind == "writing":
         return Pose(trunk_pitch=deg(_u(rng, 12, 28)), neck_pitch=deg(_u(rng, 20, 40)), head_yaw=deg(rng.normal(0, 5)),
                     arms="writing")
+    if kind == "reading":
+        return Pose(trunk_pitch=-deg(_u(rng, 4, 10)), neck_pitch=deg(_u(rng, 15, 25)), head_yaw=deg(rng.normal(0, 4)),
+                    arms="book")
+    if kind == "mouse_work":
+        return Pose(trunk_pitch=deg(rng.normal(2, 4)), neck_pitch=deg(rng.normal(6, 5)), head_yaw=deg(rng.normal(0, 6)),
+                    arms="mouse")
+    if kind == "phone_call":                                   # the phone hand is the right one: head tilts that way (-x)
+        return Pose(trunk_pitch=deg(rng.normal(0, 4)), neck_pitch=deg(rng.normal(3, 5)), head_roll=-deg(_u(rng, 4, 12)),
+                    head_yaw=deg(rng.normal(0, 8)), arms="phone_call", other_arms=_arms("phone_other", rng))
     if kind == "stretch":
         return Pose(trunk_pitch=-deg(_u(rng, 20, 35)), neck_pitch=-deg(_u(rng, 5, 15)), arms=_arms("stretch", rng),
                     hip_shift=_u(rng, 0.0, 0.08))
@@ -504,9 +522,11 @@ def _plan_lookalikes(kind: str, duration: float, rng) -> list:
         return []
     out, t = [], _u(rng, 2.0, 10.0)
     while t < duration - 3.0:
-        what = rng.choice(["glance", "cup", "turn"], p=[0.5, 0.2, 0.3])
-        length = {"glance": _u(rng, 0.6, 2.5), "cup": _u(rng, 2.0, 5.0), "turn": _u(rng, 1.0, 4.0)}[what]
-        amount = {"glance": np.radians(_u(rng, 12, 30)), "cup": 1.0, "turn": np.radians(_u(rng, -40, 40))}[what]
+        what = rng.choice(["glance", "cup", "turn", "eat", "bag"], p=[0.40, 0.17, 0.25, 0.12, 0.06])
+        length = {"glance": _u(rng, 0.6, 2.5), "cup": _u(rng, 2.0, 5.0), "turn": _u(rng, 1.0, 4.0),
+                  "eat": _u(rng, 5.0, 30.0), "bag": _u(rng, 2.0, 5.0)}[what]
+        amount = {"glance": np.radians(_u(rng, 12, 30)), "cup": 1.0, "turn": np.radians(_u(rng, -40, 40)),
+                  "eat": _u(rng, 2.0, 4.0), "bag": np.radians(_u(rng, 15, 25))}[what]   # eat: seconds per bite
         out.append((t, str(what), length, float(amount)))
         t += length + _u(rng, 6.0, 30.0)
     return out
@@ -908,9 +928,21 @@ def generate_frames(cfg: SessionConfig, total_s: float, rng: np.random.Generator
                             pose.neck_pitch += amount * min(1.0, 2 * k)
                         elif what == "turn":
                             pose.head_yaw += amount * k
-                        elif what == "cup" and pose.arms in ("typing", "lap", "crossed", "phone", "hanging"):
+                        elif what == "cup" and pose.arms in TWO_HANDED_FREE:
                             pose.other_arms = pose.arms
                             pose.arms = "cup_right"
+                        elif what == "eat" and pose.arms in TWO_HANDED_FREE:
+                            # a snack: the right hand goes desk -> mouth -> desk every `amount` seconds
+                            pose.other_arms = pose.arms
+                            pose.arms = "eat"
+                            pose.arm_phase = ((ts - start) / amount) % 1.0
+                        elif what == "bag" and pose.arms in TWO_HANDED_FREE:
+                            # rummaging in the bag on the floor: leans down to the right; no posture to speak of meanwhile
+                            pose.other_arms = pose.arms
+                            pose.arms = "bag"
+                            pose.trunk_roll -= amount * k
+                            pose.trunk_pitch += np.radians(10.0) * k
+                            flags |= FLAG_TRANSITION
                 frame_pose = pose
                 prev_pose = pose
             walker = _bystander_pos(events, t_global + ts)

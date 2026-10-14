@@ -132,7 +132,10 @@ sbatch --export=ALL,RUN=mj_trial,TOTAL_H=336 slurm_train.sh   # 이어서 할 �
 - 자세 변형(`session.SEGMENTS`, 라벨은 `SEGMENT_LABEL` 로 기존 7개에 붙음): 팔걸이에 기대기(`armrest`→upright),
   옆 모니터·옆사람 보기(`look_aside`, 고개 30~60° 돌린 채 5~30 s→upright), 팔꿈치 괴고 숙이기(`elbows`→lean_forward),
   기지개(`stretch`, 3~7 s→recline), 연필로 공부하기(`writing`, 고개 20~40° 숙이고 상체 12~28° 앞으로, 손은 책상 위에서 움직임→lean_forward).
+  책 들고 읽기(`reading`→upright), 마우스 작업(`mouse_work`→upright), 전화 통화(`phone_call`, 오른손을 귀에→upright).
   기본 자세들의 각도 범위도 조금 넓혔다. 폰 내려다보기는 졸음과 구분이 애매해 넣지 않았다.
+- 자세 안의 짧은 동작(look-alike, 라벨은 그 자세 그대로): 키보드 힐끗 보기, 컵으로 마시기, 고개 돌리기, 과자 먹기(손이 입과 책상을
+  2~4 s 주기로 오감, 5~30 s), 바닥 가방 뒤지기(오른쪽으로 숙임 2~5 s, 이 구간은 전환으로 표시해 채점에서 뺌).
 
 ### 중간에 멈추기·뽑아내기
 
@@ -150,17 +153,37 @@ sbatch --export=ALL,RUN=mj_trial,TOTAL_H=336 slurm_train.sh   # 이어서 할 �
 
 ### 보드(Raspberry Pi 4) 이식
 
-Pi 4 허브는 AI Native OS Headless 라 numpy·torch·컴파일러가 없고 `hub/atlas` C++ 서비스(IPK)만 올라간다.
-`tools/posture_net_ref.cpp` 가 그 서비스에 그대로 넣을 수 있는 **의존성 없는 C++ 순전파**(`tof::PostureNet`:
-`load` → 세션 시작 `reset` → 프레임마다 `step`)이고, 골든 벡터로 PyTorch 와 맞춰 본다. 센서가 여럿이면
-센서마다 `PostureNet` 하나씩(각자 GRU 상태, 가중치 파일은 공유). 10 Hz 로 불러야 하고, 입력 규약은 `model_card.json`.
+Pi 4 허브는 AI Native OS Headless 라 numpy·torch·컴파일러가 없고 C++ 서비스(IPK)만 올라간다. 팀 레포
+**`hub/atlas-tof/`** 가 그 서비스다: `tools/posture_net_ref.cpp` 의 **의존성 없는 C++ 순전파**(`tof::PostureNet`:
+`load` → 세션 시작 `reset` → 프레임마다 `step`)를 그대로 쓰고, ESP32(`env:tof_logger`) USB 줄을 센서마다 읽어
+10 Hz 로 모델을 돌린 뒤 log-softmax 합으로 합쳐 HTTP 8771 로 낸다. 빌드·설치·검증 순서는 그 폴더의 README.
 
 ```
 g++ -O2 -std=c++17 tools/posture_net_ref.cpp -o tools/posture_net_ref
-tools/posture_net_ref <export>/posture_net.bin <export>/golden.txt      # PASS + us/frame
+tools/posture_net_ref <export>/posture_net.bin <export>/golden.txt      # PASS + us/frame (PyTorch 대비 2.5e-5)
 ```
 
+보드 없이 실제 센서로 모델을 돌려 보려면 PC 에서 `tof_live.py --ports COM5,COM6 --model <export>/posture_net.onnx`
+(pyserial + onnxruntime, 처리 경로는 서비스와 같음, `--record` 로 실측 세션 저장).
 이 PC 에는 g++ 가 없어 UBAI 로그인 노드(gcc 8.5)에서 확인했다.
+
+### 센서 두 개 (한 장치의 좌·우)
+
+모델은 센서 하나의 8×8 을 본다(세션마다 `DEVICE_SENSORS` 둘 중 하나를 무작위로 골라 학습). 보드에서는 센서마다
+모델 하나씩 돌리고 합친다. `eval_pair.py` 가 같은 세션을 두 센서 뷰로 렌더해 규칙별 점수를 내고, `--dump` 결과로
+`fit_fusion.py` 가 선형 융합을 세션 교차검증한다. `tools/sim_to_toflines.py` 는 한 세션을 두 센서 뷰의 펌웨어 줄
+형식(+정답)으로 저장해 서비스 리플레이 테스트에 쓴다.
+
+```
+python eval_pair.py --ckpt runs/<RUN>/ckpt_best.pt --placement random --sessions 24 --out runs/pair.json --dump runs/pair.npz
+python fit_fusion.py runs/pair.npz
+python tools/sim_to_toflines.py --seed 7001 --placement random --out ../2026ESWContest_smart_TEAMMATE/hub/atlas-tof/test
+```
+
+2026-10-14 측정(ubai_random 4 h 체크포인트, random 배치, 정확도): 단일 센서 0.62~0.67, softmax 평균 0.668~0.705,
+log-softmax 합 0.682~0.718, "둘 중 하나라도 맞으면" 상한 0.854. 규칙 차이는 세션 편차 안쪽이고 상한과의 간격은
+두 센서를 한 모델이 같이 보는 구조(학습 변경)의 몫이다. ubai_v3(SMPL-X 이전 arc 모델)는 지금 시뮬에서 0.52 로
+떨어진다 — arc 시연 모델은 ubai_v5 계열을 써야 한다.
 
 ### 출력 (`runs/<run>/`, 커밋 안 함)
 
