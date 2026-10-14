@@ -46,10 +46,11 @@ def main():
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--placement", default="arc", help="arc | random | mixed (tofsim.session.PLACEMENT_MODES)")
     ap.add_argument("--clutter", type=int, default=None, help="boxes against the back wall, 0..N (default: session.CLUTTER_MAX)")
+    ap.add_argument("--scene", default="rich", help="rich | plain (tofsim.session.SCENE_MODES)")
     args = ap.parse_args()
 
     rng = np.random.default_rng(args.seed)
-    cfg = sample_session(rng, "vl53l8cx", placement=args.placement, clutter_max=args.clutter)
+    cfg = sample_session(rng, "vl53l8cx", placement=args.placement, clutter_max=args.clutter, scene=args.scene)
     desk = MjDesk(cfg.room, cfg.person)
     origin, R = sensor_frame(cfg.sensor_pose)
     centers = Sensor(cfg.spec, cfg.model, np.random.default_rng(0)).zone_centers(R)

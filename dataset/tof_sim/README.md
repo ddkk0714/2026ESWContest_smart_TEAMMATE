@@ -124,6 +124,10 @@ sbatch --export=ALL,RUN=mj_trial,TOTAL_H=336 slurm_train.sh   # 이어서 할 �
 ### 배경·자리비움·자세 변형
 
 - `--clutter N`: 뒷벽 앞에 상자·선반 같은 잡동사니를 세션마다 0~N개 둔다(기본은 `session.CLUTTER_MAX`, 지금 0). 검증셋 파일명에 `clutterN_` 이 붙는다.
+- `--scene rich`(기본): 책상 위 물건(모니터·보조 모니터·노트북·컵/병·책 더미·스탠드·가방)과 방 안 가구(옆 책장·파티션·옆 책상에 앉은
+  사람·뒷벽 책장·창문(유리라 무응답)·화분)를 세션마다 각각의 확률로 둔다. 장치 발자국·키보드·손 구역은 비우고, 센서 시야에 드는 물건은
+  맨 아래 줄 6 cm 까지만 허용한다. 지나가는 사람도 더 자주, 더 다양하게(옆에 서서 얘기, 어깨 너머로 보기, 가까이 지나가기). `--scene plain` 은
+  예전 그대로의 빈 책상·빈 벽. 검증셋 파일명에 `rich_` 가 붙는다.
 - 자리비움은 사람이 그냥 사라지지 않는다. 의자를 뒤로 밀며 일어서고(0.6~1.2 s), 옆으로 걸어 나가고(bystander 와 같은 걷는 몸체), 돌아올 때는 옆에서 걸어 들어와 의자에 앉는다. 그 프레임은 전환(FLAG_TRANSITION)이라 채점에서 빠지고 학습 가중치가 낮다. 짧은 자리비움은 빨리 걷는다.
 - 자세 변형(`session.SEGMENTS`, 라벨은 `SEGMENT_LABEL` 로 기존 7개에 붙음): 팔걸이에 기대기(`armrest`→upright),
   옆 모니터·옆사람 보기(`look_aside`, 고개 30~60° 돌린 채 5~30 s→upright), 팔꿈치 괴고 숙이기(`elbows`→lean_forward),
@@ -141,7 +145,22 @@ sbatch --export=ALL,RUN=mj_trial,TOTAL_H=336 slurm_train.sh   # 이어서 할 �
 
 `export.py` 결과는 `runs/<RUN>/export_<시각>_<best|last>/` 와 같은 이름의 `.zip` 이다.
 `posture_net.pt`(가중치+정보), `weights.npz`(numpy), `posture_net.onnx`(한 프레임 스트리밍 추론, PyTorch 와
-오차 1e-6 확인), `report.md`(클래스별 점수·혼동행렬·학습 중 점수 변화), `model_card.json`(입력·출력 형식).
+오차 1e-6 확인), `report.md`(클래스별 점수·혼동행렬·학습 중 점수 변화), `model_card.json`(입력·출력 형식),
+그리고 보드 이식용 `posture_net.bin`(평탄 float32 가중치, 24바이트 헤더) + `golden.txt`(PyTorch 가 만든 240프레임 입력·logits).
+
+### 보드(Raspberry Pi 4) 이식
+
+Pi 4 허브는 AI Native OS Headless 라 numpy·torch·컴파일러가 없고 `hub/atlas` C++ 서비스(IPK)만 올라간다.
+`tools/posture_net_ref.cpp` 가 그 서비스에 그대로 넣을 수 있는 **의존성 없는 C++ 순전파**(`tof::PostureNet`:
+`load` → 세션 시작 `reset` → 프레임마다 `step`)이고, 골든 벡터로 PyTorch 와 맞춰 본다. 센서가 여럿이면
+센서마다 `PostureNet` 하나씩(각자 GRU 상태, 가중치 파일은 공유). 10 Hz 로 불러야 하고, 입력 규약은 `model_card.json`.
+
+```
+g++ -O2 -std=c++17 tools/posture_net_ref.cpp -o tools/posture_net_ref
+tools/posture_net_ref <export>/posture_net.bin <export>/golden.txt      # PASS + us/frame
+```
+
+이 PC 에는 g++ 가 없어 UBAI 로그인 노드(gcc 8.5)에서 확인했다.
 
 ### 출력 (`runs/<run>/`, 커밋 안 함)
 

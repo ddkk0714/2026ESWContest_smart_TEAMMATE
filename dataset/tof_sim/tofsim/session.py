@@ -70,6 +70,14 @@ RANDOM_WRONG_P = 0.15               # random: chance of a deliberately wrong pla
 OK_DIST_M = (0.45, 1.30)
 OK_MARGIN_H_DEG = 4.0
 OK_MARGIN_V_DEG = 0.0
+
+# Scene richness (sample_session(scene=...), train.py --scene):
+#   "plain" the desk, keyboard, chair and a bare wall (plus --clutter boxes): the same draws as before
+#   "rich"  things on the desk (monitors, a laptop, a cup, books, a lamp, a bag) and around the room (shelves,
+#           a partition, a neighbour at the next desk, a window that returns nothing, a plant), each with its own
+#           chance, placed clear of the device, the keyboard and the hands (see _furnish)
+SCENE_MODES = ("plain", "rich")
+VIEW_INTRUDE_M = 0.06              # rich: a desk item may poke at most this far into the bottom of the field of view
 L = {name: i for i, name in enumerate(LABELS)}
 
 FLAG_TRANSITION = 1   # frame is inside a transition into this segment
@@ -115,7 +123,7 @@ def _u(rng, a, b):
 
 def sample_session(rng: np.random.Generator, sensor: str = "vl53l8cx",
                    azimuth_deg: float | None = None, sensor_index: int | None = None,
-                   placement: str = "arc", clutter_max: int | None = None) -> SessionConfig:
+                   placement: str = "arc", clutter_max: int | None = None, scene: str = "rich") -> SessionConfig:
     """One random desk session. The sensor is one device sensor (`sensor_index`, see
     DEVICE_SENSORS) at one arc position (`azimuth_deg`, in SENSOR_AZIMUTHS_DEG); random when
     not given. cfg.meta["arc"] holds (azimuth_deg, sensor_index, SensorPose) for every sensor of
@@ -127,9 +135,12 @@ def sample_session(rng: np.random.Generator, sensor: str = "vl53l8cx",
     and meta["devices"] with that one device, and sets meta["misplaced"] when the spot is one
     the classifier cannot be expected to read: every frame of such a session is then labelled
     `misplaced`, the empty chair included. meta["placement_mode"] records the mode drawn.
-    `clutter_max` overrides CLUTTER_MAX (boxes and shelves against the back wall, 0..N per session)."""
+    `clutter_max` overrides CLUTTER_MAX (boxes and shelves against the back wall, 0..N per session).
+    `scene` (SCENE_MODES): "rich" furnishes the desk and the room (_furnish, meta["scene"]); "plain" does not."""
     if placement not in PLACEMENT_MODES:
         raise ValueError(f"placement must be one of {PLACEMENT_MODES}, not {placement!r}")
+    if scene not in SCENE_MODES:
+        raise ValueError(f"scene must be one of {SCENE_MODES}, not {scene!r}")
     spec = PRESETS[sensor]
     room = Room(
         desk_height=_u(rng, 0.70, 0.76),
@@ -182,7 +193,7 @@ def sample_session(rng: np.random.Generator, sensor: str = "vl53l8cx",
     mode = placement if placement != "mixed" else ("arc" if rng.random() < 0.5 else "random")
     arc, meta = (_place_arc if mode == "arc" else _place_random)(room, person, spec, rng)
     if arc is None:                      # this desk/person admits no placement: draw the whole session again
-        return sample_session(rng, sensor, azimuth_deg, sensor_index, placement, clutter_max)
+        return sample_session(rng, sensor, azimuth_deg, sensor_index, placement, clutter_max, scene)
     if mode == "arc":
         a_i = int(rng.integers(len(SENSOR_AZIMUTHS_DEG))) if azimuth_deg is None else SENSOR_AZIMUTHS_DEG.index(int(azimuth_deg))
     else:
@@ -191,6 +202,9 @@ def sample_session(rng: np.random.Generator, sensor: str = "vl53l8cx",
     meta["azimuth_deg"], meta["sensor_index"], sensor_pose = arc[a_i * len(DEVICE_SENSORS) + s_i]
     meta["placement_mode"] = mode
     meta["clutter"] = len(room.clutter)
+    meta["scene_mode"] = scene
+    if scene == "rich":
+        meta["scene"] = _furnish(room, person, spec, sensor_pose, meta["devices"][a_i][1], rng)
     fd_pitch, fd_shift = _face_down_limit(room, person, meta["devices"][a_i])
     meta["limits"] = {"face_down_pitch": fd_pitch, "face_down_shift": fd_shift}
     # Head as wide as HEAD_COLUMNS zone columns from the arc (every arc sensor is equally far
@@ -533,24 +547,141 @@ def _face_down_limit(room: Room, person: Person, device) -> tuple[float, float]:
     return 25.0, float(max_shift)
 
 
+def _furnish(room: Room, person: Person, spec: SensorSpec, pose: SensorPose, device_c: np.ndarray, rng) -> dict:
+    """Things on the desk and around the room (scene "rich"), as boxes in room.clutter. Desk items
+    keep clear of the device footprint, the keyboard and the hands, and may poke no more than
+    VIEW_INTRUDE_M into the bottom of the field of view (nobody leaves a laptop lid right in front
+    of the device). Room furniture stands beside the desk or against the back wall; the window
+    reflects nothing, like glass. Returns {"desk": [kinds], "room": [kinds]} for meta."""
+    desk_h, desk_d, half_w = room.desk_height, room.desk_depth, room.desk_width / 2
+    x0, chair_z = person.x_offset, room.chair_z
+    placed = {"desk": [], "room": []}
+    fwd, _side = _device_axes(pose.yaw_deg)
+    px, py, pz = pose.position
+
+    def box(kind, center, half, refl, where):
+        room.clutter.append({"center": [float(v) for v in center], "half": [float(v) for v in half],
+                             "refl": float(refl), "kind": kind})
+        placed[where].append(kind)
+
+    def clear(x, z, hx, hz):     # on the desk, off the device, the keyboard and the hands
+        if abs(x) + hx > half_w - 0.02 or z - hz < 0.02 or z + hz > desk_d - 0.02:
+            return False
+        if abs(x - device_c[0]) < hx + DEVICE_HALF_M[0] + 0.03 and abs(z - device_c[2]) < hz + DEVICE_HALF_M[1] + 0.03:
+            return False
+        if abs(x - x0) < hx + 0.26 and z + hz > desk_d - 0.34 and z - hz < desk_d - 0.10:
+            return False
+        return not (abs(x - x0) < hx + 0.20 and z + hz > desk_d - 0.10)
+
+    def fits_view(x, z, top):    # `top` = height above the desk; beside the view, or low enough
+        vx, vz = x - px, z - pz
+        ang = np.degrees(np.arctan2(vx * fwd[2] - vz * fwd[0], vx * fwd[0] + vz * fwd[2]))
+        if abs(ang) > spec.fov_h_deg / 2 + 3.0:
+            return True
+        bottom = py + np.hypot(vx, vz) * np.tan(np.radians(-pose.pitch_down_deg - spec.fov_v_deg / 2))
+        return desk_h + top <= bottom + VIEW_INTRUDE_M
+
+    def put(kind, tries, draw):  # draw() -> (x, z, (hx, hy, hz), refl, centre height above the desk)
+        for _ in range(tries):
+            x, z, (hx, hy, hz), refl, yc = draw()
+            if clear(x, z, hx, hz) and fits_view(x, z, yc + hy):
+                box(kind, (x, desk_h + yc, z), (hx, hy, hz), refl, "desk")
+                return x, z
+        return None
+
+    def pick_side():
+        return 1.0 if rng.random() < 0.5 else -1.0
+
+    # --- on the desk
+    if rng.random() < 0.75:                                   # a monitor on a stand at the far edge
+        hy = _u(rng, 0.15, 0.22)
+        mon = put("monitor", 6, lambda: (x0 + rng.normal(0.0, 0.08), _u(rng, 0.06, 0.16),
+                                          (_u(rng, 0.25, 0.35), hy, 0.015), _u(rng, 0.05, 0.3), 0.10 + hy))
+        if mon is not None and rng.random() < 0.3:            # a second one beside it
+            s2 = pick_side()
+            put("monitor2", 4, lambda: (mon[0] + s2 * _u(rng, 0.55, 0.7), _u(rng, 0.06, 0.2),
+                                        (_u(rng, 0.25, 0.32), hy, 0.015), _u(rng, 0.05, 0.3), 0.10 + hy))
+    if rng.random() < 0.3:                                    # an open laptop to one side
+        s2 = pick_side()
+        for _ in range(6):
+            x, z = x0 + s2 * _u(rng, 0.45, 0.7), _u(rng, desk_d - 0.45, desk_d - 0.2)
+            if clear(x, z, 0.16, 0.11) and fits_view(x, z, 0.02) and fits_view(x, z - 0.105, 0.24):
+                box("laptop", (x, desk_h + 0.01, z), (0.16, 0.01, 0.11), _u(rng, 0.1, 0.5), "desk")
+                box("laptop_lid", (x, desk_h + 0.13, z - 0.105), (0.16, 0.11, 0.005), _u(rng, 0.05, 0.3), "desk")
+                break
+    if rng.random() < 0.6:                                    # a cup or a bottle within reach
+        s2, tall = pick_side(), rng.random() < 0.4
+        hy = _u(rng, 0.11, 0.14) if tall else _u(rng, 0.04, 0.06)
+        put("bottle" if tall else "cup", 8, lambda: (x0 + s2 * _u(rng, 0.30, 0.55), _u(rng, desk_d - 0.38, desk_d - 0.10),
+                                                     (0.035, hy, 0.035), _u(rng, 0.1, 0.7), hy))
+    if rng.random() < 0.5:                                    # a stack of books
+        s2, hy = pick_side(), _u(rng, 0.02, 0.08)
+        put("books", 8, lambda: (x0 + s2 * _u(rng, 0.35, 0.75), _u(rng, 0.08, desk_d - 0.12),
+                                 (_u(rng, 0.08, 0.12), hy, _u(rng, 0.10, 0.14)), _u(rng, 0.2, 0.8), hy))
+    if rng.random() < 0.4:                                    # a desk lamp: post and head
+        s2 = pick_side()
+        for _ in range(6):
+            x, z = x0 + s2 * _u(rng, 0.45, 0.8), _u(rng, 0.06, 0.3)
+            if clear(x, z, 0.07, 0.11) and fits_view(x, z + 0.06, 0.42):
+                box("lamp", (x, desk_h + 0.20, z), (0.02, 0.20, 0.02), 0.3, "desk")
+                box("lamp_head", (x, desk_h + 0.40, z + 0.06), (0.07, 0.02, 0.05), 0.3, "desk")
+                break
+    if rng.random() < 0.2:                                    # a bag dropped on the desk
+        s2, hy = pick_side(), _u(rng, 0.10, 0.16)
+        put("bag", 6, lambda: (x0 + s2 * _u(rng, 0.5, 0.9), _u(rng, 0.15, desk_d - 0.15),
+                               (_u(rng, 0.12, 0.18), hy, _u(rng, 0.06, 0.10)), _u(rng, 0.05, 0.4), hy))
+
+    # --- around the room
+    for s2 in (-1.0, 1.0):
+        if rng.random() < 0.35:                               # a bookshelf standing beside the desk
+            hy = _u(rng, 0.85, 1.05)
+            box("shelf", (s2 * (half_w + _u(rng, 0.45, 1.0)), hy, _u(rng, 0.3, max(0.4, min(chair_z + 0.5, room.wall_z - 0.5)))),
+                (0.15, hy, _u(rng, 0.35, 0.55)), _u(rng, 0.15, 0.7), "room")
+        elif rng.random() < 0.3:                              # a partition panel along the side of the desk
+            hy = _u(rng, 0.6, 0.8)
+            box("partition", (s2 * (half_w + 0.03), hy, desk_d / 2 + 0.15), (0.02, hy, _u(rng, 0.55, 0.75)),
+                _u(rng, 0.2, 0.6), "room")
+    if rng.random() < 0.3:                                    # a neighbour at the next desk (desk, torso, head)
+        s2 = pick_side()
+        nx = s2 * (half_w + _u(rng, 1.0, 1.6))
+        box("neighbor_desk", (nx, desk_h - 0.02, desk_d / 2), (0.6, 0.02, desk_d / 2), room.desk_refl, "room")
+        seat, nz = _u(rng, 0.42, 0.55), chair_z + _u(rng, -0.15, 0.2)
+        box("neighbor_torso", (nx, seat + 0.33, nz), (0.19, 0.30, 0.12), _u(rng, 0.08, 0.7), "room")
+        box("neighbor_head", (nx, seat + 0.78, nz - 0.02), (0.08, 0.11, 0.09), 0.3, "room")
+    if rng.random() < 0.4:                                    # a bookshelf against the back wall
+        hy = _u(rng, 0.9, 1.0)
+        box("back_shelf", (_u(rng, -1.5, 1.5), hy, room.wall_z - 0.16), (_u(rng, 0.4, 0.6), hy, 0.15), _u(rng, 0.15, 0.7), "room")
+    if rng.random() < 0.35:                                   # a window: glass returns nothing
+        box("window", (_u(rng, -1.4, 1.4), _u(rng, 1.3, 1.5), room.wall_z - 0.02),
+            (_u(rng, 0.5, 0.8), _u(rng, 0.45, 0.6), 0.01), 0.01, "room")
+    if rng.random() < 0.3:                                    # a plant in a corner
+        box("plant", (pick_side() * _u(rng, 1.0, 1.6), 0.45, _u(rng, chair_z + 0.4, max(chair_z + 0.5, room.wall_z - 0.3))),
+            (0.15, 0.45, 0.15), _u(rng, 0.2, 0.5), "room")
+    return placed
+
+
 def _plan_bystander(cfg: SessionConfig, total_s: float, rng) -> list:
-    """Second-person events: someone walks past behind the chair, or comes in from the side and
-    stands beside the desk for a while. Positions are in the body frame (x, z toward the user)."""
+    """Second-person events: someone walks past behind the chair, comes in from the side and stands
+    beside the desk (a chat, short or long), or comes up behind the shoulder and looks on for a
+    while. Positions are in the body frame (x, z toward the user)."""
     room, p = cfg.room, cfg.person
     chair_z = room.desk_depth + p.hip_z
-    out, t = [], _u(rng, 20.0, 150.0)
+    out, t = [], _u(rng, 10.0, 120.0)
     while t < total_s - 5.0:
-        kinds = ["enter_side"] + (["walk_behind"] if room.wall_z - chair_z >= 0.9 else [])
+        kinds = ["enter_side", "behind_shoulder"] + (["walk_behind"] if room.wall_z - chair_z >= 0.75 else [])
         kind = str(rng.choice(kinds))
         side, v = (1.0 if rng.random() < 0.5 else -1.0), _u(rng, 0.7, 1.4)
         if kind == "walk_behind":
-            ev = {"t0": t, "kind": kind, "side": side, "v": v, "z": _u(rng, chair_z + 0.5, room.wall_z - 0.35), "dur": 3.6 / v}
+            ev = {"t0": t, "kind": kind, "side": side, "v": v, "z": _u(rng, chair_z + 0.35, room.wall_z - 0.35), "dur": 3.6 / v}
         else:
-            x_stop, hold = _u(rng, 0.75, 1.0), _u(rng, 2.0, 12.0)
-            ev = {"t0": t, "kind": kind, "side": side, "v": v, "z": room.desk_depth + _u(rng, 0.1, 0.4),
+            if kind == "enter_side":
+                x_stop, hold, z = _u(rng, 0.55, 1.0), _u(rng, 2.0, 60.0), room.desk_depth + _u(rng, 0.1, 0.4)
+            else:
+                x_stop, hold, z = _u(rng, 0.3, 0.5), _u(rng, 3.0, 20.0), chair_z + _u(rng, 0.35, 0.6)
+            ev = {"t0": t, "kind": kind, "side": side, "v": v, "z": z,
                   "x_stop": x_stop, "hold": hold, "dur": 2 * (1.8 - x_stop) / v + hold}
         out.append(ev)
-        t += ev["dur"] + _u(rng, 60.0, 300.0)
+        t += ev["dur"] + _u(rng, 30.0, 240.0)
     return out
 
 

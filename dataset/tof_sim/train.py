@@ -37,7 +37,7 @@ import numpy as np
 
 from tofsim.data import build_valset, load_valset, worker_main
 from tofsim.sensor import PRESETS
-from tofsim.session import LABELS, PLACEMENT_MODES
+from tofsim.session import LABELS, PLACEMENT_MODES, SCENE_MODES
 
 # Windows starts worker processes by re-importing this file as "__mp_main__".
 # They only generate frames, so keep PyTorch out of them.
@@ -106,6 +106,8 @@ def main():
                          "might put it; unusable spots are labelled misplaced) | mixed (half and half)")
     ap.add_argument("--clutter", type=int, default=None,
                     help="boxes/shelves against the back wall, 0..N per session (default: session.CLUTTER_MAX)")
+    ap.add_argument("--scene", default="rich", choices=list(SCENE_MODES),
+                    help="rich: things on the desk and around the room, each by chance | plain: bare desk and wall")
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--init", default="", help="start from the weights of this checkpoint (any run; a head with "
                                                "fewer classes is widened). Not used when --resume finds ckpt_last.pt")
@@ -141,7 +143,8 @@ def main():
     # Validation sets: one drawn like the training sessions (it picks ckpt_best), plus the plain
     # arc when training elsewhere, so the cost on the demo placement stays visible.
     def val_file(placement):
-        tag = ("" if placement == "arc" else f"{placement}_") + ("" if args.clutter is None else f"clutter{args.clutter}_")
+        tag = (("" if placement == "arc" else f"{placement}_") + ("" if args.clutter is None else f"clutter{args.clutter}_")
+               + ("rich_" if args.scene == "rich" else ""))
         return os.path.join(HERE, "runs", f"valset_{args.backend}_{args.sensor}_{tag}{args.val_sessions}x{int(args.val_seconds)}.npz")
 
     vals = {}
@@ -151,7 +154,7 @@ def main():
             log(f"building validation set ({placement}) -> {path}")
             with ctx.Pool(args.workers) as pool:
                 build_valset(path, args.sensor, args.val_sessions, args.val_seconds, log=log, pool=pool,
-                             backend=args.backend, placement=placement, clutter_max=args.clutter)
+                             backend=args.backend, placement=placement, clutter_max=args.clutter, scene=args.scene)
         vals[placement] = load_valset(path)
         log(f"validation set ({placement}): {len(vals[placement]['label'])} frames, {len(vals[placement]['starts'])} sessions")
     val = vals[args.placement]
@@ -193,7 +196,7 @@ def main():
     def spawn(w):
         p = ctx.Process(target=worker_main, daemon=True,
                         args=(w, streams_of[w], queues[w], T, args.sensor, base_seed + 1_000 * w + int(time.time()) % 997,
-                              args.transition_weight, stop, args.backend, args.placement, args.clutter))
+                              args.transition_weight, stop, args.backend, args.placement, args.clutter, args.scene))
         p.start()
         return p
 
@@ -201,7 +204,7 @@ def main():
         procs.append(spawn(w))
     gpu = f" ({torch.cuda.get_device_name(dev)})" if dev.type == "cuda" else ""
     log(f"{W} workers, {B} streams x {T} frames per step, placement {args.placement}, clutter {args.clutter}, "
-        f"trainer on {dev}{gpu}")
+        f"scene {args.scene}, trainer on {dev}{gpu}")
 
     h = torch.zeros(1, B, model.gru.hidden_size, device=dev)
     interrupted = {"flag": False}
