@@ -81,8 +81,12 @@ def build_dataset(*, name: str, synthetic: str = "default,short,demo", seeds: st
                              "state_sha256": hashlib.sha256(state_path.read_bytes()).hexdigest(), "ticks": len(ticks)})
     if not sessions:
         raise ValueError("합성 시나리오 또는 로그가 하나 이상 필요합니다")
-    train_ids, test_ids = split_sessions([session[0] for session in sessions],
-                                         eval_fraction=eval_fraction, seed=seed)
+    # Offset variants must remain together across train/test.
+    from ml.training.train_common import group_id
+    groups = sorted({group_id(session[0]) for session in sessions})
+    train_groups, test_groups = split_sessions(groups, eval_fraction=eval_fraction, seed=seed)
+    train_ids = {session[0] for session in sessions if group_id(session[0]) in train_groups}
+    test_ids = {session[0] for session in sessions if group_id(session[0]) in test_groups}
     train_x, train_y, test_x, test_y, train_meta, test_meta = [], [], [], [], [], []
     for session_id, ticks, phases in sessions:
         labels, sources, missing = frames.label_ticks(ticks, phases, esm_records)

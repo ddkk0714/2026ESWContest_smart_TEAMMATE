@@ -12,19 +12,8 @@ from deskmate_hub.ingest import SensorCache
 from deskmate_hub.ingest.mqtt_lines import MqttLineSource, control_envelope, route_mqtt_message
 
 
-class ControlAwareCache(SensorCache):
-    """현재 main의 SensorCache에는 아직 control result 큐가 없으므로 라우터 계약만 검증한다."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.control_results = []
-
-    def put_control_result(self, payload):
-        self.control_results.append(payload)
-
-
 def test_line_source_routes_sensor_feedback_and_result():
-    cache = ControlAwareCache()
+    cache = SensorCache()
     src = MqttLineSource(cache)
     env = json.dumps({"schema_version": "1.0", "ts": 100.0, "node": "esp32-desk1", "seq": 3,
                       "data": {"present": True, "motion_state": "active", "motion_level": 40, "distance_cm": 55,
