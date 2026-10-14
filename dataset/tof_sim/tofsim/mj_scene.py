@@ -31,7 +31,7 @@ def _v(*a) -> str:
     return " ".join(f"{x:.4f}" for x in a)
 
 
-def build_mjcf(room: Room, person: Person) -> tuple[str, dict]:
+def build_mjcf(room: Room, person: Person, body=None) -> tuple[str, dict]:
     """Returns (xml, reflectivity by geom name)."""
     k = person.scale
     refl = {}
@@ -48,6 +48,8 @@ def build_mjcf(room: Room, person: Person) -> tuple[str, dict]:
     spine = 0.52 * k
     sh = person.shoulder_half * k
     ua, fa = 0.30 * k, 0.27 * k
+    if body is not None:                                       # SMPL-X skeleton lengths
+        spine, sh, ua, fa = body.spine, body.sh, body.ua, body.fa
 
     # --- static scene (group 0)
     geoms.append(geom("wall", room.wall_refl, type="box", size=_v(4.0, 0.05, 2.0), pos=_v(0, room.wall_z + 0.05, 1.5),
@@ -68,6 +70,7 @@ def build_mjcf(room: Room, person: Person) -> tuple[str, dict]:
         refl["chair_back"] = room.chair_refl
         chair = f"""
     <body name="chair" pos="{_v(person.x_offset, chair_y, seat_h)}">
+      <joint name="seat_tilt" type="hinge" axis="1 0 0" range="-0.5 0.1"/>
       <geom name="chair_seat" type="box" size="0.23 0.23 0.03" pos="0 0.02 -0.03" rgba="0.1 0.1 0.1 1" group="0"/>
       <body name="chair_backrest" pos="0 0.16 0.05">
         <joint name="chair_tilt" type="hinge" axis="1 0 0" range="-0.8 0.1"/>
@@ -81,8 +84,10 @@ def build_mjcf(room: Room, person: Person) -> tuple[str, dict]:
         return geom(name, refl_value, **attrs)
 
     hip_z = seat_h + 0.10 * k
-    head_pos = (0, -0.01 * k, 0.09 * k + 0.10 * k)
-    head_size = (0.075 * k, 0.095 * k, 0.11 * k)
+    g = person.girth                     # thickness: torso depth, neck/arm/leg radii
+    hk = k * person.head_scale           # head and hair size (the neck stays as it is)
+    head_pos = (0, -0.01 * hk, 0.09 * k + 0.10 * hk)
+    head_size = (0.075 * hk * person.head_width, 0.095 * hk, 0.11 * hk)
     hair_size = (head_size[0] * 1.06, head_size[1] * 1.04, head_size[2] * (0.98 * person.hair_cover + 0.2))
     skin, cloth, hair = person.skin_refl, person.torso_refl, person.hair_refl
 
@@ -90,10 +95,10 @@ def build_mjcf(room: Room, person: Person) -> tuple[str, dict]:
         return f"""
         <body name="uarm_{side}" pos="{_v(sx, 0, spine - 0.03 * k)}">
           <joint name="shoulder_{side}" type="ball"/>
-          {pg(f"uarm_{side}", cloth, type="capsule", fromto=_v(0, 0, 0, 0, 0, -ua), size=_v(0.045 * k), rgba="0.3 0.4 0.7 1")}
+          {pg(f"uarm_{side}", cloth, type="capsule", fromto=_v(0, 0, 0, 0, 0, -ua), size=_v(0.045 * k * g), rgba="0.3 0.4 0.7 1")}
           <body name="farm_{side}" pos="{_v(0, 0, -ua)}">
             <joint name="elbow_{side}" type="hinge" axis="1 0 0"/>
-            {pg(f"farm_{side}", skin, type="capsule", fromto=_v(0, 0, 0, 0, 0, -fa), size=_v(0.038 * k), rgba="0.9 0.75 0.65 1")}
+            {pg(f"farm_{side}", skin, type="capsule", fromto=_v(0, 0, 0, 0, 0, -fa), size=_v(0.038 * k * g), rgba="0.9 0.75 0.65 1")}
             <body name="hand_{side}" pos="{_v(0, 0, -fa)}">
               {pg(f"hand_{side}", skin, type="ellipsoid", size=_v(0.045 * k, 0.02 * k, 0.05 * k), pos=_v(0, 0, -0.05 * k),
                   rgba="0.9 0.75 0.65 1")}
@@ -104,43 +109,60 @@ def build_mjcf(room: Room, person: Person) -> tuple[str, dict]:
 
     legs = "".join(
         f"""
-        {pg(f"thigh_{s}", cloth, type="capsule", fromto=_v(sx, 0, 0, sx, -0.42 * k, -0.02), size=_v(0.07 * k), rgba="0.2 0.2 0.3 1")}
-        {pg(f"shin_{s}", cloth, type="capsule", fromto=_v(sx, -0.42 * k, -0.02, sx, -0.37 * k, -0.47 * k), size=_v(0.055 * k),
+        {pg(f"thigh_{s}", cloth, type="capsule", fromto=_v(sx, 0, 0, sx, -0.42 * k, -0.02), size=_v(0.07 * k * g), rgba="0.2 0.2 0.3 1")}
+        {pg(f"shin_{s}", cloth, type="capsule", fromto=_v(sx, -0.42 * k, -0.02, sx, -0.37 * k, -0.47 * k), size=_v(0.055 * k * g),
             rgba="0.2 0.2 0.3 1")}"""
         for s, sx in (("l", 0.10), ("r", -0.10)))
+
+    ws, wr = room.walker_scale, room.walker_refl
+    walker = f"""
+    <body name="walker" mocap="true" pos="0 0 -10">
+      {geom("walker_leg_l", wr, type="capsule", fromto=_v(0.10, 0, 0.05, 0.10, 0, 0.78 * ws), size=_v(0.075), rgba="0.25 0.25 0.3 1", group="3")}
+      {geom("walker_leg_r", wr, type="capsule", fromto=_v(-0.10, 0, 0.05, -0.10, 0, 0.78 * ws), size=_v(0.075), rgba="0.25 0.25 0.3 1", group="3")}
+      {geom("walker_torso", wr, type="capsule", fromto=_v(0, 0, 0.80 * ws, 0, 0, 1.40 * ws), size=_v(0.17), rgba="0.45 0.35 0.3 1", group="3")}
+      {geom("walker_head", 0.35, type="sphere", pos=_v(0, 0, 1.58 * ws), size=_v(0.11), rgba="0.9 0.75 0.65 1", group="3")}
+    </body>"""
 
     person_xml = f"""
     <body name="pelvis" pos="{_v(person.x_offset, chair_y, hip_z)}">
       <joint name="hip_shift" type="slide" axis="0 1 0" range="-0.3 0.8"/>
+      <joint name="pelvis_tilt" type="hinge" axis="1 0 0" range="-0.5 0.1"/>
       {legs}
       <body name="trunk">
         <joint name="trunk_pitch" type="hinge" axis="1 0 0"/>
         <joint name="trunk_roll" type="hinge" axis="0 1 0"/>
         <body name="chest">
           <joint name="breath" type="slide" axis="0 -1 0"/>
-          {pg("torso", cloth, type="ellipsoid", size=_v(sh * 0.95, 0.11 * k, spine * 0.55), pos=_v(0, 0, spine * 0.55),
+          {pg("torso", cloth, type="ellipsoid", size=_v(sh * 0.95, 0.11 * k * g, spine * 0.55), pos=_v(0, 0, spine * 0.55),
               rgba="0.3 0.4 0.7 1")}
         </body>
         <body name="head" pos="{_v(0, 0, spine)}">
           <joint name="neck_pitch" type="hinge" axis="1 0 0"/>
           <joint name="head_yaw" type="hinge" axis="0 0 1"/>
           <joint name="head_roll" type="hinge" axis="0 1 0"/>
-          {pg("neck", skin, type="capsule", fromto=_v(0, 0, 0, 0, 0, 0.09 * k), size=_v(0.05 * k), rgba="0.9 0.75 0.65 1")}
+          {pg("neck", skin, type="capsule", fromto=_v(0, 0, 0, 0, 0, 0.09 * k), size=_v(0.05 * k * g), rgba="0.9 0.75 0.65 1")}
           {pg("head", skin, type="ellipsoid", size=_v(*head_size), pos=_v(*head_pos), rgba="0.9 0.75 0.65 1")}
           {pg("hair", hair, type="ellipsoid", size=_v(*hair_size),
-              pos=_v(head_pos[0], head_pos[1] + 0.012 * k, head_pos[2] + 0.02 * k), rgba="0.1 0.08 0.05 1")}
-          <site name="chin" pos="{_v(0, -0.06 * k, head_pos[2] - 0.10 * k)}"/>
-          <site name="mouth" pos="{_v(0, -0.09 * k, head_pos[2] - 0.05 * k)}"/>
+              pos=_v(head_pos[0], head_pos[1] + 0.012 * hk, head_pos[2] + 0.02 * hk), rgba="0.1 0.08 0.05 1")}
+          <site name="chin" pos="{_v(0, -0.06 * hk, head_pos[2] - 0.10 * hk)}"/>
+          <site name="mouth" pos="{_v(0, -0.09 * hk, head_pos[2] - 0.05 * hk)}"/>
         </body>
         {arm("l", sh)}
         {arm("r", -sh)}
       </body>
     </body>"""
 
+    assets = ""
+    if body is not None:
+        from . import smplx_body as sb
+        assets = sb.mesh_assets(body)
+        person_xml = _mesh_person_xml(person, body, pg, chair_y, hip_z)
+
     xml = f"""
 <mujoco model="deskmate_tof">
   <compiler angle="radian" autolimits="true" boundmass="0.01" boundinertia="0.0001"/>
   <option gravity="0 0 0"/>
+  <asset>{assets}</asset>
   <visual>
     <global offwidth="960" offheight="720"/>
     <headlight ambient="0.35 0.35 0.35" diffuse="0.55 0.55 0.55"/>
@@ -152,10 +174,123 @@ def build_mjcf(room: Room, person: Person) -> tuple[str, dict]:
       <geom name="monitor" type="box" size="0.30 0.02 0.20" rgba="0.05 0.05 0.05 1" group="2"/>
     </body>
     {chair}
+    {walker}
     {person_xml}
   </worldbody>
 </mujoco>"""
     return xml, refl
+
+
+def _mesh_person_xml(person: Person, body, pg, chair_y: float, hip_z: float) -> str:
+    """The person body tree with SMPL-X mesh pieces instead of capsules (same joints and sites)."""
+    skin, cloth, hair = person.skin_refl, person.torso_refl, person.hair_refl
+    P = body.parts
+
+    def mesh(name, refl_value, at_origin=True, rgba="0.3 0.4 0.7 1"):
+        # the piece's vertices are already in the body frame (smplx_body.make), so no rotation here
+        p = P[name]
+        pos = (0.0, 0.0, 0.0) if at_origin else tuple(p.offset)
+        return pg(name, refl_value, type="mesh", mesh=f"sx_{name}", pos=_v(*pos), rgba=rgba)
+
+    # Inner core: an invisible, slightly smaller capsule body inside the mesh skin. Rigid pieces
+    # open a little where a limb turns; a ray slipping through such a seam then stops on the core,
+    # one or two centimetres under the skin, instead of crossing to the far inner surface.
+    k = person.scale
+    HIDE = "0.3 0.3 0.3 0"
+
+    def core(name, refl_value, **attrs):
+        return pg(name, refl_value, rgba=HIDE, **attrs)
+
+    def arm(side):
+        o = P[f"uarm_{side}"].offset
+        return f"""
+        <body name="uarm_{side}" pos="{_v(*o)}">
+          <joint name="shoulder_{side}" type="ball"/>
+          {mesh(f"uarm_{side}", cloth)}
+          {core(f"core_uarm_{side}", cloth, type="capsule", fromto=_v(0, 0, 0.02 * k, 0, 0, -body.ua), size=_v(0.040 * k))}
+          <body name="farm_{side}" pos="{_v(0, 0, -body.ua)}">
+            <joint name="elbow_{side}" type="hinge" axis="1 0 0"/>
+            {mesh(f"farm_{side}", skin, rgba="0.9 0.75 0.65 1")}
+            {core(f"core_farm_{side}", skin, type="capsule", fromto=_v(0, 0, 0, 0, 0, -body.fa), size=_v(0.034 * k))}
+            <body name="hand_{side}" pos="{_v(0, 0, -body.fa)}">
+              {mesh(f"hand_{side}", skin, rgba="0.9 0.75 0.65 1")}
+              {core(f"core_hand_{side}", skin, type="ellipsoid", size=_v(0.038 * k, 0.014 * k, 0.045 * k), pos=_v(0, 0, -0.05 * k))}
+              <site name="wrist_{side}" pos="0 0 0"/>
+            </body>
+          </body>
+        </body>"""
+
+    cap = mesh("hair", hair, rgba="0.1 0.08 0.05 1")                 # scalp piece of the head mesh, dark at 940 nm
+    jaw = body.joints[22] - body.joints[12]
+    legs = "".join(mesh(n, cloth, at_origin=False, rgba="0.2 0.2 0.3 1") for n in ("thigh_l", "shin_l", "thigh_r", "shin_r"))
+    for s in ("l", "r"):
+        hip, knee = P[f"thigh_{s}"].offset, P[f"shin_{s}"].offset
+        legs += core(f"core_thigh_{s}", cloth, type="capsule", fromto=_v(*hip, *knee), size=_v(0.062 * k))
+        legs += core(f"core_shin_{s}", cloth, type="capsule", fromto=_v(*knee, knee[0], knee[1], knee[2] - 0.42 * k), size=_v(0.048 * k))
+    legs += core("core_pelvis", cloth, type="ellipsoid", size=_v(0.13 * k, 0.095 * k, 0.09 * k), pos=_v(0, 0, 0.02 * k))
+    hv_ = P["head"].verts
+    hlo, hhi = hv_.min(0), hv_.max(0)
+    head_core = core("core_head", skin, type="ellipsoid", size=_v(*(0.45 * (hhi - hlo))), pos=_v(*(0.5 * (hlo + hhi))))
+    trunk_core = core("core_trunk", cloth, type="ellipsoid", size=_v(body.sh * 0.92, 0.10 * k, body.spine * 0.52),
+                      pos=_v(0, 0, body.spine * 0.53))
+    return f"""
+    <body name="pelvis" pos="{_v(person.x_offset, chair_y, hip_z)}">
+      <joint name="hip_shift" type="slide" axis="0 1 0" range="-0.3 0.8"/>
+      <joint name="pelvis_tilt" type="hinge" axis="1 0 0" range="-0.5 0.1"/>
+      {mesh("pelvis", cloth, rgba="0.2 0.2 0.3 1")}
+      {legs}
+      <body name="trunk">
+        <joint name="trunk_pitch" type="hinge" axis="1 0 0"/>
+        <joint name="trunk_roll" type="hinge" axis="0 1 0"/>
+        <body name="chest">
+          <joint name="breath" type="slide" axis="0 -1 0"/>
+          {mesh("trunk", cloth)}
+          {trunk_core}
+        </body>
+        <body name="head" pos="{_v(*P["head"].offset)}">
+          <joint name="neck_pitch" type="hinge" axis="1 0 0"/>
+          <joint name="head_yaw" type="hinge" axis="0 0 1"/>
+          <joint name="head_roll" type="hinge" axis="0 1 0"/>
+          {mesh("head", skin, rgba="0.9 0.75 0.65 1")}
+          {cap}
+          {head_core}
+          {core("core_neck", skin, type="capsule", fromto=_v(0, 0, -0.02 * k, 0, 0, 0.08 * k), size=_v(0.045 * k))}
+          <site name="chin" pos="{_v(jaw[0], jaw[1] - 0.07, jaw[2] - 0.05)}"/>
+          <site name="mouth" pos="{_v(jaw[0], jaw[1] - 0.09, jaw[2])}"/>
+        </body>
+        {arm("l")}
+        {arm("r")}
+      </body>
+    </body>"""
+
+
+def _elbow_on_plane(S, W, L1, L2, z, y_max):
+    """Elbow E with |E - S| = L1, |E - W| = L2 and E[2] = z, in front of the desk edge (E[1] <= y_max).
+
+    The two candidates lie on the circle where the two spheres meet; the one further toward the
+    desk (smaller y) is returned, or None if there is none.
+    """
+    v = W - S
+    D = float(np.linalg.norm(v))
+    if D < 1e-6 or D > L1 + L2 or D < abs(L1 - L2):
+        return None
+    n = v / D
+    a = (L1 * L1 - L2 * L2 + D * D) / (2 * D)
+    h = math.sqrt(max(L1 * L1 - a * a, 0.0))
+    c = S + a * n
+    u = np.cross(n, [0.0, 0.0, 1.0])
+    if np.linalg.norm(u) < 1e-6:
+        u = np.array([1.0, 0.0, 0.0])
+    u /= np.linalg.norm(u)
+    w = np.cross(n, u)
+    A, B, C = h * u[2], h * w[2], z - c[2]          # A cos t + B sin t = C
+    R = math.hypot(A, B)
+    if R < 1e-9 or abs(C) > R:
+        return None
+    base, dlt = math.atan2(B, A), math.acos(C / R)
+    cands = [c + h * (math.cos(t) * u + math.sin(t) * w) for t in (base + dlt, base - dlt)]
+    cands = [e for e in cands if e[1] <= y_max]
+    return min(cands, key=lambda e: e[1]) if cands else None
 
 
 def _quat_from_mat(R: np.ndarray) -> np.ndarray:
@@ -169,7 +304,12 @@ class MjDesk:
 
     def __init__(self, room: Room, person: Person):
         self.room, self.person = room, person
-        xml, refl = build_mjcf(room, person)
+        body = None
+        if getattr(person, "smplx", None):
+            from . import smplx_body as sb
+            body = sb.make_cached(person.smplx["gender"], tuple(person.smplx["betas"]), round(person.hair_cover, 3))
+        self.body_mesh = body
+        xml, refl = build_mjcf(room, person, body)
         self.xml = xml
         self.model = mujoco.MjModel.from_xml_string(xml)
         self.data = mujoco.MjData(self.model)
@@ -184,11 +324,16 @@ class MjDesk:
         self.monitor = self.body("monitor")
         self.present = True
         k = person.scale
-        self.ua, self.fa = 0.30 * k, 0.27 * k
-        self._geomgroup_all = np.array([1, 1, 0, 0, 0, 0], dtype=np.uint8)     # group 2 = monitor, never hit
-        self._geomgroup_empty = np.array([1, 0, 0, 0, 0, 0], dtype=np.uint8)
+        self.ua, self.fa = (body.ua, body.fa) if body is not None else (0.30 * k, 0.27 * k)
+        self._geomgroup_all = np.array([1, 1, 0, 1, 0, 0], dtype=np.uint8)     # group 2 = monitor, never hit; 3 = bystander
+        self._geomgroup_empty = np.array([1, 0, 0, 1, 0, 0], dtype=np.uint8)
+        self._walker = self.model.body_mocapid[self.body("walker")]
 
     # ------------------------------------------------------------------ pose
+    def set_walker(self, pos):
+        """Bystander at body-frame (x, z toward the user) on the floor, or parked under the floor."""
+        self.data.mocap_pos[self._walker] = (0.0, 0.0, -10.0) if pos is None else (pos[0], pos[1], 0.0)
+
     def set_pose(self, pose: Pose | None):
         m, d = self.model, self.data
         d.qpos[:] = 0.0
@@ -196,6 +341,7 @@ class MjDesk:
             d.qpos[self.jnt[f"shoulder_{side}"]] = 1.0        # identity quaternion
         if pose is None:
             self.present = False
+            self._chin = None
             mujoco.mj_kinematics(m, d)
             return
         self.present = True
@@ -207,11 +353,56 @@ class MjDesk:
         q[j["neck_pitch"]] = pose.neck_pitch
         q[j["head_yaw"]] = pose.head_yaw
         q[j["head_roll"]] = -pose.head_roll
+        # office-chair recline: the seat tips back about a third of the lean (knees rise), the
+        # backrest follows the trunk; the trunk still ends at the requested world angle
+        seat = 0.35 * min(0.0, pose.trunk_pitch)
+        q[j["pelvis_tilt"]] = seat
+        q[j["trunk_pitch"]] = pose.trunk_pitch - seat
         if "chair_tilt" in j:
-            q[j["chair_tilt"]] = min(0.0, pose.trunk_pitch)
+            q[j["seat_tilt"]] = seat
+            q[j["chair_tilt"]] = min(0.0, pose.trunk_pitch) - seat
         mujoco.mj_kinematics(m, d)
+        self._chin = self._settle_chin(pose) if pose.arms in self.CHIN_ARMS else None
         self._place_arms(pose)
         mujoco.mj_kinematics(m, d)
+
+    # propping arm(s) for each chin mode: (side, +1 for the arm at +x)
+    CHIN_ARMS = {"chin_right": (("l", 1.0),), "chin_left": (("r", -1.0),), "chin_both": (("l", 1.0), ("r", -1.0))}
+
+    def _chin_arms(self, mode):
+        """{side: (wrist, elbow)} for the propping arm(s) with the elbow on the desk top, in the
+        current trunk pose, or None if an arm cannot reach."""
+        d, room, p = self.data, self.room, self.person
+        k = p.scale
+        chin = d.site_xpos[self.site("chin")]
+        z_el = room.desk_height + 0.038 * k * p.girth            # forearm resting on the desk top
+        out = {}
+        for side, sign in self.CHIN_ARMS[mode]:
+            S = d.xpos[self.body(f"uarm_{side}")].copy()
+            dx = 0.035 * sign if mode == "chin_both" else 0.0
+            W = chin + np.array([dx, 0.02, -0.08 * k])             # wrist under the chin, hand up to it
+            E = _elbow_on_plane(S, W, self.ua, self.fa, z_el, room.desk_depth - 0.03)
+            if E is None or abs(E[0]) > room.desk_width / 2 - 0.02:
+                return None
+            out[side] = (W, E)
+        return out
+
+    def _settle_chin(self, pose: Pose):
+        """Bend the trunk forward (and slide the chair) until the propping elbow(s) can rest on the
+        desk. Returns _chin_arms() of the pose found, or None (the arm then floats as before)."""
+        m, d = self.model, self.data
+        q, j = d.qpos, self.jnt
+        base_p, base_h = float(q[j["trunk_pitch"]]), float(q[j["hip_shift"]])
+        for dh in (0.0, -0.06, 0.06, -0.12, 0.12):
+            for dp in np.radians([0, 2.5, -2.5, 5, -5, 7.5, 10, 12.5, 15, 17.5, 20, 22.5, 25, 30, 35]):
+                q[j["trunk_pitch"]], q[j["hip_shift"]] = base_p + dp, base_h + dh
+                mujoco.mj_kinematics(m, d)
+                arms = self._chin_arms(pose.arms)
+                if arms is not None:
+                    return arms
+        q[j["trunk_pitch"]], q[j["hip_shift"]] = base_p, base_h
+        mujoco.mj_kinematics(m, d)
+        return None
 
     def _place_arms(self, pose: Pose):
         d, room, p = self.data, self.room, self.person
@@ -221,19 +412,22 @@ class MjDesk:
         mouth = d.site_xpos[self.site("mouth")].copy()
         trunk_R = d.xmat[self.body("trunk")].reshape(3, 3)
         kb_y = room.desk_depth - 0.20 + pose.arm_jitter
+        chin_sides = {s for s, _ in self.CHIN_ARMS.get(pose.arms, ())}
         for side, sign in (("l", 1.0), ("r", -1.0)):     # "l" = person's left = sensor's right (+x)
             S = d.xpos[self.body(f"uarm_{side}")].copy()
             mode = pose.arms
-            active_chin = (mode == "chin_right" and side == "l") or (mode == "chin_left" and side == "r")
             active_cup = mode == "cup_right" and side == "l"
-            if active_chin:
-                W = chin + np.array([0.0, 0.02, -0.03])
+            if side in chin_sides and self._chin is not None:
+                W, E = self._chin[side]
+                pole = E                                   # |E-S| = upper arm, |E-W| = forearm: the elbow lands on E
+            elif side in chin_sides:                       # no reachable desk point: hand to the chin, elbow free
+                W = chin + np.array([0.035 * sign if mode == "chin_both" else 0.0, 0.02, -0.03])
                 pole = np.array([S[0] * 0.6 + chin[0] * 0.4, room.desk_depth - 0.12, desk_top])
             elif active_cup:
                 W = mouth + np.array([0.0, -0.05, -0.02])
                 pole = S + np.array([0.08 * sign, 0.05, -0.4])
             else:
-                if mode in ("chin_right", "chin_left", "cup_right"):
+                if mode in self.CHIN_ARMS or mode == "cup_right":
                     mode = pose.other_arms     # the arm that is not propping the chin / holding the cup
                 W, pole = self._arm_target(mode, side, sign, S, trunk_R, kb_y, desk_top)
             self._ik_arm(side, S, W, pole, trunk_R)
@@ -270,8 +464,26 @@ class MjDesk:
             # arms hanging down at the sides of the chair
             W = S + np.array([0.06 * sign, 0.04, -(self.ua + self.fa) * 0.97])
             pole = S + np.array([0.05 * sign, 0.15, -0.30])
+        elif mode == "writing":
+            # pen hand (the person's right, at -x) on the paper in front of them; the other hand
+            # rests flat on the sheet a little further out and forward
+            if sign < 0:
+                W = np.array([p.x_offset - 0.10, kb_y - 0.02, desk_top + 0.015])
+            else:
+                W = np.array([p.x_offset + 0.17, kb_y + 0.05, desk_top + 0.0])
         else:  # typing
             W = np.array([S[0] * 0.55, kb_y, desk_top + 0.03])
+        if mode in ("typing", "writing"):
+            # Keep the elbow bent: a keyboard beyond the relaxed reach is not chased with a
+            # straight arm; the hands rest nearer on the desk (between keyboard and desk edge).
+            R = p.reach * (self.ua + self.fa)
+            dx, dz = float(W[0] - S[0]), float(W[2] - S[2])
+            hy = math.sqrt(max(R * R - dx * dx - dz * dz, 0.0))
+            if S[1] - W[1] > hy:                          # the person faces -y
+                W[1] = min(S[1] - hy, room.desk_depth - 0.03)
+            if np.linalg.norm(W - S) > 0.97 * (self.ua + self.fa):
+                # even the desk edge is out of easy reach (chair far back): hands rest on the lap
+                return self._arm_target("lap", side, sign, S, trunk_R, kb_y, desk_top)
             pole = S + np.array([0.06 * sign, 0.10, -0.35])
         return W, pole
 
@@ -304,6 +516,11 @@ class MjDesk:
             nx, ny, nz = -uz, 0.0, ux                                    # u × (0,1,0)
             nn = math.sqrt(nx * nx + nz * nz) or 1.0
         nx, ny, nz = nx / nn, ny / nn, nz / nn
+        # Keep the arm's roll fixed: the hinge axis (local x) always points to the person's left,
+        # which is how the mesh pieces were cut. Otherwise the arm can end up twisted half a turn
+        # (palms out, thumbs out) while the capsules looked the same.
+        if nx < 0 or (abs(nx) < 1e-6 and ny > 0):
+            nx, ny, nz = -nx, -ny, -nz
         zx, zy, zz = -ux, -uy, -uz                                       # arm points along local -z
         yx, yy, yz = zy * nz - zz * ny, zz * nx - zx * nz, zx * ny - zy * nx   # y = z × x
         R_ua = np.array([[nx, yx, zx], [ny, yy, zy], [nz, yz, zz]])
@@ -335,7 +552,8 @@ def sensor_frame(pose) -> tuple[np.ndarray, np.ndarray]:
     """SensorPose (body.py coordinates) -> (origin, R local(right, up, forward) -> MuJoCo world)."""
     X, Y, Z = pose.position
     origin = np.array([X, Z, Y], dtype=np.float64)
-    p, yaw, r = np.radians([pose.pitch_down_deg, pose.yaw_deg, pose.roll_deg + (180.0 if pose.upside_down else 0.0)])
+    # yaw and roll are negated so both backends agree with sensor._rot (+yaw turns the beam toward +x)
+    p, yaw, r = np.radians([pose.pitch_down_deg, -pose.yaw_deg, -pose.roll_deg + (180.0 if pose.upside_down else 0.0)])
     B = np.array([[1, 0, 0], [0, 0, 1], [0, 1, 0]], dtype=float)   # columns: right=x, up=z, forward=y
     cp, sp = np.cos(-p), np.sin(-p)
     Rx = np.array([[1, 0, 0], [0, cp, -sp], [0, sp, cp]])          # about x: -pitch tips forward down

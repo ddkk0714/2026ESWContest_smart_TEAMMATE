@@ -1,9 +1,23 @@
-# tof_sim — 합성 ToF 데이터로 자세·졸음 분류기 학습
+# tof-sim — 합성 ToF 데이터로 자세·졸음 분류기 학습
 
 책상 앞 사람을 **MuJoCo** 관절 모델로 만들고, 가상 VL53L8CX(또는 VL53L9CX 축소 격자)로 읽어
 **정답이 붙은 프레임을 끝없이** 만든다. 그 프레임으로 작은 스트리밍 분류기를 계속 학습한다.
-펌웨어 규칙 판정(`firmware/.../preprocess/tof/TofPosture`)도 같은 데이터로 채점해 둘을 비교한다.
+펌웨어 규칙 판정(`rules/TofPosture`)도 같은 데이터로 채점해 둘을 비교한다.
 MuJoCo 뷰어로 사람이 움직이는 모습과 센서 빔이 맞는 자리를 직접 볼 수 있다.
+
+DESKMATE 팀 레포(`2026ESWContest_smart_TEAMMATE`)의 `dataset/tof_sim` 을 커밋 기록째 떼어낸 독립 레포다.
+학습 서버에서는 이 레포만 받으면 된다.
+
+```
+git clone <이 레포 주소> tof-sim && cd tof-sim
+bash setup.sh                                   # 리눅스: 가상환경·패키지 설치 (한 번)
+sbatch --export=ALL,RUN=ubai_v1,TOTAL_H=336 slurm_train.sh   # Slurm (UBAI cpu2 기준으로 맞춰 둠)
+bash run_forever.sh ubai_v1 336                 # Slurm 이 아닌 서버·PC
+```
+
+`rules/TofPosture.{h,cpp}` 는 팀 레포 `firmware/esp32_sensor_node/src/preprocess/tof/` 의 사본이다
+(팀 레포 커밋 250f801 기준). 팀 레포의 최신 펌웨어로 채점하려면 `TOFPOSTURE_SRC=<그 폴더>` 를 주고
+`tools/rule_replay(.exe)` 를 지운 뒤 `eval_rules.py` 를 실행한다.
 
 > **시뮬 결과는 실제 성능이 아니다.** 센서 잡음·반사율·사람 움직임 모델은 그럴듯한 가정이고 실측으로
 > 맞추지 않았다. 실제 판단은 실측 데이터(`depth_teacher` 라벨 + 동시 녹화)로 한다(아래 "실측으로 확인").
@@ -19,11 +33,11 @@ tofsim/body.py     numpy 백엔드 사람·방 모델, 그리고 두 백엔드�
 tofsim/sensor.py   다중 zone direct ToF 모델 — zone 당 k×k 부광선, 60 cm 안쪽 표면은 한 봉우리로
                    합쳐짐(혼합 픽셀), 신호 ∝ 반사율×cos(입사각)/거리², 가장 가까운 유효 봉우리 보고
                    (Closest), 신호 대 문턱 비에 따른 거리 잡음·상태값(5/9/6/10/4/255)·결측
-tofsim/session.py  세션 무작위화(체격·옷/머리 반사율·의자·책상·벽·센서 높이/각도·주변광)와
+tofsim/session.py  세션 무작위화(체격·옷/머리 반사율·의자·책상·벽·센서 배치 arc/random·주변광)와
                    자세 타임라인(바른자세·상체 앞으로·젖힘·엎드림·턱괴기·꾸벅 졸음·자리비움)
                    + 헷갈리는 동작(키보드 힐끗·컵 마시기·고개 돌리기·타이핑·호흡·흔들림)
 tofsim/data.py     모델 입력 변환, 워커 프로세스 스트리밍, 고정 검증셋
-tofsim/model.py    프레임마다 작은 CNN → GRU → 7클래스 (약 7만 파라미터, MCU 탑재 크기)
+tofsim/model.py    프레임마다 작은 CNN → GRU → 8클래스 (약 7만 파라미터, MCU 탑재 크기)
 train.py           무한 학습 루프 (체크포인트·재개·평가·최고 모델·로그)
 eval_rules.py      펌웨어 규칙 판정을 같은 검증셋으로 채점
 preview.py         자세별 프레임 눈으로 확인, 생성 속도 측정
@@ -35,7 +49,8 @@ run_forever.ps1    정해진 시간 동안 train.py 를 계속 돌림 (죽으면
 백엔드는 `--backend mujoco`(기본)와 `--backend numpy` 가 있다. 같은 센서 모델·타임라인·라벨을 쓰고
 장면·광선 계산만 다르다. 이 노트북 기준 워커 1개가 MuJoCo 약 240 f/s, numpy 약 100 f/s.
 
-라벨은 펌웨어 enum 과 같다: `0 upright · 1 lean_forward · 2 recline · 3 face_down · 4 chin_rest · 5 drowsy · 6 away`.
+라벨은 펌웨어 enum 에 하나를 더한 것이다: `0 upright · 1 lean_forward · 2 recline · 3 face_down · 4 chin_rest · 5 drowsy · 6 away · 7 misplaced`.
+`misplaced` 는 자세가 아니라 "장치를 다시 놓으라"는 뜻이다(거꾸로·너무 가까이·너무 멀리·옆을 봄·많이 기울임). `--placement random` 에서만 나온다(아래 "센서 배치").
 졸음 구간에서 첫 끄덕임 전 프레임은 `upright` 로 둔다 — 센서로 볼 수 없는 라벨은 학습 잡음이다.
 
 ## 설치
@@ -45,6 +60,7 @@ python -m venv .venv
 .venv\Scripts\python -m pip install "numpy>=1.26,<2.0"
 .venv\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 .venv\Scripts\python -m pip install mujoco
+.venv\Scripts\python -m pip install onnx onnxruntime        # export.py 의 ONNX 내보내기와 확인용
 ```
 
 규칙 판정 채점(`eval_rules.py`)은 `g++` 가 있어야 한다(처음 실행할 때 `tools/rule_replay.exe` 를 빌드).
@@ -79,6 +95,40 @@ sbatch --export=ALL,RUN=mj_trial,TOTAL_H=336 slurm_train.sh   # 이어서 할 �
 
 `slurm_train.sh` 는 작업 하나가 시간 제한으로 끝나면 전체 마감(`TOTAL_H`) 전까지 자기 자신을 다시
 제출한다. 연속 5번 실패하면 스스로 멈춘다.
+
+### 센서 배치 (`--placement`)
+
+| 모드 | 뜻 |
+|---|---|
+| `arc` (기본) | 시연 배치. 턱에서 0.60~1.10 m 떨어진 호 위 7자리 중 하나, 사용자를 정확히 향함(조준 오차 sd 2°). 책상·키보드가 보이면 다시 뽑는다 |
+| `random` | 실제 사용자가 놓듯이. 거리 0.35~1.45 m, 방위 ±60°, 조준 오차 sd 6°, 기울기 오차 sd 3°, 25% 는 3~15 cm 받침 위, 15% 는 일부러 잘못 놓음(거꾸로·너무 가까이·너무 멀리·옆을 봄·많이 기울임). 책상·키보드가 보여도 그대로 쓴다 |
+| `mixed` | 세션마다 `arc` / `random` 반반 |
+
+`random` 에서 바른자세 머리 중심이 센서에서 0.45~1.30 m 를 벗어나거나, 시야 밖으로 나가거나(가로는 가장자리에서 4° 안쪽까지),
+장치가 뒤집혀 있으면 그 세션은 `misplaced` 다. 자리비움 구간까지 세션의 모든 프레임이 그 라벨이다(한 세션 안에서 빈 화면이
+`away` 와 `misplaced` 두 라벨을 갖지 않도록). 세션의 약 1/4 이 그렇게 나온다(센서 하나 기준; 장치의 두 센서 중 한쪽만 옆을
+보는 경우도 그 센서는 `misplaced` 다). 기준은 `tofsim/session.py` 의 `OK_*`, 뽑는 분포는 `RANDOM_*` 상수.
+
+검증셋은 학습 배치 모드 것(이걸로 `ckpt_best` 를 고름)과 `arc` 것을 둘 다 만들어 매 평가 때 같이 찍는다.
+파일 이름에 모드가 붙는다(`valset_mujoco_vl53l8cx_random_24x300.npz`); `arc` 는 예전 이름 그대로라 캐시가 유지된다.
+
+```
+.venv\Scripts\python train.py --run l8_random --placement random --init ..\tof-sim_ubai_v3\ckpt_best.pt   # 표준 모델에서 이어서 (7클래스 head 는 8클래스로 넓혀 줌)
+.venv\Scripts\python train.py --run l8_random_scratch --placement random                          # 처음부터
+.venv\Scripts\python export_arc.py . viewer\arc_random.json 7 240 5 - random                       # 뷰어용 (무작위 배치 세션 하나)
+```
+
+`arc` 로만 학습한 모델은 무작위 배치에서 쓸 수 없다(2026-10-14, ubai_v3 best 를 v5 시뮬 16세션에서 센서 자세만 바꿔 측정:
+기준 정확도 0.75 → 조준 10° 틀어지면 0.49, 옆으로 25 cm 치우치면 0.31, 0.45 m 에서 0.11, 거꾸로 0.11).
+
+### 배경·자리비움·자세 변형
+
+- `--clutter N`: 뒷벽 앞에 상자·선반 같은 잡동사니를 세션마다 0~N개 둔다(기본은 `session.CLUTTER_MAX`, 지금 0). 검증셋 파일명에 `clutterN_` 이 붙는다.
+- 자리비움은 사람이 그냥 사라지지 않는다. 의자를 뒤로 밀며 일어서고(0.6~1.2 s), 옆으로 걸어 나가고(bystander 와 같은 걷는 몸체), 돌아올 때는 옆에서 걸어 들어와 의자에 앉는다. 그 프레임은 전환(FLAG_TRANSITION)이라 채점에서 빠지고 학습 가중치가 낮다. 짧은 자리비움은 빨리 걷는다.
+- 자세 변형(`session.SEGMENTS`, 라벨은 `SEGMENT_LABEL` 로 기존 7개에 붙음): 팔걸이에 기대기(`armrest`→upright),
+  옆 모니터·옆사람 보기(`look_aside`, 고개 30~60° 돌린 채 5~30 s→upright), 팔꿈치 괴고 숙이기(`elbows`→lean_forward),
+  기지개(`stretch`, 3~7 s→recline), 연필로 공부하기(`writing`, 고개 20~40° 숙이고 상체 12~28° 앞으로, 손은 책상 위에서 움직임→lean_forward).
+  기본 자세들의 각도 범위도 조금 넓혔다. 폰 내려다보기는 졸음과 구분이 애매해 넣지 않았다.
 
 ### 중간에 멈추기·뽑아내기
 

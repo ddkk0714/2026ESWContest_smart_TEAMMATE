@@ -1,0 +1,678 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body style="margin:0">
+<title>tof-sim 장면 뷰어</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap">
+<style>
+/* Layout: a bench instrument. 3D stage left, the selected sensor's readout right, and under the
+   stage the whole 19-sensor arc as a row of 8x8 readouts, ordered as the user sees them (left to right). */
+:root {
+  --bg: #f4f6f7;
+  --panel: #fcfdfd;
+  --scene: #e3e8eb;
+  --ink: #111518;
+  --ink-2: #4c555b;
+  --muted: #7c868c;
+  --line: #d5dce0;
+  --accent: #0f6c74;
+  --accent-ink: #ffffff;
+  --empty: #e9edef;
+  --empty-hatch: #cdd5d9;
+  --good: #0ca30c;
+  --bad: #d03b3b;
+  --l0: #2a78d6; --l1: #eb6834; --l2: #1baf7a; --l3: #eda100; --l4: #e87ba4; --l5: #008300; --l6: #4a3aa7; --l7: #8d5524;
+  --d-near: #0d366b; --d-mid: #2a78d6; --d-far: #86b6ef;
+  --font-ui: "IBM Plex Sans KR", system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+  --font-num: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1214; --panel: #171b1e; --scene: #1d2327; --ink: #eef2f4; --ink-2: #b4bec3; --muted: #84909a;
+    --line: #2b3236; --accent: #4fb3ba; --accent-ink: #071415; --empty: #20262a; --empty-hatch: #2e363b;
+    --l0: #3987e5; --l1: #d95926; --l2: #199e70; --l3: #c98500; --l4: #d55181; --l5: #008300; --l6: #9085e9; --l7: #c48a4a;
+    --d-near: #cde2fb; --d-mid: #5598e7; --d-far: #184f95;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1214; --panel: #171b1e; --scene: #1d2327; --ink: #eef2f4; --ink-2: #b4bec3; --muted: #84909a;
+  --line: #2b3236; --accent: #4fb3ba; --accent-ink: #071415; --empty: #20262a; --empty-hatch: #2e363b;
+  --l0: #3987e5; --l1: #d95926; --l2: #199e70; --l3: #c98500; --l4: #d55181; --l5: #008300; --l6: #9085e9; --l7: #c48a4a;
+  --d-near: #cde2fb; --d-mid: #5598e7; --d-far: #184f95;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-ui); font-size: 14px; line-height: 1.5; }
+.wrap { max-width: 1320px; margin: 0 auto; padding-inline: 16px; padding-block: 18px 28px; display: grid; gap: 14px; }
+
+header h1 { font-size: 1.35rem; font-weight: 600; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+header p { margin: 2px 0 0; color: var(--ink-2); font-size: 0.86rem; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
+.seg button { font: inherit; font-size: 0.82rem; border: 0; background: none; color: var(--ink-2); padding: 6px 12px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+button:focus-visible, .tl:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.main { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 14px; align-items: start; }
+@media (max-width: 860px) { .main { grid-template-columns: minmax(0, 1fr); } }
+
+.stage { display: grid; gap: 10px; min-width: 0; }
+.view { position: relative; height: clamp(320px, 56vh, 600px); border-radius: 10px; overflow: hidden; background: var(--scene); border: 1px solid var(--line); }
+.view canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.overlay { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-2); font-size: 0.9rem; background: var(--scene); padding: 16px; text-align: center; }
+.cams { position: absolute; left: 10px; top: 10px; }
+.hint { position: absolute; right: 10px; bottom: 8px; font-size: 0.72rem; color: var(--muted); }
+
+.transport { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+@media (max-width: 560px) { .transport { grid-template-columns: auto minmax(0, 1fr); } .transport .seg { grid-column: 1 / -1; justify-self: start; } }
+.btn { font: inherit; font-size: 0.85rem; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 8px; padding: 6px 12px; cursor: pointer; min-width: 64px; }
+.time { font-family: var(--font-num); font-size: 0.8rem; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.tl { width: 100%; height: 44px; display: block; cursor: pointer; border-radius: 6px; touch-action: none; }
+.tl-wrap { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px; min-width: 0; }
+.tl-lab { display: grid; grid-template-rows: 15px 15px; row-gap: 3px; font-size: 0.68rem; color: var(--muted); line-height: 15px; }
+.tl-cap { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--muted); margin-top: -4px; }
+
+/* the arc: 19 readouts */
+.arc { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 8px; }
+.arc-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; align-items: baseline; }
+.arc-head h2 { margin: 0; }
+.arc-scroll { overflow-x: auto; padding-bottom: 4px; }
+.sectors { display: flex; gap: 10px; width: max-content; }
+.sector { display: grid; gap: 4px; }
+.sector-name { font-size: 0.72rem; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 2px; }
+.sector-row { display: flex; gap: 4px; }
+.mini { border: 1px solid transparent; border-radius: 6px; background: none; padding: 3px; cursor: pointer; display: grid; gap: 2px; justify-items: center; color: var(--ink-2); font: inherit; }
+.mini canvas { width: 36px; height: 36px; display: block; border-radius: 3px; image-rendering: pixelated; }
+.pairbox { display: grid; gap: 2px; justify-items: center; }
+.pairbox .pair-row { display: flex; gap: 1px; }
+.pairbox .ang { font-family: var(--font-num); font-size: 0.68rem; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.mini .ang { font-family: var(--font-num); font-size: 0.68rem; font-variant-numeric: tabular-nums; }
+.mini .acc { font-family: var(--font-num); font-size: 0.62rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.mini[aria-pressed="true"] { border-color: var(--accent); background: var(--bg); color: var(--ink); }
+.mini .mark { width: 100%; height: 3px; border-radius: 2px; }
+
+aside { display: grid; gap: 12px; min-width: 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 8px; }
+h2 { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0; }
+.now { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.swatch { width: 14px; height: 14px; border-radius: 4px; flex: none; }
+.now .ko { font-size: 1.2rem; font-weight: 600; }
+.now .en { font-family: var(--font-num); font-size: 0.78rem; color: var(--muted); }
+.pair { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 10px; align-items: center; }
+.tag { font-size: 0.7rem; color: var(--muted); letter-spacing: 0.04em; }
+.verdict { font-size: 0.76rem; display: inline-flex; align-items: center; gap: 4px; color: var(--ink-2); }
+.verdict b { width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; font-size: 0.66rem; color: #fff; }
+.verdict.ok b { background: var(--good); }
+.verdict.bad b { background: var(--bad); }
+.flags { display: flex; flex-wrap: wrap; gap: 6px; min-height: 22px; }
+.flag { font-size: 0.74rem; border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; color: var(--ink-2); }
+.probs { display: grid; grid-template-columns: auto minmax(0, 1fr) 3.2em; gap: 3px 8px; align-items: center; font-size: 0.76rem; }
+.probs .bar { height: 8px; border-radius: 0 4px 4px 0; min-width: 1px; }
+.probs .pct { font-family: var(--font-num); font-variant-numeric: tabular-nums; text-align: right; color: var(--ink-2); }
+.probs .nm { color: var(--ink-2); white-space: nowrap; }
+.probs .nm.top { color: var(--ink); font-weight: 600; }
+
+.grid8 { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; }
+.cell { aspect-ratio: 1; max-width: 100%; border-radius: 3px; display: grid; place-items: center; font-family: var(--font-num); font-size: 0.6rem; font-variant-numeric: tabular-nums; }
+.cell.none { background: repeating-linear-gradient(45deg, var(--empty) 0 4px, var(--empty-hatch) 4px 5px); color: var(--muted); }
+.rows { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 4px; }
+.rowlab { display: grid; grid-template-rows: repeat(8, 1fr); gap: 2px; font-family: var(--font-num); font-size: 0.6rem; color: var(--muted); }
+.rowlab span { display: grid; place-items: center; }
+.ramp { height: 8px; border-radius: 4px; }
+.ramp-cap { position: relative; height: 14px; font-family: var(--font-num); font-size: 0.66rem; color: var(--muted); }
+.ramp-cap span { position: absolute; white-space: nowrap; }
+.note { font-size: 0.76rem; color: var(--ink-2); margin: 0; }
+dl.spec { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 0.84rem; }
+dl.spec dt { color: var(--ink-2); }
+dl.spec dd { margin: 0; text-align: right; font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+.legend { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; font-size: 0.8rem; }
+.legend div { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 0.84rem; color: var(--ink-2); }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>tof-sim 장면 뷰어</h1>
+    <p>팀 CAD(TEAMMATE.step) 장치 · VL53L8CX 2개 한 세트(높이 13 cm, 위로 20°, 바깥쪽 ±8°, 간격 10.5 cm) · 정면 기준 −45°~+45° 호에 15° 간격 7대 · 같은 사람을 센서 14개가 동시에 봄 · v4: 필기·측면 졸음·지나가는 사람·의자 젖힘</p>
+  </header>
+
+  <div class="main">
+    <section class="stage">
+      <div class="view" id="view">
+        <canvas id="gl" aria-label="시뮬레이션 3D 장면"></canvas>
+        <div class="cams seg" role="group" aria-label="카메라">
+          <button id="cam-orbit" type="button" aria-pressed="true">비스듬히</button>
+          <button id="cam-top" type="button" aria-pressed="false">위에서</button>
+          <button id="cam-sensor" type="button" aria-pressed="false">센서 시점</button>
+        </div>
+        <div class="hint" id="hint">드래그 회전 · 휠 확대</div>
+        <div class="overlay" id="overlay">장면 불러오는 중… (약 8 MB)</div>
+      </div>
+      <div class="transport">
+        <button class="btn" id="play" type="button">일시정지</button>
+        <div class="tl-wrap">
+          <div class="tl-lab" aria-hidden="true"><span>정답</span><span>예측</span></div>
+          <div>
+            <canvas class="tl" id="tl" tabindex="0" aria-label="정답과 선택한 센서의 예측 타임라인. 클릭하거나 좌우 화살표로 이동"></canvas>
+            <div class="tl-cap"><span>0 s</span><span>아래 눈금 = 고개 끄덕임</span><span id="tl-end">–</span></div>
+          </div>
+        </div>
+        <div class="seg" role="group" aria-label="재생 속도">
+          <button id="sp1" type="button" aria-pressed="false" data-speed="1">1×</button>
+          <button id="sp4" type="button" aria-pressed="true" data-speed="4">4×</button>
+          <button id="sp16" type="button" aria-pressed="false" data-speed="16">16×</button>
+          <button id="sp64" type="button" aria-pressed="false" data-speed="64">64×</button>
+        </div>
+      </div>
+      <div class="time" id="time">–</div>
+
+      <section class="arc" aria-label="센서 19개">
+        <div class="arc-head">
+          <h2>장치 7대 × 센서 2개 · 사용자 기준 왼쪽 → 오른쪽</h2>
+          <span class="note">자리마다 왼쪽 센서 | 오른쪽 센서 · 눌러서 선택 · 아래 숫자는 이 세션에서 예측이 맞은 비율</span>
+        </div>
+        <div class="arc-scroll"><div class="sectors" id="sectors"></div></div>
+      </section>
+    </section>
+
+    <aside>
+      <div class="card">
+        <h2 id="sel-title">정답 · 예측</h2>
+        <div class="pair">
+          <span class="tag">정답</span>
+          <div class="now"><span class="swatch" id="now-sw"></span><span class="ko" id="now-ko">–</span><span class="en" id="now-en"></span></div>
+          <span class="tag">예측</span>
+          <div class="now"><span class="swatch" id="pr-sw"></span><span class="ko" id="pr-ko">–</span><span class="verdict" id="verdict"></span></div>
+        </div>
+        <div class="flags" id="flags"></div>
+        <div class="probs" id="probs" aria-label="자세별 예측 확률"></div>
+        <p class="note" id="model-note"></p>
+      </div>
+
+      <div class="card">
+        <h2 id="grid-title">선택한 센서 화면 · 거리 mm</h2>
+        <div class="rows">
+          <div class="rowlab" aria-hidden="true"><span>0</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span></div>
+          <div class="grid8" id="grid8" role="img" aria-label="선택한 센서의 8×8 깊이 화면"></div>
+        </div>
+        <div class="ramp" id="ramp"></div>
+        <div class="ramp-cap" id="ramp-cap"></div>
+        <p class="note">왼쪽 숫자는 줄 번호. 빗금 칸은 유효한 반사가 없는 칸이에요.</p>
+      </div>
+
+      <div class="card">
+        <h2>센서 설치</h2>
+        <dl class="spec">
+          <dt>선택한 센서</dt><dd id="sp-az">–</dd>
+          <dt>기울기</dt><dd id="sp-p">–</dd>
+          <dt>센서 높이 (책상 위)</dt><dd id="sp-h">–</dd>
+          <dt>호 반지름 (턱까지)</dt><dd id="sp-r">–</dd>
+          <dt>시야각 / 한 줄</dt><dd>45° / 5.6°</dd>
+        </dl>
+        <label class="check"><input type="checkbox" id="beams" checked> 선택한 센서 광선 표시</label>
+      </div>
+
+      <div class="card">
+        <h2>자세</h2>
+        <div class="legend" id="legend"></div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+(() => {
+  const SRC = new URLSearchParams(location.search).get("src") || "arc14.json", DEVICE_SRC = "device.json";  // ?src=other.json
+  const KO = { upright: "바른자세", lean_forward: "상체 앞으로", recline: "뒤로 젖힘", face_down: "엎드림",
+               chin_rest: "턱괴기", drowsy: "꾸벅 졸음", away: "자리비움", misplaced: "위치 재조정" };
+  const FLAG_TRANSITION = 1, FLAG_NOD = 2, FLAG_LOOKALIKE = 4, FLAG_BYSTANDER = 8;
+  const $ = (id) => document.getElementById(id);
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const azText = (az) => (Math.abs(az) < 0.5 ? "정면 0°" : `${az > 0 ? "왼쪽" : "오른쪽"} ${Math.abs(az).toFixed(0)}°`);   // + = user's left
+  const senText = (s) => `${azText(s.az)} 장치 · ${s.si === 0 ? "왼쪽" : "오른쪽"} 센서`;
+
+  // ---- depth colour: log scale 100 mm .. 3000 mm, near -> far
+  const D_MIN = 100, D_MAX = 3000;
+  const depthT = (mm) => Math.min(1, Math.max(0, Math.log(mm / D_MIN) / Math.log(D_MAX / D_MIN)));
+  let rampStops = [], emptyRgb = [200, 200, 200];
+  const hexRgb = (h) => { const n = parseInt(h.replace("#", ""), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+  function readRamp() { rampStops = [css("--d-near"), css("--d-mid"), css("--d-far")].map(hexRgb); emptyRgb = hexRgb(css("--empty-hatch")); }
+  function depthRgb(mm) {
+    const t = depthT(mm), s = t < 0.5 ? 0 : 1, u = t < 0.5 ? t * 2 : (t - 0.5) * 2;
+    const a = rampStops[s], b = rampStops[s + 1];
+    return [0, 1, 2].map((i) => Math.round(a[i] + (b[i] - a[i]) * u));
+  }
+  const lum = ([r, g, b]) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+
+  // ---- three.js (inside `root`: MuJoCo frame, x = the user's left, y toward the user, z up)
+  const canvas = $("gl"), view = $("view");
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  const scene = new THREE.Scene();
+  const root = new THREE.Group();
+  root.rotation.x = -Math.PI / 2;
+  scene.add(root);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x8899aa, 0.85));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.75);
+  sun.position.set(1.5, 3, 2.5);
+  scene.add(sun);
+  const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 30);
+  const controls = new THREE.OrbitControls(camera, canvas);
+  controls.enableDamping = true;
+  controls.maxDistance = 3.0;
+  controls.minDistance = 0.3;
+  controls.maxPolarAngle = Math.PI * 0.49;
+  const mj = (v) => new THREE.Vector3(v[0], v[2], -v[1]);
+
+  let data = null, geomObjs = [], frameIdx = 0, simT = 0, playing = true, speed = 4, camMode = "orbit", sel = 9, tEnd = 1;
+  let selMarker = null, fovLines = null, beamDots = null, beamLines = null, accBySensor = [];
+  const tmpM = new THREE.Matrix4(), tmpC = new THREE.Color(), v3 = new THREE.Vector3();
+  const poseMatrix = (p) => tmpM.set(p[3], p[4], p[5], p[0], p[6], p[7], p[8], p[1], p[9], p[10], p[11], p[2], 0, 0, 0, 1);
+  const sensorMatrix = (s) => { const R = s.R, o = s.origin; return new THREE.Matrix4().set(R[0], R[1], R[2], o[0], R[3], R[4], R[5], o[1], R[6], R[7], R[8], o[2], 0, 0, 0, 1); };
+
+  function buildGeom(g) {
+    if (g.rgba[3] === 0) return null;                       // invisible helper geoms (inner cores) stay invisible
+    const [sx, sy, sz] = g.size;
+    let geo;
+    if (g.type === 6) geo = new THREE.BoxGeometry(2 * sx, 2 * sy, 2 * sz);
+    else if (g.type === 4) geo = new THREE.SphereGeometry(1, 28, 18);
+    else if (g.type === 3) geo = new THREE.CapsuleGeometry(sx, 2 * sy, 6, 14);
+    else if (g.type === 0) geo = new THREE.PlaneGeometry(2 * sx, 2 * sy);
+    else if (g.type === 7 && g.mesh) {                      // SMPL-X body piece, triangles in the geom frame
+      geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(g.mesh.v, 3));
+      geo.setIndex(g.mesh.f);
+      geo.computeVertexNormals();
+    }
+    else return null;
+    const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(g.rgba[0], g.rgba[1], g.rgba[2]), roughness: 0.85 });
+    if (g.group === 2) { mat.transparent = true; mat.opacity = 0.28; mat.depthWrite = false; }   // monitor: beams pass through
+    const mesh = new THREE.Mesh(geo, mat);
+    if (g.type === 4) mesh.scale.set(sx, sy, sz);
+    if (g.type === 3) mesh.rotation.x = Math.PI / 2;
+    const holder = new THREE.Object3D();
+    holder.matrixAutoUpdate = false;
+    holder.add(mesh);
+    return holder;
+  }
+
+  function buildSensors(device) {
+    // the CAD device (TEAMMATE.step) at every arc position, turned to face the user
+    const mat = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.6, side: THREE.DoubleSide, ...extra });
+    const mats = { housing: mat(0xd3d8dc), bezel: mat(0x2a2f34), lcd: mat(0x0d1115, { roughness: 0.25 }),
+                   sensor: mat(0x1d6b48), glass: mat(0x9cc4e4, { transparent: true, opacity: 0.35, depthWrite: false }) };
+    const geos = device.parts.map((p) => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(p.v, 3));
+      g.setIndex(p.f);
+      g.computeVertexNormals();
+      return [g, p.kind];
+    });
+    data.devices.forEach((dv) => {
+      const holder = new THREE.Group();
+      holder.position.set(dv.c[0], dv.c[1], dv.c[2]);
+      holder.rotation.z = -dv.yaw_deg * Math.PI / 180;      // device front (+y local) turned toward the user
+      geos.forEach(([g, kind]) => holder.add(new THREE.Mesh(g, mats[kind])));
+      root.add(holder);
+    });
+    selMarker = new THREE.Mesh(new THREE.SphereGeometry(0.007, 16, 12), new THREE.MeshBasicMaterial({ color: css("--accent") }));
+    root.add(selMarker);
+    // field of view of the selected sensor: 45 x 45 deg pyramid, 1.0 m, with the row-2 boundary
+    const tx = Math.tan(Math.PI / 8), L = 1.0, pts = [];
+    const c = [[-tx, tx], [tx, tx], [tx, -tx], [-tx, -tx]].map(([x, y]) => new THREE.Vector3(x * L, y * L, L));
+    c.forEach((p, i) => { pts.push(new THREE.Vector3(), p, p, c[(i + 1) % 4]); });
+    const y2 = tx * 0.5 * L;
+    pts.push(new THREE.Vector3(-tx * L, y2, L), new THREE.Vector3(tx * L, y2, L));
+    fovLines = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineBasicMaterial({ color: css("--accent"), transparent: true, opacity: 0.6 }));
+    fovLines.matrixAutoUpdate = false;
+    root.add(fovLines);
+    beamDots = new THREE.InstancedMesh(new THREE.SphereGeometry(0.011, 10, 8), new THREE.MeshBasicMaterial(), 64);
+    beamDots.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(64 * 3), 3);
+    root.add(beamDots);
+    const lg = new THREE.BufferGeometry();
+    lg.setAttribute("position", new THREE.BufferAttribute(new Float32Array(64 * 6), 3));
+    lg.setAttribute("color", new THREE.BufferAttribute(new Float32Array(64 * 6), 3));
+    beamLines = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.35 }));
+    root.add(beamLines);
+    beamLines.visible = beamDots.visible = $("beams").checked;
+  }
+
+  function paintSensors() {
+    const acc = css("--accent"), s = data.sensors[sel];
+    selMarker.position.set(s.origin[0], s.origin[1], s.origin[2]);
+    selMarker.material.color.set(acc);
+    fovLines.matrix.copy(sensorMatrix(s));
+    fovLines.material.color.set(acc);
+  }
+
+  // ---- side readout
+  const cells = [];
+  for (let i = 0; i < 64; i++) { const d = document.createElement("div"); d.className = "cell"; $("grid8").appendChild(d); cells.push(d); }
+
+  function buildLegend() {
+    const seen = new Set(data.frames.map((f) => f.label));
+    $("legend").innerHTML = data.labels.map((name, i) =>
+      `<div><span class="swatch" style="background:var(--l${i})"></span><span>${KO[name]}${seen.has(i) ? "" : " (없음)"}</span></div>`).join("");
+  }
+
+  function buildRamp() {
+    const stops = [0, 0.25, 0.5, 0.75, 1].map((t) => {
+      const [r, g, b] = depthRgb(D_MIN * Math.pow(D_MAX / D_MIN, t));
+      return `rgb(${r},${g},${b}) ${t * 100}%`;
+    });
+    $("ramp").style.background = `linear-gradient(90deg, ${stops.join(",")})`;
+    const ticks = [[100, "0.1 m"], [300, "0.3"], [1000, "1"], [3000, "3 m"]];
+    $("ramp-cap").innerHTML = ticks.map(([mm, s], i) => {
+      const x = (depthT(mm) * 100).toFixed(1);
+      const tr = i === 0 ? "none" : i === ticks.length - 1 ? "translateX(-100%)" : "translateX(-50%)";
+      return `<span style="left:${x}%;transform:${tr}">${s}</span>`;
+    }).join("");
+  }
+
+  // ---- arc row: 19 mini readouts, the user's left first (+45 .. -45)
+  let minis = [];
+  function buildArcRow() {
+    const order = data.sensors.map((s, i) => i).sort((a, b) => data.sensors[b].az - data.sensors[a].az);
+    const groups = [["왼쪽 구역 (+30°, +45°)", (az) => az > 17], ["정면 구역 (−15°, 0°, +15°)", (az) => Math.abs(az) <= 17], ["오른쪽 구역 (−30°, −45°)", (az) => az < -17]];
+    $("sectors").innerHTML = "";
+    minis = [];
+    groups.forEach(([name, inG]) => {
+      const sec = document.createElement("div"); sec.className = "sector";
+      sec.innerHTML = `<div class="sector-name">${name}</div>`;
+      const row = document.createElement("div"); row.className = "sector-row";
+      const azs = [...new Set(order.map((i) => data.sensors[i].az))].filter(inG);
+      azs.forEach((az) => {
+        // one device: its left sensor (si 0) then its right sensor (si 1), as the user sees them
+        const box = document.createElement("div"); box.className = "pairbox";
+        const pr = document.createElement("div"); pr.className = "pair-row";
+        data.sensors.map((s, i) => i).filter((i) => data.sensors[i].az === az)
+          .sort((a, b) => data.sensors[a].si - data.sensors[b].si).forEach((i) => {
+            const b = document.createElement("button");
+            b.type = "button"; b.className = "mini"; b.id = "mini-" + i;
+            b.setAttribute("aria-pressed", String(i === sel));
+            b.setAttribute("aria-label", `${senText(data.sensors[i])} 선택`);
+            const cv = document.createElement("canvas"); cv.width = 8; cv.height = 8;
+            const acc = accBySensor[i];
+            b.appendChild(cv);
+            b.insertAdjacentHTML("beforeend", `<span class="acc">${acc == null ? "" : Math.round(acc * 100) + "%"}</span><span class="mark"></span>`);
+            b.onclick = () => select(i);
+            pr.appendChild(b);
+            minis[i] = { b, ctx: cv.getContext("2d"), img: cv.getContext("2d").createImageData(8, 8), mark: b.querySelector(".mark") };
+          });
+        box.appendChild(pr);
+        box.insertAdjacentHTML("beforeend", `<span class="ang">${az > 0 ? "+" : ""}${az}°</span>`);
+        row.appendChild(box);
+      });
+      sec.appendChild(row);
+      $("sectors").appendChild(sec);
+    });
+  }
+
+  function select(i) {
+    sel = i;
+    minis.forEach((m, j) => m && m.b.setAttribute("aria-pressed", String(j === i)));
+    const s = data.sensors[i];
+    $("sp-az").textContent = senText(s);
+    $("sp-p").textContent = s.pitch_down_deg < 0 ? `위로 ${(-s.pitch_down_deg).toFixed(1)}°` : `아래로 ${s.pitch_down_deg.toFixed(1)}°`;
+    $("sp-h").textContent = s.height_m != null ? (s.height_m * 100).toFixed(1) + " cm" : "–";
+    $("grid-title").textContent = `${senText(s)} 화면 · 거리 mm`;
+    $("sel-title").textContent = `정답 · ${senText(s)} 예측`;
+    paintSensors();
+    if (camMode === "sensor") setCam("sensor");
+    showFrame();
+  }
+
+  // ---- timeline
+  const tl = $("tl"), tctx = tl.getContext("2d");
+  function drawTimeline() {
+    if (!data) return;
+    const dpr = Math.min(devicePixelRatio, 2), w = tl.clientWidth, h = tl.clientHeight;
+    if (tl.width !== Math.round(w * dpr)) { tl.width = Math.round(w * dpr); tl.height = Math.round(h * dpr); }
+    tctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    tctx.clearRect(0, 0, w, h);
+    const fr = data.frames, x = (t) => (t / tEnd) * w, bandH = 15, gap = 3;
+    const colors = data.labels.map((_, i) => css("--l" + i));
+    const band = (get, y0) => {
+      let start = 0;
+      for (let i = 1; i <= fr.length; i++) {
+        if (i === fr.length || get(fr[i]) !== get(fr[start])) {
+          const x0 = x(fr[start].t), x1 = x(i === fr.length ? tEnd : fr[i].t);
+          tctx.fillStyle = colors[get(fr[start])];
+          tctx.fillRect(x0, y0, Math.max(1, x1 - x0 - (x1 - x0 > 4 ? 2 : 0)), bandH);
+          start = i;
+        }
+      }
+    };
+    band((f) => f.label, 0);
+    if (hasPred()) band((f) => f.pred[sel], bandH + gap);
+    tctx.fillStyle = css("--ink-2");
+    const tickY = 2 * bandH + gap + 3;
+    for (let i = 0; i < fr.length; i++) {
+      if ((fr[i].flags & FLAG_NOD) && !(i && (fr[i - 1].flags & FLAG_NOD))) tctx.fillRect(x(fr[i].t), tickY, 1.5, 6);
+    }
+    tctx.fillStyle = css("--ink");
+    tctx.fillRect(x(fr[frameIdx].t) - 1, 0, 2, h);
+  }
+  const hasPred = () => data && data.model && data.frames[0].pred.length > 0;
+  function indexAt(t) {
+    const fr = data.frames;
+    let lo = 0, hi = fr.length - 1;
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (fr[m].t <= t) lo = m; else hi = m - 1; }
+    return lo;
+  }
+  function seekFrac(frac) { simT = Math.max(0, Math.min(1, frac)) * tEnd; frameIdx = indexAt(simT); showFrame(); }
+  let dragging = false;
+  tl.addEventListener("pointerdown", (e) => { if (!data) return; dragging = true; tl.setPointerCapture(e.pointerId); seekFrac(e.offsetX / tl.clientWidth); });
+  tl.addEventListener("pointermove", (e) => { if (dragging) seekFrac(e.offsetX / tl.clientWidth); });
+  tl.addEventListener("pointerup", () => { dragging = false; });
+  tl.addEventListener("keydown", (e) => {
+    if (!data) return;
+    const step = e.shiftKey ? 30000 : 5000;
+    if (e.key === "ArrowRight") { seekFrac((simT + step) / tEnd); e.preventDefault(); }
+    if (e.key === "ArrowLeft") { seekFrac((simT - step) / tEnd); e.preventDefault(); }
+  });
+
+  // ---- per-frame update
+  function showFrame() {
+    if (!data) return;
+    const f = data.frames[frameIdx];
+    data.dynamic.forEach((g, k) => { const o = geomObjs[g]; if (o) o.matrix.copy(poseMatrix(f.pose[k])); });
+
+    // all 19 minis
+    for (let i = 0; i < data.sensors.length; i++) {
+      const m = minis[i]; if (!m) continue;
+      const px = m.img.data, d = f.d[i];
+      for (let z = 0; z < 64; z++) {
+        const rgb = d[z] >= 0 ? depthRgb(d[z]) : emptyRgb;
+        px.set([rgb[0], rgb[1], rgb[2], 255], z * 4);
+      }
+      m.ctx.putImageData(m.img, 0, 0);
+      m.mark.style.background = hasPred() ? `var(--l${f.pred[i]})` : "transparent";
+    }
+
+    // selected sensor: beams + big readout
+    const s = data.sensors[sel], o = s.origin, dirs = s.dirs, d = f.d[sel];
+    const pos = beamLines.geometry.attributes.position.array, col = beamLines.geometry.attributes.color.array;
+    const gray = hexRgb(css("--muted"));
+    for (let z = 0; z < 64; z++) {
+      const ok = d[z] >= 0, r = ok ? d[z] / 1000 : 0.6, dz = dirs[z];
+      v3.set(o[0] + dz[0] * r, o[1] + dz[1] * r, o[2] + dz[2] * r);
+      beamDots.setMatrixAt(z, tmpM.makeTranslation(v3.x, v3.y, v3.z));
+      const rgb = ok ? depthRgb(d[z]) : gray;
+      tmpC.setRGB(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255);
+      beamDots.setColorAt(z, tmpC);
+      pos.set([o[0], o[1], o[2], v3.x, v3.y, v3.z], z * 6);
+      col.set([tmpC.r, tmpC.g, tmpC.b, tmpC.r, tmpC.g, tmpC.b], z * 6);
+      const cell = cells[z];
+      if (ok) {
+        cell.className = "cell"; cell.style.background = `rgb(${rgb.join(",")})`;
+        cell.style.color = lum(rgb) > 0.55 ? "#0b0f12" : "#ffffff"; cell.textContent = d[z];
+      } else {
+        cell.className = "cell none"; cell.style.background = ""; cell.style.color = ""; cell.textContent = "·";
+      }
+    }
+    beamDots.instanceMatrix.needsUpdate = true;
+    beamDots.instanceColor.needsUpdate = true;
+    beamLines.geometry.attributes.position.needsUpdate = true;
+    beamLines.geometry.attributes.color.needsUpdate = true;
+
+    const name = data.labels[f.label];
+    $("now-ko").textContent = KO[name];
+    $("now-en").textContent = name;
+    $("now-sw").style.background = `var(--l${f.label})`;
+    if (hasPred()) {
+      const pr = f.pred[sel], p = f.p[sel];
+      $("pr-ko").textContent = KO[data.labels[pr]];
+      $("pr-sw").style.background = `var(--l${pr})`;
+      const ok = pr === f.label;
+      $("verdict").className = "verdict " + (ok ? "ok" : "bad");
+      $("verdict").innerHTML = ok ? "<b>✓</b>맞음" : "<b>✕</b>틀림";
+      $("probs").innerHTML = data.labels.map((n, i) =>
+        `<span class="nm${i === pr ? " top" : ""}">${KO[n]}</span>` +
+        `<span class="bar" style="width:${(p[i] * 100).toFixed(1)}%;background:var(--l${i})"></span>` +
+        `<span class="pct">${Math.round(p[i] * 100)}%</span>`).join("");
+    }
+    const flags = [];
+    if (f.flags & FLAG_NOD) flags.push("고개 끄덕이는 중");
+    if (f.flags & FLAG_TRANSITION) flags.push("자세 바뀌는 중 (평가 제외)");
+    if (f.flags & FLAG_LOOKALIKE) flags.push("헷갈리는 동작 (키보드 보기·컵·고개 돌림)");
+    if (f.flags & FLAG_BYSTANDER) flags.push("다른 사람 지나감 / 옆에 서 있음");
+    $("flags").innerHTML = flags.map((t) => `<span class="flag">${t}</span>`).join("");
+    $("time").textContent = `${(f.t / 1000).toFixed(1)} s / ${(tEnd / 1000).toFixed(0)} s · 프레임 ${frameIdx + 1}/${data.frames.length}`;
+    drawTimeline();
+  }
+
+  // ---- cameras
+  function setCam(mode) {
+    camMode = mode;
+    ["orbit", "top", "sensor"].forEach((m) => $("cam-" + m).setAttribute("aria-pressed", String(m === mode)));
+    controls.enabled = mode !== "sensor";
+    $("hint").hidden = mode === "sensor";
+    if (!data) return;
+    camera.fov = 45; camera.updateProjectionMatrix();
+    if (mode === "sensor") {
+      const s = data.sensors[sel], R = s.R;
+      camera.position.copy(mj(s.origin));
+      camera.up.copy(mj([R[1], R[4], R[7]]));
+      camera.lookAt(camera.position.clone().add(mj([R[2], R[5], R[8]])));
+    } else {
+      camera.up.set(0, 1, 0);
+      const d0 = (data.devices || []).find((dv) => dv.az === 0);
+      const chinY = d0 ? d0.c[1] + data.arc.radius_m : 1.0;
+      controls.target.copy(mj([0, chinY - 0.25, 0.9]));
+      camera.position.copy(mode === "top" ? mj([0.05, chinY - 0.35, 2.6]) : mj([1.35, chinY + 1.0, 1.6]));
+      controls.update();
+    }
+  }
+  $("cam-orbit").onclick = () => setCam("orbit");
+  $("cam-top").onclick = () => setCam("top");
+  $("cam-sensor").onclick = () => setCam("sensor");
+
+  // ---- playback
+  function setPlaying(p) { playing = p; $("play").textContent = p ? "일시정지" : "재생"; }
+  $("play").onclick = () => setPlaying(!playing);
+  const SPEEDS = ["sp1", "sp4", "sp16", "sp64"];
+  SPEEDS.forEach((id) => {
+    $(id).onclick = () => {
+      speed = Number($(id).dataset.speed);
+      SPEEDS.forEach((j) => $(j).setAttribute("aria-pressed", String(j === id)));
+      setPlaying(true);
+    };
+  });
+  $("beams").onchange = (e) => { if (beamLines) beamLines.visible = beamDots.visible = e.target.checked; };
+
+  function resize() {
+    const w = view.clientWidth, h = view.clientHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h; camera.updateProjectionMatrix();
+    drawTimeline();
+  }
+  new ResizeObserver(resize).observe(view);
+  new ResizeObserver(drawTimeline).observe(tl);
+
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.1, (now - last) / 1000); last = now;
+    if (data && playing) {
+      simT += dt * 1000 * speed;
+      if (simT > tEnd) simT = 0;
+      const i = indexAt(simT);
+      if (i !== frameIdx) { frameIdx = i; showFrame(); }
+    }
+    if (controls.enabled) controls.update();
+    renderer.render(scene, camera);
+    requestAnimationFrame(loop);
+  }
+
+  function applyTheme() {
+    scene.background = new THREE.Color(css("--scene"));
+    readRamp(); buildRamp();
+    if (data) { paintSensors(); buildLegend(); showFrame(); }
+  }
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
+  new MutationObserver(applyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+  async function load() {
+    let device;
+    try {
+      const [res, dres] = await Promise.all([fetch(SRC), fetch(DEVICE_SRC)]);
+      if (!res.ok) throw new Error(res.status + " " + res.statusText);
+      if (!dres.ok) throw new Error("device " + dres.status + " " + dres.statusText);
+      [data, device] = await Promise.all([res.json(), dres.json()]);
+    } catch (err) {
+      $("overlay").textContent = `장면 파일을 불러오지 못했어요 (${err.message}). 페이지를 새로고침해 보세요.`;
+      return;
+    }
+    data.geoms.forEach((g, i) => {
+      const o = buildGeom(g);
+      geomObjs[i] = o;
+      if (!o) return;
+      if (data.static[i]) o.matrix.copy(poseMatrix(data.static[i]));
+      root.add(o);
+    });
+    sel = Math.max(0, data.sensors.findIndex((s) => s.az === 0 && !s.si));
+    buildSensors(device);
+    tEnd = data.frames[data.frames.length - 1].t;
+    $("tl-end").textContent = (tEnd / 1000).toFixed(0) + " s";
+    $("sp-r").textContent = (data.arc.radius_m * 100).toFixed(1) + " cm";
+    // accuracy per sensor, scored like tofsim/evaluate.py: skip transitions and the first 3 s
+    const keep = data.frames.filter((f) => !(f.flags & FLAG_TRANSITION) && f.t >= 3000);
+    accBySensor = data.sensors.map((_, i) => (hasPred() ? keep.filter((f) => f.pred[i] === f.label).length / keep.length : null));
+    if (hasPred()) {
+      const m = data.model;
+      $("model-note").textContent = `예측: 이 배치(CAD 장치, 15° 간격 호, 10 Hz)로 ${m.hours}시간 학습한 ubai_v3 모델 (step ${m.step.toLocaleString()}, 검증 macro-F1 ${m.best_f1}). 이 장면은 학습에 쓰지 않은 새 세션이에요.`;
+    }
+    const firstUp = data.frames.findIndex((f) => data.labels[f.label] === "upright" && !(f.flags & FLAG_TRANSITION));
+    frameIdx = Math.max(0, firstUp + 6);
+    simT = data.frames[frameIdx].t;
+    buildLegend();
+    buildArcRow();
+    applyTheme();
+    select(sel);
+    setCam(camMode);
+    resize();
+    $("overlay").hidden = true;
+  }
+
+  window.__tof = { root, geomObjs: () => geomObjs, data: () => data };   // for inspection from the console
+  setPlaying(playing);
+  readRamp(); buildRamp();
+  resize();
+  requestAnimationFrame(loop);
+  load();
+})();
+</script>
+
+</body>
+</html>

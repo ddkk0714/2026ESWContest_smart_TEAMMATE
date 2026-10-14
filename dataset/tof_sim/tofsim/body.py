@@ -58,6 +58,8 @@ class Room:
     desk_width: float = 1.40
     wall_z: float = 2.8             # wall behind the user
     wall_refl: float = 0.6
+    walker_scale: float = 1.0       # bystander height factor (MuJoCo only)
+    walker_refl: float = 0.4        # bystander clothing reflectivity
     desk_refl: float = 0.4
     chair_back: bool = True
     chair_refl: float = 0.08        # black office chairs are dark at 940 nm
@@ -69,6 +71,12 @@ class Room:
 class Person:
     scale: float = 1.0              # body size factor
     shoulder_half: float = 0.19
+    girth: float = 1.0              # thickness factor: torso depth, neck/arm/leg radii
+    head_scale: float = 1.0         # head and hair size factor (length; volume is its cube)
+    head_width: float = 1.0         # extra factor on the head/hair width only
+    reach: float = 0.75             # relaxed shoulder-to-wrist distance while typing, x arm length
+    smplx: dict | None = None       # {gender, betas}: SMPL-X body shape (MuJoCo only); None = capsule body
+    chin_up: float | None = None    # chin height above the seat (set with smplx)
     hip_z: float = 0.30             # hip distance behind the desk front edge
     seat_height: float = 0.47
     x_offset: float = 0.0
@@ -86,7 +94,7 @@ class Pose:
     head_yaw: float = 0.0
     head_roll: float = 0.0
     breath: float = 0.0             # chest expansion, metres
-    # typing | lap | crossed | behind_head | phone | hanging | pillow | chin_right | chin_left | cup_right
+    # typing | lap | crossed | behind_head | phone | hanging | pillow | chin_right | chin_left | chin_both | cup_right
     # (behind_head/crossed/phone/hanging are MuJoCo-only; the numpy backend draws them as lap)
     arms: str = "typing"
     other_arms: str = "typing"      # the free arm while one arm props the chin or holds a cup
@@ -149,21 +157,23 @@ def _person_surfaces(room: Room, p: Person, q: Pose, hip_z: float) -> list[Surfa
     up = R_trunk @ np.array([0.0, 1.0, 0.0])
     neck_base = hip + up * spine_len
     chest = hip + up * (spine_len * 0.55)
-    torso_r = np.array([p.shoulder_half * k * 0.95, spine_len * 0.55, 0.11 * k + q.breath])
+    g = p.girth
+    torso_r = np.array([p.shoulder_half * k * 0.95, spine_len * 0.55, 0.11 * k * g + q.breath])
     out.append(Surface(Ellipsoid(chest, torso_r, R_trunk), Part.TORSO, p.torso_refl))
 
     # Neck and head: neck flexion on top of the trunk angle.
     R_head = R_trunk @ rot_x(-q.neck_pitch) @ rot_y(q.head_yaw) @ rot_z(q.head_roll)
     neck_up = R_head @ np.array([0.0, 1.0, 0.0])
     neck_top = neck_base + neck_up * 0.09 * k
-    out.append(Surface(Capsule(neck_base, neck_top, 0.05 * k), Part.NECK, p.skin_refl))
-    head_c = neck_top + R_head @ np.array([0.0, 0.10 * k, -0.01 * k])
-    head_r = np.array([0.075, 0.11, 0.095]) * k
+    out.append(Surface(Capsule(neck_base, neck_top, 0.05 * k * g), Part.NECK, p.skin_refl))
+    hk = k * p.head_scale
+    head_c = neck_top + R_head @ np.array([0.0, 0.10 * hk, -0.01 * hk])
+    head_r = np.array([0.075 * p.head_width, 0.11, 0.095]) * hk
     out.append(Surface(Ellipsoid(head_c, head_r, R_head), Part.HEAD, p.skin_refl))
     if p.hair_cover > 0:
         # Hair cap: a slightly larger ellipsoid shifted up and back, so it wins
         # the closest-surface test on the crown and back of the head.
-        hair_c = head_c + R_head @ np.array([0.0, 0.02 * k, 0.012 * k])
+        hair_c = head_c + R_head @ np.array([0.0, 0.02 * hk, 0.012 * hk])
         hair_r = head_r * np.array([1.06, 0.98 * p.hair_cover + 0.2, 1.04])
         out.append(Surface(Ellipsoid(hair_c, hair_r, R_head), Part.HAIR, p.hair_refl))
 
@@ -175,8 +185,8 @@ def _person_surfaces(room: Room, p: Person, q: Pose, hip_z: float) -> list[Surfa
     ua, fa = 0.30 * k, 0.27 * k
 
     def arm(shoulder, elbow, wrist):
-        out.append(Surface(Capsule(shoulder, elbow, 0.045 * k), Part.UPPER_ARM, p.torso_refl))
-        out.append(Surface(Capsule(elbow, wrist, 0.038 * k), Part.FOREARM, p.skin_refl))
+        out.append(Surface(Capsule(shoulder, elbow, 0.045 * k * g), Part.UPPER_ARM, p.torso_refl))
+        out.append(Surface(Capsule(elbow, wrist, 0.038 * k * g), Part.FOREARM, p.skin_refl))
         out.append(Surface(Ellipsoid(wrist + (wrist - elbow) / max(np.linalg.norm(wrist - elbow), 1e-6) * 0.05 * k,
                                      np.array([0.045, 0.02, 0.05]) * k), Part.HAND, p.skin_refl))
 
@@ -185,12 +195,13 @@ def _person_surfaces(room: Room, p: Person, q: Pose, hip_z: float) -> list[Surfa
         return e
 
     jit = q.arm_jitter
-    chin = head_c + R_head @ np.array([0.0, -0.10 * k, -0.06 * k])
+    chin = head_c + R_head @ np.array([0.0, -0.10 * hk, -0.06 * hk])
     for shoulder, sign, name in ((sh_l, 1.0, "left"), (sh_r, -1.0, "right")):
         # "left"/"right" here is the sensor's view: sh_l is at +X.
         mode = q.arms
-        if mode in ("chin_right", "chin_left", "cup_right"):
-            active = (mode in ("chin_right", "cup_right") and name == "left") or (mode == "chin_left" and name == "right")
+        if mode in ("chin_right", "chin_left", "chin_both", "cup_right"):
+            active = ((mode in ("chin_right", "cup_right") and name == "left") or (mode == "chin_left" and name == "right")
+                      or mode == "chin_both")
             # chin_right = the arm on the sensor's right (+X) props the chin.
             if active and mode != "cup_right":
                 elbow = np.array([shoulder[0] * 0.6 + chin[0] * 0.4, desk_top + 0.02, room.desk_depth - 0.12])
@@ -222,6 +233,6 @@ def _person_surfaces(room: Room, p: Person, q: Pose, hip_z: float) -> list[Surfa
     # Legs: thighs under the desk (mostly hidden, but the sensor may see knees)
     for sign in (1.0, -1.0):
         knee = hip + np.array([0.10 * sign, -0.02, -0.42 * k])
-        out.append(Surface(Capsule(hip + np.array([0.09 * sign, 0, 0]), knee, 0.07 * k), Part.LEG, p.torso_refl))
-        out.append(Surface(Capsule(knee, knee + np.array([0, -0.45 * k, 0.05]), 0.055 * k), Part.LEG, p.torso_refl))
+        out.append(Surface(Capsule(hip + np.array([0.09 * sign, 0, 0]), knee, 0.07 * k * g), Part.LEG, p.torso_refl))
+        out.append(Surface(Capsule(knee, knee + np.array([0, -0.45 * k, 0.05]), 0.055 * k * g), Part.LEG, p.torso_refl))
     return out

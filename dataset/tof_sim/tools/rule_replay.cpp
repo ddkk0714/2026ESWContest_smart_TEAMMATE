@@ -1,4 +1,5 @@
-// Runs the firmware posture estimator (firmware/.../preprocess/tof/TofPosture) on
+// Runs the firmware posture estimator (rules/TofPosture, a copy of the team repo's
+// firmware/esp32_sensor_node/src/preprocess/tof/TofPosture) on
 // frames piped in from Python, so the rule-based baseline can be scored on the same
 // synthetic sessions as the learned model.
 //
@@ -7,14 +8,13 @@
 //         t_ms == 0xFFFFFFFF starts a new session (estimator reset, no output).
 // stdout: one uint8 per frame = (uint8)TofPosture
 //
-// Build: g++ -std=gnu++14 -O2 -I../../firmware/esp32_sensor_node/src rule_replay.cpp
-//        ../../firmware/esp32_sensor_node/src/preprocess/tof/TofPosture.cpp -o rule_replay
+// Build (eval_rules.py does this): g++ -std=gnu++14 -O2 -I../rules rule_replay.cpp ../rules/TofPosture.cpp -o rule_replay
 #include <cstdio>
 #include <cstdint>
 #include <memory>
 #include <vector>
 
-#include "preprocess/tof/TofPosture.h"
+#include "TofPosture.h"
 
 #ifdef _WIN32
 #include <fcntl.h>

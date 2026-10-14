@@ -33,11 +33,11 @@ from torch import nn
 from tofsim.data import load_valset
 from tofsim.evaluate import evaluate
 from tofsim.model import PostureNet, count_params
-from tofsim.session import LABELS
+from tofsim.session import LABELS, SessionConfig
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KO = {"upright": "바른자세", "lean_forward": "상체 앞으로", "recline": "뒤로 젖힘", "face_down": "엎드림",
-      "chin_rest": "턱괴기", "drowsy": "꾸벅 졸음", "away": "자리비움"}
+      "chin_rest": "턱괴기", "drowsy": "꾸벅 졸음", "away": "자리비움", "misplaced": "위치 재조정"}
 
 INPUT_SPEC = {
     "frame": "센서 프레임 하나 = (2, H, W) float32",
@@ -46,7 +46,7 @@ INPUT_SPEC = {
     "layout": "row 0 = 위쪽, col 0 = 센서에서 볼 때 왼쪽 (row-major, 펌웨어 TofPosture 와 같음)",
     "state": "GRU 은닉 상태 h (1, 1, hidden). 세션 시작 때 0 으로, 프레임마다 이어서 넘긴다",
     "output": "logits (classes,) — argmax 가 자세. 라벨 순서는 labels",
-    "rate_hz": 15,
+    "rate_hz": SessionConfig.fps,      # the simulated ranging rate: the board must step the model at this rate
 }
 
 

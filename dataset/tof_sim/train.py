@@ -37,7 +37,7 @@ import numpy as np
 
 from tofsim.data import build_valset, load_valset, worker_main
 from tofsim.sensor import PRESETS
-from tofsim.session import LABELS
+from tofsim.session import LABELS, PLACEMENT_MODES
 
 # Windows starts worker processes by re-importing this file as "__mp_main__".
 # They only generate frames, so keep PyTorch out of them.
@@ -75,6 +75,24 @@ def write_json(path, obj):
     os.replace(tmp, path)
 
 
+def load_weights(model, sd: dict, log) -> bool:
+    """Load weights into the model. A head trained with fewer classes is widened: its rows are
+    kept, the new classes keep their fresh initialisation. Returns False when that happened."""
+    sd = dict(sd)
+    own = model.state_dict()
+    same = True
+    for k in ("head.weight", "head.bias"):
+        if k in sd and tuple(sd[k].shape) != tuple(own[k].shape):
+            n = min(sd[k].shape[0], own[k].shape[0])
+            widened = own[k].clone()
+            widened[:n] = sd[k][:n].to(widened.device)
+            log(f"{k}: {sd[k].shape[0]} classes in the checkpoint, {own[k].shape[0]} now (new: {', '.join(LABELS[n:])})")
+            sd[k] = widened
+            same = False
+    model.load_state_dict(sd)
+    return same
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -83,12 +101,20 @@ def main():
     ap.add_argument("--run", required=True)
     ap.add_argument("--sensor", default="vl53l8cx", choices=list(PRESETS))
     ap.add_argument("--backend", default="mujoco", choices=["mujoco", "numpy"], help="scene/ray-cast engine")
+    ap.add_argument("--placement", default="arc", choices=list(PLACEMENT_MODES),
+                    help="where the device stands: arc (the demo arc, aimed at the user) | random (anywhere a user "
+                         "might put it; unusable spots are labelled misplaced) | mixed (half and half)")
+    ap.add_argument("--clutter", type=int, default=None,
+                    help="boxes/shelves against the back wall, 0..N per session (default: session.CLUTTER_MAX)")
     ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--init", default="", help="start from the weights of this checkpoint (any run; a head with "
+                                               "fewer classes is widened). Not used when --resume finds ckpt_last.pt")
     ap.add_argument("--hours", type=float, default=0.0, help="stop after this many hours (0 = run until stopped)")
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) - 2))
     ap.add_argument("--streams", type=int, default=40, help="parallel sessions per batch")
     ap.add_argument("--chunk", type=int, default=64, help="frames per stream per step (truncated BPTT)")
     ap.add_argument("--threads", type=int, default=2, help="torch threads for the trainer")
+    ap.add_argument("--device", default="auto", help="trainer device: auto (cuda if present) | cpu | cuda")
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--lr-half-life-h", type=float, default=48.0)
     ap.add_argument("--transition-weight", type=float, default=0.3)
@@ -106,33 +132,54 @@ def main():
     os.makedirs(run_dir, exist_ok=True)
     log = Logger(os.path.join(run_dir, "train.log"))
     torch.set_num_threads(args.threads)
+    # Workers always generate on the CPU; only the trainer and evaluation move to the GPU.
+    dev = torch.device(args.device if args.device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu"))
     spec = PRESETS[args.sensor]
 
     ctx = mp.get_context("spawn")
-    val_path = os.path.join(HERE, "runs", f"valset_{args.backend}_{args.sensor}_{args.val_sessions}x{int(args.val_seconds)}.npz")
-    if not os.path.exists(val_path):
-        log(f"building validation set -> {val_path}")
-        with ctx.Pool(args.workers) as pool:
-            build_valset(val_path, args.sensor, args.val_sessions, args.val_seconds, log=log, pool=pool,
-                         backend=args.backend)
-    val = load_valset(val_path)
-    reals = {os.path.basename(p): load_valset(p) for p in args.real}
-    log(f"validation set: {len(val['label'])} frames, {len(val['starts'])} sessions")
 
-    model = PostureNet(spec.height, spec.width, len(LABELS))
+    # Validation sets: one drawn like the training sessions (it picks ckpt_best), plus the plain
+    # arc when training elsewhere, so the cost on the demo placement stays visible.
+    def val_file(placement):
+        tag = ("" if placement == "arc" else f"{placement}_") + ("" if args.clutter is None else f"clutter{args.clutter}_")
+        return os.path.join(HERE, "runs", f"valset_{args.backend}_{args.sensor}_{tag}{args.val_sessions}x{int(args.val_seconds)}.npz")
+
+    vals = {}
+    for placement in dict.fromkeys([args.placement, "arc"]):
+        path = val_file(placement)
+        if not os.path.exists(path):
+            log(f"building validation set ({placement}) -> {path}")
+            with ctx.Pool(args.workers) as pool:
+                build_valset(path, args.sensor, args.val_sessions, args.val_seconds, log=log, pool=pool,
+                             backend=args.backend, placement=placement, clutter_max=args.clutter)
+        vals[placement] = load_valset(path)
+        log(f"validation set ({placement}): {len(vals[placement]['label'])} frames, {len(vals[placement]['starts'])} sessions")
+    val = vals[args.placement]
+    reals = {os.path.basename(p): load_valset(p) for p in args.real}
+
+    model = PostureNet(spec.height, spec.width, len(LABELS)).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     state = {"step": 0, "frames": 0, "train_seconds": 0.0, "best_f1": -1.0,
              "label_counts": [1.0] * len(LABELS), "seed": args.seed}
     last_path = os.path.join(run_dir, "ckpt_last.pt")
     if args.resume and os.path.exists(last_path):
         ck = torch.load(last_path, map_location="cpu")
-        model.load_state_dict(ck["model"])
-        opt.load_state_dict(ck["opt"])
+        if load_weights(model, ck["model"], log):
+            opt.load_state_dict(ck["opt"])
+        else:
+            log("head widened: the optimizer state starts fresh")
         state.update(ck["state"])
+        state["label_counts"] = (list(state["label_counts"]) + [1.0] * len(LABELS))[:len(LABELS)]
         log(f"resumed at step {state['step']}, {state['frames']:,} frames, "
             f"{state['train_seconds'] / 3600:.1f} h trained, best macro-F1 {state['best_f1']:.3f}")
     else:
         log(f"new run: {count_params(model):,} parameters, sensor {spec.name} {spec.width}x{spec.height}")
+        if args.init:
+            ck = torch.load(args.init, map_location="cpu")
+            load_weights(model, ck["model"], log)
+            state["init_from"] = os.path.abspath(args.init)
+            st = ck.get("state", {})
+            log(f"weights from {args.init} (step {st.get('step', '?')}, labels {list(ck.get('labels', []))})")
     write_json(os.path.join(run_dir, "config.json"), vars(args))
 
     # Workers. A resumed run uses a new base seed so it does not replay the same sessions.
@@ -146,15 +193,17 @@ def main():
     def spawn(w):
         p = ctx.Process(target=worker_main, daemon=True,
                         args=(w, streams_of[w], queues[w], T, args.sensor, base_seed + 1_000 * w + int(time.time()) % 997,
-                              args.transition_weight, stop, args.backend))
+                              args.transition_weight, stop, args.backend, args.placement, args.clutter))
         p.start()
         return p
 
     for w in range(W):
         procs.append(spawn(w))
-    log(f"{W} workers, {B} streams x {T} frames per step")
+    gpu = f" ({torch.cuda.get_device_name(dev)})" if dev.type == "cuda" else ""
+    log(f"{W} workers, {B} streams x {T} frames per step, placement {args.placement}, clutter {args.clutter}, "
+        f"trainer on {dev}{gpu}")
 
-    h = torch.zeros(1, B, model.gru.hidden_size)
+    h = torch.zeros(1, B, model.gru.hidden_size, device=dev)
     interrupted = {"flag": False}
 
     def on_stop_signal(sig, _frm):
@@ -208,10 +257,11 @@ def main():
                         if interrupted["flag"]:
                             raise KeyboardInterrupt
             batch = [pending[s].popleft() for s in range(B)]
-            x = torch.from_numpy(np.stack([c.x for c in batch]))
-            y = torch.from_numpy(np.stack([c.y for c in batch]))
-            wt = torch.from_numpy(np.stack([c.w for c in batch]))
-            reset = torch.tensor([c.reset for c in batch])
+            y_np = np.stack([c.y for c in batch])
+            x = torch.from_numpy(np.stack([c.x for c in batch])).to(dev)
+            y = torch.from_numpy(y_np).to(dev)
+            wt = torch.from_numpy(np.stack([c.w for c in batch])).to(dev)
+            reset = torch.tensor([c.reset for c in batch], device=dev)
             h[:, reset] = 0.0
 
             # Learning rate decays by wall-clock training time (resumable, no total needed)
@@ -221,9 +271,9 @@ def main():
                 g["lr"] = lr
 
             # Class weights ~ 1/sqrt(frequency), from running label counts
-            counts = 0.999 * counts + np.bincount(y.numpy().ravel(), minlength=len(LABELS))
+            counts = 0.999 * counts + np.bincount(y_np.ravel(), minlength=len(LABELS))
             cw = 1.0 / np.sqrt(counts / counts.sum() + 1e-3)
-            cw = torch.tensor(cw / cw.mean(), dtype=torch.float32)
+            cw = torch.tensor(cw / cw.mean(), dtype=torch.float32, device=dev)
 
             def update(xb, yb, wb, hb):
                 logits_b, h_out = model(xb, hb)
@@ -295,6 +345,11 @@ def main():
                 rec = {"kind": "eval", "time": time.strftime("%Y-%m-%d %H:%M:%S"), "step": state["step"],
                        "frames": state["frames"], "val": ev}
                 log("eval sim  " + format_eval(ev))
+                for placement, data in vals.items():
+                    if placement != args.placement:
+                        pv = evaluate(model, data)
+                        rec[f"val:{placement}"] = pv
+                        log(f"eval sim ({placement}) " + format_eval(pv))
                 for name, data in reals.items():
                     rv = evaluate(model, data)
                     rec[f"real:{name}"] = rv

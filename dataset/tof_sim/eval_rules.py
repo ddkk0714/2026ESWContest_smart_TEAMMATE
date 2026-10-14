@@ -18,15 +18,17 @@ import numpy as np
 from tofsim.session import FLAG_TRANSITION, LABELS
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-FW_SRC = os.path.normpath(os.path.join(HERE, "..", "..", "firmware", "esp32_sensor_node", "src"))
+# 펌웨어 규칙 판정 소스. 기본은 rules/ 의 사본(팀 레포 firmware/esp32_sensor_node/src/preprocess/tof).
+# 팀 레포의 최신 펌웨어로 채점하려면 TOFPOSTURE_SRC 에 그 폴더(TofPosture.h·.cpp 가 있는 곳)를 준다.
+RULES_SRC = os.environ.get("TOFPOSTURE_SRC", os.path.join(HERE, "rules"))
 # firmware TofPosture enum -> label index (Unknown -> -1)
 ENUM_TO_LABEL = {0: -1, 1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6}
 
 
 def build_exe(path):
     src = os.path.join(HERE, "tools", "rule_replay.cpp")
-    est = os.path.join(FW_SRC, "preprocess", "tof", "TofPosture.cpp")
-    cmd = ["g++", "-std=gnu++14", "-O2", f"-I{FW_SRC}", src, est, "-o", path]
+    est = os.path.join(RULES_SRC, "TofPosture.cpp")
+    cmd = ["g++", "-std=gnu++14", "-O2", f"-I{RULES_SRC}", src, est, "-o", path]
     print("building", " ".join(cmd))
     subprocess.check_call(cmd)
 

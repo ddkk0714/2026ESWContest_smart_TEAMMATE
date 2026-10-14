@@ -11,18 +11,20 @@
 # 완전히 멈추기: scancel <작업번호>  그리고  touch runs/<RUN>/STOP   (다시 제출하지 않게)
 #
 # ▼ UBAI 기준 (2026-10-12 확인) ────────────────────────────────────────
-#   --partition cpu2 : CPU 전용(노드당 256코어·1 TB). cpu1 은 노드당 48코어. GPU 는 필요 없다
-#                      (병목은 CPU 데이터 생성)
-#   --cpus-per-task  : 생성 프로세스 = 이 값 - 2. 계정 한도 CPU 640개라 64 로 올려도 된다
-#                      (그때는 --mem 도 24G 정도로)
+#   --partition gpu6 : A10 GPU 노드(노드당 GPU 4장·48코어). 2026-10-13 기준 빈 노드가 가장 많다.
+#                      학습은 GPU, 데이터 생성은 같은 노드의 CPU 에서 한다
+#   --gres gpu:1     : GPU 1장이면 충분하다(모델 약 7만 파라미터)
+#   --cpus-per-task  : 생성 프로세스 = 이 값 - 2. GPU 노드는 48~64코어라 32 가 상한에 가깝다
+#                      CPU 만으로 돌릴 때: --partition=cpu2, --gres 줄 삭제(train.py 가 알아서 CPU 사용)
 #   --time 2-00:00:00: 계정의 작업당 최대 시간이 2일. 넘기면 작업이 대기 상태로 남는다.
 #                      바꾸면 아래 JOB_H 도 그보다 30분쯤 짧게
 #   --output         : tof_sim 폴더 바로 아래. runs/ 는 git 에 없어서 막 clone 하면 아직 없고,
 #                      Slurm 은 없는 폴더에 로그를 못 만들어 작업이 바로 실패한다
 #SBATCH --job-name=tof_sim
-#SBATCH --partition=cpu2
+#SBATCH --partition=gpu6
+#SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=32
-#SBATCH --mem=16G
+#SBATCH --mem=32G
 #SBATCH --time=2-00:00:00
 #SBATCH --output=slurm-%j.out
 
@@ -55,7 +57,7 @@ CPUS="${SLURM_CPUS_PER_TASK:-4}"
 WORKERS=$(( CPUS > 3 ? CPUS - 2 : 1 ))
 echo "$(date -Is) 작업 ${SLURM_JOB_ID:-로컬} — 실행 '$RUN', 이번 작업 ${hours}시간 (전체 남은 ${left}시간), 생성 프로세스 ${WORKERS}개"
 
-.venv/bin/python -u train.py --run "$RUN" --resume --hours "$hours" --workers "$WORKERS"
+.venv/bin/python -u train.py --run "$RUN" --resume --hours "$hours" --workers "$WORKERS" ${TRAIN_ARGS:-}   # TRAIN_ARGS: extra train.py options, kept on resubmit
 code=$?
 
 # 연속 실패 횟수 (정상 종료면 0 으로)
