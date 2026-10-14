@@ -30,10 +30,11 @@ hub_pid() {
 owner() {
     BIN=$SERVICE_DIR/deskmate_hub_service
     [ -x "$BIN" ] || fail "missing installed hub: $BIN"
-    OWNER=$(ls -ln "$BIN" | awk '{print $3}')
-    GROUP=$(ls -ln "$BIN" | awk '{print $4}')
-    case "$OWNER:$GROUP" in *[!0-9:]*|:*) fail "invalid installed owner";; esac
-    # Numeric identities follow ATLAS reinstallation without hard-coded u0_aNNNN.
+    OWNER=$(ls -l "$BIN" | awk '{print $3}')
+    GROUP=$(ls -l "$BIN" | awk '{print $4}')
+    case "$OWNER:$GROUP" in *[!A-Za-z0-9_:-]*|:*|*:) fail "invalid installed owner";; esac
+    # Read from the binary so u0_aNNNN follows reinstalls. Names, not UIDs: the
+    # ATLAS D-Bus launch helper rejects User=5015 with "Failed to setup environment".
 }
 atomic_update() {
     target=$1

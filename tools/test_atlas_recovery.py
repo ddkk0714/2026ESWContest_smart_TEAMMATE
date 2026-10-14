@@ -56,6 +56,8 @@ Start) printf '["%s"]' "$4" > "$FIXTURE/apps";;
 esac
 ''',
         'wget': '[ ! -f "$FIXTURE/http-fails" ] || exit 1\ncat "$FIXTURE/http-state"\n',
+        'df': 'echo "Filesystem 1024-blocks Used Available Capacity Mounted on"\n'
+              '[ -f "$FIXTURE/late-mount" ] && echo "dev 1 1 1 1% /data" || echo "dev 1 1 1 1% /"\n',
         'id': 'echo 0\n',
         'date': 'cat "$FIXTURE/time"\n',
         'chown': 'echo "chown $*" >> "$FIXTURE/commands.log"\n',
@@ -105,7 +107,10 @@ def test_prepare_preserves_settings_and_reload_is_idempotent(board):
     call('lifecycle.sh', 'hub-prepare')
     assert (service / 'hub.env').read_text() == settings
     assert log(root).count('systemctl reload dbus') == 1
-    assert 'User=' in (root / 'dbus/system-services/com.deskmate.hub1.service').read_text()
+    unit = (root / 'dbus/system-services/com.deskmate.hub1.service').read_text()
+    user = unit.split('User=', 1)[1].split('\n', 1)[0]
+    # 10-13 Pi 4: the D-Bus launch helper refused User=5015; it needs the account name.
+    assert user and not user.isdigit()
 
 def test_stalled_fsm_recovers_with_cooldown_and_boot_change(board):
     root, prefix, service, units, call = board
@@ -170,6 +175,16 @@ def test_no_persistent_unit_path_refuses_install(board):
     assert result.returncode != 0
     assert 'no writable persistent unit path' in result.stderr
     assert not (units / 'deskmate-hub.service').exists()
+
+def test_late_mounted_unit_path_refuses_persistent_install(board):
+    root, prefix, service, units, call = board
+    # 10-13 ATLAS: /data is mounted after systemd loads boot wants, so units there never start.
+    (root / 'late-mount').write_text('')
+    result = call('install.sh', 'pi4', '--unit-dir', posix(units), '--no-start', check=False)
+    assert result.returncode != 0
+    assert 'boot start unsupported' in result.stderr
+    assert not (units / 'deskmate-hub.service').exists()
+    assert call('install.sh', 'pi4', check=False).returncode != 0
 
 def test_unexpected_character_device_is_not_modified(board):
     root, prefix, service, units, call = board

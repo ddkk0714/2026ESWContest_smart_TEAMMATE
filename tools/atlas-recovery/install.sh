@@ -24,14 +24,21 @@ done
 case "$PREFIX" in /*) ;; *) echo "absolute prefix required" >&2; exit 1;; esac
 case "$PREFIX" in *[!A-Za-z0-9_./-]*|*/../*|*/..|/) echo "unsupported prefix" >&2; exit 1;; esac
 LOAD_PATHS=$(systemctl show --property=UnitPath --value)
+# systemd reads boot wants before later mounts appear; ATLAS mounts /data after that,
+# so units there load but are never started at boot (10-13 Pi 4/Pi 5 reboot).
+on_root_fs() { [ "$(df -P "$1" 2>/dev/null | awk 'NR==2{print $6}')" = / ]; }
 [ -n "$LOAD_PATHS" ] || { echo "cannot discover systemd UnitPath" >&2; exit 1; }
 if [ -z "$UNIT_DIR" ]; then
     if [ "$RUNTIME" -eq 1 ]; then
         UNIT_DIR=/run/systemd/system
     else
+        # root passes -w on a read-only mount (ATLAS /etc), so probe with a real write.
         for candidate in $LOAD_PATHS; do
             case "$candidate" in /run/*) continue;; esac
-            if [ -d "$candidate" ] && [ -w "$candidate" ]; then UNIT_DIR=$candidate; break; fi
+            [ -d "$candidate" ] || continue
+            probe=$candidate/.deskmate-write-probe.$$
+            on_root_fs "$candidate" || continue
+            if (umask 077; : > "$probe") 2>/dev/null; then rm -f "$probe"; UNIT_DIR=$candidate; break; fi
         done
     fi
 fi
@@ -63,6 +70,9 @@ if [ "$REMOVE" -eq 1 ]; then
     systemctl daemon-reload
     echo "removed managed units; config and data retained"
     exit 0
+fi
+if [ "$RUNTIME" -eq 0 ] && ! on_root_fs "$UNIT_DIR"; then
+    echo "unit-dir is on a filesystem mounted after boot units load; boot start unsupported. Use --runtime-only after each boot." >&2; exit 1
 fi
 # Preflight before installing any units. Existing trusted config is preserved.
 [ -f "$HERE/lifecycle.sh" ] && [ -f "$HERE/recovery.env.example" ] || exit 1

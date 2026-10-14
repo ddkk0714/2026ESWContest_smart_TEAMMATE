@@ -1,6 +1,10 @@
 # 재부팅·장애 복구 자동화 (2026-10-06)
 
-구현 위치는 `tools/atlas-recovery/`이다. 보드 설치와 실제 재부팅 검증은 아직 수행하지 않았다. Pi 4에는 broker·hub 감독 서비스, Pi 5에는 디스플레이 기동 서비스를 설치한다. 두 보드 모두 30초 간격으로 복구 상태를 점검한다.
+구현 위치는 `tools/atlas-recovery/`이다.
+
+> **10-14 실기 결과: 현재 ATLAS 이미지에서는 부팅 자동 시작이 불가능하다.** 쓰기 가능한 UnitPath는 `/data/share/usr/lib/systemd/system`뿐인데, `/data`는 systemd가 부팅 유닛을 읽은 뒤에 마운트된다. 그래서 그 경로의 `.wants`는 무시된다(두 보드 재부팅 후 `inactive` 확인). 설치기는 이제 이 경로에 영구 설치를 거부한다. 부팅할 때마다 Pi 4에서 `sh /data/share/deskmate/recovery/install.sh pi4 --runtime-only`, Pi 5에서 `... pi5 --runtime-only`를 한 번 실행한다. 이후 감독·재시작은 정상 동작한다. 영구 등록은 ATLAS가 지원하는 방식을 LG 측에 확인해야 한다.
+>
+> 같은 날 Pi 4에서 확인한 것: hub 프로세스 강제 종료 → 약 11초 뒤 새 PID로 복구. broker 재시작 → hub MQTT 재연결, broker 프로세스 1개. UART 권한 `g0_a5015 660` 복구. Pi 5 앱이 AppManager로 기동. Pi 4에는 broker·hub 감독 서비스, Pi 5에는 디스플레이 기동 서비스를 설치한다. 두 보드 모두 30초 간격으로 복구 상태를 점검한다.
 
 ## 동작
 
