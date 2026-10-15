@@ -7,11 +7,13 @@ Every frame carries the ground-truth label, so nothing has to be annotated.
 Labels follow the on-board estimator (firmware TofPosture.h) minus `unknown`,
 which only exists because the estimator has to learn a baseline first:
 
-    0 upright · 1 lean_forward · 2 recline · 3 face_down · 4 chin_rest · 5 drowsy · 6 away · 7 misplaced
+    0 upright · 1 lean_forward · 2 recline · 3 face_down · 4 chin_rest · 5 drowsy · 6 away · 7 misplaced · 8 forward_head
 
 `misplaced` is not a posture: the device stands where it cannot see the user properly (upside
 down, too near, too far, pointing past them, tilted well off), so the product should ask for a
 re-adjustment. It only arises in placement mode "random" (PLACEMENT_MODES, _placement_ok).
+`forward_head` is the turtle-neck posture: the trunk about upright but the head slid forward toward
+the screen (Pose.head_forward 5-8.5 cm), which the product should coach against.
 
 Each segment also includes the look-alikes that a real desk throws at the
 classifier, labelled as what they are: glancing down at the keyboard,
@@ -28,7 +30,7 @@ from .body import Person, Pose, Room, build_scene
 from . import smplx_body as sb
 from .sensor import PRESETS, Sensor, SensorModel, SensorPose, SensorSpec, _rot
 
-LABELS = ["upright", "lean_forward", "recline", "face_down", "chin_rest", "drowsy", "away", "misplaced"]
+LABELS = ["upright", "lean_forward", "recline", "face_down", "chin_rest", "drowsy", "away", "misplaced", "forward_head"]
 
 # Sensor placement: a small desk stand (Stream Deck-like) anywhere on an arc in front of the
 # user. At the demo the arc is split into three 30 deg sectors (left / front / right); the
@@ -86,26 +88,32 @@ FLAG_LOOKALIKE = 4    # a look-alike action (glance down, cup, head turn) is in 
 FLAG_BYSTANDER = 8    # a second person is in the room (walking behind or standing beside)
 
 # Relative frequency and duration range (s) of each segment type
+# Weights are draw frequencies, not time shares: upright-family segments are long and "return to upright"
+# segments add more, so the posture weights below are higher than their target time share. Measured over
+# 300 timelines (label time share): upright family ~45 %, forward_head ~8 %, drowsy ~11 %, lean_forward ~9 %,
+# recline / face_down / chin_rest ~6-7 % each, away ~4 %.
 SEGMENTS = {
-    "upright": (0.26, (15, 90)),
-    "lean_forward": (0.12, (5, 30)),
-    "recline": (0.12, (5, 40)),
-    "face_down": (0.10, (5, 40)),
-    "chin_rest": (0.12, (5, 40)),
-    "drowsy": (0.12, (20, 70)),
-    "away": (0.08, (3, 30)),
+    "upright": (0.14, (15, 90)),
+    "lean_forward": (0.13, (5, 30)),
+    "recline": (0.15, (5, 40)),
+    "face_down": (0.15, (5, 40)),
+    "chin_rest": (0.15, (5, 40)),
+    "drowsy": (0.13, (20, 70)),
+    "away": (0.09, (3, 30)),
     # Variants of the postures above, labelled as them (SEGMENT_LABEL): more ways of sitting the same way
-    "armrest": (0.06, (10, 60)),       # upright, leaning on one armrest
-    "look_aside": (0.06, (5, 30)),     # upright, head turned to a second monitor or a colleague for a while
+    "armrest": (0.05, (10, 60)),       # upright, leaning on one armrest
+    "look_aside": (0.05, (5, 30)),     # upright, head turned to a second monitor or a colleague for a while
     "elbows": (0.05, (5, 30)),         # lean_forward, propped on both forearms, eyes on the screen
     "stretch": (0.04, (3, 7)),         # recline, a short stretch with the hands behind the head
     "writing": (0.07, (10, 60)),       # lean_forward, studying on paper: head down over the desk, pencil hand moving
-    "reading": (0.06, (15, 90)),       # upright, a book held at chest height, eyes on it
-    "mouse_work": (0.08, (10, 60)),    # upright, left hand on the keyboard, right hand on the mouse
-    "phone_call": (0.05, (10, 60)),    # upright, the right hand holds the phone at the ear, head tilted to it
+    "reading": (0.05, (15, 90)),       # upright, a book held at chest height, eyes on it
+    "mouse_work": (0.06, (10, 60)),    # upright, left hand on the keyboard, right hand on the mouse
+    "phone_call": (0.04, (10, 60)),    # upright, the right hand holds the phone at the ear, head tilted to it
+    "turtle": (0.08, (15, 90)),        # forward_head: trunk about upright, head slid 5-8.5 cm toward the screen
 }
 SEGMENT_LABEL = {"armrest": "upright", "look_aside": "upright", "elbows": "lean_forward", "stretch": "recline",
-                 "writing": "lean_forward", "reading": "upright", "mouse_work": "upright", "phone_call": "upright"}
+                 "writing": "lean_forward", "reading": "upright", "mouse_work": "upright", "phone_call": "upright",
+                 "turtle": "forward_head"}
 
 
 @dataclass
@@ -435,6 +443,7 @@ ARMS = {
     "mouse_work": [("mouse", 1.0)],
     "phone_call": [("phone_call", 1.0)],
     "phone_other": [("lap", 0.4), ("typing", 0.3), ("hanging", 0.2), ("writing", 0.1)],   # the free arm during a call
+    "turtle": [("typing", 0.45), ("mouse", 0.25), ("writing", 0.10), ("lap", 0.10), ("phone", 0.10)],
 }
 # Two-handed modes a look-alike may interrupt with one hand (a cup, a snack, the bag on the floor)
 TWO_HANDED_FREE = ("typing", "lap", "crossed", "phone", "hanging", "writing", "mouse")
@@ -450,7 +459,7 @@ def _target_pose(kind: str, rng, limits: dict | None = None) -> Pose:
     deg = np.radians
     if kind == "upright":
         return Pose(trunk_pitch=deg(rng.normal(0, 5)), trunk_roll=deg(rng.normal(0, 2)), neck_pitch=deg(rng.normal(6, 6)),
-                    head_yaw=deg(rng.normal(0, 6)), arms=_arms("upright", rng))
+                    head_yaw=deg(rng.normal(0, 6)), arms=_arms("upright", rng), head_forward=_u(rng, 0.0, 0.03))
     if kind == "lean_forward":
         return Pose(trunk_pitch=deg(_u(rng, 14, 36)), neck_pitch=deg(_u(rng, -2, 16)), head_yaw=deg(rng.normal(0, 6)),
                     arms=_arms("lean_forward", rng))
@@ -460,11 +469,13 @@ def _target_pose(kind: str, rng, limits: dict | None = None) -> Pose:
     if kind == "armrest":
         side = 1.0 if rng.random() < 0.5 else -1.0           # which armrest (+ = +x)
         return Pose(trunk_pitch=deg(rng.normal(0, 4)), trunk_roll=deg(_u(rng, 8, 15)) * side,
-                    neck_pitch=deg(rng.normal(6, 5)), head_roll=deg(_u(rng, 0, 6)) * side, arms=_arms("armrest", rng))
+                    neck_pitch=deg(rng.normal(6, 5)), head_roll=deg(_u(rng, 0, 6)) * side, arms=_arms("armrest", rng),
+                    head_forward=_u(rng, 0.0, 0.03))
     if kind == "look_aside":
         side = 1.0 if rng.random() < 0.5 else -1.0
         return Pose(trunk_pitch=deg(rng.normal(0, 4)), trunk_roll=deg(_u(rng, 0, 5)) * side,
-                    neck_pitch=deg(rng.normal(4, 5)), head_yaw=deg(_u(rng, 30, 60)) * side, arms=_arms("look_aside", rng))
+                    neck_pitch=deg(rng.normal(4, 5)), head_yaw=deg(_u(rng, 30, 60)) * side, arms=_arms("look_aside", rng),
+                    head_forward=_u(rng, 0.0, 0.03))
     if kind == "elbows":
         return Pose(trunk_pitch=deg(_u(rng, 22, 35)), neck_pitch=deg(_u(rng, -10, 5)), arms=_arms("elbows", rng))
     if kind == "writing":
@@ -475,10 +486,13 @@ def _target_pose(kind: str, rng, limits: dict | None = None) -> Pose:
                     arms="book")
     if kind == "mouse_work":
         return Pose(trunk_pitch=deg(rng.normal(2, 4)), neck_pitch=deg(rng.normal(6, 5)), head_yaw=deg(rng.normal(0, 6)),
-                    arms="mouse")
+                    arms="mouse", head_forward=_u(rng, 0.0, 0.03))
     if kind == "phone_call":                                   # the phone hand is the right one: head tilts that way (-x)
         return Pose(trunk_pitch=deg(rng.normal(0, 4)), neck_pitch=deg(rng.normal(3, 5)), head_roll=-deg(_u(rng, 4, 12)),
                     head_yaw=deg(rng.normal(0, 8)), arms="phone_call", other_arms=_arms("phone_other", rng))
+    if kind == "turtle":                                       # turtle neck: head forward, face still on the screen
+        return Pose(trunk_pitch=deg(rng.normal(3, 4)), neck_pitch=deg(rng.normal(6, 5)), head_yaw=deg(rng.normal(0, 5)),
+                    arms=_arms("turtle", rng), head_forward=_u(rng, 0.05, 0.085))
     if kind == "stretch":
         return Pose(trunk_pitch=-deg(_u(rng, 20, 35)), neck_pitch=-deg(_u(rng, 5, 15)), arms=_arms("stretch", rng),
                     hip_shift=_u(rng, 0.0, 0.08))
@@ -796,8 +810,8 @@ def plan_timeline(total_s: float, rng, limits: dict | None = None) -> list[Segme
         seg.lookalikes = _plan_lookalikes(kind, dur, rng)
         segs.append(seg)
         # Most non-upright segments return to upright, like a real desk day
-        if kind not in ("upright", "away") and rng.random() < 0.6:
-            segs.append(Segment("upright", _u(rng, 10, 60), _target_pose("upright", rng, limits)))
+        if kind not in ("upright", "away") and rng.random() < 0.5:
+            segs.append(Segment("upright", _u(rng, 8, 30), _target_pose("upright", rng, limits)))
         t = sum(s.duration for s in segs)
     return segs
 
@@ -805,7 +819,7 @@ def plan_timeline(total_s: float, rng, limits: dict | None = None) -> list[Segme
 # ---------------------------------------------------------------------------
 # Frame generation
 
-_LERP_FIELDS = ("trunk_pitch", "trunk_roll", "neck_pitch", "head_yaw", "head_roll", "hip_shift")
+_LERP_FIELDS = ("trunk_pitch", "trunk_roll", "neck_pitch", "head_yaw", "head_roll", "hip_shift", "head_forward")
 
 
 def _lerp_pose(a: Pose, b: Pose, w: float) -> Pose:

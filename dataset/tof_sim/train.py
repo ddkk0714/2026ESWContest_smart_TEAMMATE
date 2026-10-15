@@ -80,6 +80,9 @@ def load_weights(model, sd: dict, log) -> bool:
     kept, the new classes keep their fresh initialisation. Returns False when that happened."""
     sd = dict(sd)
     own = model.state_dict()
+    if tuple(sd["gru.weight_hh_l0"].shape) != tuple(own["gru.weight_hh_l0"].shape):
+        raise SystemExit(f"checkpoint width {sd['gru.weight_hh_l0'].shape[1]} != --hidden {own['gru.weight_hh_l0'].shape[1]}: "
+                         "a model of another width cannot be continued; start it fresh")
     same = True
     for k in ("head.weight", "head.bias"):
         if k in sd and tuple(sd[k].shape) != tuple(own[k].shape):
@@ -128,6 +131,7 @@ def main():
     ap.add_argument("--val-seconds", type=float, default=300.0)
     ap.add_argument("--real", nargs="*", default=[], help="npz files of real labelled captures to score at each eval")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--hidden", type=int, default=64, help="feature/GRU width (64 = the MCU-sized model, ~72k parameters)")
     args = ap.parse_args()
 
     run_dir = os.path.join(HERE, "runs", args.run)
@@ -160,7 +164,7 @@ def main():
     val = vals[args.placement]
     reals = {os.path.basename(p): load_valset(p) for p in args.real}
 
-    model = PostureNet(spec.height, spec.width, len(LABELS)).to(dev)
+    model = PostureNet(spec.height, spec.width, len(LABELS), hidden=args.hidden).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     state = {"step": 0, "frames": 0, "train_seconds": 0.0, "best_f1": -1.0,
              "label_counts": [1.0] * len(LABELS), "seed": args.seed}
@@ -229,7 +233,7 @@ def main():
 
     def save(path):
         atomic_save({"model": model.state_dict(), "opt": opt.state_dict(), "state": state,
-                     "labels": LABELS, "sensor": spec.__dict__}, path)
+                     "labels": LABELS, "sensor": spec.__dict__, "hidden": args.hidden}, path)
 
     t_start = time.time()
     t_last_ckpt = t_last_eval = t_last_status = time.time()

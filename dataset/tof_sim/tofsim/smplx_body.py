@@ -27,7 +27,8 @@ PART_JOINTS = {
     "thigh_l": [1], "thigh_r": [2],
     "shin_l": [4, 7, 10], "shin_r": [5, 8, 11],
     "trunk": [3, 6, 9, 13, 14],
-    "head": [12, 15, 22, 23, 24],
+    "neck": [12],
+    "head": [15, 22, 23, 24],
     "uarm_l": [16], "uarm_r": [17],
     "farm_l": [18], "farm_r": [19],
     "hand_l": [20] + list(range(25, 40)), "hand_r": [21] + list(range(40, 55)),
@@ -35,7 +36,7 @@ PART_JOINTS = {
 # joint that is each part's origin, and the child joint giving its long axis (None = no re-orientation)
 PART_FRAME = {
     "pelvis": (0, None), "thigh_l": (1, 4), "thigh_r": (2, 5), "shin_l": (4, 7), "shin_r": (5, 8),
-    "trunk": (0, None), "head": (12, None),
+    "trunk": (0, None), "neck": (12, None), "head": (15, None),
     "uarm_l": (16, 18), "uarm_r": (17, 19), "farm_l": (18, 20), "farm_r": (19, 21),
     "hand_l": (20, 28), "hand_r": (21, 43),
 }
@@ -152,6 +153,7 @@ class Body:
     sh: float              # shoulder half width
     knee_l: np.ndarray     # knee position in the pelvis frame (seated)
     knee_r: np.ndarray
+    neck: float = 0.09     # neck joint -> head joint (skull base): the lever of the forward-head posture
 
 
 def make(gender: str, betas, hair_cover: float = 0.8) -> Body:
@@ -230,12 +232,16 @@ def make(gender: str, betas, hair_cover: float = 0.8) -> Body:
     # hair: the scalp part of the head surface becomes its own (dark) piece
     head = parts["head"]
     hv, hf = head.verts, head.faces
-    top, bot = hv[:, 2].max(), hv[:, 2].min()
+    # thresholds were tuned on the old neck+head piece, so measure the span on the same vertices
+    Lv = J[15] - J[12]                                                # head frame -> neck frame
+    span = np.concatenate([parts["neck"].verts, hv + Lv])             # neck + skull, in the neck frame
+    top, bot = span[:, 2].max(), span[:, 2].min()
     H = top - bot
-    yc = 0.5 * (hv[:, 1].min() + hv[:, 1].max())
+    yc = 0.5 * (span[:, 1].min() + span[:, 1].max())
     front_line = top - H * 0.25 * hair_cover                          # hairline on the forehead (above the brows)
     back_line = top - H * min(0.9, 0.25 * hair_cover + 0.45)          # hair reaches further down behind
-    is_hair = hv[:, 2] > np.where(hv[:, 1] > yc + 0.01, back_line, front_line)   # the person faces -y
+    hz, hy = hv[:, 2] + Lv[2], hv[:, 1] + Lv[1]
+    is_hair = hz > np.where(hy > yc + 0.01, back_line, front_line)    # the person faces -y
     votes = is_hair[hf].sum(1)
 
     def piece(faces):
@@ -255,14 +261,16 @@ def make(gender: str, betas, hair_cover: float = 0.8) -> Body:
         Rt = parts[f"thigh_{side}"].R
         parts[f"thigh_{side}"].offset = J[hip].copy()
         parts[f"shin_{side}"].offset = J[hip] + Rt @ (J[knee] - J[hip])          # knee after the thigh swings forward
-    parts["head"].offset = J[12].copy()
+    parts["neck"].offset = J[12].copy()                                           # neck base, in the trunk frame
+    parts["head"].offset = (J[15] - J[12]).copy()                                 # skull base, in the neck frame
     for side, s_j in (("l", 16), ("r", 17)):
         parts[f"uarm_{side}"].offset = J[s_j].copy()                                # shoulder in the trunk frame
         parts[f"farm_{side}"].offset = np.array([0.0, 0.0, -ua])
         parts[f"hand_{side}"].offset = np.array([0.0, 0.0, -fa])
     # standing stature from the posed skeleton: crown above the pelvis + thigh + shin + foot
     height = float(V[:, 2].max() + np.linalg.norm(J[4] - J[1]) + np.linalg.norm(J[7] - J[4]) + 0.08)
-    return Body(parts, J, height, ua, fa, spine, sh, parts["shin_l"].offset, parts["shin_r"].offset)
+    neck_len = float(np.linalg.norm(J[15] - J[12]))                                 # neck base -> skull base
+    return Body(parts, J, height, ua, fa, spine, sh, parts["shin_l"].offset, parts["shin_r"].offset, neck_len)
 
 
 @functools.lru_cache(maxsize=8)

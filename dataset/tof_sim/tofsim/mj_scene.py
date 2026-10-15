@@ -7,7 +7,9 @@ convert as (X, Y, Z) -> (X, Z, Y).
 
 The person is a kinematic tree with real joints:
     pelvis (slide along y: scooting the chair) -> trunk (pitch, roll) -> chest (breathing)
-    -> head (neck pitch, yaw, roll), and per arm shoulder (ball) -> elbow (hinge) -> hand.
+    -> neck (neck pitch, yaw, roll, lower-neck flexion) -> head (upper-neck extension), and per arm
+    shoulder (ball) -> elbow (hinge) -> hand. Pose.head_forward bends the neck forward and the head back
+    by the same angle, so the head translates toward the desk with the face direction unchanged.
 Poses are applied by writing qpos (no dynamics), so a session is reproducible and
 cheap. Arms reach their targets (keyboard, chin, mouth, desk) with two-link IK.
 
@@ -141,16 +143,20 @@ def build_mjcf(room: Room, person: Person, body=None) -> tuple[str, dict]:
           {pg("torso", cloth, type="ellipsoid", size=_v(sh * 0.95, 0.11 * k * g, spine * 0.55), pos=_v(0, 0, spine * 0.55),
               rgba="0.3 0.4 0.7 1")}
         </body>
-        <body name="head" pos="{_v(0, 0, spine)}">
+        <body name="neck" pos="{_v(0, 0, spine)}">
           <joint name="neck_pitch" type="hinge" axis="1 0 0"/>
           <joint name="head_yaw" type="hinge" axis="0 0 1"/>
           <joint name="head_roll" type="hinge" axis="0 1 0"/>
+          <joint name="neck_flex" type="hinge" axis="1 0 0" armature="0.01"/>
           {pg("neck", skin, type="capsule", fromto=_v(0, 0, 0, 0, 0, 0.09 * k), size=_v(0.05 * k * g), rgba="0.9 0.75 0.65 1")}
-          {pg("head", skin, type="ellipsoid", size=_v(*head_size), pos=_v(*head_pos), rgba="0.9 0.75 0.65 1")}
-          {pg("hair", hair, type="ellipsoid", size=_v(*hair_size),
-              pos=_v(head_pos[0], head_pos[1] + 0.012 * hk, head_pos[2] + 0.02 * hk), rgba="0.1 0.08 0.05 1")}
-          <site name="chin" pos="{_v(0, -0.06 * hk, head_pos[2] - 0.10 * hk)}"/>
-          <site name="mouth" pos="{_v(0, -0.09 * hk, head_pos[2] - 0.05 * hk)}"/>
+          <body name="head" pos="{_v(0, 0, 0.09 * k)}">
+            <joint name="head_ext" type="hinge" axis="1 0 0" armature="0.01"/>
+            {pg("head", skin, type="ellipsoid", size=_v(*head_size), pos=_v(head_pos[0], head_pos[1], head_pos[2] - 0.09 * k), rgba="0.9 0.75 0.65 1")}
+            {pg("hair", hair, type="ellipsoid", size=_v(*hair_size),
+                pos=_v(head_pos[0], head_pos[1] + 0.012 * hk, head_pos[2] + 0.02 * hk - 0.09 * k), rgba="0.1 0.08 0.05 1")}
+            <site name="chin" pos="{_v(0, -0.06 * hk, head_pos[2] - 0.10 * hk - 0.09 * k)}"/>
+            <site name="mouth" pos="{_v(0, -0.09 * hk, head_pos[2] - 0.05 * hk - 0.09 * k)}"/>
+          </body>
         </body>
         {arm("l", sh)}
         {arm("r", -sh)}
@@ -227,7 +233,7 @@ def _mesh_person_xml(person: Person, body, pg, chair_y: float, hip_z: float) -> 
         </body>"""
 
     cap = mesh("hair", hair, rgba="0.1 0.08 0.05 1")                 # scalp piece of the head mesh, dark at 940 nm
-    jaw = body.joints[22] - body.joints[12]
+    jaw = body.joints[22] - body.joints[15]                         # jaw joint in the head (skull base) frame
     legs = "".join(mesh(n, cloth, at_origin=False, rgba="0.2 0.2 0.3 1") for n in ("thigh_l", "shin_l", "thigh_r", "shin_r"))
     for s in ("l", "r"):
         hip, knee = P[f"thigh_{s}"].offset, P[f"shin_{s}"].offset
@@ -253,16 +259,21 @@ def _mesh_person_xml(person: Person, body, pg, chair_y: float, hip_z: float) -> 
           {mesh("trunk", cloth)}
           {trunk_core}
         </body>
-        <body name="head" pos="{_v(*P["head"].offset)}">
+        <body name="neck" pos="{_v(*P["neck"].offset)}">
           <joint name="neck_pitch" type="hinge" axis="1 0 0"/>
           <joint name="head_yaw" type="hinge" axis="0 0 1"/>
           <joint name="head_roll" type="hinge" axis="0 1 0"/>
-          {mesh("head", skin, rgba="0.9 0.75 0.65 1")}
-          {cap}
-          {head_core}
-          {core("core_neck", skin, type="capsule", fromto=_v(0, 0, -0.02 * k, 0, 0, 0.08 * k), size=_v(0.045 * k))}
-          <site name="chin" pos="{_v(jaw[0], jaw[1] - 0.07, jaw[2] - 0.05)}"/>
-          <site name="mouth" pos="{_v(jaw[0], jaw[1] - 0.09, jaw[2])}"/>
+          <joint name="neck_flex" type="hinge" axis="1 0 0" armature="0.01"/>
+          {mesh("neck", skin, rgba="0.9 0.75 0.65 1")}
+          {core("core_neck", skin, type="capsule", fromto=_v(0, 0, -0.02 * k, 0, 0, body.neck + 0.01 * k), size=_v(0.045 * k))}
+          <body name="head" pos="{_v(*P["head"].offset)}">
+            <joint name="head_ext" type="hinge" axis="1 0 0" armature="0.01"/>
+            {mesh("head", skin, rgba="0.9 0.75 0.65 1")}
+            {cap}
+            {head_core}
+            <site name="chin" pos="{_v(jaw[0], jaw[1] - 0.07, jaw[2] - 0.05)}"/>
+            <site name="mouth" pos="{_v(jaw[0], jaw[1] - 0.09, jaw[2])}"/>
+          </body>
         </body>
         {arm("l")}
         {arm("r")}
@@ -331,6 +342,8 @@ class MjDesk:
         self.present = True
         k = person.scale
         self.ua, self.fa = (body.ua, body.fa) if body is not None else (0.30 * k, 0.27 * k)
+        self.neck_len = body.neck if body is not None else 0.09 * k      # neck base -> skull base
+        self.head_off = np.array(body.parts["head"].offset, dtype=float) if body is not None else np.array([0.0, 0.0, 0.09 * k])
         self._geomgroup_all = np.array([1, 1, 0, 1, 0, 0], dtype=np.uint8)     # group 2 = monitor, never hit; 3 = bystander
         self._geomgroup_empty = np.array([1, 0, 0, 1, 0, 0], dtype=np.uint8)
         self._walker = self.model.body_mocapid[self.body("walker")]
@@ -361,6 +374,12 @@ class MjDesk:
         q[j["neck_pitch"]] = pose.neck_pitch
         q[j["head_yaw"]] = pose.head_yaw
         q[j["head_roll"]] = pose.head_roll          # + = tilt to the person's left (+x), same sense as trunk_roll
+        # forward-head posture: bend the neck forward and the head back by the same angle, so the
+        # head translates toward the desk (neck_len * sin) and drops a little, face direction unchanged
+        h = min(max(float(pose.head_forward), 0.0), self.neck_len * np.sin(np.radians(70.0)))
+        flex = float(np.arcsin(h / self.neck_len)) if h > 0.0 else 0.0
+        q[j["neck_flex"]] = flex
+        q[j["head_ext"]] = -flex
         # office-chair recline: the seat tips back about a third of the lean (knees rise), the
         # backrest follows the trunk; the trunk still ends at the requested world angle
         seat = 0.35 * min(0.0, pose.trunk_pitch)
@@ -455,7 +474,7 @@ class MjDesk:
         if mode == "phone_call":
             # hand at the ear on the same side; elbow out and forward
             head_b = self.body("head")
-            ear = d.xpos[head_b] + d.xmat[head_b].reshape(3, 3) @ np.array([0.085 * sign * k, 0.0, 0.17 * k])
+            ear = d.xpos[head_b] + d.xmat[head_b].reshape(3, 3) @ (np.array([0.085 * sign * k, 0.0, 0.17 * k]) - self.head_off)
             return ear + np.array([0.02 * sign, -0.01, -0.02]), S + np.array([0.22 * sign, -0.28, -0.10])
         if mode == "eat":
             # hand goes from the desk (snack in front of the keyboard) to the mouth and back; arm_phase 0..1
@@ -489,7 +508,7 @@ class MjDesk:
         spine = 0.52 * k
         trunk_o = d.xpos[self.body("trunk")]
         head_b = self.body("head")
-        head_c = d.xpos[head_b] + d.xmat[head_b].reshape(3, 3) @ np.array([0.0, -0.01 * k, 0.19 * k])
+        head_c = d.xpos[head_b] + d.xmat[head_b].reshape(3, 3) @ (np.array([0.0, -0.01 * k, 0.19 * k]) - self.head_off)
         # trunk frame: +y is the person's back, -y their front, +z up the spine
         chest_front = trunk_o + trunk_R @ np.array([0.0, -0.13 * k, spine * 0.45])
         if mode == "mouse":

@@ -26,7 +26,7 @@
   --empty-hatch: #cdd5d9;
   --good: #0ca30c;
   --bad: #d03b3b;
-  --l0: #2a78d6; --l1: #eb6834; --l2: #1baf7a; --l3: #eda100; --l4: #e87ba4; --l5: #008300; --l6: #4a3aa7; --l7: #8d5524;
+  --l0: #2a78d6; --l1: #eb6834; --l2: #1baf7a; --l3: #eda100; --l4: #e87ba4; --l5: #008300; --l6: #4a3aa7; --l7: #8d5524; --l8: #0b7285;
   --d-near: #0d366b; --d-mid: #2a78d6; --d-far: #86b6ef;
   --font-ui: "IBM Plex Sans KR", system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
   --font-num: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
@@ -35,7 +35,7 @@
   :root:not([data-theme="light"]) {
     --bg: #0f1214; --panel: #171b1e; --scene: #1d2327; --ink: #eef2f4; --ink-2: #b4bec3; --muted: #84909a;
     --line: #2b3236; --accent: #4fb3ba; --accent-ink: #071415; --empty: #20262a; --empty-hatch: #2e363b;
-    --l0: #3987e5; --l1: #d95926; --l2: #199e70; --l3: #c98500; --l4: #d55181; --l5: #008300; --l6: #9085e9; --l7: #c48a4a;
+    --l0: #3987e5; --l1: #d95926; --l2: #199e70; --l3: #c98500; --l4: #d55181; --l5: #008300; --l6: #9085e9; --l7: #c48a4a; --l8: #3bc9db;
     --d-near: #cde2fb; --d-mid: #5598e7; --d-far: #184f95;
     color-scheme: dark;
   }
@@ -43,7 +43,7 @@
 :root[data-theme="dark"] {
   --bg: #0f1214; --panel: #171b1e; --scene: #1d2327; --ink: #eef2f4; --ink-2: #b4bec3; --muted: #84909a;
   --line: #2b3236; --accent: #4fb3ba; --accent-ink: #071415; --empty: #20262a; --empty-hatch: #2e363b;
-  --l0: #3987e5; --l1: #d95926; --l2: #199e70; --l3: #c98500; --l4: #d55181; --l5: #008300; --l6: #9085e9; --l7: #c48a4a;
+  --l0: #3987e5; --l1: #d95926; --l2: #199e70; --l3: #c98500; --l4: #d55181; --l5: #008300; --l6: #9085e9; --l7: #c48a4a; --l8: #3bc9db;
   --d-near: #cde2fb; --d-mid: #5598e7; --d-far: #184f95;
   color-scheme: dark;
 }
@@ -234,7 +234,7 @@ dl.spec dd { margin: 0; text-align: right; font-family: var(--font-num); font-va
 (() => {
   const SRC = new URLSearchParams(location.search).get("src") || "arc14.json", DEVICE_SRC = "device.json";  // ?src=other.json
   const KO = { upright: "바른자세", lean_forward: "상체 앞으로", recline: "뒤로 젖힘", face_down: "엎드림",
-               chin_rest: "턱괴기", drowsy: "꾸벅 졸음", away: "자리비움", misplaced: "위치 재조정" };
+               chin_rest: "턱괴기", drowsy: "꾸벅 졸음", away: "자리비움", misplaced: "위치 재조정", forward_head: "거북목" };
   const FLAG_TRANSITION = 1, FLAG_NOD = 2, FLAG_LOOKALIKE = 4, FLAG_BYSTANDER = 8;
   const $ = (id) => document.getElementById(id);
   const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();

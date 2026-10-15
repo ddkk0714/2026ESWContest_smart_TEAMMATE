@@ -12,6 +12,8 @@
     posture_net.pt      가중치(state_dict)와 라벨·센서·입력 형식·학습 정보
     weights.npz         같은 가중치를 numpy 배열로 (펌웨어 이식용)
     posture_net.onnx    한 프레임 스트리밍 추론 그래프 (입력 x, h → 출력 logits, h)
+    posture_net.bin     보드 이식용 평탄 float32 가중치 (헤더 "TOFPN001" + H,W,classes,hidden; 순서는 BIN_ORDER)
+    golden.txt          PyTorch 로 만든 입력(거리·상태값)과 logits — tools/posture_net_ref.cpp 로 C++ 구현을 맞춰 봄
     report.md           학습 정보, 클래스별 점수, 혼동행렬, 학습 중 점수 변화
     model_card.json     입력·출력 형식 요약
 """
@@ -30,14 +32,14 @@ import numpy as np
 import torch
 from torch import nn
 
-from tofsim.data import load_valset
+from tofsim.data import load_valset, to_input
 from tofsim.evaluate import evaluate
 from tofsim.model import PostureNet, count_params
 from tofsim.session import LABELS, SessionConfig
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KO = {"upright": "바른자세", "lean_forward": "상체 앞으로", "recline": "뒤로 젖힘", "face_down": "엎드림",
-      "chin_rest": "턱괴기", "drowsy": "꾸벅 졸음", "away": "자리비움", "misplaced": "위치 재조정"}
+      "chin_rest": "턱괴기", "drowsy": "꾸벅 졸음", "away": "자리비움", "misplaced": "위치 재조정", "forward_head": "거북목"}
 
 INPUT_SPEC = {
     "frame": "센서 프레임 하나 = (2, H, W) float32",
@@ -48,6 +50,59 @@ INPUT_SPEC = {
     "output": "logits (classes,) — argmax 가 자세. 라벨 순서는 labels",
     "rate_hz": SessionConfig.fps,      # the simulated ranging rate: the board must step the model at this rate
 }
+
+
+BIN_MAGIC = b"TOFPN001"
+BIN_ORDER = ["enc.0.weight", "enc.0.bias", "enc.2.weight", "enc.2.bias", "enc.4.weight", "enc.4.bias",
+             "enc.8.weight", "enc.8.bias", "gru.weight_ih_l0", "gru.weight_hh_l0", "gru.bias_ih_l0",
+             "gru.bias_hh_l0", "head.weight", "head.bias"]
+
+
+def write_bin(net: PostureNet, path: str, sensor: dict, classes: int, hidden: int) -> list[dict]:
+    """보드용 평탄 바이너리: 8바이트 매직, int32 ×4 (H, W, classes, hidden), 이어서 BIN_ORDER 순서의 float32(LE).
+    헤더만 읽으면 모든 텐서 크기가 정해지므로 C++ 쪽에 파서가 필요 없다 (tools/posture_net_ref.cpp)."""
+    sd = {k: np.ascontiguousarray(v.detach().cpu().numpy().astype("<f4")) for k, v in net.state_dict().items()}
+    manifest, off = [], 0
+    with open(path, "wb") as fp:
+        fp.write(BIN_MAGIC)
+        fp.write(np.array([sensor["height"], sensor["width"], classes, hidden], dtype="<i4").tobytes())
+        for k in BIN_ORDER:
+            fp.write(sd[k].tobytes())
+            manifest.append({"name": k, "shape": list(sd[k].shape), "offset_floats": off, "count": int(sd[k].size)})
+            off += int(sd[k].size)
+    return manifest
+
+
+def write_golden(net: PostureNet, path: str, sensor: dict, classes: int, hidden: int, frames: int = 240,
+                 seed: int = 20261014) -> None:
+    """C++ 구현 검증용 입출력. 무작위 거리·상태값(가까운 덩어리 + 먼 배경 + 결측·음수·빈 프레임)을 넣고
+    PyTorch 가 낸 logits 를 프레임마다 적는다. 중간에 한 번 reset 해 상태 초기화도 같이 검사한다."""
+    rng = np.random.default_rng(seed)
+    H, W = sensor["height"], sensor["width"]
+    pool = np.array([5, 5, 5, 5, 6, 9, 10, 4, 255, 0], dtype=np.uint8)
+    dist = rng.integers(150, 4000, size=(frames, H, W)).astype(np.int16)
+    for t in range(frames):                       # 사람처럼 가까운 3×3 덩어리
+        r0, c0 = int(rng.integers(0, max(1, H - 2))), int(rng.integers(0, max(1, W - 2)))
+        dist[t, r0:r0 + 3, c0:c0 + 3] = rng.integers(300, 1200)
+    status = pool[rng.integers(0, len(pool), size=(frames, H, W))]
+    dist[rng.random((frames, H, W)) < 0.02] = -1   # 음수 거리 = 무효
+    dist[frames // 3] = 0
+    status[frames // 3] = 255                      # 아무것도 못 본 프레임
+    resets = {0, (2 * frames) // 3}
+    x = torch.from_numpy(to_input(dist, status))   # (T,2,H,W)
+    lines = [f"golden {frames} {H} {W} {classes} {hidden}"]
+    h = None
+    with torch.no_grad():
+        for t in range(frames):
+            if t in resets:
+                h = None
+            logits, h = net(x[t][None, None], h)
+            lines += [f"frame {t} reset {int(t in resets)}",
+                      "dist " + " ".join(str(int(v)) for v in dist[t].ravel()),
+                      "status " + " ".join(str(int(v)) for v in status[t].ravel()),
+                      "logits " + " ".join(f"{float(v):.7g}" for v in logits[0, 0].numpy())]
+    with open(path, "w", encoding="ascii") as fp:
+        fp.write("\n".join(lines) + "\n")
 
 
 class StepModel(nn.Module):
@@ -128,7 +183,8 @@ def main():
     ck = load_checkpoint(ckpt_path)
     sensor = ck.get("sensor", {"name": "vl53l8cx", "width": 8, "height": 8})
     labels = list(ck.get("labels", LABELS))
-    net = PostureNet(sensor["height"], sensor["width"], len(labels))
+    hidden = int(ck["model"]["gru.weight_hh_l0"].shape[1])          # the width the checkpoint was trained with
+    net = PostureNet(sensor["height"], sensor["width"], len(labels), hidden=hidden)
     net.load_state_dict(ck["model"])
     net.eval()
     st = ck.get("state", {})
@@ -161,6 +217,12 @@ def main():
         onnx_note = f"ONNX 내보내기 실패: {type(e).__name__}: {e}"[:300]
         print(onnx_note)
 
+    # 2b) 보드 이식용 평탄 가중치 + 골든 입출력 (C++ 구현은 tools/posture_net_ref.cpp 로 맞춰 본다)
+    info["bin"] = {"file": "posture_net.bin", "magic": BIN_MAGIC.decode(), "header": "int32 H, W, classes, hidden",
+                   "dtype": "float32 little-endian", "tensors": write_bin(net, os.path.join(out, "posture_net.bin"),
+                                                                           sensor, len(labels), hidden)}
+    write_golden(net, os.path.join(out, "golden.txt"), sensor, len(labels), hidden)
+
     with open(os.path.join(out, "model_card.json"), "w", encoding="utf-8") as fp:
         json.dump(info, fp, ensure_ascii=False, indent=1)
 
@@ -172,7 +234,8 @@ def main():
               f"- 파라미터 {info['parameters']:,}개 · 센서 {sensor.get('name')} {sensor['width']}×{sensor['height']} · "
               f"GRU 은닉 {hidden}",
               f"- 학습 중 최고 검증 macro-F1: {info['best_macro_f1']}",
-              f"- ONNX: {onnx_note}", "",
+              f"- ONNX: {onnx_note}",
+              "- 보드 이식: `posture_net.bin`(평탄 가중치) + `golden.txt`(검증 입출력) → `tools/posture_net_ref.cpp`", "",
               "> 시뮬 검증셋 점수는 실제 성능이 아니다. 실측 데이터로 다시 확인해야 한다.", ""]
     if not args.no_eval:
         val_path = args.valset or find_valset(sensor.get("name", "vl53l8cx"))

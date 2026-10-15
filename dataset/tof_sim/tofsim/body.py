@@ -100,6 +100,9 @@ class Pose:
     other_arms: str = "typing"      # the free arm while one arm props the chin or holds a cup
     arm_jitter: float = 0.0         # small hand motion while typing, metres
     arm_phase: float = 0.0          # 0..1 cycle position for repeating arm actions (eat: hand to mouth and back)
+    head_forward: float = 0.0       # m, forward-head posture: the head slides this far toward the desk, face
+                                    # direction unchanged (lower-neck flexion + upper-neck extension); capped at
+                                    # ~0.94 x neck length (about 8-9 cm), mujoco backend only
     hip_shift: float = 0.0          # sliding the chair forward(+)/back(-), metres
 
 

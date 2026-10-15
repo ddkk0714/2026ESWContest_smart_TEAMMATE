@@ -38,7 +38,8 @@ if ckpt_path:
 
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     ck_labels = list(ck.get("labels", LABELS))                   # the checkpoint's own class list (7 or 8 labels)
-    net = PostureNet(cfg0.spec.height, cfg0.spec.width, len(ck_labels))
+    hidden = ck["model"]["gru.weight_hh_l0"].shape[1]            # GRU width from the weights (train.py --hidden)
+    net = PostureNet(cfg0.spec.height, cfg0.spec.width, len(ck_labels), hidden=hidden)
     net.load_state_dict(ck["model"])
     net.eval()
 

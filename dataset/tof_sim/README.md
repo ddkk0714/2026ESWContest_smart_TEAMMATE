@@ -49,8 +49,10 @@ run_forever.ps1    정해진 시간 동안 train.py 를 계속 돌림 (죽으면
 백엔드는 `--backend mujoco`(기본)와 `--backend numpy` 가 있다. 같은 센서 모델·타임라인·라벨을 쓰고
 장면·광선 계산만 다르다. 이 노트북 기준 워커 1개가 MuJoCo 약 240 f/s, numpy 약 100 f/s.
 
-라벨은 펌웨어 enum 에 하나를 더한 것이다: `0 upright · 1 lean_forward · 2 recline · 3 face_down · 4 chin_rest · 5 drowsy · 6 away · 7 misplaced`.
+라벨은 펌웨어 enum 에 둘을 더한 것이다: `0 upright · 1 lean_forward · 2 recline · 3 face_down · 4 chin_rest · 5 drowsy · 6 away · 7 misplaced · 8 forward_head`.
 `misplaced` 는 자세가 아니라 "장치를 다시 놓으라"는 뜻이다(거꾸로·너무 가까이·너무 멀리·옆을 봄·많이 기울임). `--placement random` 에서만 나온다(아래 "센서 배치").
+`forward_head` 는 거북목이다: 상체는 거의 바로 세운 채 머리만 화면 쪽으로 5~8.5 cm 나간 자세(`Pose.head_forward`). 평소 자세에도 0~3 cm 의 자연스러운
+머리 위치 변화가 섞여 있고, 5 cm 이상 지속되는 세그먼트(`turtle`)만 이 라벨이다. 펌웨어 enum 에도 한 칸을 더해야 한다.
 졸음 구간에서 첫 끄덕임 전 프레임은 `upright` 로 둔다 — 센서로 볼 수 없는 라벨은 학습 잡음이다.
 
 ## 설치
@@ -115,6 +117,7 @@ sbatch --export=ALL,RUN=mj_trial,TOTAL_H=336 slurm_train.sh   # 이어서 할 �
 ```
 .venv\Scripts\python train.py --run l8_random --placement random --init ..\tof-sim_ubai_v3\ckpt_best.pt   # 표준 모델에서 이어서 (7클래스 head 는 8클래스로 넓혀 줌)
 .venv\Scripts\python train.py --run l8_random_scratch --placement random                          # 처음부터
+.venv\Scripts\python train.py --run l8_h128 --placement random --hidden 128 --val-sessions 48       # 큰 모델(약 17만 파라미터), 넓은 검증셋
 .venv\Scripts\python export_arc.py . viewer\arc_random.json 7 240 5 - random                       # 뷰어용 (무작위 배치 세션 하나)
 ```
 
@@ -132,7 +135,8 @@ sbatch --export=ALL,RUN=mj_trial,TOTAL_H=336 slurm_train.sh   # 이어서 할 �
 - 자세 변형(`session.SEGMENTS`, 라벨은 `SEGMENT_LABEL` 로 기존 7개에 붙음): 팔걸이에 기대기(`armrest`→upright),
   옆 모니터·옆사람 보기(`look_aside`, 고개 30~60° 돌린 채 5~30 s→upright), 팔꿈치 괴고 숙이기(`elbows`→lean_forward),
   기지개(`stretch`, 3~7 s→recline), 연필로 공부하기(`writing`, 고개 20~40° 숙이고 상체 12~28° 앞으로, 손은 책상 위에서 움직임→lean_forward).
-  책 들고 읽기(`reading`→upright), 마우스 작업(`mouse_work`→upright), 전화 통화(`phone_call`, 오른손을 귀에→upright).
+  책 들고 읽기(`reading`→upright), 마우스 작업(`mouse_work`→upright), 전화 통화(`phone_call`, 오른손을 귀에→upright),
+  거북목(`turtle`→forward_head). 비중은 `SEGMENTS` 주석의 라벨 시간 비율이 되도록 맞춰 두었다(바른자세 계열 약 45 %).
   기본 자세들의 각도 범위도 조금 넓혔다. 폰 내려다보기는 졸음과 구분이 애매해 넣지 않았다.
 - 자세 안의 짧은 동작(look-alike, 라벨은 그 자세 그대로): 키보드 힐끗 보기, 컵으로 마시기, 고개 돌리기, 과자 먹기(손이 입과 책상을
   2~4 s 주기로 오감, 5~30 s), 바닥 가방 뒤지기(오른쪽으로 숙임 2~5 s, 이 구간은 전환으로 표시해 채점에서 뺌).
