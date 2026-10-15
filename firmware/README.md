@@ -107,7 +107,18 @@ Arduino 의존이 없는 순수 C++ 이고, 원본 zone 배열은 여기서 소�
   타이핑 팔은 턱괴기 아님 · 1.5 s 유지 · 결측/튐 내성 · 끄덕임 1회는 졸음 아님 · 2회·떨군 채 정지는 졸음 ·
   상체 숙임·거북목은 끄덕임 아님 · 격자 4종 동일 판정 등).
 
-아직 하지 않은 것: 센서 드라이버 연결(`main.cpp`), UART TYPE 0x03/0x04 payload 정의, hub 매핑.
+아직 하지 않은 것: 운영 센서 드라이버 연결(`main.cpp`), UART TYPE 0x03/0x04 payload 정의.
+hub의 특징 MQTT 입력은 개인화 브랜치에서 기본 비활성으로 연결했다.
+
+**특징 전용 출력 모듈:** `preprocess/tof/TofFeaturePayload.{h,cpp}`의
+`formatTofFeaturePayload(buf, cap, features, valid)`는 ToF 특징만 JSON data 객체로 만든다.
+raw 배열을 인자로 받지 않고 재실·자세·신뢰도·움직임·기준선 편차·유효성 등 스칼라 특징만 포함한다.
+센서 읽기와 추정기 update 결과를 `valid`에 전달해야 하며, 실패하면 이전 정상 특징을 다시 발행하지
+않도록 valid=false를 출력한다. 기준선 미확보 값은 0 대신 null이다. 버퍼 부족은 길이 0과 빈 버퍼로 알린다.
+
+이 함수는 전송·로깅·USB/UART 설정을 수행하지 않는다. 호출부가 수신지의 시간 계약과 envelope를
+붙여야 하며, ESP32 millis를 MQTT epoch 시각으로 넣지 않는다. 운영 main·수집 모드의 기존 출력은
+변경하지 않았다. C++ 출력 → hub 파서/매핑 교차 시험은 `hub/tests/test_tof_feature_payload.py`다.
 
 **학습 데이터 수집 모드(`env:tof_logger`, 운영 아님).** VL53L8CX 8×8 을 ST 공식 라이브러리로 읽어 원본 zone 과
 규칙 판정을 USB 한 줄 JSON(`{"t":"tof",...}`, 921600)으로 PC 에 보낸다. `src/tof_logger/` 는 운영 빌드에서 빠진다
