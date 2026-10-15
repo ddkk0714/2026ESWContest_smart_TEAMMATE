@@ -66,6 +66,15 @@ def test_suggest_waits_for_user_then_dispatches_or_skips():
     assert len(sent) == 2 and ep2.outcome == "rejected" and d.action_done() is True
 
 
+def test_command_expiry_starts_when_user_accepts_not_when_card_opens():
+    d, sent, t = make()
+    d.on_enter_action("ACTION_ENV", "environment", GateMode.SUGGEST)
+    t["now"] += 30  # Still within the 180 s suggestion window.
+    d.on_feedback("accept")
+    assert sent
+    assert all(c["expires_ts_ms"] == int((t["now"] + 15) * 1000) for c in sent)
+
+
 def test_reject_after_auto_execution_sends_undo():
     d, sent, t = make()
     d.on_enter_action("ACTION_ENV", "environment", GateMode.AUTO)

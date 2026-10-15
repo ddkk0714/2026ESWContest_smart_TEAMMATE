@@ -15,12 +15,16 @@
 
 현재 시연 경로는 PC 컨트롤러가 아니라 **Pi 5 Atlas 앱**이다. 앱의 Bluetooth 화면에서 기기를 검색하고, 스피커는 Atlas A2DP로 페어링·연결한다. 음악은 기존 번들 MP3를 선택된 시스템 오디오 출력(연결된 Bluetooth 스피커 포함)으로 재생한다.
 
-iLink 램프는 앱에서 선택한 BLE 장치에 Atlas `Bluetooth1.Gatt`로 연결해 A040 특성에 프레임을 쓴다. `state/phase`가 바뀔 때만 FSM 피드백을 적용하며, 자동 피드백 스위치를 사용자가 켜기 전에는 조명·음악을 자동 실행하지 않는다. `fatigue`는 주황 조명과 음악 재생, `recovery`·`idle`·`end`는 음악 일시정지이며, 색·밝기 정책은 앱 코드의 `feedback_policy.dart`에 있다.
+iLink 램프는 앱에서 선택한 BLE 장치에 Atlas `Bluetooth1.Gatt`로 연결해 A040 특성에 프레임을 쓴다. 자동 피드백 스위치를 사용자가 켜기 전에는 조명·음악을 자동 실행하지 않는다. `fatigue` 국면만으로 실행하지 않으며 `FATIGUE_SUSPECT`와 미수락 제안은 표시만 한다.
+
+`ACTION_ENV`는 허브의 `control/cmd`를 받아 밝기·전원을 적용하고 `control/result`를 응답한다. `ACTION_BREAK`·`ACTION_POSTURE`는 `auto` 또는 제안 수락 뒤 주황 조명·음악을 적용한다. `recovery`·`idle`·`end`는 음악을 일시정지한다. 같은 국면에서 조명 쓰기가 실패해도 다음 조회 때 재시도하며, 조명 프레임은 순서대로 전송한다.
+
+Bluetooth 탭에 **조명 25%/100% 테스트**와 **음악 재생/정지 테스트**가 있다. 수동 테스트는 자동 피드백 스위치와 무관하게 명시적 터치로 실행한다. GATT 연결 성공만으로 밝기가 바뀌었다고 판정하지 말고 두 밝기와 실제 소리를 먼저 확인한다. 조명과 스피커 주소가 따로인 일체형은 BLE 램프 항목과 A2DP 오디오 항목을 각각 연결해야 한다. 저장된 주소는 복원되지만 자동 피드백 스위치는 앱 시작 때 기본 OFF다.
 
 Pi 5 배포 전 검증은 Atlas Docker에서 Flutter test와 release IPK 빌드로 한다. 실제 Bluetooth 페어링·GATT 쓰기는 물리 장비가 있는 Pi 5에서만 별도로 검증한다.
 ## 프로토콜
 
-프레임은 `55 AA <length> <command...> <checksum>`이다. 이 장비에서 확인한 체크섬은 **`0xFF - Σ(command...)`** 이며 `length` 바이트는 합계에서 제외한다. 결과는 8비트로 자른다.
+프레임은 `55 AA <mode> <command...> <checksum>`이다. 현재 앱·Python 어댑터와 프레임 테스트의 체크섬은 **`(0xFF - Σ(헤더 55 AA·mode·command)) & 0xFF`**다. `mode=01`에서는 헤더와 mode 합이 `0x100`이라 상쇄되지만 `mode=03` RGB에서는 그렇지 않다. 예를 들어 빨강은 `55 AA 03 08 02 FF 00 00 F4`다. 이번 변경에서 프레임 프로토콜은 바꾸지 않았다.
 
 | 동작 | 프레임 |
 | --- | --- |

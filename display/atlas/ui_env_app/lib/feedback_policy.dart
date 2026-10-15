@@ -60,6 +60,7 @@ class IlinkLampFeedback {
   GattConnection? _connection;
   DateTime? _lastOkAt;
   Object? _lastError;
+  Future<void> _writes = Future.value();
 
   bool get configured => _address?.isNotEmpty ?? false;
   String? get address => _address;
@@ -75,9 +76,17 @@ class IlinkLampFeedback {
     _lastError = null;
   }
 
-  Future<bool> connect() async {
-    if (!configured) return false;
-    if (_connection != null) return true;
+  /// Concurrent callers (restore, selection, phase retries) share one attempt:
+  /// a second GATT Connect to the same lamp fails with "Already Connected".
+  Future<bool> connect() {
+    if (!configured) return Future.value(false);
+    if (_connection != null) return Future.value(true);
+    return _connecting ??= _connect().whenComplete(() => _connecting = null);
+  }
+
+  Future<bool>? _connecting;
+
+  Future<bool> _connect() async {
     try {
       _connection = await _bluetooth.connectLamp(_address!);
       _lastError = null;
@@ -90,33 +99,52 @@ class IlinkLampFeedback {
   }
 
   Future<void> apply(String phase) async {
-    if (!configured) return;
-    final frames = ilinkFramesForPhase(phase);
-    if (frames.isEmpty) return;
+    await writeFrames(ilinkFramesForPhase(phase));
+  }
+
+  Future<bool> setBrightness(int value) => writeFrames([
+        ilinkFrame([0x01, 0x08, 0x05, 0x01]),
+        ilinkFrame([0x01, 0x08, 0x01, value]),
+      ]);
+
+  /// Phase feedback and explicit commands must not interleave BLE frames.
+  Future<bool> writeFrames(List<List<int>> frames, {num? expiresTsMs}) {
+    final next = _writes.then((_) => _writeFrames(frames, expiresTsMs));
+    _writes = next.then<void>((_) {});
+    return next;
+  }
+
+  Future<bool> _writeFrames(List<List<int>> frames, num? expiresTsMs) async {
+    if (!configured || frames.isEmpty) return false;
+    bool expired() =>
+        expiresTsMs != null &&
+        DateTime.now().millisecondsSinceEpoch >= expiresTsMs;
     // 끊긴 GATT 세션은 재사용하지 않고 한 번만 새 세션으로 되풀이한다.
     for (var attempt = 0; attempt < 2; attempt++) {
+      if (expired()) return false;
       if (!await connect()) continue;
       try {
         for (final frame in frames) {
+          if (expired()) return false;
           await _bluetooth.writeCharacteristic(_connection!,
               serviceId: ilinkServiceUuid,
               characteristicId: ilinkWriteUuid,
               value: frame);
-          _lastOkAt = DateTime.now();
         }
+        _lastOkAt = DateTime.now();
         _lastError = null;
-        return;
+        return true;
       } catch (error) {
         _connection = null;
         _lastError = error;
       }
     }
+    return false;
   }
 }
 
-/// A state transition, rather than raw sensor data, triggers feedback. The
-/// FSM remains the sole decision maker; failures only affect this optional UI
-/// output and never alter the next FSM state.
+/// The FSM authorizes interventions through its gate and control commands.
+/// Suggestions require acceptance; raw fatigue phases only update the UI.
 class FeedbackCoordinator {
   FeedbackCoordinator({
     required this.music,
@@ -128,8 +156,24 @@ class FeedbackCoordinator {
   final AtlasBluetoothService bluetooth;
   String? _speakerAddress;
   String? get speakerAddress => _speakerAddress;
-  bool enabled = false;
-  String? _lastPhase;
+  bool _enabled = false;
+  bool get enabled => _enabled;
+  set enabled(bool value) {
+    if (_enabled == value) return;
+    _enabled = value;
+    _lastLampKey = null;
+    _lastMusicKey = null;
+    _acceptedAction = null;
+  }
+
+  String? _lastLampKey;
+  String? _lastMusicKey;
+  String? _acceptedAction;
+  bool _applying = false;
+  DisplayState? _latest;
+  final _commandResults = <String, Future<Map<String, dynamic>>>{};
+  String? lastControlError;
+  Object? lastAudioError;
 
   void selectSpeaker(String address) => _speakerAddress = address;
 
@@ -142,28 +186,155 @@ class FeedbackCoordinator {
       if (!await bluetooth.isA2dpConnected(address)) {
         if (music.isPlaying) {
           await music.toggle();
+          _lastMusicKey = null;
         }
       }
     } catch (_) {
       // A lost Bluetooth service is treated like a disconnected output.
       if (music.isPlaying) await music.toggle();
+      _lastMusicKey = null;
     }
   }
 
   Future<void> apply(DisplayState state) async {
-    if (!enabled || state.phase == _lastPhase) return;
-    _lastPhase = state.phase;
+    _latest = state;
+    if (state.fsmState != _acceptedAction) _acceptedAction = null;
+    if (!enabled || _applying) return;
+    // ACTION_ENV is executed by the hub's explicit control command. Suspected
+    // fatigue and unanswered suggestions must not change light or sound.
+    if (state.phase == 'fatigue' &&
+        (state.fsmState == 'ACTION_ENV' ||
+            !state.fsmState.startsWith('ACTION_') ||
+            (state.gate != 'auto' && state.fsmState != _acceptedAction))) {
+      return;
+    }
+    await _applyOutputs(state);
+  }
+
+  Future<void> accept(DisplayState state) async {
+    if (!enabled ||
+        state.gate != 'suggest' ||
+        !state.fsmState.startsWith('ACTION_') ||
+        state.fsmState == 'ACTION_ENV') {
+      return;
+    }
+    if (_latest != null && _latest!.fsmState != state.fsmState) return;
+    _acceptedAction = state.fsmState;
+    await _applyOutputs(state);
+  }
+
+  Future<void> _applyOutputs(DisplayState state) async {
+    if (_applying) return;
+    _applying = true;
     try {
-      await lamp.apply(state.phase);
-    } catch (_) {
-      // Bluetooth light is optional. Music and the UI must continue if absent.
+      final key = '${state.phase}:${lamp.address}';
+      if (key != _lastLampKey &&
+          await lamp.writeFrames(ilinkFramesForPhase(state.phase))) {
+        _lastLampKey = key;
+      }
+      if (state.phase == 'fatigue') {
+        await _playFatigueMusic();
+      } else if (state.phase == 'recovery' ||
+          state.phase == 'idle' ||
+          state.phase == 'end') {
+        if (_lastMusicKey != state.phase) {
+          if (music.isPlaying) await music.toggle();
+          _lastMusicKey = state.phase;
+        }
+      } else {
+        _lastMusicKey = null;
+      }
+    } catch (error) {
+      lastAudioError = error;
+    } finally {
+      _applying = false;
     }
-    if (state.phase == 'fatigue') {
-      if (!music.isPlaying) await music.toggle();
-    } else if (state.phase == 'recovery' ||
-        state.phase == 'idle' ||
-        state.phase == 'end') {
-      if (music.isPlaying) await music.toggle();
+  }
+
+  Future<void> _playFatigueMusic() async {
+    if (_lastMusicKey == 'fatigue') return;
+    final address = _speakerAddress;
+    if (address != null && !await bluetooth.isA2dpConnected(address)) return;
+    if (!music.isPlaying) await music.toggle();
+    lastAudioError = null;
+    if (music.isPlaying) _lastMusicKey = 'fatigue';
+  }
+
+  /// Hub already applied its gate and received acceptance before publishing.
+  /// Cache in-flight results too, so QoS 1 duplicates never actuate twice.
+  Future<Map<String, dynamic>?> handleControlCommand(
+      Map<String, dynamic> command) async {
+    if (command['target_id'] != 'desk_lamp') return null;
+    final id = command['command_id'];
+    if (id is! String || id.isEmpty) return null;
+    final cached = _commandResults[id];
+    if (cached != null) return cached;
+    final result = _executeLampCommand(command);
+    _commandResults[id] = result;
+    if (_commandResults.length > 128) {
+      _commandResults.remove(_commandResults.keys.first);
     }
+    return result;
+  }
+
+  Future<Map<String, dynamic>> _executeLampCommand(
+      Map<String, dynamic> command) async {
+    Map<String, dynamic> result(String status, [String? error]) {
+      lastControlError = error;
+      return {
+        'command_id': command['command_id'],
+        'status': status,
+        if (status == 'succeeded') 'actual_value': command['value'],
+        if (error != null) 'error_code': error,
+        'completed_ts_ms': DateTime.now().millisecondsSinceEpoch,
+      };
+    }
+
+    if (!enabled) return result('failed', 'feedback_disabled');
+    final expires = command['expires_ts_ms'];
+    if (expires is! num ||
+        !expires.isFinite ||
+        !['auto', 'suggest', 'undo'].contains(command['gate']) ||
+        command['requires_confirmation'] != false) {
+      return result('failed', 'invalid_command');
+    }
+    if (expires <= DateTime.now().millisecondsSinceEpoch) {
+      return result('failed', 'expired');
+    }
+    if (!lamp.configured) return result('failed', 'lamp_not_configured');
+    final value = command['value'];
+    final List<List<int>> frames;
+    if (command['operation'] == 'set_brightness' &&
+        value is int &&
+        value >= 0 &&
+        value <= 255) {
+      frames = [
+        ilinkFrame([0x01, 0x08, 0x05, 0x01]),
+        ilinkFrame([0x01, 0x08, 0x01, value])
+      ];
+    } else if (command['operation'] == 'set_power' &&
+        (value == 'on' || value == 'off')) {
+      frames = [
+        ilinkFrame([0x01, 0x08, 0x05, value == 'on' ? 1 : 0])
+      ];
+    } else {
+      return result('failed', 'unsupported_operation_or_value');
+    }
+    if (!await lamp.writeFrames(frames, expiresTsMs: expires)) {
+      return result(
+          'failed',
+          expires <= DateTime.now().millisecondsSinceEpoch
+              ? 'expired'
+              : 'bluetooth_write_failed');
+    }
+    // Sound failure must not turn a successful lamp command into a failure.
+    if (command['gate'] != 'undo' && _latest?.phase == 'fatigue') {
+      try {
+        await _playFatigueMusic();
+      } catch (error) {
+        lastAudioError = error;
+      }
+    }
+    return result('succeeded');
   }
 }

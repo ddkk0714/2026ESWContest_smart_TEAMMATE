@@ -266,9 +266,13 @@ class _DashboardPageState extends State<DashboardPage> {
 
   Future<void> _feedback(String verdict) async {
     if (_override != null) return _devAnswer(verdict);
+    final acceptedState = _state;
     try {
       await _source.feedback(verdict,
           responseMs: _intervention.responseMs(DateTime.now()));
+      if (verdict == 'accept' && acceptedState != null) {
+        await _feedbackController.accept(acceptedState);
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -434,11 +438,16 @@ class _DashboardPageState extends State<DashboardPage> {
     // IPv4 가 아닌 빌드 값(호스트 이름)도 예전처럼 그대로 쓴다.
     final host = effectiveMqttHost(_settings, _mqttHost) ??
         (_mqttHost.trim().isEmpty ? null : _mqttHost.trim());
-    if (host != null) return MqttStateSource(host, port: port);
+    if (host != null) return _mqttSource(host, port: port);
     return _hubUrl.trim().isEmpty
         ? DemoStateSource()
         : HttpStateSource(_hubUrl);
   }
+
+  MqttStateSource _mqttSource(String host, {required int port}) =>
+      MqttStateSource(host,
+          port: port,
+          onControlCommand: _feedbackController.handleControlCommand);
 
   /// MQTT 로 붙을 때만 시작 점검을 돌린다. 결과는 대기 화면의 가이드가 그린다.
   void _startMqttCheck() {
@@ -484,7 +493,7 @@ class _DashboardPageState extends State<DashboardPage> {
   void _retryMqtt() {
     final source = _source;
     if (source is MqttStateSource) {
-      _replaceSource(MqttStateSource(source.host, port: source.port));
+      _replaceSource(_mqttSource(source.host, port: source.port));
     }
   }
 
@@ -507,7 +516,7 @@ class _DashboardPageState extends State<DashboardPage> {
     final saved = _settingsStore.save(next);
     _settings = next;
     final port = effectiveMqttPort(_settings, _mqttPort);
-    _replaceSource(MqttStateSource(result, port: port));
+    _replaceSource(_mqttSource(result, port: port));
     _notify(saved
         ? 'MQTT 브로커를 $result:$port 로 저장했습니다.'
         : '$result:$port 로 연결합니다 — 저장할 곳이 없어 이번 실행에만 적용됩니다.');
@@ -527,7 +536,7 @@ class _DashboardPageState extends State<DashboardPage> {
     diag.write(auto
         ? 'MQTT 자동 재연결 #${_watchdog.attempts} (다음 간격 ${_watchdog.backoff.inSeconds} s)'
         : 'MQTT 수동 재연결');
-    _replaceSource(MqttStateSource(source.host, port: source.port),
+    _replaceSource(_mqttSource(source.host, port: source.port),
         keepState: true);
   }
 
@@ -537,7 +546,7 @@ class _DashboardPageState extends State<DashboardPage> {
     setState(() => _postureReloadToken++);
     switch (source) {
       case MqttStateSource():
-        _replaceSource(MqttStateSource(source.host, port: source.port),
+        _replaceSource(_mqttSource(source.host, port: source.port),
             keepState: true);
       case HttpStateSource():
         _replaceSource(HttpStateSource(_hubUrl), keepState: true);

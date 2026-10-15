@@ -152,12 +152,22 @@ class LiveHub:
             self.control.tick(now)
 
         frame = build_frame(view, now, self.ingest_cfg, self.tracker, fsm_state=self.engine.state)
+        request_kind = self._REQUEST_STATES.get(self.engine.state)
+        awaiting_request = (self.pending_request is not None and request_kind is not None
+                            and self.pending_request["data"]["kind"] == request_kind[0])
+        if awaiting_request:
+            # The MVP auto-completion flag is not a substitute for a person's
+            # response. Keep BREAK/POSTURE suggestions alive too, not just ENV.
+            frame.action_done = False
         if self.control is not None and self.engine.state is State.ACTION_ENV:
             # ACTION_ENV 완료 여부는 제어 결과가 결정한다 (ingest 의 auto_complete 를 덮어쓴다)
             frame.action_done = self.control.action_done(now)
             frame.break_accepted = None
         prev_state = self.engine.state
         result = self.engine.tick(frame)
+        if awaiting_request and result.state is prev_state:
+            result.gate = GateMode.SUGGEST
+            result.cause = self.pending_request["data"].get("cause")
         self._last_result = result
         self.tracker.observe_state(result.state, now)
         self.recorder.observe(frame, result)
