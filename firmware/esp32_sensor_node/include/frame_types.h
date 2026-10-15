@@ -6,6 +6,7 @@ namespace deskmate {
 
 constexpr uint8_t kFrameSof = 0xA5;
 constexpr uint8_t kFrameVersion = 0x01;
+constexpr uint8_t kFrameTypeTofFeatures = 0x03;
 constexpr uint8_t kFrameTypeEnvironment = 0x10;
 constexpr uint8_t kFrameTypeMmwave = 0x20;
 constexpr uint8_t kFrameTypeHeartbeat = 0xF0;

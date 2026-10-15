@@ -19,12 +19,16 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "hub"))
 
 from deskmate_hub.ingest.uart_frame import (  # noqa: E402
-    TYPE_ENV, TYPE_HEARTBEAT, TYPE_MMWAVE, Frame, FrameError, cobs_encode, crc16_ccitt_false,
+    TYPE_ENV, TYPE_HEARTBEAT, TYPE_MMWAVE, TYPE_TOF_FEATURES, Frame, FrameError, cobs_encode, crc16_ccitt_false,
     decode_frame, decode_payload, encode_frame, encode_payload, split_stream,
 )
 
-_TYPES = {"mmwave": TYPE_MMWAVE, "env": TYPE_ENV, "heartbeat": TYPE_HEARTBEAT}
+_TYPES = {"mmwave": TYPE_MMWAVE, "env": TYPE_ENV, "heartbeat": TYPE_HEARTBEAT, "tof": TYPE_TOF_FEATURES}
 _SAMPLES = {
+    "tof": {"present": True, "valid": True, "posture": "lean_forward",
+            "posture_confidence": 0.9, "motion_score": 0.2, "baseline_ready": True,
+            "baseline_deviation": 0.6, "grid_width": 8, "grid_height": 8, "valid_zones": 40,
+            "coverage_ratio": 0.5, "head_delta_mm": None, "nod_rate_hz": None},
     "mmwave": {"present": True, "motion_state": "still", "motion_level": 12, "distance_cm": 55, "resp_bpm": 15,
                "resp_valid": True, "heart_bpm": None, "heart_valid": False, "drowsy_state": "AWAKE", "valid": True},
     "env": {"co2_ppm": 812, "temp_c": 26.4, "humidity_pct": 48.2, "lux": 310.0,

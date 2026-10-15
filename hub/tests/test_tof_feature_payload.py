@@ -1,7 +1,9 @@
 """Compile the real feature serializer and feed its output into the hub."""
+import importlib.util
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,8 +16,9 @@ from deskmate_hub.inference import State
 @pytest.fixture(scope="module")
 def encoder(tmp_path_factory):
     compiler = shutil.which("g++")
-    if compiler is None:
-        pytest.skip("C++ host compiler required")
+    command = [compiler] if compiler else [sys.executable, "-m", "ziglang", "c++"]
+    if not compiler and importlib.util.find_spec("ziglang") is None:
+        pytest.skip("C++ host compiler required (g++ or ziglang)")
     root = Path(__file__).resolve().parents[2]
     source = root / "firmware/esp32_sensor_node/src"
     directory = tmp_path_factory.mktemp("tof-feature-payload")
@@ -50,7 +53,7 @@ int main(int argc, char **argv) {
 }
 ''', encoding="utf-8")
     binary = directory / "encoder"
-    subprocess.run([compiler, "-std=c++17", "-Wall", "-Wextra", "-I", str(source),
+    subprocess.run(command + ["-std=c++17", "-Wall", "-Wextra", "-I", str(source),
                     str(driver), str(source / "preprocess/tof/TofFeaturePayload.cpp"),
                     str(source / "preprocess/tof/TofPosture.cpp"), "-o", str(binary)],
                    check=True, capture_output=True, text=True)

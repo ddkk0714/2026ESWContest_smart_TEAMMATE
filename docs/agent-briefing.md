@@ -14,7 +14,7 @@ ESP32 (mmWave·환경) ── UART2 / COBS + CRC-16 ──> Pi 4 Hub
                                                       │ MQTT (LAN, TCP 1883)
 PC 키스트로크 특징 ─────────────── MQTT ─────────────┤
                                                       └────────────> Pi 5 Atlas UI
-ToF VL53L9CX ── 경로 결정 전 (Pi 4 CSI-2 또는 ESP32 I2C) — 미연결
+ToF VL53L8CX(L8) ── I2C(GPIO21/22) → 기존 ESP32 → UART2 → Pi 4 (기본 비활성, 실기 미검증)
 (임시·결정 필요) ESP32-CAM ─USB─> Pi 5 camsvc 자세 판정  ※ §3 참고
 ```
 
@@ -34,7 +34,10 @@ Docker는 개발 PC의 빌드 환경일 뿐 보드에서 실행하지 않는다.
 
 ## 2. 이미 정한 사항
 
-- ToF는 VL53L9CX(54×42 zone)만 대상으로 한다. 제품 처리·전송은 특징값만 하며,
+- 2026-10-15 사용자 확정 개인화 경로는 VL53L8CX(L8) 8×8 → 기존 ESP32 I2C(GPIO21/22) →
+  UART2(TX25/RX26, 115200 8N1, COBS+CRC16) → Pi 4다. 이전 VL53L9CX 검토와 구분한다.
+  운영 L8 드라이버·0x03 특징 전송·hub 캐시 연결은 구현했으며 기본 비활성·실기 미검증이다.
+  제품 처리·전송은 특징값만 하며,
   raw depth map은 명시적 디버그 UI에서 최대 2 Hz만 허용한다.
 - ToF 자세는 온보드 기하 특징 7종을 우선하고, V2V-PoseNet은 PC 오프라인 검증용이다.
 - ESP32→Pi 4는 UART2(ESP32 GPIO25/26, Pi 4 GPIO15/14, 공통 GND), 115200 8N1,
@@ -63,7 +66,7 @@ Docker는 개발 PC의 빌드 환경일 뿐 보드에서 실행하지 않는다.
 | **카메라 기반 자세 판정** (09-18 main 반영, `display/atlas/camsvc`·`camtest`) | §4 비협상 제약(카메라 영상 미수집)과 충돌. ToF 대역 개발용으로만 둘지, 제품 기능으로 채택하고 포스터 서술을 바꿀지 **팀 결정 전**. 결정 전에는 카메라 경로를 확장하거나 시연·제출 빌드의 기본값으로 만들지 않는다 (`roadmap.md` §3 I7) |
 | UART TYPE·mmWave payload·CRC test vector | **잠정안 기록됨**(`data-spec.md` §13.1, 2026-09-15): mmWave 0x20 · env 0x10 · heartbeat 0xF0, CRC-16/CCITT-FALSE, COBS. 팀이 다른 값을 원하면 `uart_frame.py` 상수와 펌웨어 `frame_types.h` 만 바꾼다. MVP 는 PC USB 브리지로 우회 |
 | `C_focus`의 부호 | 현재 구현의 “큰 값 = 집중 증거”를 임의 변경하지 않음 |
-| ToF 연결 경로 | Pi 4 CSI-2(Path A) / ESP32 I2C binning(Path B). 09-19 spike 마감 경과, 결정 기록 없음 — 규칙상 Path B, 팀 확인 필요 |
+| ToF 연결 경로 | 2026-10-15 사용자 확정: L8 → 기존 ESP32 I2C → UART2 → Pi 4. §2·data-spec §13.1 참조. 실기 처리율·방향·판정 정확도는 검증 대기 |
 | 개인화 저장소·동의 | 로컬 opt-in 정책과 저장 방식을 결정 전에는 확장하지 않음 |
 | 스마트 플러그·ThinQ 제어 모델 | 기본은 스마트 플러그 기반 가역 제어, 실기기 모델은 미선정(09-28 마감 경과). 제어 디스패처·mock 플러그는 `feat/edge-hub-port` 에 있음 |
 
