@@ -1,0 +1,10 @@
+# Feature rollout is separate from the team's policy approval.
+enabled: false
+policy_approved: false
+policy_version: pending
+# Configure only local paths owned by this deployment. No path is accepted from MQTT.
+data_root: logs
+consent_file: logs/personalization/consent.json
+# Only explicitly registered personal model bundles are deleted. Never register a common model.
+personal_model_files: []
+recent_request_limit: 64

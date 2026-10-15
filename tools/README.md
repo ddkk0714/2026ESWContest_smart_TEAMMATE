@@ -45,3 +45,9 @@ python tools/plot_session.py logs/2026-08-01.jsonl
 브리지 옵션은 `DESKMATE_SERIAL_PORT`, `DESKMATE_SERIAL_BAUD`, `DESKMATE_MQTT_BROKER`,
 `DESKMATE_MQTT_PORT`, `DESKMATE_NODE`, `DESKMATE_LOG_DIR` 환경변수로도 지정할 수 있다.
 센서 envelope는 MQTT 연결 여부와 무관하게 `logs/<node>-YYYYMMDD.jsonl`에 남는다.
+
+## 개입 사이클 검증
+
+- [intervention_check.py](intervention_check.py): 읽기 전용 개입 MQTT 수집·저장 기록 판정. 센서·피드백·기기 제어를 발행하지 않는다.
+- [test_intervention_mqtt.py](test_intervention_mqtt.py): loopback 브로커·LiveHub·외부 mock으로 응답 5종과 화면 무응답·제어 실패·결과 누락을 검증한다.
+- 설치·실행·판정 제한: [개입 한 사이클 검증](../docs/intervention-cycle-check.md).

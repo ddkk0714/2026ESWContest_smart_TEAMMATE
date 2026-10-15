@@ -92,9 +92,7 @@ def test_undo_on_the_auto_notice_follows_the_undo_window(seconds_after, undone):
 
 
 def test_display_gone_suggestion_expires_and_session_moves_on():
-    # 화면이 꺼져 있으면 아무도 카드에 답하지 않는다(timeout 도 안 온다). hub 는 suggest_timeout_sec 뒤 스스로
-    # 제안을 만료하고 ACTION_ENV 를 벗어난다 — 명령은 나가지 않는다.
-    from deskmate_hub.control import load_control_config
+    # The hub now honors the published card deadline even when the display is gone.
     from mqtt_scenario_sim import Phase, demo_phases
 
     phases = demo_phases()
@@ -104,9 +102,11 @@ def test_display_gone_suggestion_expires_and_session_moves_on():
     trace = res["trace"]
     enter = next(r["t"] for r in trace if r["state"] == "ACTION_ENV")
     leave = next(r["t"] for r in trace if r["t"] > enter)
-    timeout = float(load_control_config()["suggest_timeout_sec"])
+    timeout = next(q["expires_in_s"] for q in res["requests"] if q["kind"] == "env_suggest")
     assert enter + timeout <= leave <= enter + timeout + 10
     assert res["commands"] == []
+    assert res["report"]["metrics"]["timeout_rate"] == 1.0
+    assert res["report"]["control_results"]["forward"]["total"] == 0
 
 
 def test_tick_latency_is_far_inside_the_500ms_budget():
