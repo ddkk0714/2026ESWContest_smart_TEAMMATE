@@ -33,7 +33,7 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 | `deskmate/debug/tof/depth/<node>` | ToF adapter | display/debug | 최대 2Hz | 명시적 디버그 모드의 축소 depth map. retain 금지 |
 | `deskmate/sensor/mmwave/<node>` | ESP32 | hub | 1Hz | SEN0623 재실·모션·호흡/심박 보조 특징 |
 | `deskmate/sensor/env/<node>` | ESP32 | hub | 0.2Hz | CO₂ · 온습도 · 조도 |
-| `deskmate/sensor/keystroke` | PC 수집기 | hub | 1Hz | 키 입력 타이밍 특징 |
+| `deskmate/sensor/keystroke` | PC 수집기 | hub, display/PC 키스트로크 탭 | 1Hz | 키 입력 타이밍 특징 |
 | `deskmate/state/phase` | hub | display, control | 10 s 주기(retain) | 추론 결과 + 신뢰도. `python -m deskmate_hub run` 이 발행 |
 | `deskmate/display/message` | Node-RED/debug | display | 이벤트 | Pi 5 화면에 일회성 텍스트 표시 |
 | `deskmate/session/report` | hub | display | 10 s 주기 스냅샷(retain) + 세션 종료 시 | 화면용 세션 요약. 개별 행동 로그 없음 |
@@ -123,6 +123,13 @@ MVP(2026-09-18) 경로: ESP32 USB(UART0) 1 Hz JSON 라인 → `tools/uart_mqtt_b
 ```
 
 health: `deskmate/health/pc-collector` 에 `{"node","status":"online|offline","reconnects"}` (LWT, retain).
+
+Pi 5의 **PC 키스트로크** 탭은 앱에 설정된 동일 MQTT 브로커에서 이 토픽을 QoS 0으로
+직접 구독한다. 허브의 10초 국면 발행을 기다리지 않고 1Hz 특징값을 표시하며, 보드에
+꽂힌 키보드의 로컬 캡처로 덮어쓰지 않는다. 표본 `ts`가 현재 시각보다 5초 넘게
+오래되면 "수신 끊김"으로 표시하므로 PC·Pi의 시계 동기화가 필요하다.
+최근 60개 집계 표본의 추이는 탭을 연 동안 메모리에만 유지하고, 미입력·수신 공백을
+타이밍 곡선으로 연결하지 않는다. 내장 데모는 실제 PC 미연결임을 명시한다.
 
 ### `deskmate/state/phase`
 

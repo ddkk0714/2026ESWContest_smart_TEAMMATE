@@ -190,6 +190,7 @@ class MqttStateSource implements StateSource, PrivacySource {
   static const _messageTopic = 'deskmate/display/message';
   static const _reportTopic = 'deskmate/session/report';
   static const _hubHealthTopic = 'deskmate/health/hub';
+  static const _keystrokeTopic = 'deskmate/sensor/keystroke';
   static const _feedbackTopic = 'deskmate/feedback/user';
 
   final String _host;
@@ -201,6 +202,10 @@ class MqttStateSource implements StateSource, PrivacySource {
   DisplayState? _latest;
   String? _displayMessage;
   SessionReport? _sessionReport;
+  KeystrokeMetrics? _pcKeystroke;
+
+  /// Read the 1 Hz PC topic rather than the hub's 10-second phase snapshot.
+  KeystrokeMetrics? get pcKeystroke => _pcKeystroke;
 
   /// 마지막으로 해석에 실패한 메시지. 화면이 왜 안 움직이는지 말해 주려고 둔다.
   String? _lastParseError;
@@ -322,6 +327,7 @@ class MqttStateSource implements StateSource, PrivacySource {
       _client.subscribe(_messageTopic, MqttQos.atLeastOnce);
       _client.subscribe(_reportTopic, MqttQos.atLeastOnce);
       _client.subscribe(_hubHealthTopic, MqttQos.atLeastOnce);
+      _client.subscribe(_keystrokeTopic, MqttQos.atMostOnce);
     } catch (_) {
       _client.disconnect();
       rethrow;
@@ -355,6 +361,8 @@ class MqttStateSource implements StateSource, PrivacySource {
               waiter.complete(acknowledged);
             }
           }
+        } else if (received.topic == _keystrokeTopic) {
+          _pcKeystroke = KeystrokeMetrics.fromEnvelope(envelope);
         } else if (received.topic == _requestTopic) {
           final data = envelope['data'];
           if (data is Map<String, dynamic>) {

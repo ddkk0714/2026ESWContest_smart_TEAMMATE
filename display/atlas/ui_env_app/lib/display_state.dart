@@ -212,6 +212,19 @@ class KeystrokeMetrics {
     );
   }
 
+  static KeystrokeMetrics? fromEnvelope(Map<String, dynamic> envelope) {
+    if (envelope['schema_version'] != '1.0') {
+      throw const FormatException('unsupported keystroke schema_version');
+    }
+    final data = DisplayState._map(envelope['data']);
+    if (data.isEmpty) return null;
+    return fromJson({
+      ...data,
+      'node': envelope['node'] ?? data['node'],
+      'ts': envelope['ts'],
+    });
+  }
+
   static double? _positive(Object? value) {
     final number = (value as num?)?.toDouble();
     if (number == null || !number.isFinite || number < 0) return null;
