@@ -13,7 +13,7 @@ which only exists because the estimator has to learn a baseline first:
 down, too near, too far, pointing past them, tilted well off), so the product should ask for a
 re-adjustment. It only arises in placement mode "random" (PLACEMENT_MODES, _placement_ok).
 `forward_head` is the turtle-neck posture: the trunk about upright but the head slid forward toward
-the screen (Pose.head_forward 5-8.5 cm), which the product should coach against.
+the screen (Pose.head_forward 6-8.5 cm), which the product should coach against.
 
 Each segment also includes the look-alikes that a real desk throws at the
 classifier, labelled as what they are: glancing down at the keyboard,
@@ -109,7 +109,7 @@ SEGMENTS = {
     "reading": (0.05, (15, 90)),       # upright, a book held at chest height, eyes on it
     "mouse_work": (0.06, (10, 60)),    # upright, left hand on the keyboard, right hand on the mouse
     "phone_call": (0.04, (10, 60)),    # upright, the right hand holds the phone at the ear, head tilted to it
-    "turtle": (0.08, (15, 90)),        # forward_head: trunk about upright, head slid 5-8.5 cm toward the screen
+    "turtle": (0.08, (15, 90)),        # forward_head: trunk about upright, head slid 6-8.5 cm toward the screen
 }
 SEGMENT_LABEL = {"armrest": "upright", "look_aside": "upright", "elbows": "lean_forward", "stretch": "recline",
                  "writing": "lean_forward", "reading": "upright", "mouse_work": "upright", "phone_call": "upright",
@@ -459,7 +459,7 @@ def _target_pose(kind: str, rng, limits: dict | None = None) -> Pose:
     deg = np.radians
     if kind == "upright":
         return Pose(trunk_pitch=deg(rng.normal(0, 5)), trunk_roll=deg(rng.normal(0, 2)), neck_pitch=deg(rng.normal(6, 6)),
-                    head_yaw=deg(rng.normal(0, 6)), arms=_arms("upright", rng), head_forward=_u(rng, 0.0, 0.03))
+                    head_yaw=deg(rng.normal(0, 6)), arms=_arms("upright", rng), head_forward=_u(rng, 0.0, 0.015))
     if kind == "lean_forward":
         return Pose(trunk_pitch=deg(_u(rng, 14, 36)), neck_pitch=deg(_u(rng, -2, 16)), head_yaw=deg(rng.normal(0, 6)),
                     arms=_arms("lean_forward", rng))
@@ -470,12 +470,12 @@ def _target_pose(kind: str, rng, limits: dict | None = None) -> Pose:
         side = 1.0 if rng.random() < 0.5 else -1.0           # which armrest (+ = +x)
         return Pose(trunk_pitch=deg(rng.normal(0, 4)), trunk_roll=deg(_u(rng, 8, 15)) * side,
                     neck_pitch=deg(rng.normal(6, 5)), head_roll=deg(_u(rng, 0, 6)) * side, arms=_arms("armrest", rng),
-                    head_forward=_u(rng, 0.0, 0.03))
+                    head_forward=_u(rng, 0.0, 0.015))
     if kind == "look_aside":
         side = 1.0 if rng.random() < 0.5 else -1.0
         return Pose(trunk_pitch=deg(rng.normal(0, 4)), trunk_roll=deg(_u(rng, 0, 5)) * side,
                     neck_pitch=deg(rng.normal(4, 5)), head_yaw=deg(_u(rng, 30, 60)) * side, arms=_arms("look_aside", rng),
-                    head_forward=_u(rng, 0.0, 0.03))
+                    head_forward=_u(rng, 0.0, 0.015))
     if kind == "elbows":
         return Pose(trunk_pitch=deg(_u(rng, 22, 35)), neck_pitch=deg(_u(rng, -10, 5)), arms=_arms("elbows", rng))
     if kind == "writing":
@@ -486,13 +486,13 @@ def _target_pose(kind: str, rng, limits: dict | None = None) -> Pose:
                     arms="book")
     if kind == "mouse_work":
         return Pose(trunk_pitch=deg(rng.normal(2, 4)), neck_pitch=deg(rng.normal(6, 5)), head_yaw=deg(rng.normal(0, 6)),
-                    arms="mouse", head_forward=_u(rng, 0.0, 0.03))
+                    arms="mouse", head_forward=_u(rng, 0.0, 0.015))
     if kind == "phone_call":                                   # the phone hand is the right one: head tilts that way (-x)
         return Pose(trunk_pitch=deg(rng.normal(0, 4)), neck_pitch=deg(rng.normal(3, 5)), head_roll=-deg(_u(rng, 4, 12)),
                     head_yaw=deg(rng.normal(0, 8)), arms="phone_call", other_arms=_arms("phone_other", rng))
     if kind == "turtle":                                       # turtle neck: head forward, face still on the screen
         return Pose(trunk_pitch=deg(rng.normal(3, 4)), neck_pitch=deg(rng.normal(6, 5)), head_yaw=deg(rng.normal(0, 5)),
-                    arms=_arms("turtle", rng), head_forward=_u(rng, 0.05, 0.085))
+                    arms=_arms("turtle", rng), head_forward=_u(rng, 0.06, 0.085))
     if kind == "stretch":
         return Pose(trunk_pitch=-deg(_u(rng, 20, 35)), neck_pitch=-deg(_u(rng, 5, 15)), arms=_arms("stretch", rng),
                     hip_shift=_u(rng, 0.0, 0.08))
@@ -513,8 +513,9 @@ def _target_pose(kind: str, rng, limits: dict | None = None) -> Pose:
         return Pose(trunk_pitch=deg(_u(rng, 6, 22)), trunk_roll=trunk_roll, neck_pitch=deg(_u(rng, 5, 20)),
                     arms=side, head_roll=head_roll, other_arms=_arms("chin_rest_other", rng))
     if kind == "drowsy":
-        # drowsy baseline: a drooping head and a slightly slumped trunk, even between nods
-        return Pose(trunk_pitch=deg(_u(rng, 0, 14)), neck_pitch=deg(_u(rng, 8, 22)), arms=_arms("drowsy", rng))
+        # drowsy baseline: a drooping head and a slightly slumped trunk, even between nods. The trunk stays
+        # under 8 deg so the resting pose keeps clear of lean_forward (14 deg and up); the nods add the sag.
+        return Pose(trunk_pitch=deg(_u(rng, 0, 8)), neck_pitch=deg(_u(rng, 8, 22)), arms=_arms("drowsy", rng))
     return Pose()
 
 

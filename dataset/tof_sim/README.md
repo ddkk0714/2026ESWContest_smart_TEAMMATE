@@ -51,8 +51,9 @@ run_forever.ps1    정해진 시간 동안 train.py 를 계속 돌림 (죽으면
 
 라벨은 펌웨어 enum 에 둘을 더한 것이다: `0 upright · 1 lean_forward · 2 recline · 3 face_down · 4 chin_rest · 5 drowsy · 6 away · 7 misplaced · 8 forward_head`.
 `misplaced` 는 자세가 아니라 "장치를 다시 놓으라"는 뜻이다(거꾸로·너무 가까이·너무 멀리·옆을 봄·많이 기울임). `--placement random` 에서만 나온다(아래 "센서 배치").
-`forward_head` 는 거북목이다: 상체는 거의 바로 세운 채 머리만 화면 쪽으로 5~8.5 cm 나간 자세(`Pose.head_forward`). 평소 자세에도 0~3 cm 의 자연스러운
-머리 위치 변화가 섞여 있고, 5 cm 이상 지속되는 세그먼트(`turtle`)만 이 라벨이다. 펌웨어 enum 에도 한 칸을 더해야 한다.
+`forward_head` 는 거북목이다: 상체는 거의 바로 세운 채 머리만 화면 쪽으로 6~8.5 cm 나간 자세(`Pose.head_forward`). 평소 자세에도 0~1.5 cm 의
+자연스러운 머리 위치 변화가 섞여 있고, 6 cm 이상 지속되는 세그먼트(`turtle`)만 이 라벨이다. 둘 사이를 비워 둔 건 경계에서 라벨이 흔들리지
+않게 하려는 것이다(2026-10-15, 0~3 / 5~8.5 cm 일 때 검증마다 재현율이 0.3~0.8 로 흔들림). 펌웨어 enum 에도 한 칸을 더해야 한다.
 졸음 구간에서 첫 끄덕임 전 프레임은 `upright` 로 둔다 — 센서로 볼 수 없는 라벨은 학습 잡음이다.
 
 ## 설치
@@ -168,7 +169,12 @@ tools/posture_net_ref <export>/posture_net.bin <export>/golden.txt      # PASS +
 ```
 
 보드 없이 실제 센서로 모델을 돌려 보려면 PC 에서 `tof_live.py --ports COM5,COM6 --model <export>/posture_net.onnx`
-(pyserial + onnxruntime, 처리 경로는 서비스와 같음, `--record` 로 실측 세션 저장).
+(pyserial + onnxruntime, 처리 경로는 서비스와 같음, `--record` 로 실측 세션 저장, `--echo` 줄 형식, `--show` 8×8 거리로
+방향 확인, `--forward <PI4>:9001` 로 보드 서비스에 줄 넘기기).
+
+배포 모델 고르기: `bench_deploy.py render` 로 한 장치의 두 센서 시험 세션을 만들고 `bench_deploy.py score --ckpt ...` 로
+후보 체크포인트를 같은 세션·같은 융합 규칙으로 채점한다(8라벨 모델은 거북목 구간을 바른자세로 셈한 점수도 냄).
+2026-10-15 결과와 Pi 4 배포 묶음은 `../rpi4_tof_deploy/README.md`(기본 = ubai_random_fresh, 대안 = ubai_v5 9라벨).
 이 PC 에는 g++ 가 없어 UBAI 로그인 노드(gcc 8.5)에서 확인했다.
 
 ### 센서 두 개 (한 장치의 좌·우)
@@ -211,7 +217,20 @@ flags  uint8 [T]       선택. bit0 = 전환 구간(채점 제외)
 starts int   [S]       선택. 세션 시작 프레임 번호
 ```
 
-`depth_teacher` 의 `frames.csv`(t_host) 와 VL53L8 시리얼 로그를 시간으로 맞추면 이 파일을 만들 수 있다(도구는 아직 없음).
+만드는 도구는 `real_from_record.py` 다. `tof_live.py --record` 로 녹화하면 줄마다 PC 시각과 포트가 붙어서(두 센서를 한 파일에
+녹화해도 나뉜다), `real_protocol_v1.csv`(15분 각본: 빈 의자·바른자세·상체 앞으로·거북목·젖힘·턱괴기 좌우·엎드림·꾸벅 졸기·
+자리비움·장치 돌림/뒤집음) 대로 자세를 바꾼 뒤:
+
+```
+python tof_live.py --ports COM5,COM6 --forward <보드IP>:9001,<보드IP>:9002 --record rec_%Y%m%d_%H%M.jsonl
+python real_from_record.py --labels real_protocol_v1.csv --out runs/real_<날짜>.npz rec_<...>.jsonl
+python real_from_record.py --score <ckpt 또는 export 의 posture_net.pt> runs/real_<날짜>.npz    # 센서별 + 두 센서 합침
+```
+
+프레임은 보드 서비스와 같은 방식으로 고른다(100 ms 마다 가장 최근 프레임). 펌웨어가 15 Hz 로 보내면 고른 프레임의
+절반이 한 프레임(67 ms) 늦은 것이라, 펌웨어를 10 Hz 로 맞추는 편이 학습 조건과 같다. 각본 시각이 바뀌는 앞뒤 2초는
+채점에서 뺀다(`--margin`). 각본 시각은 녹화를 시작한 PC 시각부터 센다. 녹화 줄의 PC 시각(`host_t`, epoch 초)은 `depth_teacher`
+의 `frames.csv`(t_host) 와 같은 시계라 그쪽 라벨로 바꿔 붙이는 것도 이 시각으로 하면 된다(그 변환은 아직 없음).
 
 ## 결과
 
