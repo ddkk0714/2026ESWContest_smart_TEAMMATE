@@ -89,3 +89,7 @@ scp hub/atlas/tools/pi4-uart-check.sh atlas:/tmp/
 ssh atlas sh /tmp/pi4-uart-check.sh          # 점검만
 ssh atlas sh /tmp/pi4-uart-check.sh --fix    # getty 정지·권한·보드율까지
 ```
+
+## Reboot recovery (2026-10-06)
+
+Automatic startup units and fault recovery scripts are implemented; board installation and reboot verification remain pending. See [deployment guide](../../docs/reboot-recovery.md).

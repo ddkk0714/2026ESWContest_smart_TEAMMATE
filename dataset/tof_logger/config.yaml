@@ -1,0 +1,37 @@
+# ToF(VL53L8CX) 지시 자세 수집 프로토콜. tof_log.py --protocol 이 안내한다.
+#
+# label 은 사람이 실제로 취한 자세(정답)다. 규칙 추정기(TofPosture) 출력과 비교할 수 있는
+# 라벨은 tofl/protocol.py 의 RULE_CLASS 로 data-spec §6.1 posture enum 에 대응시킨다.
+# forward_head·head_down·lean_left/right 는 규칙에 없는 자세지만 모델 학습용으로 모은다.
+# 문구는 dataset/depth_teacher/config.yaml 프로토콜과 맞췄다(같은 동작이 같은 라벨이 되게).
+
+protocol:
+  transition_s: 3           # 각 단계 앞 자세 전환 구간 (prompt 없음, 학습·평가에서 제외)
+  # cmd: 단계가 시작될 때 ESP32 에 보내는 명령. g = 지금 장면을 배경으로, b = 기준 자세 다시 잡기
+  # sim: 시뮬레이터(dataset/tof_sim)만 읽는 동작 힌트. left/right = 턱 괸 손, glance = 키보드 힐끗
+  steps:
+    - {label: away,         seconds: 8,  text: "자리에서 비켜 주세요 (빈 자리 배경 측정)", cmd: g}
+    - {label: upright,      seconds: 15, text: "앉아서 바른 자세로 화면을 보세요 (기준 자세)", cmd: b}
+    - {label: lean_forward, seconds: 10, text: "허리를 숙여 상체를 책상 쪽으로 기울이세요"}
+    - {label: upright,      seconds: 8,  text: "바른 자세로 돌아오세요"}
+    - {label: forward_head, seconds: 10, text: "어깨는 그대로, 목만 앞으로 쭉 빼세요 (거북목)"}
+    - {label: upright,      seconds: 8,  text: "바른 자세로 돌아오세요"}
+    - {label: head_down,    seconds: 10, text: "고개를 숙여 책상(키보드)을 보세요"}
+    - {label: upright,      seconds: 8,  text: "바른 자세로 돌아오세요"}
+    - {label: recline,      seconds: 10, text: "등받이에 기대 뒤로 젖히세요"}
+    - {label: upright,      seconds: 8,  text: "바른 자세로 돌아오세요"}
+    - {label: face_down,    seconds: 10, text: "책상에 팔을 괴고 엎드리세요"}
+    - {label: upright,      seconds: 8,  text: "바른 자세로 돌아오세요"}
+    - {label: chin_rest,    seconds: 10, text: "책상에 팔꿈치를 대고 왼손으로 턱을 괴세요", sim: left}
+    - {label: upright,      seconds: 6,  text: "바른 자세로 돌아오세요"}
+    - {label: chin_rest,    seconds: 10, text: "책상에 팔꿈치를 대고 오른손으로 턱을 괴세요", sim: right}
+    - {label: upright,      seconds: 8,  text: "바른 자세로 돌아오세요"}
+    - {label: lean_left,    seconds: 8,  text: "고개 말고 상체 전체를 (본인 기준) 왼쪽으로 기울이세요"}
+    - {label: upright,      seconds: 6,  text: "바른 자세로 돌아오세요"}
+    - {label: lean_right,   seconds: 8,  text: "고개 말고 상체 전체를 (본인 기준) 오른쪽으로 기울이세요"}
+    - {label: upright,      seconds: 8,  text: "바른 자세로 돌아오세요"}
+    # 졸음 오탐 확인용: 깨어 있는 사람이 키보드를 힐끗 보는 것은 끄덕임과 모양이 비슷하다
+    - {label: upright,      seconds: 12, text: "바른 자세에서 키보드를 2~3번 힐끗 내려다봤다 화면을 보세요", sim: glance}
+    - {label: drowsy,       seconds: 30, text: "실제로 조는 것처럼 하세요 (끄덕이다 고개를 떨군 채 있기)"}
+    - {label: upright,      seconds: 10, text: "바른 자세로 화면을 보세요"}
+    - {label: away,         seconds: 8,  text: "자리에서 일어나 비켜 주세요"}

@@ -24,7 +24,8 @@ ToF VL53L9CX ── 경로 결정 전 (Pi 4 CSI-2 또는 ESP32 I2C) — 미연�
 | 수집 | PC | 키 내용 없는 입력 특징 수집 | `collector/` |
 | 추론·제어 | Raspberry Pi 4 | UART 디코드, 특징 통합, FSM, MQTT broker/client, 제어 판단 | `hub/` |
 | 표시 | Raspberry Pi 5 | Atlas Flutter UI, 터치 피드백, 음성·화면 안내 | `display/` |
-| 학습 | PC | 오프라인 검증·TFLite 변환 | `ml/` |
+| 공통 모델 준비 | PC | 최초 공통 CNN 학습·오프라인 검증·TFLite/portable 변환 | `ml/` |
+| 운영 개인화 | Raspberry Pi 4 | 동의 후 개인 head 학습·검증·적용(10-08 구현, 실기 미검증) | `hub/deskmate_hub/personalization/` |
 
 Pi 4는 ATLAS Headless native-service IPK, Pi 5는 Atlas Flutter IPK로 배포한다.
 Docker는 개발 PC의 빌드 환경일 뿐 보드에서 실행하지 않는다. Pi 4↔Pi 5의 제품

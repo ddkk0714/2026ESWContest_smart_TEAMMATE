@@ -74,7 +74,8 @@ class BluetoothDeviceInfo {
 /// permissions declared in atlas/meta/appinfo.json; no system setting is
 /// changed silently by this app.
 class AtlasBluetoothService {
-  AtlasBluetoothService() : _client = DBusClient.system() {
+  AtlasBluetoothService({DBusClient? client})
+      : _client = client ?? DBusClient.system() {
     _bluetooth = DBusRemoteObject(
       _client,
       name: _bluetoothBusName,
@@ -247,6 +248,10 @@ class AtlasBluetoothService {
       throw StateError(
           'Atlas Bluetooth 권한이 허용되지 않았습니다. 권한 요청을 허용한 뒤 다시 시도하세요.');
     }
+    if (await isA2dpConnected(device.address)) {
+      await selectBluetoothOutput();
+      return;
+    }
     final adapter = await adapterAddress();
     if (!device.paired) {
       await _bluetooth.callMethod(_adapterInterface, 'Pair',
@@ -267,6 +272,10 @@ class AtlasBluetoothService {
           'Atlas Bluetooth 권한이 허용되지 않았습니다. 권한 요청을 허용한 뒤 다시 시도하세요.');
     }
     try {
+      if (await isA2dpConnected(address)) {
+        await selectBluetoothOutput();
+        return;
+      }
       final adapter = await adapterAddress();
       await _bluetooth.callMethod(_a2dpInterface, 'Connect',
           [DBusString(adapter), DBusString(address)]);

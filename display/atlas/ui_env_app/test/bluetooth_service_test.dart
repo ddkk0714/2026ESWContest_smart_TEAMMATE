@@ -2,7 +2,96 @@ import 'package:dbus/dbus.dart';
 import 'package:deskmate_display/bluetooth_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+class _SpeakerClient extends Fake implements DBusClient {
+  bool connected = true;
+  int connections = 0;
+
+  @override
+  Future<DBusMethodSuccessResponse> callMethod({
+    String? destination,
+    required DBusObjectPath path,
+    String? interface,
+    required String name,
+    Iterable<DBusValue> values = const [],
+    DBusSignature? replySignature,
+    bool noReplyExpected = false,
+    bool noAutoStart = false,
+    bool allowInteractiveAuthorization = false,
+  }) async {
+    if (name == 'GetStatus') {
+      return DBusMethodSuccessResponse([
+        DBusDict(DBusSignature.string, DBusSignature.variant, {
+          const DBusString('connected'): DBusVariant(DBusBoolean(connected)),
+        }),
+      ]);
+    }
+    if (name == 'Connect') {
+      connections++;
+      if (connected) throw StateError('Already Connected');
+      connected = true;
+      return DBusMethodSuccessResponse([]);
+    }
+    throw StateError('Unexpected Bluetooth call: $name');
+  }
+}
+
+class _SpeakerService extends AtlasBluetoothService {
+  _SpeakerService(_SpeakerClient client) : super(client: client);
+
+  int outputSelections = 0;
+
+  @override
+  Future<bool> ensureBluetoothPermission({
+    Duration waitForConsent = const Duration(seconds: 20),
+  }) async =>
+      true;
+
+  @override
+  Future<String> adapterAddress() async => '11:22:33:44:55:66';
+
+  @override
+  Future<bool> selectBluetoothOutput() async {
+    outputSelections++;
+    return true;
+  }
+}
+
 void main() {
+  for (final savedAddress in [false, true]) {
+    Future<void> connect(_SpeakerService service) => savedAddress
+        ? service.connectSpeakerAddress('AA:BB:CC:DD:EE:FF')
+        : service.connectSpeaker(const BluetoothDeviceInfo(
+            address: 'AA:BB:CC:DD:EE:FF',
+            name: 'Speaker',
+            paired: true,
+            connected: false,
+            deviceClass: 0x0400,
+          ));
+
+    test('already connected speaker skips Connect (saved=$savedAddress)',
+        () async {
+      final client = _SpeakerClient();
+      final service = _SpeakerService(client);
+
+      await connect(service);
+
+      expect(client.connections, 0);
+      expect(service.outputSelections, 1);
+    });
+
+    test(
+        'disconnected speaker connects and selects output (saved=$savedAddress)',
+        () async {
+      final client = _SpeakerClient()..connected = false;
+      final service = _SpeakerService(client);
+
+      await connect(service);
+
+      expect(client.connections, 1);
+      expect(service.outputSelections, 1);
+    });
+  }
+
   test('GATT write payload carries the frame under "bytes"', () {
     // 10-12 Pi 5: Atlas rejected {"value": ...} with "Invalid value input for
     // GATT characteristic" and accepted {"bytes": ...}; the lamp then changed.

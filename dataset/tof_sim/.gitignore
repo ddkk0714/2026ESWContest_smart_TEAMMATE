@@ -1,0 +1,7 @@
+data/
+# 합성 데이터로만 학습한 시연용 기준 모델은 올린다(개인 데이터 없음, 108 KB). 나머지 모델은 제외
+models/*
+!models/mlp_sim60.npz
+replay/build/
+__pycache__/
+.venv/
