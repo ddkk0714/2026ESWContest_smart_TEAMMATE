@@ -103,9 +103,12 @@ class PortableBackend:
         if metadata.get("model_sha256") != self.fingerprint:
             raise ValueError("portable fingerprint required")
         model = json.loads(content.decode("utf-8"))
-        if model.get("format") != "deskmate-portable-cnn/1" or model.get("metadata") != {
+        expected = {
                 k: metadata[k] for k in ("contract_version", "features", "classes", "input_shape",
-                                         "output_shape", "dtype", "frame_period_sec", "normalization")}:
+                                         "output_shape", "dtype", "frame_period_sec", "normalization")}
+        if "feature_profile" in metadata:
+            expected["feature_profile"] = metadata["feature_profile"]
+        if model.get("format") != "deskmate-portable-cnn/1" or model.get("metadata") != expected:
             raise ValueError("portable contract mismatch")
         self.width = metadata["input_shape"][1]
         self.layers = model["layers"]

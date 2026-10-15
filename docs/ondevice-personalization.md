@@ -22,6 +22,21 @@ Pi 4의 `PortableBackend`는 Conv1D(same, ReLU) 두 층 → mean pool → Dense(
 
 ## 초기 공통 모델 내보내기 (개발 PC)
 
+ToF 입력 연결 시험에서는 승인된 특징 로그만 사용한다. ToF 특징 MQTT 발행기는 아직 별도 연결이
+필요하며, PR39 수집 USB 펌웨어를 그대로 운영에 사용하지 않는다. `tof.enabled`는 기본 false다.
+시험에서 활성화한 hub는 특징 로그에 `feature_profile: tof_features_v1`을 남긴다.
+기존 합성 시나리오·mmWave 로그와 섞으면 dataset 생성이 실패한다. 예시:
+
+```powershell
+python -m ml.training.build_dataset --name tof-common --synthetic= --logs <승인된-특징-로그-폴더>
+python -m ml.training.train_common --dataset ml/datasets/tof-common --output ml/models/tof-common
+python -m ml.training.export_portable --common-model ml/models/tof-common/common.keras --dataset ml/datasets/tof-common --output ml/models/tof-common-bundle --normalization baseline
+```
+
+특징별 유효성·기준선·독립 세션·정정 라벨을 먼저 확인한다. 프로필 일치와 수치 변환 일치는 실제
+집중·피로 정확도를 뜻하지 않는다. 생성한 공통 bundle의 최초 설치 뒤 개인 head 학습은 기존 Pi 4
+경로를 사용한다. 동의·승인·저장 정책을 자동 활성화하지 않고 관찰 전용을 유지한다.
+
 저장소 루트의 학습 가상환경에서 실행한다. output은 비어 있는 새 디렉터리여야 한다.
 
 ```powershell

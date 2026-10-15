@@ -32,6 +32,7 @@ class SensorCache:
     mmwave: Sample | None = None
     env: Sample | None = None
     keystroke: Sample | None = None
+    tof: Sample | None = None
     feedback: deque = field(default_factory=lambda: deque(maxlen=16))
     control_results: deque = field(default_factory=lambda: deque(maxlen=64))
     feedback_received: deque = field(default_factory=lambda: deque(maxlen=16))
@@ -82,6 +83,7 @@ class SensorCache:
                 keystroke=self.keystroke,
                 keystroke_history=list(self.keystroke_history),
                 feedback=list(self.feedback),
+                tof=self.tof,
             )
 
     def pop_feedback_event(self) -> tuple[dict[str, Any] | None, float | None]:
@@ -109,6 +111,7 @@ class CacheView:
     keystroke: Sample | None
     keystroke_history: list[KeystrokeTick]
     feedback: list[dict[str, Any]]
+    tof: Sample | None = None
 
     def fresh(self, kind: str, now: float, max_age: float) -> Sample | None:
         sample: Sample | None = getattr(self, kind)

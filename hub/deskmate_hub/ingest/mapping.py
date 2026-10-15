@@ -101,6 +101,27 @@ def pc_ratio(view: CacheView, now: float, window_sec: float) -> float:
     return sum(1 for t in ticks if t.input_active) / len(ticks)
 
 
+def _tof_sample(view: CacheView, now: float, cfg: dict[str, Any]):
+    if cfg.get("tof", {}).get("enabled") is not True:
+        return None
+    age = cfg["freshness_sec"]["tof"]
+    sample = view.fresh("tof", now, age)
+    if (sample is None or sample.data.get("valid") is not True
+            or not 0 <= now - sample.ts <= age or now < sample.received):
+        return None
+    return sample
+
+
+def _presence(mm, tof) -> tuple[bool, bool]:
+    mm_present = bool(mm.data.get("present", False)) if mm else False
+    if tof is None:
+        return mm_present, False
+    tof_present = tof.data["present"]
+    conflict = bool(mm and mm.data.get("valid") is True and mm_present != tof_present)
+    # Keep occupancy on disagreement, but never use the disputed posture as evidence.
+    return (mm_present or tof_present) if conflict else tof_present, conflict
+
+
 def build_frame(
     view: CacheView,
     now: float,
@@ -115,12 +136,13 @@ def build_frame(
     env = view.fresh("env", now, fresh["env"])
     ks = view.fresh("keystroke", now, fresh["keystroke"])
 
-    present = bool(mm.data.get("present", False)) if mm else False
+    tof = _tof_sample(view, now, cfg)
+    present, presence_conflict = _presence(mm, tof)
     signals: dict[str, Signal] = {}
 
     # ---- posture (ToF 전까지 mmWave 체동으로 대체) ----
     mcfg = cfg["mmwave"]
-    if mm and present:
+    if mm and mm.data.get("present"):
         level = float(mm.data.get("motion_level") or 0.0)
         if level <= mcfg["still_motion_level_max"]:
             if tracker.still_since is None:
@@ -151,6 +173,20 @@ def build_frame(
         tracker.resp_lost_since = None
         signals["posture"] = Signal(available=False)
         signals["respiration"] = Signal(available=False)
+
+    if cfg.get("tof", {}).get("enabled") is True:
+        signals["posture"] = Signal(available=False)
+        if tof is not None and present and not presence_conflict:
+            data, tcfg = tof.data, cfg["tof"]
+            if (data.get("baseline_ready") is True
+                    and data.get("posture") not in ("unknown", "away")
+                    and data.get("posture_confidence") is not None
+                    and data["posture_confidence"] >= tcfg["min_posture_confidence"]
+                    and data.get("motion_score") is not None
+                    and data.get("baseline_deviation") is not None):
+                signals["posture"] = Signal(
+                    phi=_ramp(data["motion_score"], 0.0, tcfg["motion_full"]),
+                    delta=_ramp(data["baseline_deviation"], 0.0, tcfg["deviation_full"]), available=True)
 
     # ---- keystroke ----
     kcfg = cfg["keystroke"]
@@ -268,5 +304,11 @@ def sensor_summary(view: CacheView, now: float, cfg: dict[str, Any],
     ks = view.fresh("keystroke", now, fresh["keystroke"])
     if ks:
         out["keystroke"] = {"ts": ks.ts, **ks.data}
-    out["valid"] = bool(mm or env or ks)
+    tof = _tof_sample(view, now, cfg)
+    if cfg.get("tof", {}).get("enabled") is True:
+        out["posture_source"] = "tof"
+        if tof is not None:
+            out["present"], conflict = _presence(mm, tof)
+            out["tof"] = {**tof.data, "presence_conflict": conflict}
+    out["valid"] = bool(mm or env or ks or tof)
     return out

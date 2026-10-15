@@ -140,7 +140,7 @@ def _run_live_bridge() -> None:
                   out=sys.stderr)
     if os.environ.get("DESKMATE_PERSONALIZATION_SELF_CHECK") == "1":
         from .personalization.self_check import run_self_check
-        check = run_self_check(hub.personalization_cfg, hub.ondevice_cfg, period=hub.period,
+        check = run_self_check(hub._effective_model_config(), hub.ondevice_cfg, period=hub.period,
                                normalization=hub.ingest_cfg.get("normalization", "linear"))
         print("[personalization-self-check] " + json.dumps(check), file=sys.stderr, flush=True)
     next_tick = time.time()

@@ -7,6 +7,7 @@ frame_period_sec: 10
 
 # 이 시간(초) 안에 새 표본이 없으면 해당 신호를 미가용(available=false)으로 둔다.
 freshness_sec:
+  tof: 5
   mmwave: 5
   env: 30
   keystroke: 5
@@ -22,6 +23,14 @@ pc_ratio_window_sec: 900
 # 정규화 방식: linear = 아래 고정 램프만 사용 / baseline = 세션 보정 창(START, fsm baseline_sec)에서 만든
 # 개인 기준선(중앙값·MAD Modified z-score)을 우선 쓰고, 기준선이 없는 지표는 linear 로 폴백한다.
 normalization: baseline
+
+# Development mapping only. Enable after validating the feature publisher and sensor setup.
+tof:
+  enabled: false
+  min_posture_confidence: 0.5
+  motion_full: 1.0
+  deviation_full: 1.0
+
 baseline:
   min_samples: 20          # 보정 창 안에 이만큼 표본이 모여야 그 지표의 기준선을 확정
   z_full: 3.5              # |modified z| 가 이 값이면 증거 1.0 (Iglewicz–Hoaglin 이상치 기준)

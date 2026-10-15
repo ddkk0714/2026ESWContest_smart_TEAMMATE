@@ -85,6 +85,11 @@ VL53L9CX는 54×42(2,268 zone) ToF 센서이며 실제 운영률은 Pi 4 MIPI CS
 
 ### 6.1 `tof_feature`
 
+hub 시험 입력(2026-10-15): `posture_confidence`(0..1), `baseline_ready`(boolean),
+`baseline_deviation`(0 이상)을 함께 받는다. 마지막 값은 `TofFeatures.baseline_deviation`이며
+피로의 실측 정답이나 모델 확률이 아니다. 매핑·신뢰도·freshness 개발값은 `config/ingest.yaml`에 두고
+기본 비활성이다. 운영 MQTT의 스칼라 특징과 PR39 수집 전용 USB raw 줄은 서로 다른 계약이다.
+
 | 필드 | 타입·단위 | 정의 |
 |---|---|---|
 | `present` | boolean | ToF 재실. |

@@ -47,6 +47,26 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 
 ### `deskmate/sensor/tof/<node>`
 
+hub는 이 토픽의 스칼라 특징만 캐시에 보관한다. 알 수 없는 필드와 raw 배열은 보관·재발행하지 않는다.
+`present`, `valid`는 boolean이고 `posture`는 아래 enum이다. 숫자의 NaN/Infinity와 잘못된 타입은 거절한다.
+
+ToF 기반 모델 입력은 `ingest.yaml`의 `tof.enabled: true`를 명시한 시험에서만 사용한다(기본 false).
+자세 증거에 필요한 추가 특징은 `posture_confidence`(0..1), `baseline_ready`(boolean),
+`baseline_deviation`(0 이상, 펌웨어 TofFeatures의 기준선 편차)이다. PR39 수집 전용 USB 줄의
+`rule`/`d`/`st`는 이 운영 토픽 형식이 아니며, 수집 펌웨어를 운영 어댑터로 자동 전환하지 않는다.
+
+개발 매핑은 `phi = clip(motion_score / tof.motion_full)`,
+`delta = clip(baseline_deviation / tof.deviation_full)`이다. 기준선 미확보·unknown/away·
+신뢰도 부족·특징 누락·만료·ToF/mmWave 재실 불일치이면 자세는 미가용이다. ToF 모드에서는
+mmWave 자세 대체값으로 조용히 되돌아가지 않는다. 재실 불일치는 사람이 있다고 유지하되
+`sensor_summary.tof.presence_conflict: true`로 표시한다. 판단 모델의 확률을 행동 게이트에 연결하지 않는다.
+
+`sensor_summary.tof`에는 스칼라 특징과 재실 충돌 여부만 들어가며 `posture_source`는 `tof`다.
+발행 시각과 수신 시각 모두 `freshness_sec.tof`(개발 기본 5초) 이내여야 유효하다.
+발행 시각이 없거나 미래·비유한 값이면 새 표본으로 간주하지 않는다. 자세 신호만 남을 때 기존
+FSM의 가중치 재정규화로 피로가 과대평가되는 예상 실패는 남아 있으므로 입력 연결 시험을
+실제 피로 판정 검증으로 취급하지 않는다.
+
 ToF 원본 54×42 배열은 전송하지 않는다. 운영 경로는 특징값만 보내며, 별도 디버그 topic에서만 축소 depth map을 최대 2Hz로 허용한다.
 
 ```json

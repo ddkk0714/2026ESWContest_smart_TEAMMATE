@@ -20,7 +20,12 @@ def feature_values(frame):
     return values
 
 
-def model_metadata(window, period, normalization):
-    return {"contract_version": VERSION, "features": list(FEATURES), "classes": list(CLASSES),
+def model_metadata(window, period, normalization, *, feature_profile=None):
+    metadata = {"contract_version": VERSION, "features": list(FEATURES), "classes": list(CLASSES),
             "input_shape": [1, window, len(FEATURES)], "output_shape": [1, len(CLASSES)],
             "dtype": "float32", "frame_period_sec": period, "normalization": normalization}
+    if feature_profile is not None:
+        if not isinstance(feature_profile, str) or not feature_profile:
+            raise ValueError("invalid feature profile")
+        metadata["feature_profile"] = feature_profile
+    return metadata

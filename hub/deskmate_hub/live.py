@@ -187,11 +187,14 @@ class LiveHub:
                                    "seeded": sorted({m for b in snap["buckets"].values() for m in b})}
         if self.privacy.enabled:
             summary["privacy"] = self.privacy.snapshot()
+        frame_data = frame_to_dict(frame)
+        if self.ingest_cfg.get("tof", {}).get("enabled") is True:
+            frame_data["feature_profile"] = "tof_features_v1"
         if self.personalization_cfg.get("enabled"):
             if self.ondevice_cfg.get("enabled"):
                 self.ondevice.bind(self.personalization)
             summary["personalization"] = self.personalization.observe(
-                frame_to_dict(frame), reset=(result.state in (State.START, State.END) and result.state is not prev_state),
+                frame_data, reset=(result.state in (State.START, State.END) and result.state is not prev_state),
             )
         if self.ondevice_cfg.get("enabled"):
             self.ondevice.observe(self.personalization, result.state.value, now)
@@ -203,7 +206,7 @@ class LiveHub:
         self._maybe_request(result, prev_state, now)
 
         if self.frame_log:
-            self.frame_log.write(json.dumps(frame_to_dict(frame), ensure_ascii=False) + "\n"); self.frame_log.flush()
+            self.frame_log.write(json.dumps(frame_data, ensure_ascii=False) + "\n"); self.frame_log.flush()
         if self.state_log:
             self.state_log.write(json.dumps(envelope, ensure_ascii=False) + "\n"); self.state_log.flush()
 
@@ -228,6 +231,8 @@ class LiveHub:
 
     def _effective_model_config(self):
         cfg = dict(self.personalization_cfg)
+        cfg["feature_profile"] = ("tof_features_v1"
+                                  if self.ingest_cfg.get("tof", {}).get("enabled") is True else None)
         if self.privacy.enabled and not self.privacy.consented:
             cfg["enabled"] = False
         return cfg
