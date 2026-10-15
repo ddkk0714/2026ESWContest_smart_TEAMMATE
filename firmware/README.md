@@ -77,6 +77,43 @@ PlatformIO (Arduino 프레임워크) 또는 ESP-IDF.
 
 ESP32 는 Pi 4 와 유선이므로 Wi-Fi 자격증명이 기본 경로에 필요 없다. 필요해지면 `include/secrets.h.example` 를 복사해 `include/secrets.h` 로 쓰고 커밋하지 않는다.
 
+## ToF 자세 추정 (Path B 전처리)
+
+`src/preprocess/tof/TofPosture.{h,cpp}` — 멀티존 거리 프레임 → roadmap §4-4 기하 특징 7종 →
+`docs/data-spec.md` §6.1 `tof_feature`(posture enum · `motion_score` · `head_delta_mm` · `nod_rate_hz`).
+Arduino 의존이 없는 순수 C++ 이고, 원본 zone 배열은 여기서 소비하고 내보내지 않는다.
+
+- **자세:** 바른자세 · 상체 앞으로 · 뒤로 젖힘 · 엎드림 · 턱괴기 · 꾸벅 졸음 · 자리비움.
+  정의는 팀에 이미 검증된 두 판정을 ToF 물리량으로 옮겼다 — `display/atlas/camsvc/src/posture_pose`
+  (자세 범주·판정 순서·히스테리시스·1.5 s 유지)와 `dataset/depth_teacher`(머리 동역학만으로 졸음).
+  8×8·54×42 ToF 로 앉은 자세를 다룬 공개 데이터셋은 찾지 못했다.
+- **격자 무관.** VL53L9CX 54×42 원본, binning 축소(24×20 · 8×6 …), VL53L8CX 8×8 을 같은 코드로 처리한다.
+  RAM 은 `DESKMATE_TOF_MAX_ZONES`(기본 2268 → 약 35 KB)로 정한다. 객체는 전역·정적으로 둔다.
+- **흐름.** zone 상태값 판정(5·9, 선택 6·10) → 3프레임 중앙값 · 짧은 결측 유지 → 빈 자리에서 배운 배경 대비
+  전경 분리 → 특징 7종 + 머리·몸통 거리, 머리 낙차, 팔 기둥 → 앉은 뒤 처음 조용한 10 s 를 "바른 자세" 기준선으로
+  → 기준선 대비 분류 → 1.5 s 유지.
+
+| 자세 | ToF 판정 (기준선 대비, on/off) | 출처 |
+|---|---|---|
+| 턱괴기 | 머리 바로 아래부터 끊김 없이 가슴보다 60 mm 이상 가까운 열이 상체 행의 60%/40% 이상, 머리는 엎드림만큼 안 내려감 | camsvc "턱괴기는 팔의 사실" |
+| 뒤로 젖힘 | 머리 거리 1.11배/1.05배 이상 | camsvc 어깨 폭 0.90/0.95배 ↔ 거리 비율 |
+| 엎드림 | 머리 꼭대기 하강 135/75 mm 이상 (행 변화 × 세로 시야각 × 거리) | camsvc 머리 낙차 0.35/0.20 어깨 폭 × 380 mm |
+| 상체 앞으로 | 머리 80 mm 이상 가까워짐 | depth_teacher lean_forward 5 cm |
+| 꾸벅 졸음 | 끄덕임(0.2~1.5 s 에 40 mm 이상 떨어지고 1.5 s 안에 60% 복귀, 몸통은 80 mm 이내) 60 s 안 2회, 또는 끄덕이듯 떨군 채 5 s 정지. 5 s 유지 | depth_teacher drowsiness |
+
+- **임계값**은 전부 `TofPostureConfig` 에 있다. 출처를 옮긴 값도 카메라→ToF 환산 가정(어깨 폭 380 mm, 회전 반지름 15 cm)이
+  들어가 있으니 depth_teacher 라벨과 동시 녹화로 실측 보정해야 한다.
+- **호스트 테스트:** `pio test -e native -f test_tof_posture` (28개 — 배경 분리 · 기준선 · 6자세 · 판정 순서 ·
+  타이핑 팔은 턱괴기 아님 · 1.5 s 유지 · 결측/튐 내성 · 끄덕임 1회는 졸음 아님 · 2회·떨군 채 정지는 졸음 ·
+  상체 숙임·거북목은 끄덕임 아님 · 격자 4종 동일 판정 등).
+
+아직 하지 않은 것: 센서 드라이버 연결(`main.cpp`), UART TYPE 0x03/0x04 payload 정의, hub 매핑.
+
+**학습 데이터 수집 모드(`env:tof_logger`, 운영 아님).** VL53L8CX 8×8 을 ST 공식 라이브러리로 읽어 원본 zone 과
+규칙 판정을 USB 한 줄 JSON(`{"t":"tof",...}`, 921600)으로 PC 에 보낸다. `src/tof_logger/` 는 운영 빌드에서 빠진다
+(`env:esp32dev` 의 `build_src_filter`). PC 쪽 수집기·배선·방향 확인은 [`dataset/tof_logger/README.md`](../dataset/tof_logger/README.md).
+줄 형식 시험: `pio test -e native -f test_tof_line`.
+
 ## 통신 계약
 
 논리 스키마는 [`docs/data-spec.md`](../docs/data-spec.md), Pi 4 이후 MQTT 매핑은 [`docs/mqtt-topics.md`](../docs/mqtt-topics.md) 참조.
