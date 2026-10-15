@@ -6,6 +6,8 @@
 #include "sensors/environment/EnvironmentPayload.h"
 #include "sensors/environment/EnvironmentSensors.h"
 #include "transport/frame.h"
+#include "sensors/tof/TofSensor.h"
+#include "preprocess/tof/TofFeaturePayload.h"
 #include "transport/usb_json.h"
 
 using namespace deskmate;
@@ -25,6 +27,10 @@ uint16_t mmwave_sequence = 0;
 uint16_t environment_sequence = 0;
 uint16_t heartbeat_sequence = 0;
 bool mmwave_ready = false;
+#if DESKMATE_TOF_ENABLED
+TofSensor tof_sensor(Wire);
+uint16_t tof_sequence = 0;
+#endif
 
 WireDrowsyState wireDrowsyState(DrowsyState state) {
   switch (state) {
@@ -138,7 +144,18 @@ void loop() {
     writeMmwaveUart(now_ms, sample, drowsy_state);
   }
 
-  environment_sensors.poll(now_ms, environment_sample);
+#if DESKMATE_TOF_ENABLED
+  if (tof_sensor.poll(millis())) {
+#if DESKMATE_UART2_TX
+    uint8_t payload[kTofFeatureBinarySize];
+    const size_t length = encodeTofFeatureBinary(payload, sizeof(payload), tof_sensor.features(),
+                                                tof_sensor.valid());
+    if (length > 0) writeUartFrame(pi4_serial, kFrameTypeTofFeatures, tof_sequence++,
+                                    tof_sensor.timestampMs(), payload, length);
+#endif
+  }
+#endif
+  environment_sensors.poll(millis(), environment_sample);
   if (now_ms - last_environment_ms >= kEnvironmentPeriodMs) {
     last_environment_ms = now_ms;
     writeEnvironmentJson(Serial, now_ms, environment_sample);

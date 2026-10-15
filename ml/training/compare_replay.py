@@ -49,6 +49,10 @@ def summarize(rows, policy):
 
 
 def compare_session(raw_frames, fsm_cfg, runtime_cfg, *, period, normalization, policy, backend_factory=None, drop_signal=None):
+    profiles = {frame.get("feature_profile") for frame in raw_frames}
+    if len(profiles) > 1:
+        raise ValueError("mixed feature profiles")
+    runtime_cfg = dict(runtime_cfg, feature_profile=next(iter(profiles), None))
     if drop_signal is not None and drop_signal not in SIGNALS:
         raise ValueError("unknown ablation signal")
     if not 0 < policy["low_confidence"] <= 1 or not math.isfinite(policy["max_interval_gap_sec"]) or policy["max_interval_gap_sec"] <= 0:

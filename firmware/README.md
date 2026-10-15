@@ -4,7 +4,7 @@
 
 도크 내부에 1대 배치되어 mmWave·환경 센서를 읽고 노드 단에서 1차 전처리(이동평균·이상치 제거·졸음 FSM)한 뒤
 **UART2 바이너리 프레임(COBS + CRC-16/CCITT-FALSE)** 으로 Pi 4 에 보낸다. 2026-09-11 에 C1001 → ESP32 → Pi 4 `/dev/serial0` 도달을 실측했다.
-VL53L9CX 는 연결 경로(Path A: Pi 4 CSI-2 / Path B: ESP32 I2C 1 MHz binning)가 09-19 결정 대기이며, Path B 일 때만 이 노드에 붙는다.
+2026-10-15 개인화 개발 경로는 VL53L8CX(L8) 8×8 → 기존 ESP32 I2C(GPIO21/22) → UART2 → Pi 4로 확정했다. 이전 VL53L9CX 검토와 구분하며 L8 실기는 미검증이다.
 
 > **현재 상태(2026-09-15):** `esp32_sensor_node/`에 PlatformIO 프로젝트, 공식 DFRobot C1001 라이브러리 기반
 > `C1001Passive`, 5상태 `DrowsyDetector`, UART0(USB) JSON 출력이 들어왔다. 환경 센서는 MVP 스텁이며 5초마다
@@ -52,7 +52,7 @@ GPIO16/17 은 WROVER 계열에서 PSRAM 용이다. 현재 `esp32dev`(WROOM)라 �
 | TYPE | 내용 | 주기 | 상태 |
 |---|---|---|---|
 | 0x01 | (디버그) binning depth map | ≤ 2 Hz | 예약. **실험 펌웨어가 mmWave 에 임시 사용 중 → 충돌, 재배정 필요** |
-| 0x03 / 0x04 | ToF 특징 벡터 / 자세 클래스+신뢰도 | 30 Hz | Path B 시 |
+| 0x03 / 0x04 | L8 특징·자세 32 B / 별도 자세 클래스 예약 | 최대 15 Hz / 미사용 | 기본 비활성 |
 | 0x10 | 환경 묶음 (SCD41 CO₂ 2B + DHT22 T 2B + RH 2B + BH1750 lux 2B = 8B). SCD41 T/RH 는 보내지 않음(보정 없음·단일 센서, 09-14 확정) | 0.2 Hz | 미구현 |
 | **미배정** | mmWave 졸음 state + evidence + 요약값 (10~16 B) | 1 Hz | **TYPE 배정 필요** |
 | 0xF0 | 상태/하트비트 | 1 Hz | |
@@ -107,7 +107,23 @@ Arduino 의존이 없는 순수 C++ 이고, 원본 zone 배열은 여기서 소�
   타이핑 팔은 턱괴기 아님 · 1.5 s 유지 · 결측/튐 내성 · 끄덕임 1회는 졸음 아님 · 2회·떨군 채 정지는 졸음 ·
   상체 숙임·거북목은 끄덕임 아님 · 격자 4종 동일 판정 등).
 
-아직 하지 않은 것: 센서 드라이버 연결(`main.cpp`), UART TYPE 0x03/0x04 payload 정의, hub 매핑.
+**L8 운영 드라이버:** `sensors/tof/TofSensor.{h,cpp}`가 환경 센서의 Wire 버스·클록을 재사용한다. 버스를 재초기화하거나 1 MHz로 바꾸지 않는다. LPn·PWREN은 logger 기본 배선처럼 3.3 V에 연결한다. 8×8, closest, continuous, 15 Hz로 읽고 logger와 같은 기본 좌우 반전을 적용한다.
+
+누락 시 주소 0x29 probe, 읽기 실패·1000 ms 갱신 중단 시 무효화·추정기 reset, 10000 ms 뒤 재시도한다. 초기화의 센서 firmware 업로드는 수 초 동안 loop를 지연시킬 수 있다. 공유 버스에서 15 Hz 처리율과 C1001 수신 유실 여부는 실측이 필요하다. 송신은 성공한 새 프레임과 무효화 이벤트에 한정한다.
+
+`DESKMATE_TOF_ENABLED` 기본값은 0이다. 승인된 활성화 시 빌드 플래그에 `-DDESKMATE_TOF_ENABLED=1`을 추가한다. hub `config/ingest.yaml`의 `tof.enabled: false`, 개인화 동의·정책 승인은 자동으로 바뀌지 않는다. 방향은 `DESKMATE_TOF_FLIP_ROWS/COLS`, 통신 복구 시간은 `DESKMATE_TOF_STALE_MS/RETRY_MS`로 빌드 시 조정한다. 자세 판정 임계값은 기존 추정기 값을 유지하고 hub 매핑 임계값은 YAML을 사용한다.
+
+`encodeTofFeatureBinary` → 기존 `writeUartFrame` → Pi 4 C++ 수신 브리지 → Python `decode_payload(0x03)` → 기존 ToF 캐시·개인화 입력으로 연결된다. 스칼라 특징만 32 B로 전송하며 상세 계약은 `docs/data-spec.md` §13.1을 따른다. 교차 시험은 `py -m pytest hub/tests/test_tof_uart.py -q`, g++ 또는 Python ziglang이 필요하다.
+
+**특징 전용 출력 모듈:** `preprocess/tof/TofFeaturePayload.{h,cpp}`의
+`formatTofFeaturePayload(buf, cap, features, valid)`는 ToF 특징만 JSON data 객체로 만든다.
+raw 배열을 인자로 받지 않고 재실·자세·신뢰도·움직임·기준선 편차·유효성 등 스칼라 특징만 포함한다.
+센서 읽기와 추정기 update 결과를 `valid`에 전달해야 하며, 실패하면 이전 정상 특징을 다시 발행하지
+않도록 valid=false를 출력한다. 기준선 미확보 값은 0 대신 null이다. 버퍼 부족은 길이 0과 빈 버퍼로 알린다.
+
+이 함수는 전송·로깅·USB/UART 설정을 수행하지 않는다. 호출부가 수신지의 시간 계약과 envelope를
+붙여야 하며, ESP32 millis를 MQTT epoch 시각으로 넣지 않는다. 운영 main의 L8 경로는 별도
+바이너리 함수를 쓰며 수집 모드의 기존 출력은 유지한다. C++ 출력 → hub 파서/매핑 교차 시험은 `hub/tests/test_tof_feature_payload.py`다.
 
 **학습 데이터 수집 모드(`env:tof_logger`, 운영 아님).** VL53L8CX 8×8 을 ST 공식 라이브러리로 읽어 원본 zone 과
 규칙 판정을 USB 한 줄 JSON(`{"t":"tof",...}`, 921600)으로 PC 에 보낸다. `src/tof_logger/` 는 운영 빌드에서 빠진다

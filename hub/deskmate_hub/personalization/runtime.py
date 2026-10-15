@@ -26,11 +26,13 @@ class PersonalizationRuntime:
             for key in ("max_period_jitter_sec", "max_inference_ms", "probability_sum_tolerance", "probability_range_tolerance"):
                 if not math.isfinite(float(config[key])) or float(config[key]) <= 0:
                     raise ValueError("invalid limits")
-            self.expected = model_metadata(width, period, normalization)
+            self.expected = model_metadata(width, period, normalization,
+                                           feature_profile=config.get("feature_profile"))
             self.rows = deque(maxlen=width)
             with open(config["metadata_path"], encoding="utf-8") as source:
                 metadata = json.load(source)
-            if any(metadata.get(k) != v for k, v in self.expected.items()):
+            if (any(metadata.get(k) != v for k, v in self.expected.items())
+                    or metadata.get("feature_profile") != self.expected.get("feature_profile")):
                 raise ValueError("metadata contract mismatch")
             # Check the file before importing any optional native dependency.
             with open(config["model_path"], "rb") as source:

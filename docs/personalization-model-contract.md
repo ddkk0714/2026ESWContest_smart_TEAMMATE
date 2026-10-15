@@ -23,6 +23,13 @@
 
 ## 메타데이터와 로딩
 
+ToF 시험 모드의 입력 프로필은 `feature_profile: tof_features_v1`이다. live 특징 로그에 기록하고
+PC dataset manifest → portable/TFLite metadata → Pi 4 관찰 런타임까지 전달한다.
+기존 mmWave 대체 입력은 이 필드가 없다. 프로필이 다른 로그·합성 시나리오는 같은 dataset으로
+섞지 않으며, 모델과 hub 프로필이 다르면 backend를 로딩하지 않고 FSM을 유지한다.
+portable 내부 metadata에도 같은 값을 넣어 외부 metadata만 바꿔 호환성을 우회하지 못하게 한다.
+17개 특징의 순서·shape·클래스는 유지한다. ToF 매핑과 보정값을 바꾸면 공통 모델을 다시 학습·검증한다.
+
 `model_metadata(window, period, normalization)`으로 JSON을 생성한다.
 필수 필드는 contract_version, features, classes, input_shape, output_shape, dtype, frame_period_sec, normalization이다.
 features/classes 순서까지 일치해야 한다. 기본 모델 경로는 `ml/models/personalized.tflite`,

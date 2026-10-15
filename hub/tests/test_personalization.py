@@ -56,6 +56,27 @@ def test_disabled_does_not_load():
     assert r.observe(frame(0))["status"] == "disabled"
 
 
+@pytest.mark.parametrize("input_profile,model_profile", [
+    ("tof_features_v1", None), (None, "tof_features_v1"),
+    ("tof_features_v1", "another-profile"),
+])
+def test_feature_profile_mismatch_is_rejected_before_backend(tmp_path, input_profile, model_profile):
+    cfg = configured(tmp_path)
+    cfg["feature_profile"] = input_profile
+    Path(cfg["metadata_path"]).write_text(json.dumps(
+        model_metadata(6, 10, "linear", feature_profile=model_profile)))
+    result = runtime(cfg, lambda *_: pytest.fail("mismatched input reached backend"))
+    assert result.status == "unavailable" and result.backend is None
+
+
+def test_matching_feature_profile_loads(tmp_path):
+    cfg = configured(tmp_path)
+    cfg["feature_profile"] = "tof_features_v1"
+    Path(cfg["metadata_path"]).write_text(json.dumps(
+        model_metadata(6, 10, "linear", feature_profile="tof_features_v1")))
+    assert runtime(cfg).status == "warming_up"
+
+
 def test_window_prediction_and_period_reset(tmp_path):
     r = runtime(configured(tmp_path))
     for now in range(0, 50, 10):

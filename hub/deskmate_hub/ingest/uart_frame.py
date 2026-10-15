@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass
 from typing import Any
@@ -32,6 +33,9 @@ _DROWSY = {0: "NOPERSON", 1: "NOLOCK", 2: "WARMUP", 3: "AWAKE", 4: "DROWSY"}
 _MMWAVE = struct.Struct("<BBBHBBBBBB")     # 11 B
 _ENV = struct.Struct("<HhHHB")             # 9 B
 _HEARTBEAT = struct.Struct("<IHB")         # 7 B
+_TOF = struct.Struct("<BBBBBBHffffff")     # 32 B, scalar features only
+_POSTURE = {0: "unknown", 1: "upright", 2: "lean_forward", 3: "recline",
+            4: "face_down", 5: "chin_rest", 6: "drowsy", 7: "away"}
 
 
 class FrameError(ValueError):
@@ -153,6 +157,29 @@ def _nullable(value: int, sentinel: int) -> int | None:
 
 def decode_payload(ftype: int, payload: bytes) -> dict[str, Any] | None:
     """TYPE 별 payload → 계약 필드(dict). 모르는 TYPE 은 None."""
+    if ftype == TYPE_TOF_FEATURES:
+        if len(payload) != _TOF.size:
+            raise FrameError("ToF payload length")
+        ver, flags, posture, width, height, reserved, zones, confidence, motion, deviation, coverage, head, nod = _TOF.unpack(payload)
+        if ver != 1 or reserved or flags & ~0x1F or posture not in _POSTURE:
+            raise FrameError("ToF version, flags or posture")
+        if not all(math.isfinite(v) for v in (confidence, motion, deviation, coverage, head, nod)):
+            raise FrameError("ToF nonfinite feature")
+        valid = bool(flags & 1)
+        if not valid and (flags or posture):
+            raise FrameError("ToF invalid sample has evidence flags")
+        if valid and (not 0 < width * height <= 64 or not 0 < zones <= width * height or
+                      not all(0 <= v <= 1 for v in (confidence, motion, coverage)) or
+                      (flags & 4 and deviation < 0) or (flags & 16 and nod < 0)):
+            raise FrameError("ToF feature range")
+        return {
+            "valid": valid, "present": bool(flags & 2), "posture": _POSTURE[posture],
+            "baseline_ready": bool(flags & 4), "grid_width": width, "grid_height": height,
+            "valid_zones": zones, "posture_confidence": confidence if valid else None,
+            "motion_score": motion if valid else None, "coverage_ratio": coverage if valid else None,
+            "baseline_deviation": deviation if flags & 4 else None,
+            "head_delta_mm": head if flags & 8 else None, "nod_rate_hz": nod if flags & 16 else None,
+        }
     if ftype == TYPE_MMWAVE:
         if len(payload) < _MMWAVE.size:
             raise FrameError("mmwave payload short")
@@ -193,6 +220,33 @@ def decode_payload(ftype: int, payload: bytes) -> dict[str, Any] | None:
 
 def encode_payload(ftype: int, data: dict[str, Any]) -> bytes:
     """계약 필드(dict) → payload bytes. 테스트·PC 시뮬레이터용(펌웨어 구현의 참조)."""
+    if ftype == TYPE_TOF_FEATURES:
+        from .protocol import _tof_features
+
+        data = _tof_features(data)
+        if data is None:
+            raise FrameError("invalid ToF features")
+        valid = data["valid"]
+        baseline = valid and data.get("baseline_ready", False)
+        head = valid and data.get("head_delta_mm") is not None
+        nod = valid and data.get("nod_rate_hz") is not None
+        flags = int(valid) | (2 if valid and data["present"] else 0) | (4 if baseline else 0) \
+            | (8 if head else 0) | (16 if nod else 0)
+        posture = {v: k for k, v in _POSTURE.items()}[data["posture"]] if valid else 0
+        try:
+            payload = _TOF.pack(
+                1, flags, posture, data.get("grid_width", 0), data.get("grid_height", 0),
+                0, data.get("valid_zones", 0),
+                data.get("posture_confidence") if valid else 0,
+                data.get("motion_score") if valid else 0,
+                data.get("baseline_deviation") if baseline else 0,
+                data.get("coverage_ratio") if valid else 0,
+                data["head_delta_mm"] if head else 0, data["nod_rate_hz"] if nod else 0,
+            )
+        except (TypeError, struct.error, OverflowError) as exc:
+            raise FrameError("invalid ToF feature representation") from exc
+        decode_payload(ftype, payload)
+        return payload
     if ftype == TYPE_MMWAVE:
         motion = {v: k for k, v in _MOTION.items()}.get(data.get("motion_state", "none"), 0)
         drowsy = {v: k for k, v in _DROWSY.items()}.get(data.get("drowsy_state", "NOLOCK"), 1)
@@ -216,4 +270,4 @@ def encode_payload(ftype: int, data: dict[str, Any]) -> bytes:
     raise FrameError(f"no encoder for type {ftype:#04x}")
 
 
-KIND_BY_TYPE = {TYPE_MMWAVE: "mmwave", TYPE_ENV: "env"}
+KIND_BY_TYPE = {TYPE_MMWAVE: "mmwave", TYPE_ENV: "env", TYPE_TOF_FEATURES: "tof"}

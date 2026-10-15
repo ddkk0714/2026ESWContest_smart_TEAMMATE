@@ -74,7 +74,8 @@ def export(selection_report, dataset, output, *, normalization, period=10, polic
     content = converter.convert()
     if len(content) > policy["max_model_bytes"]:
         raise ValueError("TFLite model exceeds size budget")
-    metadata = model_metadata(width, period, normalization)
+    metadata = model_metadata(width, period, normalization,
+                              feature_profile=data["manifest"].get("feature_profile"))
     metadata["model_sha256"] = hashlib.sha256(content).hexdigest()
     reference = model(x, training=False).numpy()
     # Temporary artifacts are not published until every check passes.

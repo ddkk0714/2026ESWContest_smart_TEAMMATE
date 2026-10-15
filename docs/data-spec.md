@@ -85,6 +85,11 @@ VL53L9CX는 54×42(2,268 zone) ToF 센서이며 실제 운영률은 Pi 4 MIPI CS
 
 ### 6.1 `tof_feature`
 
+hub 시험 입력(2026-10-15): `posture_confidence`(0..1), `baseline_ready`(boolean),
+`baseline_deviation`(0 이상)을 함께 받는다. 마지막 값은 `TofFeatures.baseline_deviation`이며
+피로의 실측 정답이나 모델 확률이 아니다. 매핑·신뢰도·freshness 개발값은 `config/ingest.yaml`에 두고
+기본 비활성이다. 운영 MQTT의 스칼라 특징과 PR39 수집 전용 USB raw 줄은 서로 다른 계약이다.
+
 | 필드 | 타입·단위 | 정의 |
 |---|---|---|
 | `present` | boolean | ToF 재실. |
@@ -339,10 +344,31 @@ crc16  = CRC-16/CCITT-FALSE(poly 0x1021, init 0xFFFF, no reflect, xorout 0) over
 | TYPE | 이름 | 주기 | payload (little-endian) |
 |---|---|---|---|
 | `0x01` | ToF 디버그 depth | ≤ 2 Hz | 예약(디버그 모드만) |
-| `0x03` / `0x04` | ToF 특징 / 자세 클래스 | 30 Hz | Path B 확정 시 정의 |
+| `0x03` | L8 ToF 특징·자세 | 최대 15 Hz, 새 프레임만 | 아래 v1, 32 B |
+| `0x04` | 별도 ToF 자세 클래스 | 예약 | 미사용 |
 | `0x10` | 환경 | 0.2 Hz | `co2_ppm u16 · temp_c_x10 i16 · humidity_pct_x10 u16 · lux u16 · valid_bits u8(b0 co2, b1 temp, b2 hum, b3 lux)` = 9 B |
 | `0x20` | mmWave | 1 Hz | `present u8 · motion_state u8(0 none/1 still/2 active) · motion_level u8 · distance_cm u16(0xFFFF=null) · resp_bpm u8(0xFF=null) · resp_valid u8 · heart_bpm u8(0xFF=null) · heart_valid u8 · drowsy_state u8(0 NOPERSON/1 NOLOCK/2 WARMUP/3 AWAKE/4 DROWSY) · valid u8` = 11 B |
 | `0xF0` | 하트비트 | 1 Hz | `uptime_ms u32 · fw_version u16 · mmwave_ok u8` = 7 B |
+
+**L8 운영 연결(2026-10-15 사용자 확정):** VL53L8CX 8×8 → 기존 ESP32 I2C(GPIO21/22, 환경 센서와 버스·클록 공유) → UART2 TX25/RX26 → Pi 4, 115200 8N1. 이전 VL53L9CX/CSI-2 검토와 구분한다. L8 실기·실사용 개인화는 미검증이다.
+
+ToF v1 payload: Python struct `<BBBBBBHffffff`, 32 B.
+
+- 0..5: `version=1 u8, flags u8, posture u8, grid_width u8, grid_height u8, reserved=0 u8`
+- 6..7: `valid_zones u16`
+- 8..31: `posture_confidence, motion_score, baseline_deviation, coverage_ratio, head_delta_mm, nod_rate_hz`, 각각 IEEE754 float32 LE
+- flags: b0 valid, b1 present, b2 baseline_ready(기하 유효 포함), b3 head_delta_valid, b4 nod_rate_valid. b5..7=0.
+- posture: 0 unknown, 1 upright, 2 lean_forward, 3 recline, 4 face_down, 5 chin_rest, 6 drowsy, 7 away.
+- 없는 선택 수치는 wire에서 0, 대응 flag=0이며 Pi 4에서 null로 복원한다. valid=0이면 flags=0, posture=unknown, 모든 float=0이고 재실·피로 증거로 쓰지 않는다. 기준선 미확보 편차도 null이다.
+- 길이·버전·예약 비트·enum·유효 격자(1..64 zone)·수치 범위·유한성을 검사하고 오류는 폐기한다.
+- 성공한 새 프레임 시각만 TS_MS에 넣는다. 읽기 오류 또는 1000 ms 갱신 중단 시 무효 특징을 보내고 추정기를 초기화한다. 10000 ms 뒤 재시도하며 누락 센서는 주소 0x29를 probe한다.
+- UART 시각은 ESP32 uptime이므로 기존 경로처럼 hub 수신 시각으로 캐시 freshness를 계산한다. 센서 stale 판정과 hub `freshness_sec.tof=5`초를 함께 적용한다. 전송 큐에 지연된 프레임의 실제 측정 age를 복원하는 시계 동기화는 아직 없다.
+- raw zone은 ESP32 RAM에서 특징 계산에만 사용하며 USB·UART·운영 로그로 내보내지 않는다. 별도 `tof_logger` 학습 모드는 이 운영 계약에 포함하지 않는다.
+
+고정 교차 벡터(seq=7, ts_ms=1000)는 `python tools/uart_frame_tool.py encode tof --seq 7 --ts 1000`으로 재현한다.
+`vectors`에도 ToF가 포함되며 PC 인코더와 실제 C++ 송신 payload를 바이트 단위로 대조한다.
+
+ToF 송신은 `DESKMATE_TOF_ENABLED=0` 기본 비활성, hub 매핑도 `tof.enabled: false`를 유지한다. 활성화·개인화 동의·정책 승인은 각각 별도로 수행해야 한다.
 
 test vector (seq 7, ts_ms 1000): mmWave 예시 payload `01010c37000f01ff000301` → wire `05a5012007020b03e803010501010c37040f01ff050301dea100`(26 B).
 Pi 4 C++ 서비스는 COBS 해제·CRC 검증·헤더 파싱까지만 하고 `UART\t{"type","seq","ts_ms","payload_hex"}` 한 줄을 Python 브리지로 넘긴다. payload 해석은 Python(`decode_payload`)이 한다.
