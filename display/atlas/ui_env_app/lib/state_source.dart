@@ -7,6 +7,7 @@ import 'package:mqtt_client/mqtt_server_client.dart';
 
 import 'display_state.dart';
 import 'session_report.dart';
+import 'privacy_state.dart';
 
 abstract interface class StateSource {
   String get label;
@@ -165,8 +166,8 @@ class HttpStateSource implements StateSource {
 /// HTTP source는 Atlas 앱과 Hub를 따로 검증하기 위한 개발용 대체 수단으로
 /// 남겨 둔다. MQTT가 끊겨도 display는 재연결할 뿐, Pi 4의 FSM에는 영향을
 /// 주지 않는다.
-class MqttStateSource implements StateSource {
-  MqttStateSource(this._host, {required this.port})
+class MqttStateSource implements StateSource, PrivacySource {
+  MqttStateSource(this._host, {required this.port, this.onControlCommand})
       : _bootId = 'display-${DateTime.now().microsecondsSinceEpoch}',
         _client = MqttServerClient.withPort(
           _host,
@@ -189,10 +190,16 @@ class MqttStateSource implements StateSource {
   static const _messageTopic = 'deskmate/display/message';
   static const _reportTopic = 'deskmate/session/report';
   static const _hubHealthTopic = 'deskmate/health/hub';
+  static const _keystrokeTopic = 'deskmate/sensor/keystroke';
   static const _feedbackTopic = 'deskmate/feedback/user';
+  static const _controlTopic = 'deskmate/control/cmd';
+  static const _controlResultTopic = 'deskmate/control/result';
 
   final String _host;
   final int port;
+  final Future<Map<String, dynamic>?> Function(Map<String, dynamic>)?
+      onControlCommand;
+  bool _closed = false;
   final String _bootId;
   final MqttServerClient _client;
   StreamSubscription<List<MqttReceivedMessage<MqttMessage?>>>? _updates;
@@ -200,9 +207,54 @@ class MqttStateSource implements StateSource {
   DisplayState? _latest;
   String? _displayMessage;
   SessionReport? _sessionReport;
+  KeystrokeMetrics? _pcKeystroke;
+
+  /// Read the 1 Hz PC topic rather than the hub's 10-second phase snapshot.
+  KeystrokeMetrics? get pcKeystroke => _pcKeystroke;
 
   /// 마지막으로 해석에 실패한 메시지. 화면이 왜 안 움직이는지 말해 주려고 둔다.
   String? _lastParseError;
+  PrivacyState? _privacyState;
+  final Map<String, Completer<PrivacyState>> _privacyRequests = {};
+  @override
+  PrivacyState? get privacyState => _privacyState;
+
+  @override
+  Future<PrivacyState> changePrivacy(String action) async {
+    if (!['grant', 'revoke', 'delete'].contains(action)) {
+      throw ArgumentError('Unknown privacy action');
+    }
+    final state = _privacyState;
+    if (state?.available != true ||
+        (action == 'grant' && state?.policyReady != true)) {
+      throw StateError('Privacy policy or service unavailable');
+    }
+    await _ensureConnected();
+    final requestId = 'privacy-$_bootId-${++_sequence}';
+    final completion = Completer<PrivacyState>();
+    _privacyRequests[requestId] = completion;
+    try {
+      final payload = jsonEncode({
+        'schema_version': '1.0',
+        'node': 'display',
+        'data': {
+          'kind': 'personalization',
+          'request_id': requestId,
+          'action': action,
+          'confirmed': true,
+          'policy_version': state!.policyVersion,
+          'hub_boot_id': state.hubBootId
+        }
+      });
+      final builder = MqttClientPayloadBuilder()..addString(payload);
+      _client.publishMessage(
+          _feedbackTopic, MqttQos.atLeastOnce, builder.payload!);
+      return await completion.future.timeout(const Duration(seconds: 35));
+    } finally {
+      _privacyRequests.remove(requestId);
+    }
+  }
+
   String? _pendingRequestId;
   int? _pendingExpiresInS;
   int _sequence = 0;
@@ -280,6 +332,10 @@ class MqttStateSource implements StateSource {
       _client.subscribe(_messageTopic, MqttQos.atLeastOnce);
       _client.subscribe(_reportTopic, MqttQos.atLeastOnce);
       _client.subscribe(_hubHealthTopic, MqttQos.atLeastOnce);
+      _client.subscribe(_keystrokeTopic, MqttQos.atMostOnce);
+      if (onControlCommand != null) {
+        _client.subscribe(_controlTopic, MqttQos.atLeastOnce);
+      }
     } catch (_) {
       _client.disconnect();
       rethrow;
@@ -302,6 +358,33 @@ class MqttStateSource implements StateSource {
         final envelope = jsonDecode(text) as Map<String, dynamic>;
         if (received.topic == _stateTopic) {
           _latest = DisplayState.fromEnvelope(envelope);
+          if (!_latest!.fsmState.startsWith('ACTION_')) {
+            _pendingRequestId = null;
+            _pendingExpiresInS = null;
+          }
+          final data = envelope['data'];
+          final summary = data is Map ? data['sensor_summary'] : null;
+          _privacyState = PrivacyState.fromSummary(summary);
+          final acknowledged = _privacyState;
+          if (acknowledged != null &&
+              ['succeeded', 'failed'].contains(acknowledged.status)) {
+            final waiter = _privacyRequests[acknowledged.requestId];
+            if (waiter != null && !waiter.isCompleted) {
+              waiter.complete(acknowledged);
+            }
+          }
+        } else if (received.topic == _keystrokeTopic) {
+          _pcKeystroke = KeystrokeMetrics.fromEnvelope(envelope);
+        } else if (received.topic == _controlTopic) {
+          // Control events must never replay from retained messages on startup.
+          if (publish.header?.retain == true ||
+              envelope['schema_version'] != '1.0') {
+            continue;
+          }
+          final data = envelope['data'];
+          if (data is Map<String, dynamic>) {
+            unawaited(_handleControl(data));
+          }
         } else if (received.topic == _requestTopic) {
           final data = envelope['data'];
           if (data is Map<String, dynamic>) {
@@ -341,6 +424,28 @@ class MqttStateSource implements StateSource {
     }
   }
 
+  Future<void> _handleControl(Map<String, dynamic> command) async {
+    final handler = onControlCommand;
+    if (_closed || handler == null) return;
+    try {
+      final result = await handler(command);
+      if (result == null || _closed || !isConnected) return;
+      final builder = MqttClientPayloadBuilder()
+        ..addString(jsonEncode({
+          'schema_version': '1.0',
+          'ts': DateTime.now().millisecondsSinceEpoch / 1000,
+          'node': 'display-control',
+          'boot_id': _bootId,
+          'seq': ++_sequence,
+          'data': result,
+        }));
+      _client.publishMessage(
+          _controlResultTopic, MqttQos.atLeastOnce, builder.payload!);
+    } catch (error) {
+      stderr.writeln('[display] 제어 명령 처리 실패: $error');
+    }
+  }
+
   @override
   Future<void> feedback(String verdict,
       {String? correctedState, int? responseMs}) async {
@@ -376,6 +481,13 @@ class MqttStateSource implements StateSource {
 
   @override
   void close() {
+    _closed = true;
+    for (final request in _privacyRequests.values) {
+      if (!request.isCompleted) {
+        request.completeError(StateError('Connection closed'));
+      }
+    }
+    _privacyRequests.clear();
     _updates?.cancel();
     _client.disconnect();
   }

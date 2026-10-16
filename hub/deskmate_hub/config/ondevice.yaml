@@ -1,0 +1,14 @@
+# Development defaults. Production approval and board timing tests remain required.
+enabled: false
+head_path: logs/personalization/head.json
+max_samples: 512
+max_label_age_sec: 12
+min_train_sessions: 2
+min_per_class: 2
+epochs: 20
+learning_rate: 0.01
+l2: 0.001
+updates_per_tick: 8
+tick_budget_ms: 25
+min_macro_f1_gain: 0.0
+max_recall_regression: 0.0

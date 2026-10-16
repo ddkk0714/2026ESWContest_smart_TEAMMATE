@@ -34,6 +34,8 @@ class SensorCache:
     keystroke: Sample | None = None
     feedback: deque = field(default_factory=lambda: deque(maxlen=16))
     control_results: deque = field(default_factory=lambda: deque(maxlen=64))
+    feedback_received: deque = field(default_factory=lambda: deque(maxlen=16))
+    control_received: deque = field(default_factory=lambda: deque(maxlen=64))
     keystroke_history: deque = field(default_factory=lambda: deque(maxlen=1800))
     seq_gaps: dict[str, int] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -51,19 +53,25 @@ class SensorCache:
                     KeystrokeTick(sample.received, bool(sample.data.get("input_active", False)))
                 )
 
-    def put_feedback(self, payload: dict[str, Any]) -> None:
+    def put_feedback(self, payload: dict[str, Any], *, received: float | None = None) -> None:
         with self._lock:
             self.feedback.append(payload)
+            self.feedback_received.append(received)
 
-    def put_control_result(self, payload: dict[str, Any]) -> None:
+    def put_control_result(self, payload: dict[str, Any], *, received: float | None = None) -> None:
         with self._lock:
             self.control_results.append(payload)
+            self.control_received.append(received)
+
+    def pop_control_result_events(self) -> list[tuple[dict[str, Any], float | None]]:
+        with self._lock:
+            items = list(zip(self.control_results, self.control_received))
+            self.control_results.clear()
+            self.control_received.clear()
+            return items
 
     def pop_control_results(self) -> list[dict[str, Any]]:
-        with self._lock:
-            items = list(self.control_results)
-            self.control_results.clear()
-            return items
+        return [payload for payload, _ in self.pop_control_result_events()]
 
     # ---- 읽기 (프레임 빌더) ----
     def snapshot(self) -> "CacheView":
@@ -76,9 +84,21 @@ class SensorCache:
                 feedback=list(self.feedback),
             )
 
-    def pop_feedback(self) -> dict[str, Any] | None:
+    def pop_feedback_event(self) -> tuple[dict[str, Any] | None, float | None]:
         with self._lock:
-            return self.feedback.popleft() if self.feedback else None
+            if not self.feedback:
+                return None, None
+            return self.feedback.popleft(), self.feedback_received.popleft()
+
+    def pop_feedback_events(self) -> list[tuple[dict[str, Any], float | None]]:
+        with self._lock:
+            items = list(zip(self.feedback, self.feedback_received))
+            self.feedback.clear()
+            self.feedback_received.clear()
+            return items
+
+    def pop_feedback(self) -> dict[str, Any] | None:
+        return self.pop_feedback_event()[0]
 
 
 @dataclass

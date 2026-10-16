@@ -159,6 +159,12 @@ dominant = argmax(wᵢ · δᵢ)
 뒤라 첫 원인은 대개 자동이 되고, 첫 원인이 효과가 없었다면 다음 원인은 근거가 약하므로 사람이 확인하고 실행한다.
 `retry_max: auto`(또는 키 없음)면 낮추지 않는다. 제안 카드가 화면에서 만료되면(`timeout`) 그 제안은 실행 없이 만료한다.
 
+라이브 허브는 `ACTION_ENV`·`ACTION_POSTURE`·`ACTION_BREAK`의 유효한 제안이 대기하는 동안
+`auto_complete_actions` 개발 옵션으로 실행 완료를 합성하지 않는다. 응답 전에는 게이트를
+`suggest`로 유지하고 원인을 보존한다. 수락·거절 또는 `expires_in_s` 만료 뒤에만 후속 상태로
+진행한다. 앱이 응답하지 않아도 허브는 요청 시각부터 만료를 판단해 `timeout`을 기록한다.
+`ACTION_BREAK` 수락은 `REST`, 거절·만료는 `MONITOR`로 진행한다.
+
 2단계 TFLite 분류기가 활성화되면 FSM 점수와 분류기 확신도를 융합해 같은 게이트에 입력한다.
 두 판정이 엇갈리면 보수적으로 `suggest` 로 낮춘다. 분류기 import 실패 시에도 FSM 은 단독 동작한다.
 
@@ -173,3 +179,9 @@ dominant = argmax(wᵢ · δᵢ)
 - 1단계 규칙 FSM 은 완전 오프라인 동작. 2단계 TFLite 는 RasPi 탑재 성공 시 오프라인.
 - 판정 사이클 ≤ 500ms, 신뢰도 계산 주기 10s(`score_period_sec`).
 - 장시간 구동: deque 버퍼 상한 · 주기적 정리 · systemd 자동 재시작.
+
+## 개입 응답 처리 보완 (2026-10-06)
+
+FSM 상태·가중치·임계값은 유지한다. LiveHub에서 질문 만료 시 timeout ESM을 한 번 기록하고, ACTION_ENV의 제어 디스패처가 만료·실패·결과 타임아웃을 action_done으로 전달한다. 결과가 실패했더라도 MONITOR에서 센서 회복을 관측할 수 있으며, 제어 성공과 같은 의미로 보고하지 않는다. 리포트 control_results에서 실제 성공·실패·타임아웃을 구분한다. 정정은 상태 전이를 강제로 바꾸지 않는다.
+
+설정은 기존 config/control.yaml과 config/fsm.yaml을 따른다. 제어 명령 기한은 수락 후 실제 발행 시점부터 계산하며, 기한 전에 수신한 결과는 다음 tick에서도 유효하다. 닫힌 에피소드의 되돌리기 결과도 추적한다. [mock·MQTT 검증 절차](intervention-cycle-check.md)를 참고한다.

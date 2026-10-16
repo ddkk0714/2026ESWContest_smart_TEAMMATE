@@ -1,0 +1,3 @@
+max_absolute_error: 0.00001
+min_top1_agreement: 1.0
+max_model_bytes: 262144

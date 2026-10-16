@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:camtest/diag.dart';
 import 'package:dbus/dbus.dart';
 
 const _bluetoothBusName = 'com.atlas.Bluetooth1';
@@ -73,7 +74,8 @@ class BluetoothDeviceInfo {
 /// permissions declared in atlas/meta/appinfo.json; no system setting is
 /// changed silently by this app.
 class AtlasBluetoothService {
-  AtlasBluetoothService() : _client = DBusClient.system() {
+  AtlasBluetoothService({DBusClient? client})
+      : _client = client ?? DBusClient.system() {
     _bluetooth = DBusRemoteObject(
       _client,
       name: _bluetoothBusName,
@@ -246,6 +248,10 @@ class AtlasBluetoothService {
       throw StateError(
           'Atlas Bluetooth 권한이 허용되지 않았습니다. 권한 요청을 허용한 뒤 다시 시도하세요.');
     }
+    if (await isA2dpConnected(device.address)) {
+      await selectBluetoothOutput();
+      return;
+    }
     final adapter = await adapterAddress();
     if (!device.paired) {
       await _bluetooth.callMethod(_adapterInterface, 'Pair',
@@ -266,6 +272,10 @@ class AtlasBluetoothService {
           'Atlas Bluetooth 권한이 허용되지 않았습니다. 권한 요청을 허용한 뒤 다시 시도하세요.');
     }
     try {
+      if (await isA2dpConnected(address)) {
+        await selectBluetoothOutput();
+        return;
+      }
       final adapter = await adapterAddress();
       await _bluetooth.callMethod(_a2dpInterface, 'Connect',
           [DBusString(adapter), DBusString(address)]);
@@ -342,18 +352,39 @@ class AtlasBluetoothService {
       throw StateError(
           'Atlas Bluetooth 권한이 허용되지 않았습니다. 권한 요청을 허용한 뒤 다시 시도하세요.');
     }
-    final adapter = await adapterAddress();
+    var adapter = await adapterAddress();
     final result = await _bluetooth.callMethod(
       _gattInterface,
       'Connect',
       [DBusString(adapter), DBusString(address), const DBusUint32(0)],
     );
     final clientId = result.returnValues.first.asString();
-    await _bluetooth.callMethod(
-      _gattInterface,
-      'DiscoverServices',
-      [DBusString(adapter), DBusString(address)],
-    );
+    if (adapter.isEmpty) {
+      // Connect tolerates an empty adapter; DiscoverServices and writes do not.
+      final status =
+          await _bluetooth.callMethod(_gattInterface, 'GetStatus', []);
+      final values = status.returnValues;
+      if (values.isNotEmpty && values.first is DBusArray) {
+        adapter = gattAdapterFor(values.first as DBusArray, address);
+      }
+      diag.write('램프 어댑터: GetInfo 비어 있음 → GetStatus "$adapter"');
+    }
+    try {
+      await discoverWithRetry(() => _bluetooth.callMethod(
+            _gattInterface,
+            'DiscoverServices',
+            [DBusString(adapter), DBusString(address)],
+          ), onError: (error, attempt) =>
+              diag.write('램프 서비스 검색 실패 $attempt ($address, $clientId): $error'));
+    } catch (_) {
+      // Release by client id (not address), or every later Connect fails
+      // with "Already Connected".
+      try {
+        await _bluetooth.callMethod(_gattInterface, 'Disconnect',
+            [DBusString(adapter), DBusString(clientId)]);
+      } catch (_) {}
+      rethrow;
+    }
     return GattConnection(adapter: adapter, clientId: clientId);
   }
 
@@ -363,11 +394,6 @@ class AtlasBluetoothService {
     required String characteristicId,
     required List<int> value,
   }) async {
-    final bytes = DBusArray(DBusSignature.byte,
-        value.map((byte) => DBusByte(byte)).toList(growable: false));
-    final payload = DBusDict(DBusSignature.string, DBusSignature.variant, {
-      const DBusString('value'): DBusVariant(bytes),
-    });
     await _bluetooth.callMethod(_gattInterface, 'WriteCharacteristicValue', [
       DBusString(connection.adapter),
       DBusString(serviceId),
@@ -375,7 +401,7 @@ class AtlasBluetoothService {
       const DBusString(''),
       DBusString(connection.clientId),
       const DBusUint32(1),
-      payload,
+      gattWritePayload(value),
     ]);
   }
 
@@ -417,4 +443,39 @@ class GattConnection {
   const GattConnection({required this.adapter, required this.clientId});
   final String adapter;
   final String clientId;
+}
+
+/// Atlas WriteCharacteristicValue wraps this dict as "value" itself, so the
+/// frame goes under "bytes" (verified on Pi 5, 10-12).
+DBusDict gattWritePayload(List<int> frame) =>
+    DBusDict(DBusSignature.string, DBusSignature.variant, {
+      const DBusString('bytes'): DBusVariant(DBusArray(DBusSignature.byte,
+          frame.map((byte) => DBusByte(byte)).toList(growable: false))),
+    });
+
+/// Adapter of [address] in a Gatt.GetStatus reply, or '' when not connected.
+String gattAdapterFor(DBusArray status, String address) {
+  final wanted = address.toLowerCase();
+  for (final entry in status.children.whereType<DBusDict>()) {
+    if (AtlasBluetoothService._string(entry, 'address').toLowerCase() == wanted) {
+      return AtlasBluetoothService._string(entry, 'adapterAddress');
+    }
+  }
+  return '';
+}
+
+/// Retries DiscoverServices; the first call after Connect can fail.
+Future<void> discoverWithRetry(Future<void> Function() discover,
+    {int attempts = 4,
+    Duration delay = const Duration(seconds: 2),
+    void Function(Object error, int attempt)? onError}) async {
+  for (var attempt = 1;; attempt++) {
+    try {
+      return await discover();
+    } catch (error) {
+      onError?.call(error, attempt);
+      if (attempt >= attempts) rethrow;
+      await Future<void>.delayed(delay);
+    }
+  }
 }

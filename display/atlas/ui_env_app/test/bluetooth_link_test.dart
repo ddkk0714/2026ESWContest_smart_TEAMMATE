@@ -217,6 +217,25 @@ void main() {
     expect(store.load().lamp, isNotNull); // 저장은 한다 — 다음 전환 때 다시 시도
   });
 
+  test('successful lamp recovery clears the old failed status', () async {
+    lamp.connectOk = false;
+    final links = manager();
+    await links.selectLamp(_lampInfo);
+    expect(links.lampStatus.health, LinkHealth.down);
+    lamp.connectOk = true;
+    await feedback.lamp.connect();
+    expect(links.lampStatus.health, LinkHealth.ok);
+  });
+
+  test('pair connection reports lamp failure instead of complete success',
+      () async {
+    lamp.connectOk = false;
+    final links = manager();
+    expect(await links.connectPair(_speakerInfo, _lampInfo), isFalse);
+    expect(links.speakerStatus.health, LinkHealth.ok);
+    expect(links.lampStatus.health, LinkHealth.down);
+  });
+
   group('BluetoothControlPage', () {
     Future<void> pumpPage(WidgetTester tester) async {
       tester.view.physicalSize = const Size(1024, 600);

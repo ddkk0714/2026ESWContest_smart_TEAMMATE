@@ -35,12 +35,12 @@ def route_mqtt_message(cache: SensorCache, topic: str, payload: bytes, now: floa
         if not isinstance(data, dict):
             return None
         if topic == TOPIC_FEEDBACK:
-            cache.put_feedback(data)
+            cache.put_feedback(data, received=now)
             return "feedback"
         put_control_result = getattr(cache, "put_control_result", None)
         if put_control_result is None:
             return None
-        put_control_result(data)
+        put_control_result(data, received=now)
         return "control_result"
     parsed = parse_sensor_message(topic, payload, now)
     if parsed is None:

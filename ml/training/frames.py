@@ -13,11 +13,7 @@ sys.path.insert(0, str(ROOT / "hub"))
 from deskmate_hub.inference import State  # noqa: E402
 from deskmate_hub.presentation import _PHASE_BY_STATE  # noqa: E402
 
-SIGNALS = ("keystroke", "posture", "respiration", "environment", "elapsed")
-FEATURES = tuple(f"{signal}_{field}" for signal in SIGNALS for field in ("phi", "delta", "available")) + (
-    "present", "pc_ratio",
-)
-CLASSES = ("focus", "fatigue", "rest", "idle")
+from deskmate_hub.personalization.contract import SIGNALS, FEATURES, CLASSES, feature_values  # noqa: E402
 CLASS_INDEX = {name: index for index, name in enumerate(CLASSES)}
 PHASE_CLASS = {"focus": "focus", "fatigue": "fatigue", "recovery": "rest", "rest": "rest",
                "idle": "idle", "start": "idle", "end": "idle"}
@@ -30,14 +26,7 @@ def read_jsonl(path: str | Path) -> list[dict]:
 
 
 def feature_vector(frame: dict) -> np.ndarray:
-    values = []
-    for name in SIGNALS:
-        signal = (frame.get("signals") or {}).get(name) or {}
-        valid = bool(signal.get("available", False))
-        values.extend((float(signal.get("phi") or 0) if valid else 0.0,
-                       float(signal.get("delta") or 0) if valid else 0.0, float(valid)))
-    values.extend((float(bool(frame.get("present", False))), float(frame.get("pc_ratio") or 0)))
-    return np.asarray(values, dtype=np.float32)
+    return np.asarray(feature_values(frame), dtype=np.float32)
 
 
 def phase_label(phase: str | None) -> int | None:

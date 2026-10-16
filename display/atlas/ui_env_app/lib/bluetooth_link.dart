@@ -156,10 +156,10 @@ class BluetoothLinkManager extends ChangeNotifier {
 
   /// 일체형의 스피커와 램프를 한 번에. 스피커가 실패하면 램프는 시도하지 않는다 —
   /// 한쪽만 붙은 어중간한 상태보다 원인을 보고 다시 누르는 편이 낫다.
-  Future<void> connectPair(
+  Future<bool> connectPair(
       BluetoothDeviceInfo speaker, BluetoothDeviceInfo lamp) async {
     await connectSpeaker(speaker);
-    await selectLamp(lamp);
+    return selectLamp(lamp);
   }
 
   /// 저장된 기기를 잊는다. 다음 시작부터 자동 연결하지 않는다.
@@ -219,7 +219,8 @@ class BluetoothLinkManager extends ChangeNotifier {
           id: LinkId.lamp, health: LinkHealth.checking, detail: lamp.name);
     }
     final error = feedback.lamp.lastError;
-    if (error != null || _lampPhase == _Phase.failed) {
+    if (error != null ||
+        (_lampPhase == _Phase.failed && !feedback.lamp.connected)) {
       return LinkStatus(
           id: LinkId.lamp,
           health: LinkHealth.down,

@@ -18,6 +18,7 @@ import 'deskmate_theme.dart';
 import 'fsm_graph.dart';
 import 'intervention.dart';
 import 'keystroke_capture.dart';
+import 'keystroke_page.dart';
 import 'link_status.dart';
 import 'music_playback.dart';
 import 'mqtt_watchdog.dart';
@@ -27,6 +28,8 @@ import 'developer_page.dart';
 import 'session_report.dart';
 import 'settings_store.dart';
 import 'state_source.dart';
+import 'privacy_page.dart';
+import 'privacy_state.dart';
 
 const _hubUrl = String.fromEnvironment('DESKMATE_HUB_URL');
 const _mqttHost = String.fromEnvironment('DESKMATE_MQTT_HOST');
@@ -263,9 +266,13 @@ class _DashboardPageState extends State<DashboardPage> {
 
   Future<void> _feedback(String verdict) async {
     if (_override != null) return _devAnswer(verdict);
+    final acceptedState = _state;
     try {
       await _source.feedback(verdict,
           responseMs: _intervention.responseMs(DateTime.now()));
+      if (verdict == 'accept' && acceptedState != null) {
+        await _feedbackController.accept(acceptedState);
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -431,11 +438,16 @@ class _DashboardPageState extends State<DashboardPage> {
     // IPv4 가 아닌 빌드 값(호스트 이름)도 예전처럼 그대로 쓴다.
     final host = effectiveMqttHost(_settings, _mqttHost) ??
         (_mqttHost.trim().isEmpty ? null : _mqttHost.trim());
-    if (host != null) return MqttStateSource(host, port: port);
+    if (host != null) return _mqttSource(host, port: port);
     return _hubUrl.trim().isEmpty
         ? DemoStateSource()
         : HttpStateSource(_hubUrl);
   }
+
+  MqttStateSource _mqttSource(String host, {required int port}) =>
+      MqttStateSource(host,
+          port: port,
+          onControlCommand: _feedbackController.handleControlCommand);
 
   /// MQTT 로 붙을 때만 시작 점검을 돌린다. 결과는 대기 화면의 가이드가 그린다.
   void _startMqttCheck() {
@@ -481,7 +493,7 @@ class _DashboardPageState extends State<DashboardPage> {
   void _retryMqtt() {
     final source = _source;
     if (source is MqttStateSource) {
-      _replaceSource(MqttStateSource(source.host, port: source.port));
+      _replaceSource(_mqttSource(source.host, port: source.port));
     }
   }
 
@@ -504,7 +516,7 @@ class _DashboardPageState extends State<DashboardPage> {
     final saved = _settingsStore.save(next);
     _settings = next;
     final port = effectiveMqttPort(_settings, _mqttPort);
-    _replaceSource(MqttStateSource(result, port: port));
+    _replaceSource(_mqttSource(result, port: port));
     _notify(saved
         ? 'MQTT 브로커를 $result:$port 로 저장했습니다.'
         : '$result:$port 로 연결합니다 — 저장할 곳이 없어 이번 실행에만 적용됩니다.');
@@ -524,7 +536,7 @@ class _DashboardPageState extends State<DashboardPage> {
     diag.write(auto
         ? 'MQTT 자동 재연결 #${_watchdog.attempts} (다음 간격 ${_watchdog.backoff.inSeconds} s)'
         : 'MQTT 수동 재연결');
-    _replaceSource(MqttStateSource(source.host, port: source.port),
+    _replaceSource(_mqttSource(source.host, port: source.port),
         keepState: true);
   }
 
@@ -534,7 +546,7 @@ class _DashboardPageState extends State<DashboardPage> {
     setState(() => _postureReloadToken++);
     switch (source) {
       case MqttStateSource():
-        _replaceSource(MqttStateSource(source.host, port: source.port),
+        _replaceSource(_mqttSource(source.host, port: source.port),
             keepState: true);
       case HttpStateSource():
         _replaceSource(HttpStateSource(_hubUrl), keepState: true);
@@ -819,6 +831,16 @@ class _DashboardPageState extends State<DashboardPage> {
                       _AppView.dashboard => _buildDashboard(state),
                       _AppView.sensorOverview =>
                         SensorOverviewPage(state: state),
+                      _AppView.keystroke => KeystrokePage(
+                          metrics: _source is MqttStateSource
+                              ? (_source as MqttStateSource).pcKeystroke
+                              : _state?.keystroke,
+                          now: DateTime.now(),
+                          demo: _source is DemoStateSource,
+                          sourceLabel: _source.label,
+                          onConnection: () =>
+                              setState(() => _view = _AppView.connection),
+                        ),
                       _AppView.sensorTest => DeveloperPage(
                           state: state,
                           overridden: _override != null,
@@ -848,6 +870,10 @@ class _DashboardPageState extends State<DashboardPage> {
                         ),
                       _AppView.sessionReport =>
                         SessionReportCard(report: _source.sessionReport),
+                      _AppView.privacy => PrivacyPage(
+                          source: _source is PrivacySource
+                              ? _source as PrivacySource
+                              : null),
                       _AppView.connection => ConnectionPage(
                           snapshot: _links,
                           now: DateTime.now(),
@@ -919,11 +945,13 @@ class _MusicVolumeDialogState extends State<_MusicVolumeDialog> {
 enum _AppView {
   dashboard,
   sensorOverview,
+  keystroke,
   sensorTest,
   posture,
   fsmGraph,
   bluetooth,
   sessionReport,
+  privacy,
   connection
 }
 
@@ -1007,6 +1035,11 @@ class _Header extends StatelessWidget {
           // 문제가 있을 때만 보인다. 누르면 연결 탭으로 간다.
           LinkProblemBadge(snapshot: links, onTap: onProblems),
           IconButton(
+              key: const ValueKey('privacy-open'),
+              tooltip: '\uAC1C\uC778\uD654 \uAD00\uB9AC',
+              onPressed: () => onViewChanged(_AppView.privacy),
+              icon: const Icon(Icons.privacy_tip_outlined)),
+          IconButton(
               key: const ValueKey('app-exit'),
               tooltip: '\uC571 \uC885\uB8CC',
               onPressed: onExit,
@@ -1023,6 +1056,11 @@ class _Header extends StatelessWidget {
               icon: Icons.sensors_rounded,
               label: '\uC13C\uC11C \uC804\uCCB4',
               onTap: () => onViewChanged(_AppView.sensorOverview)),
+          _HeaderNav(
+              selected: view == _AppView.keystroke,
+              icon: Icons.keyboard_outlined,
+              label: 'PC 키스트로크',
+              onTap: () => onViewChanged(_AppView.keystroke)),
           _HeaderNav(
               selected: view == _AppView.sensorTest,
               icon: Icons.developer_mode,
