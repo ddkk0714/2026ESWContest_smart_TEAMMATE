@@ -6,6 +6,8 @@ namespace deskmate {
 
 constexpr uint8_t kFrameSof = 0xA5;
 constexpr uint8_t kFrameVersion = 0x01;
+constexpr uint8_t kFrameTypeTofFeatures = 0x03;   // tof_feature, payload 는 sensors/tof/TofPayload.h
+constexpr uint8_t kFrameTypeTofPosture = 0x04;    // 자세 클래스 요약 1 Hz
 constexpr uint8_t kFrameTypeEnvironment = 0x10;
 constexpr uint8_t kFrameTypeMmwave = 0x20;
 constexpr uint8_t kFrameTypeHeartbeat = 0xF0;

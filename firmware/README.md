@@ -31,6 +31,11 @@ VL53L9CX 는 연결 경로(Path A: Pi 4 CSI-2 / Path B: ESP32 I2C 1 MHz binning)
 | UART0 (`Serial`) | 디버그 모니터 · `log2file` 로깅 · 구간 마커 입력 | USB |
 | UART1 (`Serial1`) | C1001 mmWave, 115200 8N1 | GPIO16 RX / GPIO17 TX |
 | UART2 | Pi 4 링크, 115200 8N1 (목표 460,800+) | GPIO25 TX → Pi 4 GPIO15(물리 10) / GPIO26 RX ← Pi 4 GPIO14(물리 8) |
+| I2C0 (`Wire`) | SCD41 `0x62` · BH1750 `0x23`, 100 kHz | GPIO21 SDA / GPIO22 SCL |
+| I2C1 (`Wire1`) | **VL53L8CX ×2**, 1 MHz. A `0x54`(펌웨어가 바꿈) · B `0x52` | GPIO23 SDA / GPIO18 SCL · LPn A GPIO32 / B GPIO33 · NCS·SPI_I2C_N = GND |
+| GPIO27 | DHT22 DATA | |
+
+전체 배치와 핀 충돌 정리(76EHwan/ESP32_VL53L8 의 LPn 16·SPI_I2C_N 17 은 C1001 과 겹침): [`docs/breadboard-esp32-node.md`](../docs/breadboard-esp32-node.md).
 
 GPIO16/17 은 WROVER 계열에서 PSRAM 용이다. 현재 `esp32dev`(WROOM)라 무관하지만 보드를 바꾸면 핀을 옮긴다.
 공통 GND 필수. Pi 4 와 5V 를 직접 연결하지 않는다. 업로드가 안 되면 BOOT 를 누른 채 EN 을 한 번 누른다(`Wrong boot mode` = 업로드 모드 진입 실패).
@@ -52,7 +57,7 @@ GPIO16/17 은 WROVER 계열에서 PSRAM 용이다. 현재 `esp32dev`(WROOM)라 �
 | TYPE | 내용 | 주기 | 상태 |
 |---|---|---|---|
 | 0x01 | (디버그) binning depth map | ≤ 2 Hz | 예약. **실험 펌웨어가 mmWave 에 임시 사용 중 → 충돌, 재배정 필요** |
-| 0x03 / 0x04 | ToF 특징 벡터 / 자세 클래스+신뢰도 | 30 Hz | Path B 시 |
+| 0x03 / 0x04 | ToF `tof_feature`(26 B) / 자세 요약(4 B) — `src/sensors/tof/TofPayload.h` | 5 Hz / 1 Hz | **10-16 구현.** `docs/data-spec.md` §13.1 |
 | 0x10 | 환경 묶음 (SCD41 CO₂ 2B + DHT22 T 2B + RH 2B + BH1750 lux 2B = 8B). SCD41 T/RH 는 보내지 않음(보정 없음·단일 센서, 09-14 확정) | 0.2 Hz | 미구현 |
 | **미배정** | mmWave 졸음 state + evidence + 요약값 (10~16 B) | 1 Hz | **TYPE 배정 필요** |
 | 0xF0 | 상태/하트비트 | 1 Hz | |
@@ -107,7 +112,20 @@ Arduino 의존이 없는 순수 C++ 이고, 원본 zone 배열은 여기서 소�
   타이핑 팔은 턱괴기 아님 · 1.5 s 유지 · 결측/튐 내성 · 끄덕임 1회는 졸음 아님 · 2회·떨군 채 정지는 졸음 ·
   상체 숙임·거북목은 끄덕임 아님 · 격자 4종 동일 판정 등).
 
-아직 하지 않은 것: 센서 드라이버 연결(`main.cpp`), UART TYPE 0x03/0x04 payload 정의, hub 매핑.
+**2026-10-16: 센서 연결·UART·hub 매핑까지 들어갔다(브랜치 `feat/tof-node-hw`, 실기 미검증).**
+
+- `src/sensors/tof/TofArray.{h,cpp}` — VL53L8CX 두 개(ST STM32duino 2.1.0)를 `Wire1` 에서 읽어 한 격자로 붙이고
+  `TofPostureEstimator` 에 넣는다. 부팅 때 B 의 LPn 을 눌러 둔 채 A 를 0x54 로 바꾸는 주소 배정, 죽은 센서 5 s 재시도,
+  한쪽만 살면 8×8 로 축소. 배치·방향은 `-DDESKMATE_TOF_STACK_ROWS/FLIP_ROWS/FLIP_COLS/SWAP/COUNT`.
+- `src/sensors/tof/TofPayload.{h,cpp}` — TYPE 0x03(26 B, 5 Hz)·0x04(4 B, 1 Hz) 인코더. 호스트 테스트 `test_tof_payload` 4개가
+  hub `test_uart_frame` 와 같은 golden hex 를 고정한다. 하트비트 0xF0 에 `tof_ok` 1 B 가 붙었다(펌웨어 0x0120).
+- `main.cpp` — ToF 폴링·UART 송신·USB `{"t":"tof_feature"}` 1 Hz·부팅 상태 줄(`VL53L8CX x2: ok_mask=3 grid=16x8`)·
+  USB 명령 `b`(기준선)·`g`(배경)·`r`(초기화). `SET_LOOP_TASK_STACK_SIZE(16 KB)` — ST 드라이버가 스택을 4 KB 쓴다.
+- hub: `ingest/uart_frame.py` 디코더, `SensorCache.tof`, `ingest.yaml` `tof:` 섹션으로 posture 신호(mmWave 대체는 ToF 가 낡았을 때만),
+  `sensor_summary.tof`, Pi 4 C++ 네이티브 요약에도 `tof.posture`.
+
+**아직 안 한 것: 실기.** 두 센서 주소 배정·15 Hz ×2 유지·격자 방향·임계값은 보드에 붙여 봐야 안다.
+처음 켤 때 볼 것은 `docs/breadboard-esp32-node.md` "처음 켤 때 보는 것".
 
 **학습 데이터 수집 모드(`env:tof_logger`, 운영 아님).** VL53L8CX 8×8 을 ST 공식 라이브러리로 읽어 원본 zone 과
 규칙 판정을 USB 한 줄 JSON(`{"t":"tof",...}`, 921600)으로 PC 에 보낸다. `src/tof_logger/` 는 운영 빌드에서 빠진다

@@ -64,7 +64,20 @@ struct NativeSensorState {
     std::optional<bool> present;
     std::optional<bool> heart_valid;
     std::optional<std::string> motion_state;
+    // ToF (UART TYPE 0x03, 10-16). 원본 zone 격자는 프레임에 없다 — 자세 enum·신뢰도만.
+    std::optional<bool> tof_present;
+    std::optional<std::string> tof_posture;
+    std::optional<int> tof_confidence_pct;
+    std::optional<bool> tof_drowsy;
     unsigned long long sequence = 0;
+
+    static const char* postureName(unsigned char code)
+    {
+        // firmware/esp32_sensor_node/src/preprocess/tof/TofPosture.h 의 enum 순서
+        static const char* const names[] = {"unknown", "upright", "lean_forward", "recline",
+                                            "face_down", "chin_rest", "drowsy", "away"};
+        return code < 8 ? names[code] : "unknown";
+    }
 
     static int readLe16(const std::vector<unsigned char>& bytes, std::size_t offset)
     {
@@ -98,13 +111,22 @@ struct NativeSensorState {
     {
         const bool is_environment = line.rfind("UART\t{\"type\":16,", 0) == 0;
         const bool is_mmwave = line.rfind("UART\t{\"type\":32,", 0) == 0;
-        if (!is_environment && !is_mmwave) return false;
+        const bool is_tof = line.rfind("UART\t{\"type\":3,", 0) == 0 ||
+                            line.rfind("UART\t{\"type\":4,", 0) == 0;
+        if (!is_environment && !is_mmwave && !is_tof) return false;
 
         const auto bytes = payloadBytes(line);
         if (bytes.empty()) return false;
 
         std::lock_guard<std::mutex> lock(mutex);
-        if (is_environment) {
+        if (is_tof) {
+            // 0x03(26 B)과 0x04(4 B) 모두 앞 3 B 가 present · posture · confidence_pct 다.
+            if (bytes.size() < 4) return false;
+            tof_present = bytes[0] != 0;
+            tof_posture = postureName(bytes[1]);
+            tof_confidence_pct = bytes[2];
+            tof_drowsy = bytes.size() >= 26 ? (bytes[24] & 0x02) != 0 : bytes[3] != 0;
+        } else if (is_environment) {
             if (bytes.size() < 9) return false;
             const int valid = bytes[8];
             if (valid & 1) co2 = readLe16(bytes, 0);
@@ -154,9 +176,18 @@ struct NativeSensorState {
         append_number("humidity_pct", humidity_pct);
         append_number("lux", lux);
 
-        if (present) {
+        if (present || tof_present) {
             if (has_field) output << ',';
-            output << "\"present\":" << (*present ? "true" : "false");
+            const bool any = (present && *present) || (tof_present && *tof_present);
+            output << "\"present\":" << (any ? "true" : "false");
+            has_field = true;
+        }
+
+        if (tof_posture) {
+            if (has_field) output << ',';
+            output << "\"tof\":{\"posture\":\"" << *tof_posture << "\",\"posture_confidence\":"
+                   << (tof_confidence_pct ? *tof_confidence_pct : 0) / 100.0
+                   << ",\"drowsy\":" << ((tof_drowsy && *tof_drowsy) ? "true" : "false") << '}';
             has_field = true;
         }
 

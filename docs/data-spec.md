@@ -93,8 +93,8 @@ VL53L9CX는 54×42(2,268 zone) ToF 센서이며 실제 운영률은 Pi 4 MIPI CS
 | `head_delta_mm` | float/null, mm | baseline 대비 머리·상체 거리 변화. |
 | `nod_rate_hz` | float/null, Hz | 반복 숙임 주기. |
 | `valid_zones` | uint16, 0..2268 | 유효 zone 수. 축소 경로에서는 실제 전송 grid 크기를 함께 기록한다. |
-| `grid_width` | uint8 | 처리에 사용한 zone grid 너비. 원본은 54. |
-| `grid_height` | uint8 | 처리에 사용한 zone grid 높이. 원본은 42. |
+| `grid_width` | uint8 | 처리에 사용한 zone grid 너비. VL53L9CX 원본 54. **실기(10-16): VL53L8CX 8×8 두 개를 이어 붙여 16(가로 배치) 또는 8(세로 배치), 한쪽만 살면 8.** |
+| `grid_height` | uint8 | 처리에 사용한 zone grid 높이. VL53L9CX 원본 42. 실기: 8 또는 16. |
 | `coverage_ratio` | float, 0..1 | 유효 상체 영역 비율. |
 
 ToF 원본 2,268-zone 배열은 L0이며 기본 운영 스키마에 포함하지 않는다. 디버그/UI 모드에서는 `debug_depth_map` 별도 스키마로 축소 grid를 최대 2Hz 전송할 수 있고, 활성화 여부·원본 grid·축소 grid·보존 만료 시각을 반드시 기록한다.
@@ -339,12 +339,15 @@ crc16  = CRC-16/CCITT-FALSE(poly 0x1021, init 0xFFFF, no reflect, xorout 0) over
 | TYPE | 이름 | 주기 | payload (little-endian) |
 |---|---|---|---|
 | `0x01` | ToF 디버그 depth | ≤ 2 Hz | 예약(디버그 모드만) |
-| `0x03` / `0x04` | ToF 특징 / 자세 클래스 | 30 Hz | Path B 확정 시 정의 |
+| `0x03` | ToF `tof_feature` | 5 Hz | `present u8 · posture u8(0 unknown/1 upright/2 lean_forward/3 recline/4 face_down/5 chin_rest/6 drowsy/7 away) · confidence_pct u8 · motion_pct u8 · head_delta_mm i16(0x7FFF=null) · nod_rate_mhz u16(0xFFFF=null) · valid_zones u16 · grid_w u8 · grid_h u8 · coverage_pct u8 · presence_count u16 · centroid_mm u16(0xFFFF=null) · head_row_pct u8(0xFF=null) · shoulder_tilt_mm i16(0x7FFF=null) · motion_mm_s u16 · change_per_min u8 · baseline_dev_pct u8 · flags u8(b0 baseline_ready, b1 drowsy, b2 geometry_valid, b3 센서 A, b4 센서 B) · nods u8` = 26 B. **2026-10-16 Path B(ESP32 I2C, VL53L8CX 8×8 ×2 → 16×8) 로 구현.** 원본 zone 은 싣지 않는다 |
+| `0x04` | ToF 자세 요약 | 1 Hz | `present u8 · posture u8 · confidence_pct u8 · drowsy u8` = 4 B. 화면·네이티브 요약용(0x03 의 앞 3 B 와 같은 뜻) |
 | `0x10` | 환경 | 0.2 Hz | `co2_ppm u16 · temp_c_x10 i16 · humidity_pct_x10 u16 · lux u16 · valid_bits u8(b0 co2, b1 temp, b2 hum, b3 lux)` = 9 B |
 | `0x20` | mmWave | 1 Hz | `present u8 · motion_state u8(0 none/1 still/2 active) · motion_level u8 · distance_cm u16(0xFFFF=null) · resp_bpm u8(0xFF=null) · resp_valid u8 · heart_bpm u8(0xFF=null) · heart_valid u8 · drowsy_state u8(0 NOPERSON/1 NOLOCK/2 WARMUP/3 AWAKE/4 DROWSY) · valid u8` = 11 B |
-| `0xF0` | 하트비트 | 1 Hz | `uptime_ms u32 · fw_version u16 · mmwave_ok u8` = 7 B |
+| `0xF0` | 하트비트 | 1 Hz | `uptime_ms u32 · fw_version u16 · mmwave_ok u8 [· tof_ok u8(b0 센서 A, b1 센서 B)]` = 7 B(펌웨어 0x0120 부터 8 B) |
 
 test vector (seq 7, ts_ms 1000): mmWave 예시 payload `01010c37000f01ff000301` → wire `05a5012007020b03e803010501010c37040f01ff050301dea100`(26 B).
+ToF 예시 payload `01015305f4ff3200780010082a360064021908000f0002251d01`(26 B, 바른자세·신뢰도 0.83·16×8·센서 둘 다) → wire
+`05a5010307021a03e803010801015305f4ff3202780510082a360564021908020f0702251d01e55900`(41 B). 펌웨어 `test_tof_payload`·hub `test_uart_frame` 가 같은 값을 고정한다.
 Pi 4 C++ 서비스는 COBS 해제·CRC 검증·헤더 파싱까지만 하고 `UART\t{"type","seq","ts_ms","payload_hex"}` 한 줄을 Python 브리지로 넘긴다. payload 해석은 Python(`decode_payload`)이 한다.
 09-11 실험 펌웨어가 쓰던 `TYPE 0x01` 은 ToF 디버그 예약과 충돌하므로 mmWave 는 `0x20` 으로 옮긴다.
 - MQTT/TCP JSON에는 별도 애플리케이션 CRC를 넣지 않는다. `schema_version`, `boot_id`, `sequence`, timestamp와 TCP 무결성을 사용한다.

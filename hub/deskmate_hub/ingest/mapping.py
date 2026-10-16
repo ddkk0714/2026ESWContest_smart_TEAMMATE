@@ -94,6 +94,22 @@ class SessionTracker:
         return linear if z is None else z
 
 
+def _tof_posture_signal(data: dict[str, Any], cfg: dict[str, Any]) -> Signal:
+    """ToF tof_feature → posture Signal. 숫자는 전부 config/ingest.yaml `tof` 에서 온다(실측 전 잠정)."""
+    posture = str(data.get("posture") or "unknown")
+    confidence = float(data.get("posture_confidence") or 0.0)
+    if confidence < float(cfg["min_confidence"]):
+        posture = "unknown"
+    phi_table = cfg["posture_phi"]
+    delta_table = cfg["posture_delta"]
+    motion = _clip(float(data.get("motion_score") or 0.0))
+    phi = max(float(phi_table.get(posture, 0.0)), motion * float(cfg["motion_phi_weight"]))
+    nod = data.get("nod_rate_hz")
+    nod_delta = _ramp(nod, 0.0, float(cfg["nod_rate_full_hz"])) if nod is not None else 0.0
+    delta = max(float(delta_table.get(posture, 0.0)), nod_delta, 1.0 if data.get("drowsy") else 0.0)
+    return Signal(phi=_clip(phi), delta=_clip(delta), available=True)
+
+
 def pc_ratio(view: CacheView, now: float, window_sec: float) -> float:
     ticks = [t for t in view.keystroke_history if now - t.received <= window_sec]
     if not ticks:
@@ -114,13 +130,22 @@ def build_frame(
     mm = view.fresh("mmwave", now, fresh["mmwave"])
     env = view.fresh("env", now, fresh["env"])
     ks = view.fresh("keystroke", now, fresh["keystroke"])
+    tof = view.fresh("tof", now, fresh.get("tof", 3)) if "tof" in cfg else None
 
-    present = bool(mm.data.get("present", False)) if mm else False
+    mm_present = bool(mm.data.get("present", False)) if mm else False
+    tof_present = bool(tof.data.get("present", False)) if tof else False
+    # 재실은 둘 중 하나라도 보면 참. ToF 가 자리비움(away)이고 mmWave 가 없으면 거짓.
+    present = mm_present or tof_present
     signals: dict[str, Signal] = {}
 
-    # ---- posture (ToF 전까지 mmWave 체동으로 대체) ----
+    # ---- posture: ToF tof_feature 가 신선하면 그것을, 아니면 mmWave 체동으로 대체 ----
     mcfg = cfg["mmwave"]
-    if mm and present:
+    tof_posture_used = False
+    if tof and tof_present:
+        signals["posture"] = _tof_posture_signal(tof.data, cfg["tof"])
+        tof_posture_used = True
+        tracker.still_since = None
+    if mm and mm_present:
         level = float(mm.data.get("motion_level") or 0.0)
         if level <= mcfg["still_motion_level_max"]:
             if tracker.still_since is None:
@@ -134,7 +159,8 @@ def build_frame(
             float(mcfg["drowsy_delta"].get(drowsy, 0.0)),
         )
         phi = tracker.evidence("motion_level", level, _clip(level / 100.0), now=now)
-        signals["posture"] = Signal(phi=phi, delta=delta, available=True)
+        if not tof_posture_used:
+            signals["posture"] = Signal(phi=phi, delta=delta, available=True)
 
         # ---- respiration: 재실 중 호흡 소실 지속 ----
         if mm.data.get("resp_valid"):
@@ -149,7 +175,8 @@ def build_frame(
     else:
         tracker.still_since = None
         tracker.resp_lost_since = None
-        signals["posture"] = Signal(available=False)
+        if not tof_posture_used:
+            signals["posture"] = Signal(available=False)
         signals["respiration"] = Signal(available=False)
 
     # ---- keystroke ----
@@ -228,9 +255,20 @@ def sensor_summary(view: CacheView, now: float, cfg: dict[str, Any],
     """state/phase 의 sensor_summary — 화면 표시용 특징 요약. 없는 필드는 생략한다."""
     fresh = cfg["freshness_sec"]
     out: dict[str, Any] = {}
+    tof = view.fresh("tof", now, fresh.get("tof", 3)) if "tof" in cfg else None
+    if tof:
+        out["present"] = bool(tof.data.get("present", False))
+        # 화면용 요약. 원본 zone 격자는 애초에 UART 에 실리지 않는다(firmware README "원칙").
+        out["tof"] = {
+            k: tof.data[k]
+            for k in ("posture", "posture_confidence", "motion_score", "head_delta_mm", "nod_rate_hz",
+                      "drowsy", "nods_in_window", "baseline_ready", "grid_width", "grid_height",
+                      "coverage_ratio", "sensors_ok")
+            if k in tof.data
+        }
     mm = view.fresh("mmwave", now, fresh["mmwave"])
     if mm:
-        out["present"] = bool(mm.data.get("present", False))
+        out["present"] = bool(out.get("present", False)) or bool(mm.data.get("present", False))
         out["mmwave"] = {
             k: mm.data[k]
             # 심박·호흡은 *_valid 와 짝으로 넘긴다. 락온이 풀린 구간의 값을 화면이 그대로

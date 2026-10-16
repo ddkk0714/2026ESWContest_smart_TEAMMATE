@@ -38,6 +38,22 @@ constexpr uint32_t kC1001RetryMs = 10000;
 // 응답하다 마는 상태에서 15 s 를 먹으므로 10 s 마다 부르면 루프가 못 돈다.
 constexpr uint32_t kC1001RetryMaxMs = 120000;
 
+// ---- ToF: VL53L8CX ×2, 전용 I2C 버스(Wire1) ----
+// GPIO16/17 은 C1001 UART1, GPIO21/22 는 환경 센서 I2C(SCD41 은 100 kHz 까지)라
+// ToF 는 1 MHz 전용 버스를 따로 둔다. 76EHwan/ESP32_VL53L8 의 LPn=16 · SPI_I2C_N=17 · NCS=5 는
+// C1001(16/17) 과 겹쳐서 바꿨다. NCS·SPI_I2C_N 은 GND 로 묶는다(I2C 모드, 핀 소비 없음).
+// 배선·브레드보드 배치: docs/breadboard-esp32-node.md
+constexpr int kTofSdaPin = 23;
+constexpr int kTofSclPin = 18;
+constexpr int kTofLpnPinA = 32;           // 센서 A (장면의 왼쪽 또는 위)
+constexpr int kTofLpnPinB = 33;           // 센서 B (장면의 오른쪽 또는 아래)
+constexpr uint32_t kTofI2cHz = 1000000;   // 펌웨어 84 KB 업로드·8×8 15 Hz ×2. 선이 길어 실패하면 400000
+constexpr uint8_t kTofRangingHz = 15;     // 8×8 최대
+constexpr uint16_t kTofAddressA = 0x54;   // 8-bit. A 만 주소를 바꾸고 B 는 기본 0x52 를 쓴다
+constexpr uint32_t kTofRetryMs = 5000;
+constexpr uint32_t kTofFeaturePeriodMs = 200;   // UART TYPE 0x03 (tof_feature) 5 Hz
+constexpr uint32_t kTofPosturePeriodMs = 1000;  // UART TYPE 0x04 + USB JSON 1 Hz
+
 // 졸음 판정 임계값은 실측 근거 주석과 함께 sensors/c1001/DrowsyDetector.h 에 있다.
 // 시연용으로 확정 시간만 줄이려면 -DDESKMATE_DROWSY_HOLD_SCALE_PCT=<퍼센트>.
 

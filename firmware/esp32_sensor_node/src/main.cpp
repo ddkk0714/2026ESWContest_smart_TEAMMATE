@@ -5,25 +5,71 @@
 #include "sensors/c1001/DrowsyDetector.h"
 #include "sensors/environment/EnvironmentPayload.h"
 #include "sensors/environment/EnvironmentSensors.h"
+#include "sensors/tof/TofArray.h"
+#include "sensors/tof/TofPayload.h"
 #include "transport/frame.h"
 #include "transport/usb_json.h"
 
 using namespace deskmate;
+
+// VL53L8CX 드라이버의 IO_Read 가 약 4 KB 버퍼를 스택에 두므로 기본 8 KB loop 스택은 모자란다.
+SET_LOOP_TASK_STACK_SIZE(16 * 1024);
+
+// ToF 배치는 빌드 플래그로 바꾼다(실기 방향 확인 뒤 고정): dataset/tof_logger/README.md "방향 확인".
+#ifndef DESKMATE_TOF_COUNT
+#define DESKMATE_TOF_COUNT 2
+#endif
+#ifndef DESKMATE_TOF_FLIP_ROWS
+#define DESKMATE_TOF_FLIP_ROWS 0
+#endif
+#ifndef DESKMATE_TOF_FLIP_COLS
+#define DESKMATE_TOF_FLIP_COLS 1
+#endif
+#ifndef DESKMATE_TOF_STACK_ROWS
+#define DESKMATE_TOF_STACK_ROWS 0  // 0: A|B 가로(16×8), 1: A 위 B 아래(8×16)
+#endif
+#ifndef DESKMATE_TOF_SWAP
+#define DESKMATE_TOF_SWAP 0
+#endif
+
+TofArrayConfig tofConfig() {
+  TofArrayConfig c;
+  c.wire = &Wire1;
+  c.sda = kTofSdaPin;
+  c.scl = kTofSclPin;
+  c.i2c_hz = kTofI2cHz;
+  c.ranging_hz = kTofRangingHz;
+  c.count = DESKMATE_TOF_COUNT;
+  c.lpn[0] = kTofLpnPinA;
+  c.lpn[1] = kTofLpnPinB;
+  c.address[0] = kTofAddressA;
+  c.address[1] = VL53L8CX_DEFAULT_I2C_ADDRESS;
+  c.flip_rows = DESKMATE_TOF_FLIP_ROWS != 0;
+  c.flip_cols = DESKMATE_TOF_FLIP_COLS != 0;
+  c.stack_rows = DESKMATE_TOF_STACK_ROWS != 0;
+  c.swap = DESKMATE_TOF_SWAP != 0;
+  c.retry_ms = kTofRetryMs;
+  return c;
+}
 
 HardwareSerial pi4_serial(2);
 C1001Passive mmwave(Serial1);
 DrowsyDetector drowsy_detector;
 EnvironmentSensors environment_sensors(Wire);
 EnvironmentSample environment_sample;
+TofArray tof(tofConfig());  // 전역: zone 버퍼·추정기가 커서 스택에 두지 않는다
 
 uint32_t last_mmwave_ms = 0;
 uint32_t last_environment_ms = 0;
 uint32_t last_heartbeat_ms = 0;
+uint32_t last_tof_feature_ms = 0;
+uint32_t last_tof_posture_ms = 0;
 uint32_t last_c1001_retry_ms = 0;
 uint32_t c1001_retry_interval_ms = kC1001RetryMs;
 uint16_t mmwave_sequence = 0;
 uint16_t environment_sequence = 0;
 uint16_t heartbeat_sequence = 0;
+uint16_t tof_sequence = 0;  // 0x03·0x04 가 같은 흐름을 쓴다
 bool mmwave_ready = false;
 
 WireDrowsyState wireDrowsyState(DrowsyState state) {
@@ -71,9 +117,28 @@ void writeEnvironmentUart(uint32_t now_ms, const EnvironmentSample& sample) {
 #endif
 }
 
+void writeTofFeatureUart(uint32_t now_ms) {
+#if DESKMATE_UART2_TX
+  uint8_t payload[kTofFeaturePayloadSize];
+  encodeTofFeaturePayload(tof.features(), tof.okMask(), payload);
+  writeUartFrame(pi4_serial, kFrameTypeTofFeatures, tof_sequence++, now_ms, payload,
+                 sizeof(payload));
+#endif
+}
+
+void writeTofPostureUart(uint32_t now_ms) {
+#if DESKMATE_UART2_TX
+  uint8_t payload[kTofPosturePayloadSize];
+  encodeTofPosturePayload(tof.features(), payload);
+  writeUartFrame(pi4_serial, kFrameTypeTofPosture, tof_sequence++, now_ms, payload,
+                 sizeof(payload));
+#endif
+}
+
 void writeHeartbeatUart(uint32_t now_ms) {
 #if DESKMATE_UART2_TX
   const uint16_t version = DESKMATE_FIRMWARE_VERSION;
+  // 8번째 바이트 tof_ok(b0 = A, b1 = B)는 10-16 추가. 이전 디코더는 7 B 까지만 읽는다.
   const uint8_t payload[] = {
       static_cast<uint8_t>(now_ms & 0xFF),
       static_cast<uint8_t>((now_ms >> 8) & 0xFF),
@@ -82,10 +147,43 @@ void writeHeartbeatUart(uint32_t now_ms) {
       static_cast<uint8_t>(version & 0xFF),
       static_cast<uint8_t>((version >> 8) & 0xFF),
       static_cast<uint8_t>(mmwave_ready),
+      tof.okMask(),
   };
   writeUartFrame(pi4_serial, kFrameTypeHeartbeat, heartbeat_sequence++, now_ms, payload,
                  sizeof(payload));
 #endif
+}
+
+// USB 로 받는 한 글자 명령(수집 모드와 같은 글자):
+//   b  바른 자세 기준선 다시 잡기   g  다음 프레임을 배경으로(빈 자리에서)   r  추정기 초기화
+void handleUsbCommands() {
+  while (Serial.available() > 0) {
+    switch (Serial.read()) {
+      case 'b': tof.estimator().resetBaseline(); Serial.println(F("# tof baseline reset")); break;
+      case 'g': tof.estimator().requestBackgroundCapture(); Serial.println(F("# tof background capture")); break;
+      case 'r': tof.estimator().reset(); Serial.println(F("# tof estimator reset")); break;
+      default: break;
+    }
+  }
+}
+
+void printTofStatus() {
+  Serial.print(F("VL53L8CX x"));
+  Serial.print(DESKMATE_TOF_COUNT);
+  Serial.print(F(": ok_mask="));
+  Serial.print(tof.okMask());
+  Serial.print(F(" grid="));
+  Serial.print(tof.width());
+  Serial.print('x');
+  Serial.print(tof.height());
+  for (uint8_t i = 0; i < DESKMATE_TOF_COUNT; ++i) {
+    if (tof.sensorOk(i) || tof.errorWhere(i) == nullptr) continue;
+    Serial.print(i == 0 ? F(" A=") : F(" B="));
+    Serial.print(tof.errorWhere(i));
+    Serial.print('/');
+    Serial.print(tof.errorCode(i));
+  }
+  Serial.println();
 }
 
 void setup() {
@@ -100,9 +198,13 @@ void setup() {
   Serial.println(mmwave_ready ? F("C1001 ready") : F("C1001 initialization failed"));
   drowsy_detector.begin(millis());
   environment_sensors.begin(millis(), environment_sample);
+  // ToF 는 센서당 init(펌웨어 업로드)에 수 초가 걸린다. 실패한 센서는 loop 에서 5 s 마다 다시 올린다.
+  tof.begin(millis(), &Serial);
+  printTofStatus();
 }
 
 void loop() {
+  handleUsbCommands();
   // 파서는 논블로킹이다. 주기와 무관하게 매 루프에서 밀린 바이트를 소화하고,
   // 판정기는 값이 실제로 갱신된 것만 소비한다. 보고가 끊기면 질의로 깨운다.
   if (mmwave_ready) {
@@ -129,6 +231,24 @@ void loop() {
     }
   }
   if (mmwave_ready) drowsy_detector.update(mmwave, now_ms);
+
+  // ToF: 매 루프 폴링(15 Hz ×2). 특징은 5 Hz 로, 자세 요약·USB 진단은 1 Hz 로 낸다.
+  // 살아 있는 센서가 없으면 아무것도 보내지 않는다 — hub 는 freshness 로 미가용 처리한다.
+  tof.poll(now_ms);
+  if (tof.okCount() > 0) {
+    if (now_ms - last_tof_feature_ms >= kTofFeaturePeriodMs) {
+      last_tof_feature_ms = now_ms;
+      writeTofFeatureUart(now_ms);
+    }
+    if (now_ms - last_tof_posture_ms >= kTofPosturePeriodMs) {
+      last_tof_posture_ms = now_ms;
+      writeTofPostureUart(now_ms);
+      writeTofJson(Serial, now_ms, tof.features(), tof.okMask());
+    }
+  } else if (now_ms - last_tof_posture_ms >= kTofRetryMs) {
+    last_tof_posture_ms = now_ms;
+    printTofStatus();
+  }
 
   if (now_ms - last_mmwave_ms >= kMmwavePeriodMs) {
     last_mmwave_ms = now_ms;

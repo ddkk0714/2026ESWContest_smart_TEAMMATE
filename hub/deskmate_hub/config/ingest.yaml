@@ -10,6 +10,7 @@ freshness_sec:
   mmwave: 5
   env: 30
   keystroke: 5
+  tof: 3              # ESP32 가 0x03 을 5 Hz 로 보낸다. 센서가 둘 다 죽으면 아무것도 안 보내 미가용이 된다
 
 # MVP 지름길: 디스플레이 터치 대신 재실 상승엣지(IDLE 에서 present false→true)로 세션을 시작한다.
 auto_start_on_presence: true
@@ -46,8 +47,35 @@ keystroke:
   flight_cv_high: 0.70
   correction_rate_high: 0.15
 
+tof:
+  # posture 신호 — ESP32 TofPosture 추정기(firmware/.../preprocess/tof)의 자세 enum·motion_score·nod_rate_hz 로.
+  # phi(집중 저하 증거) = max(posture_phi[posture], motion_score × motion_phi_weight)
+  # delta(피로 증거)   = max(posture_delta[posture], nod_rate_hz / nod_rate_full_hz, drowsy 면 1.0)
+  # 값은 전부 실측 전 잠정이다(2026-10-16). 10-12 시뮬에서 규칙 판정 정확도가 48% 라 confidence 로 거른다.
+  min_confidence: 0.3            # posture_confidence 가 이보다 낮으면 unknown 으로 본다
+  posture_phi:
+    unknown: 0.0
+    upright: 0.0
+    lean_forward: 0.2
+    recline: 0.4
+    face_down: 1.0
+    chin_rest: 0.5
+    drowsy: 1.0
+    away: 0.0
+  posture_delta:
+    unknown: 0.0
+    upright: 0.0
+    lean_forward: 0.1
+    recline: 0.6
+    face_down: 1.0
+    chin_rest: 0.6
+    drowsy: 1.0
+    away: 0.0
+  motion_phi_weight: 0.5         # 안절부절(motion_score 1.0)이면 phi 0.5
+  nod_rate_full_hz: 0.05         # 60 s 에 3번 끄덕이면 delta 1.0
+
 mmwave:
-  # posture 신호(ToF 가 붙기 전 대체): phi = motion_level/100 (안절부절 = 집중 저하 증거)
+  # posture 신호(ToF 가 없거나 끊겼을 때 대체): phi = motion_level/100 (안절부절 = 집중 저하 증거)
   # delta = max( still_seconds/still_full_sec , drowsy_delta[drowsy_state] )
   still_motion_level_max: 10     # 이 이하 체동이 지속되면 '정적'으로 센다
   still_full_sec: 600            # 정적 10분이면 delta 1.0

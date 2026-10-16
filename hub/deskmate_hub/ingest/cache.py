@@ -32,6 +32,8 @@ class SensorCache:
     mmwave: Sample | None = None
     env: Sample | None = None
     keystroke: Sample | None = None
+    tof: Sample | None = None            # UART 0x03 tof_feature (5 Hz)
+    tof_posture: Sample | None = None    # UART 0x04 자세 요약 (1 Hz)
     feedback: deque = field(default_factory=lambda: deque(maxlen=16))
     control_results: deque = field(default_factory=lambda: deque(maxlen=64))
     feedback_received: deque = field(default_factory=lambda: deque(maxlen=16))
@@ -80,6 +82,8 @@ class SensorCache:
                 mmwave=self.mmwave,
                 env=self.env,
                 keystroke=self.keystroke,
+                tof=self.tof,
+                tof_posture=self.tof_posture,
                 keystroke_history=list(self.keystroke_history),
                 feedback=list(self.feedback),
             )
@@ -109,6 +113,8 @@ class CacheView:
     keystroke: Sample | None
     keystroke_history: list[KeystrokeTick]
     feedback: list[dict[str, Any]]
+    tof: Sample | None = None
+    tof_posture: Sample | None = None
 
     def fresh(self, kind: str, now: float, max_age: float) -> Sample | None:
         sample: Sample | None = getattr(self, kind)

@@ -7,8 +7,8 @@ import pytest
 
 from deskmate_hub.ingest import SensorCache
 from deskmate_hub.ingest.uart_frame import (
-    TYPE_ENV, TYPE_HEARTBEAT, TYPE_MMWAVE, Frame, FrameError, cobs_decode, cobs_encode, crc16_ccitt_false,
-    decode_frame, decode_payload, encode_frame, encode_payload, split_stream,
+    TYPE_ENV, TYPE_HEARTBEAT, TYPE_MMWAVE, TYPE_TOF_FEATURES, TYPE_TOF_POSTURE, Frame, FrameError, cobs_decode,
+    cobs_encode, crc16_ccitt_false, decode_frame, decode_payload, encode_frame, encode_payload, split_stream,
 )
 from deskmate_hub.ingest.uart_source import RawUartReader, UartLineSource, parse_uart_line
 
@@ -16,6 +16,14 @@ MM = {"present": True, "motion_state": "still", "motion_level": 12, "distance_cm
       "resp_valid": True, "heart_bpm": None, "heart_valid": False, "drowsy_state": "AWAKE", "valid": True}
 ENV = {"co2_ppm": 812, "temp_c": 26.4, "humidity_pct": 48.2, "lux": 310.0,
        "co2_valid": True, "temp_valid": True, "humidity_valid": True, "lux_valid": True}
+TOF = {"present": True, "posture": "upright", "posture_confidence": 0.83, "motion_score": 0.05,
+       "head_delta_mm": -12, "nod_rate_hz": 0.05, "valid_zones": 120, "grid_width": 16, "grid_height": 8,
+       "coverage_ratio": 0.42, "presence_count": 54, "centroid_depth_mm": 612, "head_row_index": 0.25,
+       "shoulder_tilt_mm": 8, "motion_indicator_mm_s": 15, "posture_change_rate_per_min": 2,
+       "baseline_deviation": 0.37, "baseline_ready": True, "drowsy": False, "geometry_valid": True,
+       "sensors_ok": 3, "nods_in_window": 1}
+# 펌웨어 test/test_tof_payload/test_tof_payload.cpp 의 kGoldenFeatureHex 와 같은 값 — 바꾸면 둘 다 바꾼다
+TOF_GOLDEN_HEX = "01015305f4ff3200780010082a360064021908000f0002251d01"
 
 
 # ── test vectors (펌웨어·C++ 구현이 맞춰야 하는 값) ────────────────────────
@@ -53,6 +61,53 @@ def test_frame_roundtrip_and_known_wire_bytes():
     assert decode_payload(back.type, back.payload) == MM
     # 고정 벡터 — 펌웨어 frame.cpp 검증용
     assert frame.payload.hex() == "01010c3700" "0f01ff000301"
+
+
+def test_tof_feature_vector():
+    payload = encode_payload(TYPE_TOF_FEATURES, TOF)
+    assert payload.hex() == TOF_GOLDEN_HEX and len(payload) == 26
+    assert decode_payload(TYPE_TOF_FEATURES, payload) == TOF
+    frame = decode_frame(encode_frame(Frame(type=TYPE_TOF_FEATURES, seq=7, ts_ms=1000, payload=payload)))
+    assert (frame.type, frame.seq, frame.ts_ms) == (TYPE_TOF_FEATURES, 7, 1000)
+
+
+def test_tof_feature_nulls_and_single_sensor():
+    data = dict(TOF, head_delta_mm=None, nod_rate_hz=None, centroid_depth_mm=None, head_row_index=None,
+                shoulder_tilt_mm=None, geometry_valid=False, baseline_ready=False, drowsy=True,
+                sensors_ok=2, grid_width=8, grid_height=8)
+    back = decode_payload(TYPE_TOF_FEATURES, encode_payload(TYPE_TOF_FEATURES, data))
+    assert back == data
+    with pytest.raises(FrameError):
+        decode_payload(TYPE_TOF_FEATURES, b"\x01" * 10)
+
+
+def test_tof_posture_summary_payload():
+    data = {"present": True, "posture": "face_down", "posture_confidence": 0.61, "drowsy": False}
+    payload = encode_payload(TYPE_TOF_POSTURE, data)
+    assert payload.hex() == "01043d00"
+    assert decode_payload(TYPE_TOF_POSTURE, payload) == data
+    assert decode_payload(TYPE_TOF_POSTURE, b"\x00\x63\x00\x00")["posture"] == "unknown"  # 모르는 코드
+
+
+def test_heartbeat_tof_ok_is_optional():
+    old = {"uptime_ms": 5000, "fw_version": 3, "mmwave_ok": True}
+    assert decode_payload(TYPE_HEARTBEAT, encode_payload(TYPE_HEARTBEAT, old)) == old
+    new = dict(old, tof_ok=3)
+    payload = encode_payload(TYPE_HEARTBEAT, new)
+    assert len(payload) == 8 and decode_payload(TYPE_HEARTBEAT, payload) == new
+
+
+def test_tof_frames_land_in_cache():
+    cache = SensorCache()
+    src = UartLineSource(cache)
+    line = "UART\t" + json.dumps({"type": TYPE_TOF_FEATURES, "seq": 3, "ts_ms": 10,
+                                   "payload_hex": TOF_GOLDEN_HEX})
+    assert src.feed_line(line) == "tof"
+    assert cache.tof is not None and cache.tof.data["posture"] == "upright"
+    line = "UART\t" + json.dumps({"type": TYPE_TOF_POSTURE, "seq": 4, "ts_ms": 11, "payload_hex": "01043d00"})
+    assert src.feed_line(line) == "tof_posture"
+    assert cache.snapshot().tof_posture.data["posture"] == "face_down"
+    assert src.stats.frames == 2 and src.stats.unknown_types == {}
 
 
 def test_env_and_heartbeat_payloads():

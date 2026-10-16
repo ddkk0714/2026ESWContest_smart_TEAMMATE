@@ -75,4 +75,42 @@ void writeEnvironmentJson(Stream& output, uint32_t now_ms,
   output.println(F("}"));
 }
 
+void writeTofJson(Stream& output, uint32_t now_ms, const TofFeatures& f, uint8_t sensor_mask) {
+  output.print(F("{\"t\":\"tof_feature\",\"ms\":"));
+  output.print(now_ms);
+  output.print(F(",\"present\":"));
+  writeBool(output, f.present);
+  output.print(F(",\"posture\":\""));
+  output.print(tofPostureName(f.posture));
+  output.print(F("\",\"posture_confidence\":"));
+  output.print(f.posture_confidence, 2);
+  output.print(F(",\"motion_score\":"));
+  output.print(f.motion_score, 2);
+  output.print(F(",\"head_delta_mm\":"));
+  writeNullableFloat(output, f.head_delta_valid, f.head_delta_mm, 0);
+  output.print(F(",\"nod_rate_hz\":"));
+  writeNullableFloat(output, f.nod_rate_valid, f.nod_rate_hz, 3);
+  output.print(F(",\"valid_zones\":"));
+  output.print(f.valid_zones);
+  output.print(F(",\"grid_width\":"));
+  output.print(f.grid_width);
+  output.print(F(",\"grid_height\":"));
+  output.print(f.grid_height);
+  output.print(F(",\"coverage_ratio\":"));
+  output.print(f.coverage_ratio, 2);
+  output.print(F(",\"centroid_depth_mm\":"));
+  writeNullableFloat(output, f.geometry_valid, f.centroid_depth_mm, 0);
+  output.print(F(",\"head_row_index\":"));
+  writeNullableFloat(output, f.geometry_valid, f.head_row_index, 2);
+  output.print(F(",\"baseline_ready\":"));
+  writeBool(output, f.baseline_ready);
+  output.print(F(",\"drowsy\":"));
+  writeBool(output, f.drowsy);
+  output.print(F(",\"nods_in_window\":"));
+  output.print(f.nods_in_window);
+  output.print(F(",\"sensors_ok\":"));
+  output.print(sensor_mask);
+  output.println(F("}"));
+}
+
 }  // namespace deskmate

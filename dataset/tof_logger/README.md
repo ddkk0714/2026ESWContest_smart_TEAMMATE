@@ -24,15 +24,10 @@ cd firmware/esp32_sensor_node
 pio run -e tof_logger -t upload
 ```
 
-배선(SATEL-VL53L8 기준)은 아래와 같다. 핀은 `src/tof_logger/main.cpp` 맨 위 매크로로 바꾼다.
-
-| L8 | ESP32 | 메모 |
-|---|---|---|
-| SDA / SCL | GPIO21 / GPIO22 | `DESKMATE_TOF_SDA/SCL`. I2C 1 MHz(`DESKMATE_TOF_I2C_HZ`). 배선이 길어 init 이 실패하면 400000 |
-| LPn | 3.3 V 또는 GPIO | `DESKMATE_TOF_LPN_PIN`(-1 = 3.3 V 로 묶음). LOW 면 I2C 가 안 된다 |
-| PWREN | 3.3 V 또는 GPIO | `DESKMATE_TOF_PWREN_PIN` |
-| SPI_I2C_N | GND | I2C 모드 |
-| VDD/IOVDD, GND | 3.3 V, GND | 보드 규격 확인 |
+**2026-10-16 부터 센서 두 개(VL53L8CX ×2)를 한 격자(16×8, 또는 8×16)로 붙여 기록한다.** 배선은 운영 펌웨어와 같다 —
+`include/pins.h` 와 [`docs/breadboard-esp32-node.md`](../../docs/breadboard-esp32-node.md) (SDA 23 · SCL 18 · LPn A 32 / B 33 ·
+NCS·SPI_I2C_N GND). 한쪽 센서만 올라오면 8×8 로 떨어지고, `w`·`h` 가 줄마다 들어 있으니 수집기는 그대로 돈다.
+배치·방향은 `platformio.ini` 의 `-DDESKMATE_TOF_STACK_ROWS/FLIP_ROWS/FLIP_COLS/SWAP/COUNT` 로 바꾼다(`src/tof_logger/main.cpp` 위쪽).
 
 부팅하면 센서 펌웨어(약 84 KB)를 올리느라 몇 초가 걸린다. 실패하면 `{"t":"tof_err","where":"init",...}` 를
 보내고 3초마다 다시 시도한다. 수집기 화면에 `센서 오류: init` 으로 나온다.
@@ -64,15 +59,16 @@ python inspect_session.py data/sessions/<세션> --npz s.npz        # 학습용 
 
 ## 처음 붙였을 때: 방향 확인
 
-센서 zone 순서가 장면의 어느 쪽인지는 장착 방향에 따라 다르다. 로그에는 **센서 순서 원본**이 남고,
-장면 방향(row 0 = 위, 왼쪽 = 센서가 바라볼 때 왼쪽)으로 돌리는 것은 읽을 때 한다.
-그래서 방향을 잘못 잡아도 데이터는 버리지 않는다.
+센서 zone 순서가 장면의 어느 쪽인지는 장착 방향에 따라 다르다. **10-16 부터 로그의 `d`·`st` 는 펌웨어가
+이미 장면 방향으로 돌려 두 센서를 이어 붙인 격자**다(붙이려면 방향을 먼저 맞춰야 해서). hello 의 `flip_rows/flip_cols` 는
+그래서 항상 false 다. 방향이 틀렸으면 한 센서 분(8×8 블록)씩 다시 뒤집어 쓸 수 있으니 데이터는 버리지 않는다.
 
 1. 짧게 프로토콜을 한 번 돌리고 `inspect_session.py` 의 자세별 평균 거리맵을 본다.
 2. 바른 자세에서 **머리(가까운 값)가 위쪽 가운데**에 있어야 한다.
    왼손 턱괴기는 센서에서 보면 **오른쪽 열**에 팔 기둥이 생겨야 한다.
 3. 다르면 `--flip-rows 1`·`--flip-cols 0` 처럼 바꿔 가며 맞는 조합을 찾는다.
-4. 찾은 값을 펌웨어 `DESKMATE_TOF_FLIP_ROWS/COLS` 에 넣고 다시 굽는다. 기본값(flip_cols=1)은 ST 예제의 표시 방식이고, 실측 확인 전이다.
+4. 찾은 값을 펌웨어 `DESKMATE_TOF_FLIP_ROWS/COLS`(센서별 8×8)·`DESKMATE_TOF_STACK_ROWS`(가로/세로 붙임)·`DESKMATE_TOF_SWAP`(A/B 자리)에 넣고 다시 굽는다.
+   기본값(flip_cols=1, 가로 붙임, A 가 왼쪽)은 ST 예제의 표시 방식이고, 실측 확인 전이다.
    - 이 값은 온보드 규칙 판정이 쓰는 방향이다. 방향이 틀리면 규칙 판정(약한 라벨)도 틀린다.
 
 ## 파일
