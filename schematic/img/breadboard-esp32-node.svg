@@ -1,0 +1,291 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="1060" viewBox="0 0 1480 1060">
+<rect width="1480" height="1060" fill="#fafaf9"/>
+<text x="740.0" y="34" font-size="20" text-anchor="middle" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">DESKMATE ESP32 센서 노드 — 브레드보드 핀 배치 (VL53L8CX ×2 · C1001 mmWave · SCD41 · BH1750 · DHT22 · Pi 4 UART)</text>
+<text x="740.0" y="58" font-size="13" text-anchor="middle" font-weight="normal" fill="#555" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">2026-10-16 · firmware/esp32_sensor_node/include/pins.h · 보드 방향 = 실제 꽂힌 대로(USB 왼쪽, VIN 줄 위, 3V3 줄 아래) · 실선 신호, 점선 전원/GND</text>
+<rect x="60" y="330" width="1360" height="400" rx="14" fill="#f3f0e6" stroke="#b8b2a0" stroke-width="1.5"/>
+<polyline points="80,352 1400,352" fill="none" stroke="#f77f00" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="80,366 1400,366" fill="none" stroke="#222" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="80,694 1400,694" fill="none" stroke="#d62828" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="80,708 1400,708" fill="none" stroke="#222" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="84" y="346" font-size="11" text-anchor="start" font-weight="normal" fill="#f77f00" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">+3V3 레일 (ESP32 3V3 핀에서 점퍼)</text>
+<text x="84" y="381" font-size="11" text-anchor="start" font-weight="normal" fill="#222" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GND 레일</text>
+<text x="84" y="688" font-size="11" text-anchor="start" font-weight="normal" fill="#d62828" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">+5V 레일 (ESP32 VIN = USB 5V 에서 점퍼)</text>
+<text x="84" y="723" font-size="11" text-anchor="start" font-weight="normal" fill="#222" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GND 레일</text>
+<rect x="390" y="430" width="700" height="190" rx="10" fill="#1f2937" stroke="#0f172a" stroke-width="1.5"/>
+<rect x="350" y="503.0" width="46" height="44" rx="4" fill="#9ca3af" stroke="#4b5563" stroke-width="1.5"/>
+<text x="373" y="529.0" font-size="11" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">USB</text>
+<rect x="640" y="485" width="200" height="80" rx="4" fill="#374151" stroke="#111" stroke-width="1.5"/>
+<text x="740" y="520" font-size="14" text-anchor="middle" font-weight="bold" fill="#e5e7eb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">ESP32-WROOM-32</text>
+<text x="740" y="540" font-size="11" text-anchor="middle" font-weight="normal" fill="#d1d5db" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">DOIT DevKit V1 (esp32dev)</text>
+<rect x="408.3333333333333" y="424" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="413.3333333333333" y="452" font-size="11" text-anchor="end" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 413.3333333333333 452)">VIN</text>
+<rect x="455.0" y="424" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="460.0" y="452" font-size="11" text-anchor="end" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 460.0 452)">GND</text>
+<rect x="501.66666666666663" y="424" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="506.66666666666663" y="452" font-size="11" text-anchor="end" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 506.66666666666663 452)">D13</text>
+<rect x="548.3333333333333" y="424" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="553.3333333333333" y="452" font-size="11" text-anchor="end" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 553.3333333333333 452)">D12</text>
+<rect x="595.0" y="424" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="600.0" y="452" font-size="11" text-anchor="end" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 600.0 452)">D14</text>
+<rect x="641.6666666666666" y="424" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="646.6666666666666" y="452" font-size="11" text-anchor="end" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 646.6666666666666 452)">D27</text>
+<rect x="688.3333333333333" y="424" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="693.3333333333333" y="452" font-size="11" text-anchor="end" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 693.3333333333333 452)">D26</text>
+<rect x="735.0" y="424" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="740.0" y="452" font-size="11" text-anchor="end" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 740.0 452)">D25</text>
+<rect x="781.6666666666666" y="424" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="786.6666666666666" y="452" font-size="11" text-anchor="end" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 786.6666666666666 452)">D33</text>
+<rect x="828.3333333333333" y="424" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="833.3333333333333" y="452" font-size="11" text-anchor="end" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 833.3333333333333 452)">D32</text>
+<rect x="875.0" y="424" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="880.0" y="452" font-size="11" text-anchor="end" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 880.0 452)">D35</text>
+<rect x="921.6666666666666" y="424" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="926.6666666666666" y="452" font-size="11" text-anchor="end" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 926.6666666666666 452)">D34</text>
+<rect x="968.3333333333333" y="424" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="973.3333333333333" y="452" font-size="11" text-anchor="end" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 973.3333333333333 452)">VN</text>
+<rect x="1015.0" y="424" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="1020.0" y="452" font-size="11" text-anchor="end" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 1020.0 452)">VP</text>
+<rect x="1061.6666666666665" y="424" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="1066.6666666666665" y="452" font-size="11" text-anchor="end" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 1066.6666666666665 452)">EN</text>
+<rect x="408.3333333333333" y="614" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="413.3333333333333" y="598" font-size="11" text-anchor="start" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 413.3333333333333 598)">3V3</text>
+<rect x="455.0" y="614" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="460.0" y="598" font-size="11" text-anchor="start" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 460.0 598)">GND</text>
+<rect x="501.66666666666663" y="614" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="506.66666666666663" y="598" font-size="11" text-anchor="start" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 506.66666666666663 598)">D15</text>
+<rect x="548.3333333333333" y="614" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="553.3333333333333" y="598" font-size="11" text-anchor="start" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 553.3333333333333 598)">D2</text>
+<rect x="595.0" y="614" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="600.0" y="598" font-size="11" text-anchor="start" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 600.0 598)">D4</text>
+<rect x="641.6666666666666" y="614" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="646.6666666666666" y="598" font-size="11" text-anchor="start" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 646.6666666666666 598)">RX2</text>
+<rect x="688.3333333333333" y="614" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="693.3333333333333" y="598" font-size="11" text-anchor="start" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 693.3333333333333 598)">TX2</text>
+<rect x="735.0" y="614" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="740.0" y="598" font-size="11" text-anchor="start" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 740.0 598)">D5</text>
+<rect x="781.6666666666666" y="614" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="786.6666666666666" y="598" font-size="11" text-anchor="start" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 786.6666666666666 598)">D18</text>
+<rect x="828.3333333333333" y="614" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="833.3333333333333" y="598" font-size="11" text-anchor="start" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 833.3333333333333 598)">D19</text>
+<rect x="875.0" y="614" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="880.0" y="598" font-size="11" text-anchor="start" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 880.0 598)">D21</text>
+<rect x="921.6666666666666" y="614" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="926.6666666666666" y="598" font-size="11" text-anchor="start" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 926.6666666666666 598)">RX0</text>
+<rect x="968.3333333333333" y="614" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="973.3333333333333" y="598" font-size="11" text-anchor="start" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 973.3333333333333 598)">TX0</text>
+<rect x="1015.0" y="614" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="1020.0" y="598" font-size="11" text-anchor="start" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 1020.0 598)">D22</text>
+<rect x="1061.6666666666665" y="614" width="10" height="12" fill="#fbbf24" stroke="#78350f"/>
+<text x="1066.6666666666665" y="598" font-size="11" text-anchor="start" font-weight="normal" fill="#f9fafb" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 1066.6666666666665 598)">D23</text>
+<rect x="80" y="120" width="330" height="110" rx="8" fill="#fef9c3" stroke="#334155" stroke-width="1.5"/>
+<text x="245.0" y="140" font-size="14" text-anchor="middle" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">Raspberry Pi 4 (허브) 40핀 헤더</text>
+<text x="245.0" y="157" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#475569" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">UART /dev/serial0 115200 · 5V 는 연결하지 않는다</text>
+<rect x="158.5" y="225" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="162.5" y="218" font-size="9.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 162.5 218)">GND(6)</text>
+<rect x="241.0" y="225" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="245.0" y="218" font-size="9.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 245.0 218)">GPIO14 TX(8)</text>
+<rect x="323.5" y="225" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="327.5" y="218" font-size="9.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 327.5 218)">GPIO15 RX(10)</text>
+<rect x="450" y="120" width="220" height="110" rx="8" fill="#dcfce7" stroke="#334155" stroke-width="1.5"/>
+<text x="560.0" y="140" font-size="14" text-anchor="middle" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">DHT22 / AM2302 온습도</text>
+<text x="560.0" y="157" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#475569" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">단선 디지털 (모듈 내장 풀업)</text>
+<rect x="501.0" y="225" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="505.0" y="218" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">VCC</text>
+<rect x="556.0" y="225" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="560.0" y="218" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">DATA</text>
+<rect x="611.0" y="225" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="615.0" y="218" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GND</text>
+<rect x="710" y="120" width="260" height="110" rx="8" fill="#dcfce7" stroke="#334155" stroke-width="1.5"/>
+<text x="840.0" y="140" font-size="14" text-anchor="middle" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">SCD41 (SEN0536) CO₂</text>
+<text x="840.0" y="157" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#475569" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">I2C 0x62 · 100 kHz 버스(Wire)</text>
+<rect x="758.0" y="225" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="762.0" y="218" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">VCC</text>
+<rect x="810.0" y="225" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="814.0" y="218" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GND</text>
+<rect x="862.0" y="225" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="866.0" y="218" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">SDA</text>
+<rect x="914.0" y="225" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="918.0" y="218" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">SCL</text>
+<rect x="1010" y="120" width="260" height="110" rx="8" fill="#dcfce7" stroke="#334155" stroke-width="1.5"/>
+<text x="1140.0" y="140" font-size="14" text-anchor="middle" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">BH1750 (GY-302) 조도</text>
+<text x="1140.0" y="157" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#475569" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">I2C 0x23</text>
+<rect x="1049.3333333333333" y="225" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="1053.3333333333333" y="218" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">VCC</text>
+<rect x="1092.6666666666667" y="225" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="1096.6666666666667" y="218" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GND</text>
+<rect x="1136.0" y="225" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="1140.0" y="218" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">SDA</text>
+<rect x="1179.3333333333333" y="225" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="1183.3333333333333" y="218" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">SCL</text>
+<rect x="1222.6666666666667" y="225" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="1226.6666666666667" y="218" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">ADDR</text>
+<rect x="80" y="810" width="300" height="110" rx="8" fill="#dbeafe" stroke="#334155" stroke-width="1.5"/>
+<text x="230.0" y="830" font-size="14" text-anchor="middle" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">VL53L8CX 모듈 A (장면 왼쪽/위)</text>
+<text x="230.0" y="847" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#475569" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">I2C 주소 0x52→0x54 로 펌웨어가 바꿈</text>
+<rect x="106.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="110.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">VIN</text>
+<rect x="136.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="140.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GND</text>
+<rect x="166.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="170.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">SDA</text>
+<rect x="196.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="200.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">SCL</text>
+<rect x="226.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="230.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">MISO</text>
+<rect x="256.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="260.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">LPn</text>
+<rect x="286.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="290.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">INT</text>
+<rect x="316.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="320.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">NCS</text>
+<rect x="346.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="350.0" y="824" font-size="9.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 350.0 824)">SPI_I2C_N</text>
+<rect x="420" y="810" width="300" height="110" rx="8" fill="#dbeafe" stroke="#334155" stroke-width="1.5"/>
+<text x="570.0" y="830" font-size="14" text-anchor="middle" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">VL53L8CX 모듈 B (장면 오른쪽/아래)</text>
+<text x="570.0" y="847" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#475569" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">I2C 주소 0x52 그대로</text>
+<rect x="446.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="450.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">VIN</text>
+<rect x="476.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="480.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GND</text>
+<rect x="506.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="510.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">SDA</text>
+<rect x="536.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="540.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">SCL</text>
+<rect x="566.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="570.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">MISO</text>
+<rect x="596.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="600.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">LPn</text>
+<rect x="626.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="630.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">INT</text>
+<rect x="656.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="660.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">NCS</text>
+<rect x="686.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="690.0" y="824" font-size="9.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 690.0 824)">SPI_I2C_N</text>
+<rect x="780" y="810" width="230" height="110" rx="8" fill="#fee2e2" stroke="#334155" stroke-width="1.5"/>
+<text x="895.0" y="830" font-size="14" text-anchor="middle" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">C1001 mmWave (SEN0623)</text>
+<text x="895.0" y="847" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#475569" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">UART 115200 8N1</text>
+<rect x="822.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="826.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">VIN</text>
+<rect x="868.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="872.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GND</text>
+<rect x="914.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="918.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">TX</text>
+<rect x="960.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
+<text x="964.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">RX</text>
+<polyline points="245.0,230 245.0,262 693.3333333333333,262 693.3333333333333,424" fill="none" stroke="#15803d" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="693.3333333333333" cy="424" r="4" fill="#15803d" stroke="#fff" stroke-width="1"/>
+<polyline points="327.5,230 327.5,276 740.0,276 740.0,424" fill="none" stroke="#7e22ce" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="740.0" cy="424" r="4" fill="#7e22ce" stroke="#fff" stroke-width="1"/>
+<polyline points="162.5,230 162.5,366" fill="none" stroke="#222" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<circle cx="162.5" cy="366" r="3" fill="#222" stroke="#fff" stroke-width="1"/>
+<polyline points="560.0,230 560.0,248 646.6666666666666,248 646.6666666666666,424" fill="none" stroke="#9d174d" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="646.6666666666666" cy="424" r="4" fill="#9d174d" stroke="#fff" stroke-width="1"/>
+<polyline points="866.0,230 866.0,290 1300,290 1300,664 880.0,664 880.0,626" fill="none" stroke="#1d4ed8" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="880.0" cy="626" r="4" fill="#1d4ed8" stroke="#fff" stroke-width="1"/>
+<polyline points="1140.0,230 1140.0,290 1300,290 1300,664 880.0,664 880.0,626" fill="none" stroke="#1d4ed8" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="880.0" cy="626" r="4" fill="#1d4ed8" stroke="#fff" stroke-width="1"/>
+<polyline points="918.0,230 918.0,304 1314,304 1314,678 1020.0,678 1020.0,626" fill="none" stroke="#ca8a04" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="1020.0" cy="626" r="4" fill="#ca8a04" stroke="#fff" stroke-width="1"/>
+<polyline points="1183.3333333333333,230 1183.3333333333333,304 1314,304 1314,678 1020.0,678 1020.0,626" fill="none" stroke="#ca8a04" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="1020.0" cy="626" r="4" fill="#ca8a04" stroke="#fff" stroke-width="1"/>
+<polyline points="505.0,230 505.0,352" fill="none" stroke="#f77f00" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<circle cx="505.0" cy="352" r="3" fill="#f77f00" stroke="#fff" stroke-width="1"/>
+<polyline points="615.0,230 615.0,366" fill="none" stroke="#222" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<circle cx="615.0" cy="366" r="3" fill="#222" stroke="#fff" stroke-width="1"/>
+<polyline points="762.0,230 762.0,352" fill="none" stroke="#f77f00" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<circle cx="762.0" cy="352" r="3" fill="#f77f00" stroke="#fff" stroke-width="1"/>
+<polyline points="814.0,230 814.0,366" fill="none" stroke="#222" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<circle cx="814.0" cy="366" r="3" fill="#222" stroke="#fff" stroke-width="1"/>
+<polyline points="1053.3333333333333,230 1053.3333333333333,352" fill="none" stroke="#f77f00" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<circle cx="1053.3333333333333" cy="352" r="3" fill="#f77f00" stroke="#fff" stroke-width="1"/>
+<polyline points="1096.6666666666667,230 1096.6666666666667,366" fill="none" stroke="#222" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<circle cx="1096.6666666666667" cy="366" r="3" fill="#222" stroke="#fff" stroke-width="1"/>
+<polyline points="170.0,810 170.0,770 1066.6666666666665,770 1066.6666666666665,626" fill="none" stroke="#1d4ed8" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="1066.6666666666665" cy="626" r="4" fill="#1d4ed8" stroke="#fff" stroke-width="1"/>
+<polyline points="510.0,810 510.0,770 1066.6666666666665,770 1066.6666666666665,626" fill="none" stroke="#1d4ed8" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="1066.6666666666665" cy="626" r="4" fill="#1d4ed8" stroke="#fff" stroke-width="1"/>
+<polyline points="200.0,810 200.0,756 786.6666666666666,756 786.6666666666666,626" fill="none" stroke="#ca8a04" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="786.6666666666666" cy="626" r="4" fill="#ca8a04" stroke="#fff" stroke-width="1"/>
+<polyline points="540.0,810 540.0,756 786.6666666666666,756 786.6666666666666,626" fill="none" stroke="#ca8a04" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="786.6666666666666" cy="626" r="4" fill="#ca8a04" stroke="#fff" stroke-width="1"/>
+<polyline points="260.0,810 260.0,742 1170,742 1170,386 833.3333333333333,386 833.3333333333333,424" fill="none" stroke="#0e7490" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="833.3333333333333" cy="424" r="4" fill="#0e7490" stroke="#fff" stroke-width="1"/>
+<polyline points="600.0,810 600.0,728 1184,728 1184,372 786.6666666666666,372 786.6666666666666,424" fill="none" stroke="#0e7490" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="786.6666666666666" cy="424" r="4" fill="#0e7490" stroke="#fff" stroke-width="1"/>
+<polyline points="918.0,810 918.0,784 646.6666666666666,784 646.6666666666666,626" fill="none" stroke="#15803d" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="646.6666666666666" cy="626" r="4" fill="#15803d" stroke="#fff" stroke-width="1"/>
+<polyline points="964.0,810 964.0,798 693.3333333333333,798 693.3333333333333,626" fill="none" stroke="#7e22ce" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="693.3333333333333" cy="626" r="4" fill="#7e22ce" stroke="#fff" stroke-width="1"/>
+<polyline points="110.0,810 110.0,694" fill="none" stroke="#d62828" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<circle cx="110.0" cy="694" r="3" fill="#d62828" stroke="#fff" stroke-width="1"/>
+<polyline points="140.0,810 140.0,708" fill="none" stroke="#222" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<circle cx="140.0" cy="708" r="3" fill="#222" stroke="#fff" stroke-width="1"/>
+<polyline points="450.0,810 450.0,694" fill="none" stroke="#d62828" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<circle cx="450.0" cy="694" r="3" fill="#d62828" stroke="#fff" stroke-width="1"/>
+<polyline points="480.0,810 480.0,708" fill="none" stroke="#222" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<circle cx="480.0" cy="708" r="3" fill="#222" stroke="#fff" stroke-width="1"/>
+<polyline points="826.0,810 826.0,694" fill="none" stroke="#d62828" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<circle cx="826.0" cy="694" r="3" fill="#d62828" stroke="#fff" stroke-width="1"/>
+<polyline points="872.0,810 872.0,708" fill="none" stroke="#222" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<circle cx="872.0" cy="708" r="3" fill="#222" stroke="#fff" stroke-width="1"/>
+<polyline points="320.0,810 320.0,708" fill="none" stroke="#222" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<circle cx="320.0" cy="708" r="3" fill="#222" stroke="#fff" stroke-width="1"/>
+<polyline points="350.0,810 350.0,708" fill="none" stroke="#222" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<circle cx="350.0" cy="708" r="3" fill="#222" stroke="#fff" stroke-width="1"/>
+<polyline points="660.0,810 660.0,708" fill="none" stroke="#222" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<circle cx="660.0" cy="708" r="3" fill="#222" stroke="#fff" stroke-width="1"/>
+<polyline points="690.0,810 690.0,708" fill="none" stroke="#222" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<circle cx="690.0" cy="708" r="3" fill="#222" stroke="#fff" stroke-width="1"/>
+<polyline points="413.3333333333333,424 413.3333333333333,400 70,400 70,694" fill="none" stroke="#d62828" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<polyline points="460.0,424 460.0,366" fill="none" stroke="#222" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<polyline points="413.3333333333333,626 413.3333333333333,660 1410,660 1410,352" fill="none" stroke="#f77f00" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<polyline points="460.0,424 460.0,708" fill="none" stroke="#222" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,5"/>
+<circle cx="413.3333333333333" cy="424" r="4" fill="#d62828" stroke="#fff" stroke-width="1"/>
+<circle cx="460.0" cy="424" r="4" fill="#222" stroke="#fff" stroke-width="1"/>
+<circle cx="413.3333333333333" cy="626" r="4" fill="#f77f00" stroke="#fff" stroke-width="1"/>
+<circle cx="460.0" cy="424" r="4" fill="#222" stroke="#fff" stroke-width="1"/>
+<rect x="1040" y="790" width="420" height="250" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="1052" y="812" font-size="13" text-anchor="start" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">ESP32 핀 ↔ 장치 (겹침 없음)</text>
+<rect x="1052" y="826" width="10" height="10" fill="#1d4ed8"/>
+<text x="1070" y="836" font-size="11.5" text-anchor="start" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GPIO23 / 18</text>
+<text x="1170" y="836" font-size="11.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">SDA / SCL</text>
+<text x="1275" y="836" font-size="11" text-anchor="start" font-weight="normal" fill="#334155" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">L8 A·B 공유 (Wire1, 1 MHz)</text>
+<rect x="1052" y="848" width="10" height="10" fill="#0e7490"/>
+<text x="1070" y="858" font-size="11.5" text-anchor="start" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GPIO32 / 33</text>
+<text x="1170" y="858" font-size="11.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">LPn</text>
+<text x="1275" y="858" font-size="11" text-anchor="start" font-weight="normal" fill="#334155" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">L8 A / L8 B</text>
+<rect x="1052" y="870" width="10" height="10" fill="#15803d"/>
+<text x="1070" y="880" font-size="11.5" text-anchor="start" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GPIO16 / 17</text>
+<text x="1170" y="880" font-size="11.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">UART1 RX / TX</text>
+<text x="1275" y="880" font-size="11" text-anchor="start" font-weight="normal" fill="#334155" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">C1001 TX / RX</text>
+<rect x="1052" y="892" width="10" height="10" fill="#7e22ce"/>
+<text x="1070" y="902" font-size="11.5" text-anchor="start" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GPIO25 / 26</text>
+<text x="1170" y="902" font-size="11.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">UART2 TX / RX</text>
+<text x="1275" y="902" font-size="11" text-anchor="start" font-weight="normal" fill="#334155" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">Pi 4 GPIO15(10) / 14(8)</text>
+<rect x="1052" y="914" width="10" height="10" fill="#ca8a04"/>
+<text x="1070" y="924" font-size="11.5" text-anchor="start" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GPIO21 / 22</text>
+<text x="1170" y="924" font-size="11.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">SDA / SCL</text>
+<text x="1275" y="924" font-size="11" text-anchor="start" font-weight="normal" fill="#334155" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">SCD41 + BH1750 (Wire)</text>
+<rect x="1052" y="936" width="10" height="10" fill="#9d174d"/>
+<text x="1070" y="946" font-size="11.5" text-anchor="start" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GPIO27</text>
+<text x="1170" y="946" font-size="11.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">DATA</text>
+<text x="1275" y="946" font-size="11" text-anchor="start" font-weight="normal" fill="#334155" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">DHT22</text>
+<rect x="1052" y="958" width="10" height="10" fill="#d62828"/>
+<text x="1070" y="968" font-size="11.5" text-anchor="start" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">VIN (5V)</text>
+<text x="1170" y="968" font-size="11.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">전원</text>
+<text x="1275" y="968" font-size="11" text-anchor="start" font-weight="normal" fill="#334155" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">L8 A·B VIN · C1001 VIN</text>
+<rect x="1052" y="980" width="10" height="10" fill="#f77f00"/>
+<text x="1070" y="990" font-size="11.5" text-anchor="start" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">3V3</text>
+<text x="1170" y="990" font-size="11.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">전원</text>
+<text x="1275" y="990" font-size="11" text-anchor="start" font-weight="normal" fill="#334155" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">SCD41 · BH1750 · DHT22</text>
+<rect x="1052" y="1002" width="10" height="10" fill="#222"/>
+<text x="1070" y="1012" font-size="11.5" text-anchor="start" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GND</text>
+<text x="1170" y="1012" font-size="11.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">공통</text>
+<text x="1275" y="1012" font-size="11" text-anchor="start" font-weight="normal" fill="#334155" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">전부 + Pi 4 핀 6 · L8 NCS·SPI_I2C_N</text>
+<rect x="80" y="940" width="940" height="100" rx="8" fill="#fff7ed" stroke="#fb923c" stroke-width="1.5"/>
+<text x="92" y="962" font-size="13" text-anchor="start" font-weight="bold" fill="#9a3412" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">주의</text>
+<text x="92" y="982" font-size="11" text-anchor="start" font-weight="normal" fill="#431407" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">· 보드 방향: USB 왼쪽, VIN·GND·D13…EN 줄이 위, 3V3·GND·D15…D23 줄이 아래. 핀 이름은 보드 실크를 보고 맞춘다(RX2/TX2 실크 = GPIO16/17).</text>
+<text x="92" y="1000" font-size="11" text-anchor="start" font-weight="normal" fill="#431407" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">· 76EHwan/ESP32_VL53L8 의 L8 배선(LPn=16, SPI_I2C_N=17, NCS=5)은 C1001(16/17)과 겹쳐 LPn 을 32/33 으로 옮겼다. NCS·SPI_I2C_N 은 GND 고정.</text>
+<text x="92" y="1018" font-size="11" text-anchor="start" font-weight="normal" fill="#431407" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">· L8 모듈 VIN 은 5V(모듈 레귤레이터). ESP32 는 5V 입력 불가 — 모듈 SDA/SCL 풀업이 3.3V 인지 확인. Pi 4 와 5V 를 직접 잇지 않는다(GND 만 공통).</text>
+<text x="92" y="1036" font-size="11" text-anchor="start" font-weight="normal" fill="#431407" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">· 센서 A 가 장면의 왼쪽(또는 위). 실기에서 손을 들어 방향을 확인하고 DESKMATE_TOF_FLIP_ROWS/COLS/STACK_ROWS/SWAP 로 고정한다.</text>
+</svg>
