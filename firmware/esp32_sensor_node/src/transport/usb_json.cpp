@@ -118,4 +118,41 @@ void writeTofJson(Stream& output, uint32_t now_ms, const TofFeatures& f, uint8_t
   output.println(F("}"));
 }
 
+void writeTofGridJson(Stream& output, uint32_t now_ms, uint8_t frame_id, uint8_t sensor_mask, uint8_t flags,
+                      uint8_t w, uint8_t h, uint8_t count, const int16_t* const* dist, const uint8_t* const* status) {
+  output.print(F("{\"t\":\"tof_grid\",\"ms\":"));
+  output.print(now_ms);
+  output.print(F(",\"frame\":"));
+  output.print(frame_id);
+  output.print(F(",\"sensors_ok\":"));
+  output.print(sensor_mask);
+  output.print(F(",\"w\":"));
+  output.print(w);
+  output.print(F(",\"h\":"));
+  output.print(h);
+  output.print(F(",\"flags\":"));
+  output.print(flags);
+  output.print(F(",\"s\":["));
+  const uint16_t zones = static_cast<uint16_t>(w) * h;
+  for (uint8_t i = 0; i < count; ++i) {
+    if (i > 0) output.print(',');
+    if ((sensor_mask & (1u << i)) == 0) {
+      output.print(F("null"));
+      continue;
+    }
+    output.print(F("{\"d\":["));
+    for (uint16_t z = 0; z < zones; ++z) {
+      if (z > 0) output.print(',');
+      output.print(dist[i][z]);
+    }
+    output.print(F("],\"st\":["));
+    for (uint16_t z = 0; z < zones; ++z) {
+      if (z > 0) output.print(',');
+      output.print(status[i][z]);
+    }
+    output.print(F("]}"));
+  }
+  output.println(F("]}"));
+}
+
 }  // namespace deskmate

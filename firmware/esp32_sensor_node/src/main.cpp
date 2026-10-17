@@ -76,6 +76,7 @@ uint16_t tof_sequence = 0;  // 0x03·0x04 가 같은 흐름을 쓴다
 uint16_t tof_grid_sequence = 0;  // 0x05 조각마다 +1. 같은 격자의 조각은 frame_id 로 묶인다
 uint32_t tof_grid_tx = 0;        // 보낸 0x05 프레임 수(USB tof_feature 의 tx_grid — 송신 주기 실측용)
 uint32_t tof_feature_tx = 0;     // 보낸 0x03 프레임 수(tx_feature)
+bool usb_tof_grid = false;       // USB 명령 'z' 토글: 원본 8×8 을 {"t":"tof_grid"} 로도 낸다(PC 진단, tools/sensor_monitor.py)
 uint8_t tof_grid_frame_id = 0;
 bool mmwave_ready = false;
 
@@ -179,6 +180,22 @@ void writeTofGridUart(uint32_t now_ms) {
 #endif
 }
 
+// 같은 표본·같은 frame_id 를 USB JSON 으로(PC 진단, 'z' 로 켬). writeTofGridUart 바로 뒤에서만 부른다.
+void writeTofGridJson(uint32_t now_ms) {
+  const int16_t* dist[DESKMATE_TOF_COUNT];
+  const uint8_t* status[DESKMATE_TOF_COUNT];
+  for (uint8_t i = 0; i < DESKMATE_TOF_COUNT; ++i) {
+    dist[i] = tof.sensorDistance(i);
+    status[i] = tof.sensorStatus(i);
+  }
+  const uint8_t flags = (DESKMATE_TOF_FLIP_ROWS ? kTofGridFlagFlipRows : 0) |
+                        (DESKMATE_TOF_FLIP_COLS ? kTofGridFlagFlipCols : 0) |
+                        (DESKMATE_TOF_STACK_ROWS ? kTofGridFlagStackRows : 0) |
+                        (DESKMATE_TOF_SWAP ? kTofGridFlagSwap : 0);
+  writeTofGridJson(Serial, now_ms, static_cast<uint8_t>(tof_grid_frame_id - 1), tof.okMask(), flags, kTofSensorW,
+                   kTofSensorH, DESKMATE_TOF_COUNT, dist, status);
+}
+
 void writeHeartbeatUart(uint32_t now_ms) {
 #if DESKMATE_UART2_TX
   const uint16_t version = DESKMATE_FIRMWARE_VERSION;
@@ -200,12 +217,17 @@ void writeHeartbeatUart(uint32_t now_ms) {
 
 // USB 로 받는 한 글자 명령(수집 모드와 같은 글자):
 //   b  바른 자세 기준선 다시 잡기   g  다음 프레임을 배경으로(빈 자리에서)   r  추정기 초기화
+//   z  원본 8×8 USB 출력(tof_grid) 켜기/끄기 — 기본 꺼짐
 void handleUsbCommands() {
   while (Serial.available() > 0) {
     switch (Serial.read()) {
       case 'b': tof.estimator().resetBaseline(); Serial.println(F("# tof baseline reset")); break;
       case 'g': tof.estimator().requestBackgroundCapture(); Serial.println(F("# tof background capture")); break;
       case 'r': tof.estimator().reset(); Serial.println(F("# tof estimator reset")); break;
+      case 'z':
+        usb_tof_grid = !usb_tof_grid;
+        Serial.println(usb_tof_grid ? F("# tof_grid usb on") : F("# tof_grid usb off"));
+        break;
       default: break;
     }
   }
@@ -231,6 +253,9 @@ void printTofStatus() {
 }
 
 void setup() {
+  // USB TX 링 버퍼를 키운다(begin() 앞에서). tof_grid 한 줄 ≈1.1 kB 를 print 할 때 루프가 막히지 않게 —
+  // 115200 에서 1.1 kB 는 95 ms 라 기본 버퍼면 ToF 폴링·Pi 4 송신 주기가 밀린다.
+  Serial.setTxBufferSize(4096);
   Serial.begin(kUsbBaud);
   // 능동 보고를 놓치지 않도록 수신 버퍼를 키운다. begin() 앞에서 해야 적용된다
   Serial1.setRxBufferSize(1024);
@@ -285,6 +310,7 @@ void loop() {
     // 0x05 는 기한이 지난 뒤 처음 생긴 표본을 보낸다(기한은 표본 시각이 아니라 period 격자에 맞춰 민다).
     if (tof_new_grid && periodDue(now_ms, next_tof_grid_ms, kTofGridPeriodMs)) {
       writeTofGridUart(now_ms);
+      if (usb_tof_grid) writeTofGridJson(now_ms);
     }
     if (periodDue(now_ms, next_tof_feature_ms, kTofFeaturePeriodMs)) {
       writeTofFeatureUart(now_ms);

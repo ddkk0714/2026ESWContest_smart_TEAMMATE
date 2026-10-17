@@ -203,6 +203,13 @@ ESP32 펌웨어 0x0121, Pi 4 `/dev/serial0 → ttyAMA0` 115200(getty 는 failed 
 - Pi 4 상태 메모: 이 캡처 시점에 허브 프로세스가 없었다(`ps` 0, 저널에 `[bridge]` 줄 없음) — 그래서 포트를 직접 읽을 수 있었다.
   허브를 다시 올리려면 `pi4-hub-activate.sh`.
 
+**2026-10-17 PC 진단: USB 명령 `z` 로 켜는 원본 8×8 줄 `{"t":"tof_grid"}` + `tools/sensor_monitor.py`.** 펌웨어 0x0123.
+UART 0x05 와 같은 표본·같은 `frame_id` 를 센서별 `d`(mm, -1)·`st`(255) 64개씩 JSON 으로 USB 에도 낸다(5 Hz, 한 줄 ≈1.1 kB).
+**기본은 꺼져 있고** `z` 가 토글(`# tof_grid usb on/off`)이라 운영 출력·"운영 ToF raw 미전송" 원칙은 그대로다 — 수집 모드(`env:tof_logger`)처럼
+개발 PC 에서만 본다. `Serial.setTxBufferSize(4096)` 으로 USB TX 링 버퍼를 키워 1.1 kB 를 print 해도 루프가 안 막힌다(115200 에서 95 ms).
+`tools/sensor_monitor.py --port COM8` 이 시작할 때 `z` 를 보내고 끝날 때 다시 보내 끈다. 실측: 모니터 수신 `tof_grid` 4.99 Hz, 켠 상태에서
+`tx_grid`/`tx_feature` 차분 10/5 유지.
+
 **학습 데이터 수집 모드(`env:tof_logger`, 운영 아님).** VL53L8CX 8×8 을 ST 공식 라이브러리로 읽어 원본 zone 과
 규칙 판정을 USB 한 줄 JSON(`{"t":"tof",...}`, 921600)으로 PC 에 보낸다. `src/tof_logger/` 는 운영 빌드에서 빠진다
 (`env:esp32dev` 의 `build_src_filter`). PC 쪽 수집기·배선·방향 확인은 [`dataset/tof_logger/README.md`](../dataset/tof_logger/README.md).
