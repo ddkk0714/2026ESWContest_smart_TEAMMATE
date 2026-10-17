@@ -1,0 +1,20 @@
+name: posture_view
+description: DESKMATE Raspberry Pi 5 Atlas ToF posture view (Pi 4 deskmate_tofposture /api/state).
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  # Atlas Flutter 3.27.4 가 쓰는 Dart 는 3.6.x 다. 옆 앱(camtest·ui_env_app)과 맞춘다.
+  sdk: ^3.6.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
