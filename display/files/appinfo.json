@@ -1,0 +1,10 @@
+{
+  "id": "com.atlas.app.deskmate-display",
+  "type": "web",
+  "name": "DESKMATE",
+  "description": "작업 상태 표시 단말 — 키스트로크 지표 라이브 뷰 · 보드 키보드 캡처",
+  "version": "0.2.0",
+  "entry": "index.html",
+  "layer_type": "fullscreen",
+  "visible": true
+}

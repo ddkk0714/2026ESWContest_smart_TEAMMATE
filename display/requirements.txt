@@ -1,0 +1,3 @@
+# tools/fake_publisher.py 전용. 앱 자체(web/)는 파이썬 의존이 없다.
+# tools/preview.py 는 표준 라이브러리만 쓴다.
+paho-mqtt>=2.0

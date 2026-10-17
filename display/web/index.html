@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>DESKMATE — 키스트로크</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="brand">DESKMATE<span>키스트로크</span></div>
+  <div class="right">
+    <span id="link" class="pill pill-off">브로커 연결 중</span>
+    <span id="clock" class="clock">--:--:--</span>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab is-on" data-view="live">라이브</button>
+  <button class="tab" data-view="trend">추이</button>
+  <button class="tab" data-view="raw">원본</button>
+</nav>
+
+<main>
+  <!-- ============ 라이브 ============ -->
+  <section id="view-live" class="view is-on">
+    <div class="statusrow">
+      <div id="activity" class="activity act-idle">
+        <div class="act-dot"></div>
+        <div class="act-text">
+          <strong id="act-label">대기 중</strong>
+          <small id="act-sub">아직 수신된 데이터가 없습니다</small>
+        </div>
+      </div>
+      <div class="chips">
+        <span id="chip-key" class="chip">키보드</span>
+        <span id="chip-mouse" class="chip">마우스</span>
+      </div>
+    </div>
+
+    <!-- 보드 키보드 직접 캡처(?src=local)에서만 보인다. 키가 앱까지 오는지 눈으로 확인하는 줄. -->
+    <div id="capbar" class="capbar" hidden>
+      <span id="cap-dot" class="cap-dot"></span>
+      <strong>보드 키보드 캡처</strong>
+      <span class="cap-n"><span id="cap-count">0</span> 타</span>
+      <span id="cap-last" class="cap-last">입력 대기</span>
+      <span class="cap-note">키 값은 저장하지 않고 종류·시각만 씁니다</span>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="k">체류 시간 <em>dwell</em></div>
+        <div class="v"><span id="m-dwell">--</span><u>ms</u></div>
+        <div class="s">± <span id="m-dwell-sd">--</span> ms</div>
+      </div>
+      <div class="card">
+        <div class="k">키 간격 <em>flight</em></div>
+        <div class="v"><span id="m-flight">--</span><u>ms</u></div>
+        <div class="s">± <span id="m-flight-sd">--</span> ms</div>
+      </div>
+      <div class="card">
+        <div class="k">리듬 불규칙성 <em>flight_cv</em></div>
+        <div class="v"><span id="m-cv">--</span></div>
+        <div class="meter"><i id="bar-cv" style="width:0%"></i></div>
+      </div>
+      <div class="card">
+        <div class="k">입력 공백 <em>idle_ratio</em></div>
+        <div class="v"><span id="m-idle">--</span><u>%</u></div>
+        <div class="meter"><i id="bar-idle" style="width:0%"></i></div>
+      </div>
+      <div class="card">
+        <div class="k">정정 빈도 <em>correction_rate</em></div>
+        <div class="v"><span id="m-corr">--</span><u>%</u></div>
+        <div class="meter"><i id="bar-corr" style="width:0%"></i></div>
+      </div>
+      <div class="card">
+        <div class="k">마우스 <em>events/min</em></div>
+        <div class="v"><span id="m-mouse">--</span></div>
+        <div class="s"><span id="m-window">--</span>초 윈도</div>
+      </div>
+    </div>
+
+    <footer class="foot">
+      <span id="src">노드 --</span>
+      <span id="age">수신 --</span>
+      <span id="cnt">0 건</span>
+    </footer>
+  </section>
+
+  <!-- ============ 추이 ============ -->
+  <section id="view-trend" class="view">
+    <div class="chartwrap">
+      <div class="chart-title">키 간격 <em>flight_mean_ms</em></div>
+      <canvas id="c-flight"></canvas>
+    </div>
+    <div class="chartwrap">
+      <div class="chart-title">입력 공백 <em>idle_ratio</em> · 정정 <em>correction_rate</em></div>
+      <canvas id="c-idle"></canvas>
+      <div class="legend">
+        <span class="lg lg-a">idle_ratio</span>
+        <span class="lg lg-b">correction_rate</span>
+      </div>
+    </div>
+    <footer class="foot"><span id="trend-span">최근 -- 개 (1Hz)</span></footer>
+  </section>
+
+  <!-- ============ 원본 ============ -->
+  <section id="view-raw" class="view">
+    <div class="rawhead">
+      <span class="mono" id="raw-topic">deskmate/sensor/keystroke</span>
+    </div>
+    <pre id="raw" class="raw mono">수신 대기 중…</pre>
+  </section>
+</main>
+
+<!-- 외부 CDN 을 쓰지 않는다. 보드가 오프라인이어도 동작해야 하고, 패키징된 앱이기도 하다. -->
+<script src="js/mqtt.min.js"></script>
+<script src="js/config.js"></script>
+<script src="js/store.js"></script>
+<script src="js/keycap.js"></script>
+<script src="js/demo.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
