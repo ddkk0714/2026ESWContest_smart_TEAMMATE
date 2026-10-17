@@ -1,0 +1,60 @@
+{
+ "run": "ubai_c9_range",
+ "_note": "사용자 확정(10-17): 배치 범위 학습. 센서 높이 0.05~0.25 m, 기울기 0~25°(지금과 같음), 좌우 -45~+45°(총 90°). 사람 거리·책상·체형·반사율·방은 r9 와 같음. placement=range 와 input_baseline_channel 은 tof-sim v5 에 추가 필요(PLACEMENT_BASELINE_NOISE_PROCESS.md §3-2).",
+ "sensor": "vl53l8cx",
+ "backend": "mujoco",
+ "placement": "range",
+ "input_baseline_channel": true,
+ "l8_params": {
+  "_note": "§2 실측(65 cm 벽) 값으로 교체. 아래는 시뮬 기본값",
+  "sigma0_mm": 3.0,
+  "sigma1_mm": 4.0,
+  "dropout": 0.003
+ },
+ "clutter": 4,
+ "scene": "rich",
+ "resume": true,
+ "init": "/home1/soyeon24/tof-sim-v5-random5/runs/ubai_r9_lowlr/ckpt_best.pt",
+ "init_note": "입력 채널이 2→3 으로 늘면 enc.0.weight 의 새 채널만 0 초기화하고 나머지는 이어받는다",
+ "hours": 12.0,
+ "workers": 30,
+ "streams": 320,
+ "chunk": 64,
+ "threads": 2,
+ "device": "auto",
+ "lr": 0.0002,
+ "lr_half_life_h": 24.0,
+ "transition_weight": 0.3,
+ "replay": 10,
+ "replay_size": 64,
+ "eval_min": 30.0,
+ "ckpt_min": 10.0,
+ "val_sessions": 48,
+ "val_seconds": 300.0,
+ "real": [],
+ "real_note": "지그 뒤 수집한 실측 지시자세 세션 경로를 넣는다(10-18~). 비어 있으면 시뮬 점수뿐이라 실제 성능이 아니다",
+ "seed": 0,
+ "hidden": 64,
+ "range": {
+  "height_m": [
+   0.05,
+   0.25
+  ],
+  "tilt_deg": [
+   0.0,
+   25.0
+  ],
+  "yaw_deg": [
+   -45.0,
+   45.0
+  ],
+  "person_dist_m": [
+   0.5,
+   0.8
+  ],
+  "sensor_pair_outward_deg": 8.0,
+  "misplaced_frac": 0.1,
+  "misplaced_def": "높이 0.0~0.05 또는 0.25~0.35 m, 기울기 25~40° 또는 -10~0° 중 하나 이상 벗어남(요는 ±45° 안 유지). 이 샘플만 misplaced 라벨",
+  "_note": "범위 안은 균일 분포. 범위 밖은 misplaced_frac 만큼만 섞는다"
+ }
+}

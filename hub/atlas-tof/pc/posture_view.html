@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DESKMATE 자세 뷰</title>
+<style>
+  :root { --bg:#0f1115; --fg:#e8eaf0; --dim:#8a90a0; --card:#181b22; --ok:#4cc38a; --warn:#f5a524; --bad:#f06a6a; --bar:#3b82f6; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font-family: "Segoe UI", "Malgun Gothic", system-ui, sans-serif; padding:16px; }
+  header { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:14px; }
+  header input { background:var(--card); color:var(--fg); border:1px solid #2a2f3a; border-radius:6px; padding:6px 10px; width:260px; }
+  .status { font-size:13px; color:var(--dim); }
+  .grid { display:grid; grid-template-columns: 1.2fr 1fr; gap:14px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  .card { background:var(--card); border-radius:12px; padding:16px; }
+  .posture { font-size:64px; font-weight:700; line-height:1.1; margin:4px 0; }
+  .posture.unknown { color:var(--dim); }
+  .conf { font-size:18px; color:var(--dim); }
+  .since { font-size:14px; color:var(--dim); margin-top:6px; }
+  .probs .row { display:grid; grid-template-columns: 110px 1fr 56px; gap:8px; align-items:center; margin:5px 0; font-size:14px; }
+  .probs .bar { height:12px; background:#242936; border-radius:6px; overflow:hidden; }
+  .probs .bar > i { display:block; height:100%; background:var(--bar); width:0; transition: width .25s; }
+  .probs .row.top .bar > i { background:var(--ok); }
+  .sensors { display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:12px; }
+  .sensor { background:#13161d; border-radius:10px; padding:10px 12px; font-size:13px; }
+  .sensor b { font-size:15px; }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; background:var(--bad); }
+  .dot.on { background:var(--ok); }
+  .flags { color:var(--dim); font-size:12px; margin-top:8px; }
+  .history { display:flex; gap:2px; height:28px; margin-top:12px; align-items:flex-end; }
+  .history i { flex:1; display:block; background:#2a2f3a; border-radius:2px; min-width:2px; }
+  footer { margin-top:14px; font-size:12px; color:var(--dim); }
+  .raw { margin-top:14px; }
+  .raw .head { display:flex; gap:12px; align-items:center; flex-wrap:wrap; font-size:13px; color:var(--dim); margin-bottom:8px; }
+  .raw .head label { cursor:pointer; }
+  .rawgrids { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
+  @media (max-width: 760px) { .rawgrids { grid-template-columns: 1fr; } }
+  .rawcard { background:#13161d; border-radius:10px; padding:10px 12px; }
+  .rawcard .t { font-size:13px; margin-bottom:6px; }
+  .zones { display:grid; grid-template-columns: repeat(8, 1fr); gap:2px; }
+  .zones .z { aspect-ratio:1; border-radius:3px; display:flex; align-items:center; justify-content:center; font-size:11px; font-variant-numeric: tabular-nums; color:#fff; text-shadow:0 0 2px #000; }
+  .zones .z.none { background:#1c1f27; color:var(--dim); }
+  .legend { display:flex; gap:6px; align-items:center; font-size:11px; color:var(--dim); margin-top:6px; }
+  .legend i { display:inline-block; width:14px; height:10px; border-radius:2px; }
+</style>
+</head>
+<body>
+<header>
+  <strong>DESKMATE ToF 자세</strong>
+  <input id="base" value="http://172.20.10.3:8771" spellcheck="false">
+  <span class="status" id="status">연결 중…</span>
+</header>
+<div class="grid">
+  <section class="card">
+    <div class="posture unknown" id="posture">모름</div>
+    <div class="conf" id="conf">—</div>
+    <div class="since" id="since"></div>
+    <div class="history" id="history" title="최근 60초 (0.5초 간격)"></div>
+    <div class="sensors" id="sensors"></div>
+    <div class="flags" id="flags"></div>
+  </section>
+  <section class="card probs" id="probs"></section>
+</div>
+<section class="card raw">
+  <div class="head">
+    <strong style="color:var(--fg)">원본 8×8 거리 (mm)</strong>
+    <input id="rawbase" value="http://172.20.10.3:8772" spellcheck="false" style="width:220px">
+    <label><input type="checkbox" id="flipc"> 표시만 좌우 뒤집기</label>
+    <label><input type="checkbox" id="flipr"> 표시만 상하 뒤집기</label>
+    <span id="rawstatus"></span>
+  </div>
+  <div class="rawgrids" id="rawgrids"></div>
+  <div class="legend">가까움 <i style="background:#f06a6a"></i><i style="background:#f5a524"></i><i style="background:#4cc38a"></i><i style="background:#3b82f6"></i><i style="background:#1c1f27"></i> 멀거나 없음 · row 0 = 위, col 0 = 센서 기준 왼쪽(펌웨어 원본 순서) · 상태 5·6·9·10 만 유효</div>
+</section>
+<footer>GET /api/state 를 0.3초마다 읽는다. 원본 거리는 중계기 :8772/raw (센서별 마지막 0x05 프레임). posture 는 1초 이동평균, 막대는 이번 순간값(instant). 센서 앞에 앉으면 바뀐다.</footer>
+<script>
+const KO = {upright:"바른자세", lean_forward:"상체 앞으로", recline:"젖힘", face_down:"엎드림", chin_rest:"턱괴기",
+            drowsy:"졸음", away:"자리비움", misplaced:"위치 재조정", forward_head:"거북목", unknown:"모름"};
+const COLOR = {upright:"#4cc38a", lean_forward:"#f5a524", recline:"#f5a524", face_down:"#f06a6a", chin_rest:"#f5a524",
+               drowsy:"#f06a6a", away:"#8a90a0", misplaced:"#8a90a0", forward_head:"#f06a6a", unknown:"#2a2f3a"};
+const hist = []; const HIST_N = 120;
+const $ = id => document.getElementById(id);
+let fails = 0;
+async function tick() {
+  const base = $("base").value.replace(/\/$/, "");
+  try {
+    const r = await fetch(base + "/api/state", {cache:"no-store"});
+    const s = await r.json();
+    fails = 0;
+    render(s);
+  } catch (e) {
+    fails++;
+    $("status").textContent = "연결 실패 (" + fails + "): " + e.message;
+    if (fails > 3) { $("posture").textContent = "연결 없음"; $("posture").className = "posture unknown"; }
+  }
+}
+function render(s) {
+  const p = s.posture || "unknown";
+  const el = $("posture");
+  el.textContent = (s.posture_ko || KO[p] || p) + (s.valid ? "" : "");
+  el.className = "posture " + (s.valid ? "" : "unknown");
+  el.style.color = s.valid ? COLOR[p] || "var(--fg)" : "";
+  $("conf").textContent = s.valid ? `확신 ${(s.conf*100).toFixed(0)} %  ·  present ${s.present}  ·  misplaced ${s.misplaced}` : "센서 입력 없음";
+  $("since").textContent = s.valid ? `이 자세 ${(s.since_ms/1000).toFixed(1)} s 째 · 센서 ${s.online_sensors}개 · tick ${s.ticks}` : `센서 ${s.online_sensors}개 · tick ${s.ticks}`;
+  $("status").textContent = "ok " + new Date().toLocaleTimeString();
+  hist.push(s.valid ? p : "unknown"); if (hist.length > HIST_N) hist.shift();
+  $("history").innerHTML = hist.map(h => `<i style="background:${COLOR[h]||'#2a2f3a'};height:${h==='unknown'?30:100}%" title="${KO[h]||h}"></i>`).join("");
+  const probs = (s.instant && s.instant.probs) || s.probs || {};
+  const labels = (s.model && s.model.labels) || Object.keys(probs);
+  const top = labels.reduce((a,b) => (probs[a]||0) >= (probs[b]||0) ? a : b, labels[0]);
+  $("probs").innerHTML = "<div style='font-size:13px;color:var(--dim);margin-bottom:6px'>순간 확률 (instant.probs)</div>" +
+    labels.map(l => `<div class="row ${l===top?'top':''}"><span>${KO[l]||l}</span><div class="bar"><i style="width:${((probs[l]||0)*100).toFixed(1)}%"></i></div><span>${((probs[l]||0)*100).toFixed(1)} %</span></div>`).join("");
+  $("sensors").innerHTML = (s.sensors||[]).map(x => `<div class="sensor"><span class="dot ${x.online?'on':''}"></span><b>${x.name}</b><br>
+     ${x.online ? (KO[x.posture]||x.posture) + " " + (x.conf*100).toFixed(0) + " %" : "오프라인"} · ${(x.hz||0).toFixed(1)} Hz · frames ${x.frames}<br>
+     <span style="color:var(--dim)">gaps ${x.seq_gaps} · dup ${x.duplicates} · resets ${x.resets} · flip r${x.flip_rows?1:0}/c${x.flip_cols?1:0}${x.error?' · '+x.error:''}</span></div>`).join("");
+  if (s.model) $("flags").textContent = `model ${s.model.file.split('/').pop()} · ${s.model.classes} classes · ${s.model.rate_hz} Hz · fusion ${s.model.fusion} · flip_rows ${s.model.flip_rows} flip_cols ${s.model.flip_cols}`;
+}
+function distColor(mm) {
+  if (mm == null || mm < 0) return null;
+  const t = Math.min(Math.max((mm - 200) / 1800, 0), 1);        // 20 cm → 2 m
+  const stops = [[240,106,106],[245,165,36],[76,195,138],[59,130,246],[40,45,60]];
+  const x = t * (stops.length - 1), i = Math.min(Math.floor(x), stops.length - 2), f = x - i;
+  const c = stops[i].map((v,k) => Math.round(v + (stops[i+1][k] - v) * f));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+let rawFails = 0;
+async function tickRaw() {
+  const base = $("rawbase").value.replace(/\/$/, "");
+  try {
+    const r = await fetch(base + "/raw", {cache:"no-store"});
+    const j = await r.json();
+    rawFails = 0;
+    $("rawstatus").textContent = `frames ${j.frames} · type5 ${j.type5} · bad ${j.bad}`;
+    renderRaw(j);
+  } catch (e) {
+    rawFails++;
+    $("rawstatus").textContent = "raw 연결 실패 (" + rawFails + "): " + e.message;
+  }
+}
+function renderRaw(j) {
+  const fc = $("flipc").checked, fr = $("flipr").checked;
+  $("rawgrids").innerHTML = (j.sensors || []).map(s => {
+    if (!s.have) return `<div class="rawcard"><div class="t">센서 ${s.id}: 아직 프레임 없음</div></div>`;
+    const w = s.w, h = s.h, d = s.dist_mm, st = s.status || [];
+    const ok = i => (st.length ? [5,6,9,10].includes(st[i]) : true) && d[i] > 0;
+    const vals = d.filter((v,i) => ok(i));
+    const med = vals.length ? vals.slice().sort((a,b)=>a-b)[vals.length >> 1] : null;
+    const mn = vals.length ? Math.min(...vals) : null;
+    let cells = "";
+    for (let r = 0; r < h; r++) for (let c = 0; c < w; c++) {
+      const rr = fr ? h - 1 - r : r, cc = fc ? w - 1 - c : c, i = rr * w + cc;
+      const v = ok(i) ? d[i] : -1, col = distColor(v);
+      cells += col ? `<div class="z" style="background:${col}" title="row ${rr} col ${cc} · ${v} mm · st ${st[i]}">${Math.round(v/10)}</div>`
+                   : `<div class="z none" title="row ${rr} col ${cc} · 없음 · st ${st[i]}">·</div>`;
+    }
+    return `<div class="rawcard"><div class="t"><b>센서 ${s.id}</b> · ${w}×${h} · 유효 ${vals.length}/${w*h} · 최소 ${mn ?? "-"} mm · 중앙값 ${med ?? "-"} mm<br>
+      <span style="color:var(--dim)">frame_id ${s.frame_id} · seq ${s.frame_seq} · age ${s.age_ms} ms · 펌웨어 flags 0x${(s.flags||0).toString(16).padStart(2,"0")} (flip_rows ${s.flip_rows}, flip_cols ${s.flip_cols}) · 숫자 = cm</span></div>
+      <div class="zones">${cells}</div></div>`;
+  }).join("");
+}
+setInterval(tick, 300); tick();
+setInterval(tickRaw, 300); tickRaw();
+</script>
+</body>
+</html>

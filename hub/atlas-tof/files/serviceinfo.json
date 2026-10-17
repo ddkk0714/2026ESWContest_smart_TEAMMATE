@@ -1,0 +1,8 @@
+{
+  "id": "com.deskmate.tofposture1",
+  "description": "DESKMATE Raspberry Pi 4 ToF posture service (VL53L8CX x2, PostureNet)",
+  "name": "deskmate_tofposture",
+  "type": "native",
+  "entry": "deskmate_tofposture",
+  "version": "0.1.0"
+}
