@@ -8,6 +8,11 @@
 /// 내는지는 `test/posture_judge_test.dart` 가 골든 벡터로 채점한다 —
 /// 벡터는 `tools/gen_posture_golden.py` 가 원본을 돌려 만든 것이다.
 ///
+/// **원본과 다른 점 하나: 캡처 뒤의 배경 적응.** 원본은 빈 책상을 한 번 뜨면 배경을
+/// 고정한다. 여기서는 자리가 비어 있는 동안에만 천천히 따라간다
+/// ([BackgroundModel.adapt]). 골든 시나리오는 빈 구간이 [bgEmptyHoldS] 보다 짧아
+/// 적응이 한 번도 걸리지 않으므로 벡터는 그대로 맞는다.
+///
 /// 판정하는 자세 (UPRIGHT 기준 대비):
 ///   ABSENT   자리비움    - 점유 zone 이 거의 없다
 ///   SLUMP    엎드림      - 이탈하면서 센서에 가까워진다
@@ -25,6 +30,14 @@ const double maxRangeMm = 4000.0; // 이보다 먼 값은 무효
 const double intrusionMm = 150.0; // 배경보다 이만큼 가까우면 사람 zone
 const double bgDecayMm = 1.0; // 자동 학습 시 배경이 프레임당 내려오는 폭
 const double presentMinOcc = 0.04; // 재실로 볼 최소 점유율
+
+// 캡처한 배경은 **자리가 비어 있을 때만** 따라간다. 한 번 뜨고 고정하면 치운 의자나
+// 바뀐 책상 위 물건이 끝까지 남고, 매 프레임 따라가면(자동 학습) 가만히 앉은 사람이
+// 배경에 녹는다. 값은 잠정이다 - 실 ToF 로그로 다시 맞출 것.
+const double bgAdaptTauS = 5.0; // 적응 시간상수. 이 시간에 차이의 63% 를 따라간다
+const double bgEmptyHoldS = 3.0; // 이만큼 연속으로 비어 있어야 적응을 시작한다
+const double bgMissingS = 10.0; // 비어 있는 동안 이만큼 계속 무효면 '반사 없음'
+const double bgAdaptMaxDtS = 0.5; // 프레임이 끊겼다 이어져도 한 번에 이 이상 안 따라간다
 
 const double slumpSpan = 0.22;
 const double slumpHoldS = 3.0; // 엎드림은 '내려가서 머무는' 것
@@ -96,9 +109,15 @@ Grid<double> _finite(Grid<double> depth) => Grid<double>(
     );
 
 /// zone 별 정적 배경 거리(책상 상판·벽).
+///
+/// 배경은 두 단계로 선다. 빈 책상을 [capture] 로 뜨기 전에는 [update] 의 자동
+/// 학습으로 버티고, 뜬 뒤에는 자리가 비었을 때만 [adapt] 로 따라간다. 언제 비었는지는
+/// 이 모델이 모르므로 [PostureTracker] 가 정해서 부른다.
 class BackgroundModel {
   Grid<double>? refMm;
   bool captured = false;
+
+  List<double>? _missingS; // zone 별로 무효가 이어진 시간. 적응 중에만 센다
 
   /// 책상을 비우고 부르는 것이 정확하다. zone 마다 프레임을 가로질러 중앙값.
   void capture(List<Grid<double>> frames) {
@@ -116,6 +135,40 @@ class BackgroundModel {
     }
     refMm = Grid<double>(out, rows, cols);
     captured = true;
+    _missingS = null;
+  }
+
+  /// 캡처한 배경을 지금 프레임 쪽으로 조금 옮긴다. **자리가 비어 있을 때만** 부를 것 -
+  /// 사람이 있을 때 부르면 가만히 앉은 사람이 배경에 녹는다.
+  ///
+  /// 따라가는 양은 프레임 수가 아니라 흐른 시간([dtS])으로 정한다. 같은 프레임이
+  /// 여러 번 들어와도 적응이 빨라지지 않는다.
+  void adapt(Grid<double> depthMm, double dtS) {
+    final ref = refMm;
+    if (!captured || ref == null || !depthMm.sameShape(ref) || dtS <= 0) {
+      return;
+    }
+    final dt = math.min(dtS, bgAdaptMaxDtS);
+    final alpha = 1.0 - math.exp(-dt / bgAdaptTauS);
+    var missing = _missingS;
+    if (missing == null || missing.length != ref.size) {
+      missing = List<double>.filled(ref.size, 0.0);
+      _missingS = missing;
+    }
+    final next = List<double>.from(ref.data);
+    for (var i = 0; i < next.length; i++) {
+      final d = depthMm.data[i];
+      if (!d.isFinite || d >= maxRangeMm) {
+        // 반사가 몇 프레임 빠진 것으로 배경을 멀리 끌면 그 zone 은 무엇이 와도
+        // 침입으로 잡힌다. 오래 빠져 있을 때만 '반사 없음'으로 바꾼다.
+        missing[i] += dt;
+        if (missing[i] >= bgMissingS) next[i] = maxRangeMm;
+        continue;
+      }
+      missing[i] = 0.0;
+      next[i] += (d - next[i]) * alpha;
+    }
+    refMm = Grid<double>(next, ref.rows, ref.cols);
   }
 
   /// 못 비웠을 때를 위한 자동 학습 - zone 별 '천천히 감쇠하는 최댓값'.
@@ -590,6 +643,8 @@ class PostureTracker {
   int _wantBg = 0;
   double? _slumpSince;
   double? _reclineSince;
+  double? _lastNow; // 직전 update 시각. 배경 적응에 흐른 시간을 잰다
+  double? _emptySince; // 자리가 연속으로 비기 시작한 시각
 
   /// 책상을 비운 상태에서 부를 것.
   void startBackground({int samples = 30}) {
@@ -606,7 +661,10 @@ class PostureTracker {
   bool get ready => baseline != null && _wantBg == 0 && _wantPosture == 0;
 
   PostureVerdict update(Grid<double> depth, double now) {
+    final dt = _lastNow == null ? 0.0 : now - _lastNow!;
+    _lastNow = now;
     if (_wantBg > 0) {
+      _emptySince = null; // 배경을 뜨는 동안에는 적응하지 않는다
       _bgBuf.add(depth);
       final want = _wantBg;
       final done = _bgBuf.length;
@@ -628,6 +686,15 @@ class PostureTracker {
     final (feats, occ) = extract(depth, background, prev: _prev);
     _prev = occ;
     final present = feats.occupancy >= presentMinOcc;
+    // 배경은 자리가 [bgEmptyHoldS] 이상 계속 비었을 때만 따라간다. 잠깐 몸을 숙여
+    // 화각에서 빠진 것으로 배경을 옮기지 않으려고 기다린다. 이번 프레임의 점유는 이미
+    // 옛 배경으로 쟀으므로, 옮긴 배경은 다음 프레임부터 쓰인다.
+    if (present) {
+      _emptySince = null;
+    } else {
+      _emptySince ??= now;
+      if (now - _emptySince! >= bgEmptyHoldS) background.adapt(depth, dt);
+    }
     final scale = baseline?.spread ?? feats.spread;
     final nodRate = nods.update(now, feats.topRow, present, scale: scale);
 
