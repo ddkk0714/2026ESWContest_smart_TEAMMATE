@@ -1,0 +1,12 @@
+{
+    "id": "com.atlas.app.keystroke",
+    "type": "flutter",
+    "name": "keystroke",
+    "description": "DESKMATE phase dashboard display",
+    "entry": "keystroke --bundle=./ --fullscreen -a com.atlas.app.keystroke",
+    "version": "0.1.0",
+    "required_permissions": {
+        "privileged": [],
+        "user_consent": []
+    }
+}
