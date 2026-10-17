@@ -619,7 +619,11 @@ class _DashboardPageState extends State<DashboardPage> {
       hubHealth: source is MqttStateSource ? source.hubHealth : null,
       hubHealthAt: source is MqttStateSource ? source.hubHealthAt : null,
       state: state,
-      keystrokeAt: _localKeystroke != null ? now : state?.keystroke?.timestamp,
+      keystrokeAt: source is MqttStateSource
+          ? source.pcKeystroke?.timestamp
+          : _localKeystroke != null
+              ? now
+              : state?.keystroke?.timestamp,
       posture: _postureStatus,
       speaker: _btLinks.speakerStatus,
       lamp: _btLinks.lampStatus,

@@ -8,6 +8,11 @@ import 'package:deskmate_display/state_source.dart';
 import 'package:deskmate_display/bluetooth_service.dart';
 import 'package:deskmate_display/feedback_policy.dart';
 import 'package:deskmate_display/music_playback.dart';
+import 'package:deskmate_display/connection_page.dart';
+import 'package:deskmate_display/main.dart';
+import 'package:deskmate_display/settings_store.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _short = Duration(milliseconds: 300);
@@ -24,6 +29,72 @@ Future<MqttProbeResult> _probe(_FakeBroker broker,
         onStep: onStep);
 
 void main() {
+  testWidgets(
+      'connection status follows PC topic without hub keystroke summary',
+      (tester) async {
+    tester.view.physicalSize = const Size(1024, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final sample = {
+      'schema_version': '1.0',
+      'node': 'pc-collector',
+      'ts': DateTime.now().millisecondsSinceEpoch / 1000,
+      'data': {'typing_active': false, 'window_s': 60},
+    };
+    final broker = await tester.runAsync(
+        () => _FakeBroker.start(keystrokePayload: jsonEncode(sample)));
+    final directory = Directory.systemTemp.createTempSync('pc-link-test-');
+    final settings = SettingsStore(
+        candidates: ['${directory.path}/settings.json'],
+        legacyPostureCandidates: const []);
+    settings
+        .save(DeskmateSettings(mqttHost: '127.0.0.1', mqttPort: broker!.port));
+    try {
+      await tester.pumpWidget(DeskmateApp(
+        settings: settings,
+        prober: (host, port, {onStep}) async => const MqttProbeResult(
+            ok: true, cause: LinkCause.none, elapsed: Duration.zero),
+      ));
+      for (var i = 0; i < 10; i++) {
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 50)));
+        await tester.pump(const Duration(seconds: 1));
+        if (find.byTooltip('연결').evaluate().isNotEmpty) break;
+      }
+      await tester.tap(find.byTooltip('연결'));
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 150)));
+      await tester.pump(const Duration(seconds: 1));
+      final connected =
+          tester.widget<ConnectionPage>(find.byType(ConnectionPage));
+      expect(connected.snapshot[LinkId.keystroke]?.health, LinkHealth.ok,
+          reason: 'An idle PC is connected even without hub summary metrics');
+
+      // A board key must not hide a stale PC stream.
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.keyA);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.keyA);
+      broker.publishKeystroke(jsonEncode({
+        ...sample,
+        'ts': DateTime.now()
+                .subtract(const Duration(seconds: 11))
+                .millisecondsSinceEpoch /
+            1000,
+      }));
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.pump(const Duration(seconds: 1));
+      final stale = tester.widget<ConnectionPage>(find.byType(ConnectionPage));
+      expect(stale.snapshot[LinkId.keystroke]?.cause, LinkCause.stale);
+      expect(tester.takeException(), isNull);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.runAsync(broker.close);
+      directory.deleteSync(recursive: true);
+    }
+  });
+
   test('display executes a hub command once and returns QoS 1 results',
       () async {
     final broker = await _FakeBroker.start();
