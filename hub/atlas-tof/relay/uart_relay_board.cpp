@@ -150,7 +150,10 @@ static bool toServicePayload(const uint8_t* p, size_t n, SeqTrack& trk, std::vec
     const uint8_t flags = p[6];
     const size_t z = static_cast<size_t>(gw) * static_cast<size_t>(gh);
     if (z == 0 || z > 64 || n < 8 + 3 * z) return false;
-    const uint8_t sflags = static_cast<uint8_t>(1 | 2 | ((flags & 1) ? 4 : 0) | ((flags & 2) ? 8 : 0));
+    // 펌웨어 flags 는 '이미 적용한' 방향 변환이다(data-spec §13.1, TofArray 가 flip 을 먼저 적용해 장면 방향으로 보냄).
+    // 서비스 v1 의 b2/b3 은 '받는 쪽이 뒤집어야 함' 이라 뜻이 반대다. 그대로 옮기면 두 번 뒤집혀 좌우가 거울상이 된다 → 0.
+    const uint8_t sflags = static_cast<uint8_t>(1 | 2);
+    (void)flags;
     const uint16_t seq = trk.next(sensor, fid);
     out.clear();
     out.reserve(8 + 3 * z);
