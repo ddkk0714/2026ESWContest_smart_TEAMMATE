@@ -194,9 +194,12 @@ ESP32 펌웨어 0x0121, Pi 4 `/dev/serial0 → ttyAMA0` 115200(getty 는 failed 
   **미초기화 센서에 `stop_ranging()` 을 먼저 부르는 방법은 쓰지 않았다**: 라이브러리가 레지스터 0x06 bit 7 을 10 ms × 500 회 폴하므로
   부팅 안 된 센서에서는 5 s 타임아웃까지 간다(`vl53l8cx_api.c` `vl53l8cx_stop_ranging`). 측거 중 판별용으로 본 0x06 도 측거 중 0x31 이라
   bit 7 로는 못 가른다.
-- **사용자 확인 필요 — 전원 재투입 경로.** 둘 다 미초기화(0x52, LPn 정상)인 경로의 코드는 그대로다(0x52 무응답이면 park 즉시 return,
-  `startSensor` 의 "0x52 로 init → A 만 0x54 로 변경" 로직 불변). USB 를 뽑았다 꽂은 뒤 부팅 로그에서 `tof A: init=0` / `tof B: init=0`
-  과 `ok_mask=3` 시각(기대 ≈4.2 s)을 한 번 확인할 것.
+- **전원 재투입 경로(둘 다 미초기화, LPn 정상)도 실측 확인.** 코드는 그대로다(0x52 무응답이면 park 즉시 return, `startSensor` 의
+  "0x52 로 init → A 만 0x54 로 변경" 로직 불변). USB-C 를 뽑았다 꽂으며 포트가 다시 열리는 순간부터 캡처(다른 센서 전부 연결된 상태):
+  `tof A: init=0 (1320 ms)` → `tof B: init=0 (1319 ms)` → `VL53L8CX x2: ok_mask=3 grid=16x8`, 직후 `tof_feature` 의 `ms`=3611.
+  즉 ESP32 시각으로 **3.6 s 에 두 센서 OK** — 소프트 리셋 때의 `ms`=3630 과 같다(호스트 기준 4.2 s 는 ROM 부트·USB 지연 0.5 s 포함).
+  포트 enumerate 지연(≈1 s) 때문에 스캔·park 줄은 USB 로 못 봤다. 같은 부팅에서 SCD41 은 `periodic measurement started` 로 올라왔다
+  (소프트 리셋 뒤의 `error=268` 은 SCD41 이 전원 유지 상태에서 재초기화를 거부한 것으로 보임 — ToF 와 같은 종류의 현상, 별건).
 - Pi 4 상태 메모: 이 캡처 시점에 허브 프로세스가 없었다(`ps` 0, 저널에 `[bridge]` 줄 없음) — 그래서 포트를 직접 읽을 수 있었다.
   허브를 다시 올리려면 `pi4-hub-activate.sh`.
 
