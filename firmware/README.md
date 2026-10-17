@@ -152,6 +152,25 @@ Pi 4 `UART	{"type":5,...}` 라인이 5 Hz × 2(센서 수) 로 들어오는지(`
 460800 로 올리거나 `kTofGridPeriodMs` 를 늘린다), 한쪽 센서만 살 때 그 센서 번호로 프레임 1개만 가는지(`sensors` 1), 센서별 8×8 의
 방향(`flags` 의 FLIP/SWAP)이 모델 학습 방향과 같은지(손 들기로 확인, `dataset/tof_logger/README.md` "방향 확인").
 
+**2026-10-17 실측 — Pi 4 허브 IPK 를 `feat/tof-node-hw`(382e821) 기준으로 재빌드·재설치해 0x05 조립을 보드에서 확인.**
+ESP32 펌웨어 0x0121, Pi 4 `/dev/serial0 → ttyAMA0` 115200(getty 는 failed 상태, 노드는 `g0_a5015` 660), 서비스 계정 u0_a5015,
+빌드는 WSL docker `atlas-dev:latest` 에서 `pip3 install --break-system-packages pyyaml paho-mqtt` →
+`source /opt/atlas-sdk-x86_64/environment-setup-armv8a-atlas-linux` → `arc build hub/atlas`(SDK 환경을 안 읽으면 `spawn cmake ENOENT`).
+30 s 리포트 4회 연속(사람 없이, 센서 둘 다 살아 있는 상태 `sensors_ok 3`):
+
+- C++ `uart_rx`: `rx` 516 → 982 /30 s(전체 ≈15.5 프레임/s), **`discarded=0 crc_errors=0`**.
+- hub 브리지(`[bridge] uart …`, 이 커밋부터 30 s 주기·0x05 카운터·MLP 판정 포함): **`parts` +238~239 /30 s ≈ 7.9 /s = 센서당 ≈4 Hz**
+  (5 Hz 가 아닌 것은 펌웨어 타이머 쪽으로 알려진 문제), **`grids` +119~120 /30 s ≈ 4.0 /s**(두 센서 프레임이 다 모인 표본),
+  **`grid_discarded=0`**, `dropped=0`, 하트비트 ≈1 /s, `unknown={}`.
+- 115200 에서 0x03/0x04·mmWave 0x20·환경 0x10 이 같이 들어오고 `/api/state` `sensor_summary` 에 temp 23.9·humidity 47.9·lux 418·mmwave 가
+  그대로 찍힘 — 밀림 없음. 링크 속도를 올릴 이유는 아직 없다.
+- MLP(`[tof_mlp] 192→64→10 (8x8, mlp_sim60)`): 표본마다 호출된다(`mlp frames` == `grids`). 빈 자리라 기준선이 안 잡혀 `unknown/0.0 used=0`
+  이고 `sensor_summary.tof.posture_source` 는 `rule`(규칙 판정 recline, `head_delta_mm` 605·`coverage_ratio` 0.07~0.13 = 사람 없음) — 설계대로의
+  폴백. 다만 MLP 의 `present=1`(150~1300 mm 안 zone 이 6 % 이상 — 책상 면 등으로 보임)은 사람이 앉았을 때 기준선 포착·판정과 함께 다시 봐야 한다.
+- 아직 안 본 것: 한쪽 센서만 살 때(`sensors` 1), 격자 방향(손 들기), 사람 착석 시 MLP 기준선·판정 정확도.
+- 설치는 `arc install` 대신 빌드 산출물 `hub/atlas/build/arm64/deskmate_hub_service`(zip payload 포함 ELF)를 scp 로 서비스 디렉터리에 덮고
+  `chown u0_a5015:g0_a5015` 뒤 `pi4-hub-activate.sh` 를 돌렸다(계정 재할당을 피한다). 보드 시계는 실제보다 하루 가량 늦다(journal 10-16 16:5x KST).
+
 **학습 데이터 수집 모드(`env:tof_logger`, 운영 아님).** VL53L8CX 8×8 을 ST 공식 라이브러리로 읽어 원본 zone 과
 규칙 판정을 USB 한 줄 JSON(`{"t":"tof",...}`, 921600)으로 PC 에 보낸다. `src/tof_logger/` 는 운영 빌드에서 빠진다
 (`env:esp32dev` 의 `build_src_filter`). PC 쪽 수집기·배선·방향 확인은 [`dataset/tof_logger/README.md`](../dataset/tof_logger/README.md).

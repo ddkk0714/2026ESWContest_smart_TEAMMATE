@@ -155,13 +155,15 @@ def _run_live_bridge() -> None:
     # 내보내면 과하고, 사람이 읽는 요약이라 10 s 면 충분하다.
     report_period = float(os.environ.get("DESKMATE_REPORT_PERIOD_SEC", "10"))
     next_report = time.time() + report_period
+    # UART 통계 로그 주기: C++ uart_rx 의 30 s 리포트와 맞춘다(tick 이 10 s 면 3 tick 마다).
+    stats_ticks = max(1, round(30.0 / hub.period)) if hub.period > 0 else 30
     try:
         while True:
             feedback = store.pop_feedback()
             if feedback is not None:
                 cache.put_feedback(feedback)
             hub.tick_once()
-            if hub.seq % 30 == 0:
+            if hub.seq % stats_ticks == 0:
                 st = uart.stats
                 mqtt_stats = mqtt_lines.stats if mqtt_lines is not None else None
                 mqtt_status = (
@@ -170,10 +172,21 @@ def _run_live_bridge() -> None:
                     if mqtt_stats is not None
                     else ""
                 )
+                # grids = 완성된 0x05 표본(센서 프레임이 다 모인 것), parts = 받은 0x05 센서 프레임,
+                # grid_discarded = frame_id 가 바뀌어 버린 미완성 표본(TofGridAssembler.discarded).
+                # mlp = posture/tof_mlp 의 최근 판정(없으면 '-'). baseline 이 안 잡히면 unknown/used=0 이 정상이다.
+                mlp = cache.tof_mlp.data if cache.tof_mlp is not None else None
+                mlp_status = (
+                    f" | mlp={mlp.get('posture')}/{mlp.get('posture_confidence')} present={int(bool(mlp.get('present')))} "
+                    f"used={mlp.get('sensors_used')} frames={mlp.get('frames')}"
+                    + (f" err={mlp['error']}" if mlp.get("error") else "")
+                    if mlp else " | mlp=-"
+                )
                 print(
                     f"[bridge] uart frames={st.frames} dropped={st.dropped} hb={st.heartbeats} "
-                    f"unknown={st.unknown_types}{mqtt_status}",
-                    file=sys.stderr,
+                    f"unknown={st.unknown_types} grids={st.grids} parts={st.grid_parts} "
+                    f"grid_discarded={uart.grid.discarded}{mlp_status}{mqtt_status}",
+                    file=sys.stderr, flush=True,
                 )
             if report_period > 0 and time.time() >= next_report:
                 publish_report(hub.report_envelope())
