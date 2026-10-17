@@ -110,6 +110,23 @@ def _tof_posture_signal(data: dict[str, Any], cfg: dict[str, Any]) -> Signal:
     return Signal(phi=_clip(phi), delta=_clip(delta), available=True)
 
 
+def _tof_with_mlp(view: CacheView, tof_data: dict[str, Any], now: float, cfg: dict[str, Any]) -> dict[str, Any]:
+    """0x03 규칙 특징 위에 Pi 4 MLP 판정(tof_mlp, 2026-10-17)의 posture·confidence 를 덮어쓴다.
+
+    `tof.posture_source: mlp`(기본)이고 tof_mlp 표본이 신선하며 기준선이 잡혀 있을 때만. 아니면 규칙 판정 그대로
+    (가중치 파일이 없어도 허브는 돈다). drowsy·nod_rate 는 모델 밖이라 언제나 규칙 값이다.
+    """
+    tcfg = cfg.get("tof") or {}
+    if str(tcfg.get("posture_source", "mlp")) != "mlp":
+        return dict(tof_data, posture_source="rule")
+    fresh = cfg["freshness_sec"]
+    mlp = view.fresh("tof_mlp", now, fresh.get("tof_mlp", fresh.get("tof", 3)))
+    if not mlp or not mlp.data.get("baseline_ready") or mlp.data.get("posture") in (None, "unknown"):
+        return dict(tof_data, posture_source="rule")
+    return dict(tof_data, posture=str(mlp.data["posture"]),
+                posture_confidence=float(mlp.data.get("posture_confidence") or 0.0), posture_source="mlp")
+
+
 def pc_ratio(view: CacheView, now: float, window_sec: float) -> float:
     ticks = [t for t in view.keystroke_history if now - t.received <= window_sec]
     if not ticks:
@@ -142,7 +159,7 @@ def build_frame(
     mcfg = cfg["mmwave"]
     tof_posture_used = False
     if tof and tof_present:
-        signals["posture"] = _tof_posture_signal(tof.data, cfg["tof"])
+        signals["posture"] = _tof_posture_signal(_tof_with_mlp(view, tof.data, now, cfg), cfg["tof"])
         tof_posture_used = True
         tracker.still_since = None
     if mm and mm_present:
@@ -258,13 +275,14 @@ def sensor_summary(view: CacheView, now: float, cfg: dict[str, Any],
     tof = view.fresh("tof", now, fresh.get("tof", 3)) if "tof" in cfg else None
     if tof:
         out["present"] = bool(tof.data.get("present", False))
-        # 화면용 요약. 원본 zone 격자는 애초에 UART 에 실리지 않는다(firmware README "원칙").
+        # 화면용 요약. 원본 zone 격자(UART 0x05)는 Pi 4 메모리에만 두고 여기 싣지 않는다(firmware README "원칙").
+        data = _tof_with_mlp(view, tof.data, now, cfg)
         out["tof"] = {
-            k: tof.data[k]
-            for k in ("posture", "posture_confidence", "motion_score", "head_delta_mm", "nod_rate_hz",
-                      "drowsy", "nods_in_window", "baseline_ready", "grid_width", "grid_height",
+            k: data[k]
+            for k in ("posture", "posture_confidence", "posture_source", "motion_score", "head_delta_mm",
+                      "nod_rate_hz", "drowsy", "nods_in_window", "baseline_ready", "grid_width", "grid_height",
                       "coverage_ratio", "sensors_ok")
-            if k in tof.data
+            if k in data
         }
     mm = view.fresh("mmwave", now, fresh["mmwave"])
     if mm:

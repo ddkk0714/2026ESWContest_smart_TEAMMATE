@@ -1,7 +1,8 @@
 """최근 센서 표본 보관소. MQTT 수신 스레드가 넣고 프레임 빌더가 읽는다.
 
 원본 payload 는 보관하지 않는다 — 계약(data-spec §6)에 있는 특징값만 남기고,
-키 내용·ToF raw 는 애초에 토픽에 실려 오지 않는다.
+키 내용은 애초에 토픽에 실려 오지 않는다. 예외는 ToF 원본 격자(UART 0x05, 2026-10-17): Pi 4 자세 모델의
+입력이라 마지막 격자 하나만 메모리에 둔다. MQTT·로그·요약으로는 내보내지 않는다.
 """
 from __future__ import annotations
 
@@ -34,6 +35,8 @@ class SensorCache:
     keystroke: Sample | None = None
     tof: Sample | None = None            # UART 0x03 tof_feature (5 Hz)
     tof_posture: Sample | None = None    # UART 0x04 자세 요약 (1 Hz)
+    tof_grid: Sample | None = None       # UART 0x05 원본 격자(조립 완료분, 5 Hz). 메모리 전용 — 발행·기록 금지
+    tof_mlp: Sample | None = None        # posture/tof_mlp 가 격자마다 낸 자세 판정 (1 s 다수결)
     feedback: deque = field(default_factory=lambda: deque(maxlen=16))
     control_results: deque = field(default_factory=lambda: deque(maxlen=64))
     feedback_received: deque = field(default_factory=lambda: deque(maxlen=16))
@@ -84,6 +87,8 @@ class SensorCache:
                 keystroke=self.keystroke,
                 tof=self.tof,
                 tof_posture=self.tof_posture,
+                tof_grid=self.tof_grid,
+                tof_mlp=self.tof_mlp,
                 keystroke_history=list(self.keystroke_history),
                 feedback=list(self.feedback),
             )
@@ -115,6 +120,8 @@ class CacheView:
     feedback: list[dict[str, Any]]
     tof: Sample | None = None
     tof_posture: Sample | None = None
+    tof_grid: Sample | None = None
+    tof_mlp: Sample | None = None
 
     def fresh(self, kind: str, now: float, max_age: float) -> Sample | None:
         sample: Sample | None = getattr(self, kind)

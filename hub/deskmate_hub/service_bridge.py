@@ -90,9 +90,15 @@ def _run_live_bridge() -> None:
     from .ingest.uart_source import UartLineSource
     from .live import LiveHub
 
+    from .ingest import load_ingest_config
+    from .posture.tof_mlp import load_posture_from_config
+
     store = BridgeStateStore()
     cache = SensorCache()
-    uart = UartLineSource(cache)
+    # ToF 자세 MLP(원본 격자 0x05 → posture). 가중치가 없으면 None 이고 0x03 규칙 판정으로 돈다.
+    posture = load_posture_from_config((load_ingest_config().get("tof") or {}),
+                                       log=lambda m: print(m, file=sys.stderr, flush=True))
+    uart = UartLineSource(cache, posture=posture)
     native_mqtt = os.environ.get("DESKMATE_NATIVE_MQTT") == "1"
     mqtt_lines = MqttLineSource(cache) if native_mqtt else None
     reader = threading.Thread(

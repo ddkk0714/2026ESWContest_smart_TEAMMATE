@@ -53,6 +53,9 @@ constexpr uint16_t kTofAddressA = 0x54;   // 8-bit. A 만 주소를 바꾸고 B 
 constexpr uint32_t kTofRetryMs = 5000;
 constexpr uint32_t kTofFeaturePeriodMs = 200;   // UART TYPE 0x03 (tof_feature) 5 Hz
 constexpr uint32_t kTofPosturePeriodMs = 1000;  // UART TYPE 0x04 + USB JSON 1 Hz
+// UART TYPE 0x05 원본 격자 5 Hz. 16×8 은 조각 2개(각 200 B payload, wire ≈ 215 B) → 약 2.2 kB/s,
+// 115200 8N1(11.5 kB/s)의 19 %. 센서 주기 15 Hz 를 그대로 보내면 56 % 라 5 Hz 로 솎는다.
+constexpr uint32_t kTofGridPeriodMs = 200;
 
 // 졸음 판정 임계값은 실측 근거 주석과 함께 sensors/c1001/DrowsyDetector.h 에 있다.
 // 시연용으로 확정 시간만 줄이려면 -DDESKMATE_DROWSY_HOLD_SCALE_PCT=<퍼센트>.

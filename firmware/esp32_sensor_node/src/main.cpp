@@ -64,12 +64,15 @@ uint32_t last_environment_ms = 0;
 uint32_t last_heartbeat_ms = 0;
 uint32_t last_tof_feature_ms = 0;
 uint32_t last_tof_posture_ms = 0;
+uint32_t last_tof_grid_ms = 0;
 uint32_t last_c1001_retry_ms = 0;
 uint32_t c1001_retry_interval_ms = kC1001RetryMs;
 uint16_t mmwave_sequence = 0;
 uint16_t environment_sequence = 0;
 uint16_t heartbeat_sequence = 0;
 uint16_t tof_sequence = 0;  // 0x03·0x04 가 같은 흐름을 쓴다
+uint16_t tof_grid_sequence = 0;  // 0x05 조각마다 +1. 같은 격자의 조각은 frame_id 로 묶인다
+uint8_t tof_grid_frame_id = 0;
 bool mmwave_ready = false;
 
 WireDrowsyState wireDrowsyState(DrowsyState state) {
@@ -132,6 +135,26 @@ void writeTofPostureUart(uint32_t now_ms) {
   encodeTofPosturePayload(tof.features(), payload);
   writeUartFrame(pi4_serial, kFrameTypeTofPosture, tof_sequence++, now_ms, payload,
                  sizeof(payload));
+#endif
+}
+
+// 원본 격자 → TYPE 0x05 조각들(16×8 이면 2개). 자세 AI 모델은 Pi 4 에서 돈다(10-17 결정).
+// 조각마다 같은 now_ms·frame_id 를 쓰고 SEQ 만 올라간다. 한 조각이라도 못 쓰면 그 격자는 버린다
+// (hub 는 frame_id 가 바뀌면 미완성 격자를 폐기한다).
+void writeTofGridUart(uint32_t now_ms) {
+#if DESKMATE_UART2_TX
+  static uint8_t payload[kTofGridMaxPayloadSize];  // 200 B — loop 스택 대신 정적
+  const uint8_t parts = tofGridPartCount(tof.width(), tof.height());
+  if (parts == 0) return;
+  const uint8_t frame_id = tof_grid_frame_id++;
+  for (uint8_t part = 0; part < parts; ++part) {
+    const uint16_t len = encodeTofGridPart(tof.distance(), tof.status(), tof.width(), tof.height(), part,
+                                           frame_id, tof.okMask(), payload);
+    if (len == 0 ||
+        !writeUartFrame(pi4_serial, kFrameTypeTofGrid, tof_grid_sequence++, now_ms, payload, len)) {
+      return;
+    }
+  }
 #endif
 }
 
@@ -232,10 +255,16 @@ void loop() {
   }
   if (mmwave_ready) drowsy_detector.update(mmwave, now_ms);
 
-  // ToF: 매 루프 폴링(15 Hz ×2). 특징은 5 Hz 로, 자세 요약·USB 진단은 1 Hz 로 낸다.
+  // ToF: 매 루프 폴링(15 Hz ×2). 원본 격자(0x05)는 새 격자가 생긴 뒤 5 Hz 로 솎아 보내고,
+  // 규칙 특징은 5 Hz 로, 자세 요약·USB 진단은 1 Hz 로 낸다.
   // 살아 있는 센서가 없으면 아무것도 보내지 않는다 — hub 는 freshness 로 미가용 처리한다.
   tof.poll(now_ms);
+  const bool tof_new_grid = tof.frameReady();
   if (tof.okCount() > 0) {
+    if (tof_new_grid && now_ms - last_tof_grid_ms >= kTofGridPeriodMs) {
+      last_tof_grid_ms = now_ms;
+      writeTofGridUart(now_ms);
+    }
     if (now_ms - last_tof_feature_ms >= kTofFeaturePeriodMs) {
       last_tof_feature_ms = now_ms;
       writeTofFeatureUart(now_ms);

@@ -42,8 +42,10 @@ GPIO16/17 은 WROVER 계열에서 PSRAM 용이다. 현재 `esp32dev`(WROOM)라 �
 
 ## 원칙
 
-- **ToF 원본 54×42 배열을 운영 경로로 발행하지 않는다.** Path B 에서는 재실·자세·모션·노딩
-  특징값을 만들고, 축소 depth map은 명시적 디버그/UI 모드에서만 최대 2Hz로 허용한다.
+- **ToF 원본 격자는 Pi 4 까지만 간다(2026-10-17 개정).** 자세 AI 모델은 Pi 4 허브에서 돌리기로 해, 이 노드는
+  VL53L8CX 원본 16×8 거리·상태 격자를 UART `0x05` 로 Pi 4 에 넘긴다(행 단위 조각, 5 Hz). 격자는 유선 UART 와
+  Pi 4 메모리 안에서만 다루고 MQTT·로그·화면으로는 나가지 않는다. 노드 규칙 추정기의 특징값(`0x03`)·요약(`0x04`)은
+  그대로 보내며, 축소 depth map(`0x01`)은 명시적 디버그/UI 모드에서만 최대 2Hz 로 허용하는 별개 예약이다.
 - 모든 프레임에 `SEQ`·`TS` 를 넣는다(유실 감지·Pi 4 슬라이딩 윈도 정렬).
 - UART binary frame 에만 CRC-16 을 적용한다. Pi 4 이후 MQTT JSON 에는 별도 애플리케이션 CRC 를 넣지 않는다.
 - mmWave 순간 호흡·심박값은 보내더라도 Pi 4 판정 근거가 아니다. 체동 이동평균(τ=15 s)·심박 중앙값(120 s)·각성 기준선(τ=600 s)·졸음 FSM state/evidence 가 계약 대상이다.
@@ -56,8 +58,9 @@ GPIO16/17 은 WROVER 계열에서 PSRAM 용이다. 현재 `esp32dev`(WROOM)라 �
 
 | TYPE | 내용 | 주기 | 상태 |
 |---|---|---|---|
-| 0x01 | (디버그) binning depth map | ≤ 2 Hz | 예약. **실험 펌웨어가 mmWave 에 임시 사용 중 → 충돌, 재배정 필요** |
-| 0x03 / 0x04 | ToF `tof_feature`(26 B) / 자세 요약(4 B) — `src/sensors/tof/TofPayload.h` | 5 Hz / 1 Hz | **10-16 구현.** `docs/data-spec.md` §13.1 |
+| 0x01 | (디버그) binning depth map | ≤ 2 Hz | 예약·미구현. 09-11 실험 펌웨어의 mmWave 임시 사용은 0x20 으로 옮겨 해소. 운영 원본 격자는 0x05 라 충돌 없음 |
+| 0x03 / 0x04 | ToF `tof_feature`(26 B) / 자세 요약(4 B) — `src/sensors/tof/TofPayload.h` | 5 Hz / 1 Hz | **10-16 구현.** `docs/data-spec.md` §13.1. posture 는 노드 규칙 판정(Pi 4 MLP 의 폴백) |
+| 0x05 | ToF 원본 격자 조각 `tof_grid` — 헤더 8 B(grid_w·grid_h·row0·rows·frame_id·sensor_mask·part·parts) + dist i16×n + status u8×n, n ≤ 64 → 최대 200 B. 16×8 은 4행씩 2조각 | 5 Hz | **10-17 구현.** LEN ≤ 256 B 라 조각 낸다. 근거·골든 hex 는 `docs/data-spec.md` §13.1 |
 | 0x10 | 환경 묶음 (SCD41 CO₂ 2B + DHT22 T 2B + RH 2B + BH1750 lux 2B = 8B). SCD41 T/RH 는 보내지 않음(보정 없음·단일 센서, 09-14 확정) | 0.2 Hz | 미구현 |
 | **미배정** | mmWave 졸음 state + evidence + 요약값 (10~16 B) | 1 Hz | **TYPE 배정 필요** |
 | 0xF0 | 상태/하트비트 | 1 Hz | |
@@ -86,7 +89,8 @@ ESP32 는 Pi 4 와 유선이므로 Wi-Fi 자격증명이 기본 경로에 필요
 
 `src/preprocess/tof/TofPosture.{h,cpp}` — 멀티존 거리 프레임 → roadmap §4-4 기하 특징 7종 →
 `docs/data-spec.md` §6.1 `tof_feature`(posture enum · `motion_score` · `head_delta_mm` · `nod_rate_hz`).
-Arduino 의존이 없는 순수 C++ 이고, 원본 zone 배열은 여기서 소비하고 내보내지 않는다.
+Arduino 의존이 없는 순수 C++ 다. **10-17 부터 이 규칙 판정은 Pi 4 MLP 의 폴백이다** — 원본 격자는 `0x05` 로 Pi 4 에
+가고, Pi 4 `posture/tof_mlp.py` 가 자세를 낸다. 끄덕임·졸음은 시간 현상이라 계속 여기서 판정해 `0x03` flags 로 보낸다.
 
 - **자세:** 바른자세 · 상체 앞으로 · 뒤로 젖힘 · 엎드림 · 턱괴기 · 꾸벅 졸음 · 자리비움.
   정의는 팀에 이미 검증된 두 판정을 ToF 물리량으로 옮겼다 — `display/atlas/camsvc/src/posture_pose`
@@ -124,8 +128,23 @@ Arduino 의존이 없는 순수 C++ 이고, 원본 zone 배열은 여기서 소�
 - hub: `ingest/uart_frame.py` 디코더, `SensorCache.tof`, `ingest.yaml` `tof:` 섹션으로 posture 신호(mmWave 대체는 ToF 가 낡았을 때만),
   `sensor_summary.tof`, Pi 4 C++ 네이티브 요약에도 `tof.posture`.
 
+**2026-10-17: 원본 격자 UART 전송(TYPE 0x05) — 자세 AI 모델은 Pi 4 에서 돈다.**
+
+- `TofPayload.{h,cpp}` `encodeTofGridPart` — `TofArray::distance()/status()` 를 행 단위 조각(≤64 zone, 16×8 이면 4행씩 2조각,
+  각 200 B)으로 싼다. `main.cpp` `writeTofGridUart` 가 새 격자가 생긴 뒤 5 Hz(`kTofGridPeriodMs`)로 보내며, 조각마다 같은
+  `TS`·`frame_id`, SEQ 는 별도 카운터(`tof_grid_sequence`). 한 조각이라도 못 쓰면 그 격자는 통째로 건너뛴다.
+  펌웨어 버전 0x0121. 호스트 테스트 `test_tof_payload` 6개(골든 조각 hex 2개는 hub `test_uart_frame` 와 공유).
+- Pi 4 쪽: `hub/deskmate_hub/ingest/uart_frame.py` `TofGridAssembler` 가 조립해 `SensorCache.tof_grid` 에 두고,
+  `hub/deskmate_hub/posture/tof_mlp.py` 가 numpy 없는 순수 Python MLP(192→64→10, `dataset/tof_sim/train_mlp.py` 가중치를
+  `export_mlp_json.py` 로 변환)로 자세를 낸다. 0x03 규칙 판정은 MLP 가 못 낼 때의 폴백으로 유지.
+
 **아직 안 한 것: 실기.** 두 센서 주소 배정·15 Hz ×2 유지·격자 방향·임계값은 보드에 붙여 봐야 안다.
-처음 켤 때 볼 것은 `docs/breadboard-esp32-node.md` "처음 켤 때 보는 것".
+처음 켤 때 볼 것은 `docs/breadboard-esp32-node.md` "처음 켤 때 보는 것". 0x05 에 대해 실기에서 볼 것:
+Pi 4 `UART\t{"type":5,...}` 라인이 5 Hz × 2 로 들어오는지(`uart_rx` CRC 드롭 카운트 0), hub `UartStats.grids` 가 초당 5 씩
+느는지(조각 유실이면 `TofGridAssembler.discarded` 증가), 115200 에서 mmWave·환경 프레임이 밀리지 않는지(밀리면 Pi 4 링크
+460800 로 올리거나 `kTofGridPeriodMs` 를 늘린다), 한쪽 센서만 살 때 8×8 조각 1개로 바뀌고 MLP 가 `grid 8x8 ≠ model` 없이
+도는지(시뮬 가중치는 8×8, 실측 16×8 모델은 `export_mlp_json.py --grid 16x8`), 16×8 격자 방향(`FLIP/STACK` 플래그)이 학습
+데이터와 같은지.
 
 **학습 데이터 수집 모드(`env:tof_logger`, 운영 아님).** VL53L8CX 8×8 을 ST 공식 라이브러리로 읽어 원본 zone 과
 규칙 판정을 USB 한 줄 JSON(`{"t":"tof",...}`, 921600)으로 PC 에 보낸다. `src/tof_logger/` 는 운영 빌드에서 빠진다

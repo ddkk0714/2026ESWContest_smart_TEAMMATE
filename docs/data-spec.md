@@ -97,7 +97,7 @@ VL53L9CX는 54×42(2,268 zone) ToF 센서이며 실제 운영률은 Pi 4 MIPI CS
 | `grid_height` | uint8 | 처리에 사용한 zone grid 높이. VL53L9CX 원본 42. 실기: 8 또는 16. |
 | `coverage_ratio` | float, 0..1 | 유효 상체 영역 비율. |
 
-ToF 원본 2,268-zone 배열은 L0이며 기본 운영 스키마에 포함하지 않는다. 디버그/UI 모드에서는 `debug_depth_map` 별도 스키마로 축소 grid를 최대 2Hz 전송할 수 있고, 활성화 여부·원본 grid·축소 grid·보존 만료 시각을 반드시 기록한다.
+ToF 원본 zone 배열은 L0이며 MQTT·로그 등 운영 스키마에 포함하지 않는다. **2026-10-17 결정으로 자세 AI 모델은 Pi 4 허브에서 돌고, ESP32 는 VL53L8CX 원본 16×8 거리·상태 격자를 UART `TYPE 0x05`(§13.1)로 Pi 4 에 넘긴다.** 이 유선 UART 구간과 Pi 4 메모리는 L0 처리 경로의 일부로 보며, 격자는 Pi 4 `SensorCache.tof_grid` 에 마지막 한 장만 머물고 발행·기록되지 않는다. `tof_feature.posture` 는 Pi 4 MLP 판정(`hub/deskmate_hub/posture/tof_mlp.py`, `posture_source: mlp`)이 기본이고, 가중치가 없거나 기준선이 안 잡히면 ESP32 규칙 판정(0x03)으로 돌아간다. MLP 에는 `forward_head`(거북목)·`head_down`·`lean_left`·`lean_right` 네 클래스가 더 있고 `drowsy` 는 없다(시간 현상이라 0x03 의 규칙 flags 가 계속 낸다). 디버그/UI 모드에서는 `debug_depth_map` 별도 스키마로 축소 grid를 최대 2Hz 전송할 수 있고, 활성화 여부·원본 grid·축소 grid·보존 만료 시각을 반드시 기록한다.
 
 ### 6.1.1 `debug_depth_map`
 
@@ -338,9 +338,10 @@ crc16  = CRC-16/CCITT-FALSE(poly 0x1021, init 0xFFFF, no reflect, xorout 0) over
 
 | TYPE | 이름 | 주기 | payload (little-endian) |
 |---|---|---|---|
-| `0x01` | ToF 디버그 depth | ≤ 2 Hz | 예약(디버그 모드만) |
-| `0x03` | ToF `tof_feature` | 5 Hz | `present u8 · posture u8(0 unknown/1 upright/2 lean_forward/3 recline/4 face_down/5 chin_rest/6 drowsy/7 away) · confidence_pct u8 · motion_pct u8 · head_delta_mm i16(0x7FFF=null) · nod_rate_mhz u16(0xFFFF=null) · valid_zones u16 · grid_w u8 · grid_h u8 · coverage_pct u8 · presence_count u16 · centroid_mm u16(0xFFFF=null) · head_row_pct u8(0xFF=null) · shoulder_tilt_mm i16(0x7FFF=null) · motion_mm_s u16 · change_per_min u8 · baseline_dev_pct u8 · flags u8(b0 baseline_ready, b1 drowsy, b2 geometry_valid, b3 센서 A, b4 센서 B) · nods u8` = 26 B. **2026-10-16 Path B(ESP32 I2C, VL53L8CX 8×8 ×2 → 16×8) 로 구현.** 원본 zone 은 싣지 않는다 |
+| `0x01` | ToF 디버그 depth | ≤ 2 Hz | 예약(디버그 모드만, 미구현). 운영 원본 격자는 `0x05` 이고 `0x01` 과 섞지 않는다 |
+| `0x03` | ToF `tof_feature` | 5 Hz | `present u8 · posture u8(0 unknown/1 upright/2 lean_forward/3 recline/4 face_down/5 chin_rest/6 drowsy/7 away) · confidence_pct u8 · motion_pct u8 · head_delta_mm i16(0x7FFF=null) · nod_rate_mhz u16(0xFFFF=null) · valid_zones u16 · grid_w u8 · grid_h u8 · coverage_pct u8 · presence_count u16 · centroid_mm u16(0xFFFF=null) · head_row_pct u8(0xFF=null) · shoulder_tilt_mm i16(0x7FFF=null) · motion_mm_s u16 · change_per_min u8 · baseline_dev_pct u8 · flags u8(b0 baseline_ready, b1 drowsy, b2 geometry_valid, b3 센서 A, b4 센서 B) · nods u8` = 26 B. **2026-10-16 Path B(ESP32 I2C, VL53L8CX 8×8 ×2 → 16×8) 로 구현.** 원본 zone 은 여기 싣지 않고 `0x05` 로 따로 간다. `posture` 는 ESP32 규칙 판정이며 Pi 4 는 MLP 가 못 낼 때만 쓴다(10-17) |
 | `0x04` | ToF 자세 요약 | 1 Hz | `present u8 · posture u8 · confidence_pct u8 · drowsy u8` = 4 B. 화면·네이티브 요약용(0x03 의 앞 3 B 와 같은 뜻) |
+| `0x05` | ToF 원본 격자 조각 `tof_grid` | 5 Hz (격자당 조각 1~2개) | `grid_w u8 · grid_h u8 · row0 u8 · rows u8 · frame_id u8 · sensor_mask u8(b0 A, b1 B) · part u8 · parts u8 · dist i16×n(mm, -1 = 타깃 없음) · status u8×n(VL53 target status, 255 = 타깃 없음)`, n = rows×grid_w ≤ 64 → 8+3n B(64 zone 이면 200 B). **2026-10-17: 자세 AI 모델을 Pi 4 에서 돌리기로 해 ESP32 가 원본을 넘긴다.** 16×8 int16+u8 = 384 B 는 LEN 상한 256 B(펌웨어 `kFrameMaxPayload`, Pi 4 `uart_rx` `kMaxPayloadLength`)를 넘으므로 **행 단위로 조각 낸다**(조각당 ≤64 zone = 센서 한 개 분량: 16열이면 4행씩 2조각, 8열이면 8행씩). 거리 하위 바이트만 보내는 압축은 2.55 m 에서 잘리고 10 mm 로 뭉개져 학습 데이터(`dataset/tof_logger` 의 `d`·`st`, mm·원 status)와 달라지므로 쓰지 않는다. 같은 격자의 조각은 `frame_id`·`TS` 가 같고 SEQ 만 다르며, Pi 4 는 `frame_id` 가 바뀌면 미완성 격자를 버린다. 대역: 5 Hz × 2조각 × ≈215 B ≈ 2.2 kB/s = 115200 8N1 의 19 %(센서 15 Hz 를 그대로 보내면 56 % 라 5 Hz 로 솎는다). 디코더·조립 `uart_frame.py` `TofGridAssembler`, 소비 `posture/tof_mlp.py` |
 | `0x10` | 환경 | 0.2 Hz | `co2_ppm u16 · temp_c_x10 i16 · humidity_pct_x10 u16 · lux u16 · valid_bits u8(b0 co2, b1 temp, b2 hum, b3 lux)` = 9 B |
 | `0x20` | mmWave | 1 Hz | `present u8 · motion_state u8(0 none/1 still/2 active) · motion_level u8 · distance_cm u16(0xFFFF=null) · resp_bpm u8(0xFF=null) · resp_valid u8 · heart_bpm u8(0xFF=null) · heart_valid u8 · drowsy_state u8(0 NOPERSON/1 NOLOCK/2 WARMUP/3 AWAKE/4 DROWSY) · valid u8` = 11 B |
 | `0xF0` | 하트비트 | 1 Hz | `uptime_ms u32 · fw_version u16 · mmwave_ok u8 [· tof_ok u8(b0 센서 A, b1 센서 B)]` = 7 B(펌웨어 0x0120 부터 8 B) |
@@ -348,6 +349,7 @@ crc16  = CRC-16/CCITT-FALSE(poly 0x1021, init 0xFFFF, no reflect, xorout 0) over
 test vector (seq 7, ts_ms 1000): mmWave 예시 payload `01010c37000f01ff000301` → wire `05a5012007020b03e803010501010c37040f01ff050301dea100`(26 B).
 ToF 예시 payload `01015305f4ff3200780010082a360064021908000f0002251d01`(26 B, 바른자세·신뢰도 0.83·16×8·센서 둘 다) → wire
 `05a5010307021a03e803010801015305f4ff3202780510082a360564021908020f0702251d01e55900`(41 B). 펌웨어 `test_tof_payload`·hub `test_uart_frame` 가 같은 값을 고정한다.
+`0x05` 골든 격자(16×8, zone i 는 i%11==0 이면 -1/255, 아니면 450+3i mm·status (5,9,6,0)[i%4], frame_id 0x2A, sensor_mask 0x03)의 조각 2개 payload hex 도 두 테스트(`kGoldenGridPart0/1Hex`·`GRID_GOLDEN_PART_HEX`)에 같이 들어 있다 — 바꾸면 둘 다 바꾼다.
 Pi 4 C++ 서비스는 COBS 해제·CRC 검증·헤더 파싱까지만 하고 `UART\t{"type","seq","ts_ms","payload_hex"}` 한 줄을 Python 브리지로 넘긴다. payload 해석은 Python(`decode_payload`)이 한다.
 09-11 실험 펌웨어가 쓰던 `TYPE 0x01` 은 ToF 디버그 예약과 충돌하므로 mmWave 는 `0x20` 으로 옮긴다.
 - MQTT/TCP JSON에는 별도 애플리케이션 CRC를 넣지 않는다. `schema_version`, `boot_id`, `sequence`, timestamp와 TCP 무결성을 사용한다.
@@ -382,7 +384,7 @@ Pi 4 C++ 서비스는 COBS 해제·CRC 검증·헤더 파싱까지만 하고 `UA
 | DATA-DEC-001 | `C_focus` | 큰 값=집중 저하 증거 유지 / 집중도로 부호 변경 |
 | DATA-DEC-002 | 통신 envelope | **물리 확정(09-11)**: ESP32↔Pi 4 UART2 바이너리 프레임, Pi 4↔Pi 5 MQTT JSON. 남은 것: UART TYPE 표에 mmWave 배정(실험용 0x01 은 ToF 디버그와 충돌), DrowsyDetector 출력 스키마(state·evidence / 요약값), 환경 묶음 0x10 필드 순서 |
 | DATA-DEC-003 | UART CRC 세부값 | 실측 펌웨어는 **COBS 인코딩 + 끝 `0x00` + CRC-16/CCITT-FALSE**. 초깃값·바이트 순서·test vector 를 본 문서 §13 에 기록해야 함 |
-| DATA-DEC-008 | `tof_feature` 관절 좌표 필드 | 스켈레톤 채택(09-08)에 따라 posture enum 외에 상체 관절 좌표(N×xyz) 또는 판별 결과만 보낼지. Path A/B 결정과 연동 |
+| DATA-DEC-008 | `tof_feature` 관절 좌표 필드 | 스켈레톤 채택(09-08)에 따라 posture enum 외에 상체 관절 좌표(N×xyz) 또는 판별 결과만 보낼지. Path A/B 결정과 연동. **10-17: 관절 좌표 대신 원본 격자(0x05)를 Pi 4 에 넘기고 Pi 4 가 자세를 판정하는 쪽으로 정리됨** |
 | DATA-DEC-009 | mmWave 신호 매핑 | `respiration` 신호를 "호흡 소실 여부 + 체동 이동평균" 로 재정의할지. 순간 호흡·심박·HRV·`inBed` 는 계약에서 제외 |
 | DATA-DEC-004 | freshness·샘플링 | 실제 ESP32·LAN 지연 분포로 보정 |
 | DATA-DEC-005 | 특징 정규화 | **잠정 확정(2026-09-16)** `hub/deskmate_hub/features/baseline.py`: 세션 START(baseline_sec) 표본으로 지표별 median·MAD, `z = 0.6745·(x−median)/max(MAD, mad_floor)`, 증거 = `clip(±z / z_full)`(z_full 3.5), 표본 < min_samples 이거나 기준선 없으면 `ingest.yaml` 선형 램프 폴백, 시간대 버킷(3 h) seed, 저장은 opt-in(median·MAD·표본 수만). 대상 지표: idle_ratio·flight_cv·correction_rate·motion_level·co2_ppm. z_full·floor 값은 실측 후 조정 |

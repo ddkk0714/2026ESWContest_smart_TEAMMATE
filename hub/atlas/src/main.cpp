@@ -64,7 +64,8 @@ struct NativeSensorState {
     std::optional<bool> present;
     std::optional<bool> heart_valid;
     std::optional<std::string> motion_state;
-    // ToF (UART TYPE 0x03, 10-16). 원본 zone 격자는 프레임에 없다 — 자세 enum·신뢰도만.
+    // ToF (UART TYPE 0x03/0x04, 10-16). 여기서는 자세 enum·신뢰도만 본다. 원본 격자(0x05, 10-17)는
+    // Python 브리지(posture/tof_mlp.py)만 읽고, 이 네이티브 요약은 노드 규칙 판정을 그대로 쓴다.
     std::optional<bool> tof_present;
     std::optional<std::string> tof_posture;
     std::optional<int> tof_confidence_pct;

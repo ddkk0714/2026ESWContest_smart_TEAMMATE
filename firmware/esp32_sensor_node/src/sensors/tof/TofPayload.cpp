@@ -77,4 +77,41 @@ void encodeTofPosturePayload(const TofFeatures &f, uint8_t out[kTofPosturePayloa
   out[3] = f.drowsy ? 1 : 0;
 }
 
+uint8_t tofGridRowsPerPart(uint8_t grid_w) {
+  if (grid_w == 0) return 0;
+  const uint8_t rows = static_cast<uint8_t>(kTofGridMaxZonesPerPart / grid_w);
+  return rows == 0 ? 1 : rows;
+}
+
+uint8_t tofGridPartCount(uint8_t grid_w, uint8_t grid_h) {
+  const uint8_t per = tofGridRowsPerPart(grid_w);
+  if (per == 0 || grid_h == 0 || grid_w > kTofGridMaxZonesPerPart) return 0;
+  return static_cast<uint8_t>((grid_h + per - 1) / per);
+}
+
+uint16_t encodeTofGridPart(const int16_t *dist, const uint8_t *status, uint8_t grid_w, uint8_t grid_h,
+                           uint8_t part, uint8_t frame_id, uint8_t sensor_mask,
+                           uint8_t out[kTofGridMaxPayloadSize]) {
+  const uint8_t parts = tofGridPartCount(grid_w, grid_h);
+  if (parts == 0 || part >= parts || dist == nullptr || status == nullptr) return 0;
+  const uint8_t per = tofGridRowsPerPart(grid_w);
+  const uint8_t row0 = static_cast<uint8_t>(part * per);
+  const uint8_t rows = static_cast<uint8_t>(grid_h - row0 < per ? grid_h - row0 : per);
+  const uint16_t n = static_cast<uint16_t>(rows) * grid_w;
+  const uint16_t first = static_cast<uint16_t>(row0) * grid_w;
+  out[0] = grid_w;
+  out[1] = grid_h;
+  out[2] = row0;
+  out[3] = rows;
+  out[4] = frame_id;
+  out[5] = sensor_mask;
+  out[6] = part;
+  out[7] = parts;
+  uint8_t *d = out + kTofGridHeaderSize;
+  for (uint16_t i = 0; i < n; ++i) putI16(d + 2 * i, dist[first + i]);
+  uint8_t *s = d + 2 * n;
+  for (uint16_t i = 0; i < n; ++i) s[i] = status[first + i];
+  return static_cast<uint16_t>(kTofGridHeaderSize + 3 * n);
+}
+
 }  // namespace deskmate

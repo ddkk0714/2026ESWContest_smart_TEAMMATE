@@ -65,7 +65,7 @@ python ../tof_logger/inspect_session.py data/sessions/<세션>   # 실기 세션
 | 규칙 enum 자세 프레임(11.9만) | 정확도 |
 |---|---|
 | 펌웨어 규칙 TofPosture | 47.6% |
-| MLP 192→64→10 (가중치 1.3만 개), 1 s 다수결 — 추론은 Pi 4 허브(10-17 결정, ESP32 는 원본 전달만) | **73.2%** |
+| MLP 192→64→10 (가중치 1.3만 개), 1 s 다수결 — 추론은 Pi 4 허브(10-17 결정, ESP32 는 원본 격자를 UART 0x05 로 전달만) | **73.2%** |
 
 - MLP 는 규칙에 없는 자세까지 10자세 전체 68.2%. 엎드림 81%, 좌우 기울임 76~78%, 턱괴기 71%.
   거북목·고개 숙임은 바른 자세와 거의 구분이 안 된다(12%·29%) — 8×8 로는 한계일 수 있다.
@@ -94,6 +94,27 @@ python ../tof_logger/inspect_session.py data/sessions/<세션>   # 실기 세션
   1. 같은 자세의 실기·시뮬레이션 8×8 을 나란히 놓고 `L8Params`(문턱·잡음)와 반사율 범위를 맞춘다.
   2. **최종 평가는 실기 지시 자세 세션으로만** 한다.
 
+## Pi 4 허브 탑재 (2026-10-17)
+
+자세 MLP 는 ESP32 가 아니라 **Pi 4 허브에서 순수 Python 으로** 돈다(제한 Python 에 numpy 가 없다). 경로:
+
+```
+ESP32 ─UART 0x05(원본 16×8 거리·상태, 행 단위 조각, 5 Hz)─► Pi 4 uart_frame.TofGridAssembler ─► posture/tof_mlp.py
+                                                                          기준선(앉은 뒤 조용한 10 s 중앙값) → 특징 192 → MLP → 1 s 다수결
+```
+
+```sh
+python train_mlp.py data/sessions/sim* --save models/mlp_sim60.npz
+python export_mlp_json.py models/mlp_sim60.npz ../../hub/deskmate_hub/config/tof_mlp.json   # 143 KB, numpy 대비 차이 ≈1e-6
+```
+
+- `export_mlp_json.py` 는 변환 직후 numpy 순전파와 허브 순전파를 같은 입력으로 비교해 최대 차이를 찍는다.
+  `tests/test_export_mlp_json.py` 가 특징 벡터(`train_mlp.features` ↔ `TofMlpModel.features`)와 확률의 일치, 그리고
+  커밋된 `hub/.../tof_mlp.json` 이 `models/mlp_sim60.npz` 와 같은 모델인지 확인한다. 허브 쪽 단위 테스트는 `hub/tests/test_tof_mlp.py`.
+- 실측 16×8 모델은 `--grid 16x8` 로 내보낸다(zone 수가 정사각이 아니라 필수). 격자 크기가 가중치와 다르면 허브는
+  MLP 를 비켜서고 ESP32 규칙 판정으로 돈다.
+- 졸음(`drowsy`)은 모델 밖이다. 시간축 판정은 계속 ESP32 규칙 추정기(0x03 flags)가 낸다.
+
 ## 파일
 
 | 파일 | 내용 |
@@ -104,5 +125,6 @@ python ../tof_logger/inspect_session.py data/sessions/<세션>   # 실기 세션
 | `tofsim/l8.py` | 가상 VL53L8CX |
 | `tofsim/rule.py`, `replay/tof_replay.cpp` | 펌웨어 규칙 재판정기 |
 | `generate.py` · `evaluate.py` · `train_mlp.py` · `view.py` · `animate.py` | CLI |
+| `export_mlp_json.py` | `.npz` → Pi 4 허브 JSON 가중치(`hub/deskmate_hub/config/tof_mlp.json`) |
 
-테스트: `python -m pytest tests -q` (10개. 규칙 재판정 2개는 g++/WSL 이 없으면 건너뛴다).
+테스트: `python -m pytest tests -q` (14개. 규칙 재판정 2개는 g++/WSL 이 없으면 건너뛴다. `test_export_mlp_json.py` 4개는 numpy 만 있으면 된다).

@@ -68,6 +68,49 @@ def test_tof_posture_replaces_mmwave_substitute(cfg):
     assert f.present and f.touch is True
 
 
+def mlp(now, *, posture="face_down", conf=0.9, ready=True):
+    return Sample(received=now, ts=now, seq=None, data={
+        "posture": posture, "posture_confidence": conf, "present": True, "baseline_ready": ready,
+        "raw_posture": posture, "source": "mlp", "frames": 100,
+    })
+
+
+def test_tof_mlp_verdict_overrides_rule_posture(cfg):
+    """Pi 4 MLP(원본 격자) 판정이 신선하고 기준선이 잡혀 있으면 0x03 규칙 자세 대신 쓴다(10-17)."""
+    cache = SensorCache()
+    tr = SessionTracker()
+    cache.put("tof", tof(100.0, posture="upright"))           # 규칙은 바른 자세
+    cache.put("tof_mlp", mlp(100.0, posture="face_down"))     # MLP 는 엎드림
+    f = build_frame(cache.snapshot(), 100.0, cfg, tr, fsm_state=State.MONITOR)
+    assert f.signals["posture"].phi == 1.0 and f.signals["posture"].delta == 1.0
+    out = sensor_summary(cache.snapshot(), 100.0, cfg, tr)
+    assert out["tof"]["posture"] == "face_down" and out["tof"]["posture_source"] == "mlp"
+    # MLP 전용 클래스(거북목)도 표에 있어 증거가 난다
+    cache.put("tof_mlp", mlp(100.0, posture="forward_head"))
+    f = build_frame(cache.snapshot(), 100.0, cfg, tr, fsm_state=State.MONITOR)
+    assert f.signals["posture"].phi == pytest.approx(cfg["tof"]["posture_phi"]["forward_head"])
+
+
+def test_tof_mlp_falls_back_to_rule_when_stale_or_not_ready(cfg):
+    cache = SensorCache()
+    tr = SessionTracker()
+    cache.put("tof", tof(100.0, posture="upright"))
+    cache.put("tof_mlp", mlp(100.0, posture="face_down", ready=False))   # 기준선 전 → 규칙
+    f = build_frame(cache.snapshot(), 100.0, cfg, tr, fsm_state=State.MONITOR)
+    assert f.signals["posture"].phi == pytest.approx(0.05 * cfg["tof"]["motion_phi_weight"])
+    assert sensor_summary(cache.snapshot(), 100.0, cfg, tr)["tof"]["posture_source"] == "rule"
+    cache.put("tof_mlp", mlp(90.0, posture="face_down"))                 # 낡음 → 규칙
+    cache.put("tof", tof(100.0, posture="upright"))
+    f = build_frame(cache.snapshot(), 100.0, cfg, tr, fsm_state=State.MONITOR)
+    assert f.signals["posture"].delta == 0.0
+    # posture_source: rule 이면 MLP 를 아예 안 본다
+    rule_cfg = json.loads(json.dumps(cfg))
+    rule_cfg["tof"]["posture_source"] = "rule"
+    cache.put("tof_mlp", mlp(100.0, posture="face_down"))
+    f = build_frame(cache.snapshot(), 100.0, rule_cfg, tr, fsm_state=State.MONITOR)
+    assert f.signals["posture"].delta == 0.0
+
+
 def test_tof_face_down_and_drowsy_are_fatigue_evidence(cfg):
     cache = SensorCache()
     cache.put("tof", tof(100.0, posture="face_down", conf=0.8))
