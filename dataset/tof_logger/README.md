@@ -109,4 +109,7 @@ cd ../../firmware/esp32_sensor_node && pio test -e native -f test_tof_line   # �
 
 - **실기 확인.** 아직 L8 을 붙여 돌려 보지 않았다. 컴파일, 호스트 테스트, 가짜 소스 전 구간만 확인했다.
   처음 붙일 때 볼 것은 init 성공 여부, 15 fps, seq 갭, 방향이다.
-- 학습 스크립트(`cam-teacher/train_l8.py` 의 MLP 를 실측 8×8 입력으로 옮기기)와 int8 변환, ESP32 탑재.
+- 학습 스크립트(`cam-teacher/train_l8.py` 의 MLP 를 실측 16×8 입력으로 옮기기)와 **Pi 4 허브 탑재**.
+  **2026-10-17 결정: 자세 모델 추론은 ESP32 가 아니라 Pi 4 에서 한다.** 따라서 (1) ESP32 는 원본 격자를 UART 로
+  Pi 4 에 보내야 하므로 `firmware/README.md` "원본 zone 미발행" 원칙과 프레임 규약(0x03/0x04)을 함께 고친다,
+  (2) Pi 4 의 제한 Python 에는 numpy 가 없어 순수 Python 추론으로 가거나 네이티브 확장 ABI 를 보드에서 먼저 확인한다.
