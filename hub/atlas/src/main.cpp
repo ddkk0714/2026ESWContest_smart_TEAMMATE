@@ -1,6 +1,7 @@
 #include <sdbus-c++/sdbus-c++.h>
 
 #include "mqtt_client.h"
+#include "uart_relay.h"
 #include "uart_rx.h"
 
 #include <arpa/inet.h>
@@ -650,8 +651,13 @@ int main()
         NativeSensorState native_sensors;
         std::atomic<bool> http_failed{false};
         std::mutex bridge_input_mutex;
+        // ToF 원본 격자(TYPE 0x05)를 별도 자세 서비스(deskmate_tofposture, tcp:9100)에 복사해 준다.
+        // /dev/serial0 은 이 프로세스가 혼자 읽어야 하므로 줄 단위로 넘긴다. 받는 쪽이 없으면 무해.
+        deskmate::UartRelay relay(deskmate::uartRelayConfigFromEnvironment());
+        relay.start();
         deskmate::UartReceiver uart(deskmate::uartRxConfigFromEnvironment(),
-            [&hub, &bridge_input_mutex, &native_sensors, &state](const std::string& line) {
+            [&hub, &bridge_input_mutex, &native_sensors, &state, &relay](const std::string& line) {
+                relay.publish(line);
                 // 센서 값은 브리지 생사와 무관하게 항상 갱신해 둔다.
                 // 브리지가 죽는 순간 곧바로 대신 내보낼 수 있어야 한다.
                 const bool native_consumed = native_sensors.consume(line);
@@ -721,6 +727,7 @@ int main()
 
         g_stop_requested = 1;
         uart.stop();
+        relay.stop();
         if (mqtt.connected()) {
             mqtt.publish(kHealthTopic, R"({"node":"hub","status":"offline"})", 1, true);
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
