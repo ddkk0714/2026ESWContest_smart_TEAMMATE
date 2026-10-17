@@ -71,6 +71,10 @@ class TofArray {
   uint8_t height() const { return h_; }
   const int16_t *distance() const { return dist_; }  // row-major 장면 방향, -1 = 타깃 없음
   const uint8_t *status() const { return st_; }      // 255 = 타깃 없음
+  // 센서 i 의 마지막 8×8(장면 방향, flip 적용 뒤). UART 0x05 는 이것을 센서별로 보낸다 — 두 센서 시야가
+  // 대부분 겹쳐 16×8 스티칭은 한 장면이 아니기 때문(TofPayload.h). sensorOk(i) 가 거짓이면 낡은 값이다.
+  const int16_t *sensorDistance(uint8_t i) const { return scene_d_[i < kTofMaxSensors ? i : 0]; }
+  const uint8_t *sensorStatus(uint8_t i) const { return scene_st_[i < kTofMaxSensors ? i : 0]; }
   uint8_t okMask() const { return ok_mask_; }        // b0 = A, b1 = B
   uint8_t okCount() const;
   uint32_t frames() const { return frames_; }

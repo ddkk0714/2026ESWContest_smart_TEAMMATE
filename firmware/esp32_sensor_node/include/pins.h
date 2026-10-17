@@ -53,7 +53,7 @@ constexpr uint16_t kTofAddressA = 0x54;   // 8-bit. A 만 주소를 바꾸고 B 
 constexpr uint32_t kTofRetryMs = 5000;
 constexpr uint32_t kTofFeaturePeriodMs = 200;   // UART TYPE 0x03 (tof_feature) 5 Hz
 constexpr uint32_t kTofPosturePeriodMs = 1000;  // UART TYPE 0x04 + USB JSON 1 Hz
-// UART TYPE 0x05 원본 격자 5 Hz. 16×8 은 조각 2개(각 200 B payload, wire ≈ 215 B) → 약 2.2 kB/s,
+// UART TYPE 0x05 원본 8×8, 센서별 프레임 5 Hz. 센서 2개 = 프레임 2개(각 200 B payload, wire ≈ 215 B) → 약 2.2 kB/s,
 // 115200 8N1(11.5 kB/s)의 19 %. 센서 주기 15 Hz 를 그대로 보내면 56 % 라 5 Hz 로 솎는다.
 constexpr uint32_t kTofGridPeriodMs = 200;
 

@@ -26,8 +26,8 @@ class UartStats:
     heartbeats: int = 0
     unknown_types: dict[int, int] = field(default_factory=dict)
     last_heartbeat: dict[str, Any] | None = None
-    grids: int = 0                 # 조립 완료한 0x05 격자 수
-    grid_parts: int = 0            # 받은 0x05 조각 수
+    grids: int = 0                 # 완성된 0x05 표본 수(센서 프레임이 다 모인 것)
+    grid_parts: int = 0            # 받은 0x05 센서 프레임 수
 
 
 def parse_uart_line(line: str) -> Frame | None:
@@ -46,7 +46,7 @@ def ingest_frame(cache: SensorCache, frame: Frame, stats: UartStats, received: f
                  node: str = "esp32", *, grid: TofGridAssembler | None = None, posture: Any = None) -> str | None:
     """Frame 을 캐시에 반영. 반영된 kind(또는 'heartbeat') 를 돌려주고, 모르는 TYPE 은 None.
 
-    0x05 조각은 `grid` 로 조립해 완성될 때만 `tof_grid` 로 캐시에 넣고(미완성이면 'tof_grid_part'),
+    0x05 센서 프레임은 `grid` 로 같은 frame_id 끼리 모아 표본이 완성될 때만 `tof_grid` 로 캐시에 넣고(미완성이면 'tof_grid_part'),
     `posture`(posture.tof_mlp.TofMlpPosture 등 `update(grid, now) -> dict`)가 있으면 그 판정을 `tof_mlp` 로 넣는다.
     """
     received = time.time() if received is None else received

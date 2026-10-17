@@ -99,13 +99,16 @@ python ../tof_logger/inspect_session.py data/sessions/<세션>   # 실기 세션
 여기의 MLP 는 PR #39 의 **단일 L8 비교용 기준선**이다. 자세 모델 배치는 아직 정해지지 않았고 실측 성능이 좋은 쪽을 따른다:
 (A) 이 MLP 를 Pi 4 허브에서 순수 Python 으로 돌리기(아래, 구현됨), (B) `feat/tof-sim-v5` 의 `dataset/tof_sim_v5` PostureNet
 (CNN+GRU, 센서당 (2,8,8), 두 센서 따로 추론해 log-softmax 합; `posture_models_9label_20261017`, 기본 `ubai_r9_lowlr`)을 Pi 4 별도 서비스
-`deskmate_tofposture`(HTTP 8771)에서 돌리고 `hub/atlas` 가 0x05 를 tcp:9100 으로 중계하기. 어느 쪽이든 ESP32 → Pi 4 의 0x05 원본 격자는 같다.
+`deskmate_tofposture`(HTTP 8771)에서 돌리고 `hub/atlas` 가 0x05 를 tcp:9100 으로 중계하기. 어느 쪽이든 ESP32 → Pi 4 의 0x05 는
+**센서별 8×8 프레임**이고(10-17 표준: 두 센서 시야가 대부분 겹쳐 16×8 은 한 장면이 아니다) 모델은 센서별 추론 → log-softmax 합 융합이다.
+이 시뮬은 센서 하나만 흉내 내므로 "센서 하나의 8×8" 단위와는 맞지만, 장치의 두 센서(±52.4 mm, 바깥 8°)는 `tof_sim_v5` 만 모델링한다.
 
 (A) 의 경로:
 
 ```
-ESP32 ─UART 0x05(원본 16×8 거리·상태, 행 단위 조각, 5 Hz)─► Pi 4 uart_frame.TofGridAssembler ─► posture/tof_mlp.py
-                                                                          기준선(앉은 뒤 조용한 10 s 중앙값) → 특징 192 → MLP → 1 s 다수결
+ESP32 ─UART 0x05(센서별 원본 8×8 거리·상태, 같은 frame_id, 5 Hz)─► Pi 4 uart_frame.TofGridAssembler ─► posture/tof_mlp.py
+                                                     센서마다: 기준선(앉은 뒤 조용한 10 s 중앙값) → 특징 192 → MLP → 확률
+                                                     두 센서 log-softmax 합 → 1 s 다수결
 ```
 
 ```sh

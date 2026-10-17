@@ -1,18 +1,22 @@
-"""ToF 원본 격자 → 자세 MLP 추론 (순수 Python, 표준 라이브러리만).
+"""ToF 원본 8×8 → 자세 MLP 추론 (순수 Python, 표준 라이브러리만). 후보 A.
 
-2026-10-17 결정: 자세 AI 모델은 ESP32 가 아니라 Pi 4 허브에서 돈다. ESP32 는 VL53L8CX 원본 격자(UART 0x05)를
-그대로 넘기고, 여기서 `dataset/tof_sim/train_mlp.py` 가 학습한 MLP(입력 3×zone → 은닉 → 자세 10종)를 돌린다.
-Pi 4 의 제한 Python(`/restricted/python3`)에는 numpy 가 없으므로 행렬곱을 Python 리스트로 한다
-(192→64→10 이면 1.3만 곱셈 — 5 Hz 에 충분하다). 가중치는 `export_mlp_json.py` 가 .npz 에서 만든 JSON 이고,
+2026-10-17: 자세 AI 모델은 ESP32 가 아니라 Pi 4 에서 돈다. ESP32 는 VL53L8CX 원본 8×8 을 센서마다 한 프레임씩
+(UART 0x05, 같은 frame_id) 넘기고, 여기서 `dataset/tof_sim/train_mlp.py` 가 학습한 MLP(입력 3×zone → 은닉 → 자세)를
+돌린다. Pi 4 의 제한 Python(`/restricted/python3`)에는 numpy 가 없으므로 행렬곱을 Python 리스트로 한다
+(192→64→10 이면 1.3만 곱셈 — 센서 둘 × 5 Hz 에 충분하다). 가중치는 `export_mlp_json.py` 가 .npz 에서 만든 JSON 이고,
 변환 전후 출력 일치는 `dataset/tof_sim/tests/test_export_mlp_json.py` 가 확인한다.
 
-특징(학습 코드 `train_mlp.features` 와 같은 순서·단위):
+표준(10-17): ToF 의 단위는 "센서 하나의 8×8" 이다. 두 센서는 시야가 대부분 겹치므로 16×8 로 이어 붙이지 않고
+**센서마다 따로 추론한 뒤 log-softmax 합으로 융합**한다(`dataset/tof_sim_v5` 의 두 센서 융합과 같은 규칙). 기준선·정지
+판정도 센서별이다.
+
+특징(학습 코드 `train_mlp.features` 와 같은 순서·단위, 센서 하나 기준):
     [cur_mm / 1000] × n  ‖  [clip((cur_mm − base_mm) / 300, −3, 3)] × n  ‖  [valid 0/1] × n
     valid = status ∈ {5, 9} (+ {6, 10} accept_semi_valid) 이고 dist ≥ 0.  무효 zone 의 cur·base 는 FAR 2000 mm.
     base = 바른 자세 기준선(zone 별 중앙값). 학습에서는 세션의 '기준 자세' 구간, 제품에서는 앉은 뒤 처음 조용한 구간.
 
-판정(TofMlpPosture): 기준선이 잡히기 전에는 unknown. 잡힌 뒤 프레임마다 argmax 를 내고 최근 vote_frames
-(5 Hz × 1 s)의 다수결로 확정한다. 졸음(drowsy)은 한 프레임으로 정의되지 않는 시간 현상이라 모델 밖이다 —
+판정(TofMlpPosture): 기준선이 잡힌 센서가 하나도 없으면 unknown. 잡힌 센서들의 확률을 융합해 프레임마다 argmax 를 내고
+최근 vote_frames(5 Hz × 1 s)의 다수결로 확정한다. 졸음(drowsy)은 한 프레임으로 정의되지 않는 시간 현상이라 모델 밖이다 —
 끄덕임·졸음은 계속 ESP32 규칙 추정기(0x03 flags)가 낸다.
 """
 from __future__ import annotations
@@ -33,7 +37,7 @@ DEFAULT_FEATURES = {"far_mm": 2000.0, "dist_scale_mm": 1000.0, "delta_scale_mm":
 
 
 class TofMlpModel:
-    """JSON 가중치 하나 = 모델 하나. `features()` → `forward()`."""
+    """JSON 가중치 하나 = 모델 하나(센서 한 개의 격자 입력). `features()` → `forward()`."""
 
     def __init__(self, spec: dict[str, Any]) -> None:
         if spec.get("format") != FORMAT:
@@ -114,6 +118,15 @@ class TofMlpModel:
         return max(range(len(p)), key=p.__getitem__), p
 
 
+def fuse_log_softmax(prob_lists: list[list[float]]) -> list[float]:
+    """센서별 확률 → log 합 → 다시 softmax. (tof_sim_v5 의 두 센서 융합 규칙과 같다.)"""
+    logs = [sum(math.log(max(p[k], 1e-12)) for p in prob_lists) for k in range(len(prob_lists[0]))]
+    top = max(logs)
+    e = [math.exp(v - top) for v in logs]
+    total = sum(e)
+    return [v / total for v in e]
+
+
 # ---------------------------------------------------------------- 로딩
 
 def load_model(path: str | None = None) -> TofMlpModel:
@@ -138,14 +151,78 @@ def _median(values: list[float]) -> float:
     return s[mid] if n % 2 else 0.5 * (s[mid - 1] + s[mid])
 
 
+# ---------------------------------------------------------------- 센서 하나의 상태
+
+class _SensorState:
+    """센서 한 개의 기준선 포착·정지 판정. 숫자는 TofMlpPosture 가 ingest.yaml `tof.mlp` 에서 받아 넘긴다."""
+
+    def __init__(self, owner: "TofMlpPosture") -> None:
+        self.o = owner
+        self.baseline: list[float | None] | None = None
+        self.baseline_at: float | None = None
+        self._window: deque[tuple[list[float | None], bool]] = deque(maxlen=owner.baseline_frames)
+        self._prev: list[float | None] | None = None
+        self._away_since: float | None = None
+        self.present = False
+
+    def reset(self) -> None:
+        self.baseline, self.baseline_at = None, None
+        self._window.clear()
+
+    def observe(self, dist: list[int], status: list[int], now: float) -> list[float] | None:
+        """프레임 하나 → 기준선이 있으면 클래스 확률, 없으면 None(포착 진행 중)."""
+        o = self.o
+        valid = o.model.valid_mask(dist, status, o.accept_semi_valid)
+        cur: list[float | None] = [float(d) if ok else None for d, ok in zip(dist, valid)]
+        person = sum(1 for v in cur if v is not None and o.min_person_mm <= v <= o.max_person_mm)
+        self.present = person / len(cur) >= o.present_min_coverage
+        still = self._is_still(cur)
+        self._prev = cur
+        if self.present:
+            self._away_since = None
+        else:
+            if self._away_since is None:
+                self._away_since = now
+            elif self.baseline is not None and now - self._away_since >= o.away_reset_sec:
+                self.reset()
+        if self.baseline is None:
+            if self.present:
+                self._window.append((cur, still))
+                if len(self._window) == o.baseline_frames:
+                    moving = sum(1 for _, s in self._window if not s)
+                    if moving <= o.baseline_max_moving_frac * o.baseline_frames:
+                        self.baseline = self._median_grid([c for c, _ in self._window])
+                        self.baseline_at = now
+                        self._window.clear()
+            else:
+                self._window.clear()
+            if self.baseline is None:
+                return None
+        return o.model.forward(o.model.features(dist, status, self.baseline, o.accept_semi_valid))
+
+    def _is_still(self, cur: list[float | None]) -> bool:
+        if self._prev is None:
+            return True
+        diffs = [abs(a - b) for a, b in zip(cur, self._prev) if a is not None and b is not None]
+        return not diffs or sum(diffs) / len(diffs) <= self.o.still_mm
+
+    @staticmethod
+    def _median_grid(frames: list[list[float | None]]) -> list[float | None]:
+        out: list[float | None] = []
+        for zone in zip(*frames):
+            vals = [v for v in zone if v is not None]
+            out.append(_median(vals) if vals else None)
+        return out
+
+
 # ---------------------------------------------------------------- 상태 있는 판정기
 
 class TofMlpPosture:
-    """격자 스트림 → 기준선 포착 → 프레임 판정 → 다수결. 숫자는 전부 ingest.yaml `tof.mlp` 에서 온다.
+    """센서 프레임 묶음 스트림 → 센서별 기준선·추론 → 융합 → 다수결. 숫자는 전부 ingest.yaml `tof.mlp` 에서 온다.
 
-    기준선: 사람이 있고(coverage ≥ present_min_coverage) 격자가 조용한(프레임 간 평균 변화 ≤ still_mm) 프레임이
-    baseline_frames 만큼 쌓이면 zone 별 중앙값. 창 안에 움직인 프레임이 baseline_max_moving_frac 넘게 섞이면
-    더 기다린다. away_reset_sec 동안 비어 있으면 기준선을 버린다(다른 사람·재착석). `reset_baseline()` 으로도 버린다.
+    기준선(센서별): 사람이 있고(coverage ≥ present_min_coverage) 격자가 조용한(프레임 간 평균 변화 ≤ still_mm) 프레임이
+    baseline_frames 만큼 쌓이면 zone 별 중앙값. 창 안에 움직인 프레임이 baseline_max_moving_frac 넘게 섞이면 더 기다린다.
+    away_reset_sec 동안 비어 있으면 그 센서의 기준선을 버린다(다른 사람·재착석). `reset_baseline()` 은 전부 버린다.
     """
 
     def __init__(self, model: TofMlpModel, cfg: dict[str, Any] | None = None) -> None:
@@ -160,89 +237,59 @@ class TofMlpPosture:
         self.baseline_max_moving_frac = float(c.get("baseline_max_moving_frac", 0.2))
         self.away_reset_sec = float(c.get("away_reset_sec", 300))
         self.vote_frames = max(1, int(c.get("vote_frames", 5)))
-        self.baseline: list[float | None] | None = None
-        self.baseline_at: float | None = None
-        self._window: deque[tuple[list[float | None], bool]] = deque(maxlen=self.baseline_frames)
+        self.sensors: dict[int, _SensorState] = {}
         self._votes: deque[tuple[int, float]] = deque(maxlen=self.vote_frames)
-        self._prev: list[float | None] | None = None
-        self._away_since: float | None = None
         self.frames = 0
         self.last_error: str | None = None
 
+    @property
+    def baseline_ready(self) -> bool:
+        return any(s.baseline is not None for s in self.sensors.values())
+
     def reset_baseline(self) -> None:
-        self.baseline, self.baseline_at = None, None
-        self._window.clear()
+        for s in self.sensors.values():
+            s.reset()
         self._votes.clear()
 
-    # ---- 격자 한 장 ----
-    def update(self, grid: dict[str, Any], now: float) -> dict[str, Any]:
-        dist: list[int] = grid["distance_mm"]
-        status: list[int] = grid["status"]
-        w, h = int(grid.get("grid_width") or 0), int(grid.get("grid_height") or 0)
+    # ---- 표본 하나(센서 프레임 묶음) ----
+    def update(self, sample: dict[str, Any], now: float) -> dict[str, Any]:
         self.frames += 1
-        if w * h != self.model.zones or len(dist) != self.model.zones:
-            self.last_error = f"grid {w}x{h} ≠ model {self.model.zones} zones"
-            return self._verdict(UNKNOWN, 0.0, present=False, raw=UNKNOWN, error=self.last_error)
-        valid = self.model.valid_mask(dist, status, self.accept_semi_valid)
-        cur: list[float | None] = [float(d) if ok else None for d, ok in zip(dist, valid)]
-        person = sum(1 for v in cur if v is not None and self.min_person_mm <= v <= self.max_person_mm)
-        present = person / len(cur) >= self.present_min_coverage
-        still = self._is_still(cur)
-        self._prev = cur
-
-        if present:
-            self._away_since = None
-        else:
-            if self._away_since is None:
-                self._away_since = now
-            elif self.baseline is not None and now - self._away_since >= self.away_reset_sec:
-                self.reset_baseline()
-
-        if self.baseline is None:
-            if present:
-                self._window.append((cur, still))
-                if len(self._window) == self.baseline_frames:
-                    moving = sum(1 for _, s in self._window if not s)
-                    if moving <= self.baseline_max_moving_frac * self.baseline_frames:
-                        self.baseline = self._median_grid([c for c, _ in self._window])
-                        self.baseline_at = now
-                        self._window.clear()
-            else:
-                self._window.clear()
-            if self.baseline is None:
-                return self._verdict(UNKNOWN, 0.0, present=present, raw=UNKNOWN)
-
-        x = self.model.features(dist, status, self.baseline, self.accept_semi_valid)
-        idx, probs = self.model.predict(x)
-        self._votes.append((idx, probs[idx]))
+        w, h = int(sample.get("grid_width") or 0), int(sample.get("grid_height") or 0)
+        frames: dict[int, dict[str, Any]] = sample.get("sensors") or {}
+        if w * h != self.model.zones or not frames:
+            self.last_error = f"grid {w}x{h} ≠ model {self.model.zones} zones" if frames else "no sensor frames"
+            return self._verdict(UNKNOWN, 0.0, present=False, raw=UNKNOWN, used=0, error=self.last_error)
+        probs: list[list[float]] = []
+        present = False
+        for idx in sorted(frames):
+            dist, status = frames[idx]["distance_mm"], frames[idx]["status"]
+            if len(dist) != self.model.zones:
+                self.last_error = f"sensor {idx}: {len(dist)} zones ≠ model {self.model.zones}"
+                continue
+            state = self.sensors.setdefault(int(idx), _SensorState(self))
+            p = state.observe(dist, status, now)
+            present = present or state.present
+            if p is not None:
+                probs.append(p)
+        if not probs:
+            return self._verdict(UNKNOWN, 0.0, present=present, raw=UNKNOWN, used=0)
+        fused = fuse_log_softmax(probs)
+        idx = max(range(len(fused)), key=fused.__getitem__)
+        self._votes.append((idx, fused[idx]))
         counts: dict[int, int] = {}            # 삽입 순서 = 오래된 표부터
         for i, _ in self._votes:
             counts[i] = counts.get(i, 0) + 1
         # 동률이면 창에서 먼저 나온 클래스 — 학습 평가 train_mlp.smooth(Counter.most_common) 와 같은 규칙
         best = max(counts.items(), key=lambda kv: kv[1])[0]
         conf = sum(p for i, p in self._votes if i == best) / len(self._votes)
-        return self._verdict(self.model.classes[best], conf, present=present, raw=self.model.classes[idx])
+        return self._verdict(self.model.classes[best], conf, present=present, raw=self.model.classes[idx],
+                             used=len(probs))
 
-    # ---- 내부 ----
-    def _is_still(self, cur: list[float | None]) -> bool:
-        if self._prev is None:
-            return True
-        diffs = [abs(a - b) for a, b in zip(cur, self._prev) if a is not None and b is not None]
-        return not diffs or sum(diffs) / len(diffs) <= self.still_mm
-
-    @staticmethod
-    def _median_grid(frames: list[list[float | None]]) -> list[float | None]:
-        out: list[float | None] = []
-        for zone in zip(*frames):
-            vals = [v for v in zone if v is not None]
-            out.append(_median(vals) if vals else None)
-        return out
-
-    def _verdict(self, posture: str, confidence: float, *, present: bool, raw: str,
+    def _verdict(self, posture: str, confidence: float, *, present: bool, raw: str, used: int,
                  error: str | None = None) -> dict[str, Any]:
         out: dict[str, Any] = {
             "posture": posture, "posture_confidence": round(float(confidence), 4), "present": bool(present),
-            "baseline_ready": self.baseline is not None, "raw_posture": raw, "source": "mlp",
+            "baseline_ready": used > 0, "raw_posture": raw, "source": "mlp", "sensors_used": used,
             "frames": self.frames,
         }
         if error:

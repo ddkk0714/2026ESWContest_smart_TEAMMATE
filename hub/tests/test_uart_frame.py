@@ -9,7 +9,7 @@ from deskmate_hub.ingest import SensorCache
 from deskmate_hub.ingest.uart_frame import (
     TYPE_ENV, TYPE_HEARTBEAT, TYPE_MMWAVE, TYPE_TOF_FEATURES, TYPE_TOF_GRID, TYPE_TOF_POSTURE, Frame, FrameError,
     TofGridAssembler, cobs_decode, cobs_encode, crc16_ccitt_false, decode_frame, decode_payload, encode_frame,
-    encode_payload, encode_tof_grid, split_stream, tof_grid_part_count,
+    encode_payload, encode_tof_sensor_frames, split_stream,
 )
 from deskmate_hub.ingest.uart_source import RawUartReader, UartLineSource, parse_uart_line
 
@@ -25,14 +25,15 @@ TOF = {"present": True, "posture": "upright", "posture_confidence": 0.83, "motio
        "sensors_ok": 3, "nods_in_window": 1}
 # 펌웨어 test/test_tof_payload/test_tof_payload.cpp 의 kGoldenFeatureHex 와 같은 값 — 바꾸면 둘 다 바꾼다
 TOF_GOLDEN_HEX = "01015305f4ff3200780010082a360064021908000f0002251d01"
-# TYPE 0x05 골든 격자 16×8 (펌웨어 kGoldenGridPart0Hex/1Hex 와 같은 값): zone i 는 i%11==0 이면 타깃 없음(-1/255),
-# 아니면 dist 450+3i, status (5,9,6,0)[i%4]. frame_id 0x2A, sensor_mask 0x03. 행 0~3 / 4~7 조각 2개, 각 200 B.
+# TYPE 0x05 골든 (펌웨어 kGoldenGridPart0Hex/1Hex 와 같은 값): zone i(0..127, 센서 0 = 0..63, 센서 1 = 64..127)는
+# i%11==0 이면 타깃 없음(-1/255), 아니면 dist 450+3i, status (5,9,6,0)[i%4]. frame_id 0x2A, sensor_mask 0x03,
+# flags 0x02(flip_cols). 센서마다 8×8 프레임 하나, 각 200 B.
 GRID_GOLDEN_PART_HEX = (
-    "100800042a030002ffffc501c801cb01ce01d101d401d701da01dd01e001ffffe601e901ec01ef01f201f501f801fb01fe010102"
+    "080800022a030200ffffc501c801cb01ce01d101d401d701da01dd01e001ffffe601e901ec01ef01f201f501f801fb01fe010102"
     "ffff07020a020d0210021302160219021c021f022202ffff28022b022e023102340237023a023d0240024302ffff49024c024f02"
     "5202550258025b025e0261026402ffff6a026d0270027302760279027c027f02ff09060005090600050906ff0509060005090600"
     "0509ff00050906000509060005ff06000509060005090600ff09060005090600050906ff0509060005090600",
-    "100804042a03010282028502ffff8b028e029102940297029a029d02a002a302a602ffffac02af02b202b502b802bb02be02c102"
+    "080801022a03020082028502ffff8b028e029102940297029a029d02a002a302a602ffffac02af02b202b502b802bb02be02c102"
     "c402c702ffffcd02d002d302d602d902dc02df02e202e502e802ffffee02f102f402f702fa02fd020003030306030903ffff0f03"
     "1203150318031b031e032103240327032a03ffff30033303360339033c033f030509ff00050906000509060005ff060005090600"
     "05090600ff09060005090600050906ff05090600050906000509ff00050906000509060005ff060005090600",
@@ -108,59 +109,62 @@ def test_tof_posture_summary_payload():
     assert decode_payload(TYPE_TOF_POSTURE, b"\x00\x63\x00\x00")["posture"] == "unknown"  # 모르는 코드
 
 
-# ── TYPE 0x05 원본 격자 (Pi 4 자세 모델 입력, 2026-10-17) ─────────────────
+# ── TYPE 0x05 원본 8×8 센서 프레임 (Pi 4 자세 모델 입력, 2026-10-17 표준: 센서별 8×8) ─────────────────
 
-def test_tof_grid_golden_parts():
+def golden_sensor_frames():
     dist, status = golden_grid()
-    parts = encode_tof_grid(16, 8, dist, status, frame_id=0x2A, sensors_ok=3)
-    assert [p.hex() for p in parts] == list(GRID_GOLDEN_PART_HEX) and all(len(p) == 200 for p in parts)
+    return {0: (dist[:64], status[:64]), 1: (dist[64:], status[64:])}
+
+
+def test_tof_grid_golden_sensor_frames():
+    frames = encode_tof_sensor_frames(golden_sensor_frames(), frame_id=0x2A, flags=2)
+    assert [p.hex() for p in frames] == list(GRID_GOLDEN_PART_HEX) and all(len(p) == 200 for p in frames)
     asm = TofGridAssembler()
     first = decode_payload(TYPE_TOF_GRID, bytes.fromhex(GRID_GOLDEN_PART_HEX[0]))
-    assert (first["grid_width"], first["grid_height"], first["row0"], first["rows"], first["part"], first["parts"]) \
-        == (16, 8, 0, 4, 0, 2)
-    assert first["frame_id"] == 0x2A and first["sensors_ok"] == 3 and first["distance_mm"][0] == -1
+    assert (first["grid_width"], first["grid_height"], first["sensor"], first["sensors"]) == (8, 8, 0, 2)
+    assert first["frame_id"] == 0x2A and first["sensors_ok"] == 3 and first["flags"] == 2 and first["distance_mm"][0] == -1
     assert asm.push(first) is None
     full = asm.push(decode_payload(TYPE_TOF_GRID, bytes.fromhex(GRID_GOLDEN_PART_HEX[1])))
-    assert full is not None and full["distance_mm"] == dist and full["status"] == status
-    assert (full["grid_width"], full["grid_height"], full["frame_id"], full["sensors_ok"]) == (16, 8, 0x2A, 3)
-    # 조각 하나는 LEN 상한(256 B, 펌웨어 kFrameMaxPayload·Pi 4 uart_rx) 안에서 프레임이 된다
-    wire = encode_frame(Frame(TYPE_TOF_GRID, 1, 1000, parts[0]))
-    assert decode_frame(wire).payload == parts[0]
-
-
-def test_tof_grid_part_layout_for_other_grids():
-    dist, status = golden_grid(64)
-    assert tof_grid_part_count(8, 8) == 1 and tof_grid_part_count(8, 16) == 2 and tof_grid_part_count(16, 8) == 2
-    assert tof_grid_part_count(0, 8) == 0 and tof_grid_part_count(65, 1) == 0
-    (single,) = encode_tof_grid(8, 8, dist, status, frame_id=7, sensors_ok=2)
-    d = decode_payload(TYPE_TOF_GRID, single)
-    assert (d["rows"], d["parts"], d["sensors_ok"]) == (8, 1, 2) and len(d["distance_mm"]) == 64
-    stacked = encode_tof_grid(8, 16, dist + dist, status + status, frame_id=7)
-    assert [decode_payload(TYPE_TOF_GRID, p)["row0"] for p in stacked] == [0, 8]
-    with pytest.raises(FrameError):
-        decode_payload(TYPE_TOF_GRID, single[:100])          # 잘림
-    with pytest.raises(FrameError):
-        decode_payload(TYPE_TOF_GRID, bytes([16, 8, 0, 5, 0, 3, 0, 2]) + bytes(240))   # 5×16 = 80 zone > 64
-
-
-def test_tof_grid_assembler_drops_incomplete_frame():
     dist, status = golden_grid()
-    a = [decode_payload(TYPE_TOF_GRID, p) for p in encode_tof_grid(16, 8, dist, status, frame_id=1)]
-    b = [decode_payload(TYPE_TOF_GRID, p) for p in encode_tof_grid(16, 8, dist, status, frame_id=2)]
+    assert full is not None and full["sensors"][0]["distance_mm"] == dist[:64] and full["sensors"][1]["status"] == status[64:]
+    assert (full["grid_width"], full["grid_height"], full["frame_id"], full["sensors_ok"], full["flags"]) == (8, 8, 0x2A, 3, 2)
+    # 한 프레임은 LEN 상한(256 B, 펌웨어 kFrameMaxPayload·Pi 4 uart_rx) 안에서 프레임이 된다
+    wire = encode_frame(Frame(TYPE_TOF_GRID, 1, 1000, frames[0]))
+    assert decode_frame(wire).payload == frames[0]
+
+
+def test_tof_grid_single_sensor_and_bad_headers():
+    f = golden_sensor_frames()
+    (only_b,) = encode_tof_sensor_frames({1: f[1]}, frame_id=7)           # B 만 살아 있음: 물리 번호 1, sensors 1, mask 0x02
+    d = decode_payload(TYPE_TOF_GRID, only_b)
+    assert (d["sensor"], d["sensors"], d["sensors_ok"]) == (1, 1, 2) and len(d["distance_mm"]) == 64
+    assert TofGridAssembler().push(d)["sensors"].keys() == {1}
+    with pytest.raises(FrameError):
+        decode_payload(TYPE_TOF_GRID, only_b[:100])                        # 잘림
+    with pytest.raises(FrameError):
+        decode_payload(TYPE_TOF_GRID, bytes([16, 8, 0, 1, 0, 1, 0, 0]) + bytes(384))   # 16×8 = 128 zone > 64
+    with pytest.raises(FrameError):
+        decode_payload(TYPE_TOF_GRID, bytes([8, 8, 1, 1, 0, 1, 0, 0]) + bytes(192))    # mask 에 없는 센서
+
+
+def test_tof_grid_assembler_drops_incomplete_sample():
+    f = golden_sensor_frames()
+    a = [decode_payload(TYPE_TOF_GRID, p) for p in encode_tof_sensor_frames(f, frame_id=1)]
+    b = [decode_payload(TYPE_TOF_GRID, p) for p in encode_tof_sensor_frames(f, frame_id=2)]
     asm = TofGridAssembler()
     assert asm.push(a[0]) is None
-    assert asm.push(b[0]) is None and asm.discarded == 1       # frame 1 의 두 번째 조각 유실 → 폐기
+    assert asm.push(b[0]) is None and asm.discarded == 1       # 표본 1 의 센서 B 프레임 유실 → 폐기
     assert asm.push(b[1])["frame_id"] == 2 and asm.completed == 1
-    # 같은 조각을 두 번 받아도 완성으로 치지 않는다
+    # 같은 센서 프레임을 두 번 받아도 완성으로 치지 않는다
     assert asm.push(a[1]) is None and asm.push(a[1]) is None
 
 
 class _StubPosture:
     def __init__(self):
-        self.grids = []
+        self.samples = []
 
-    def update(self, grid, now):
-        self.grids.append(grid)
+    def update(self, sample, now):
+        self.samples.append(sample)
         return {"posture": "recline", "posture_confidence": 0.8, "baseline_ready": True}
 
 
@@ -173,11 +177,11 @@ def test_tof_grid_lines_assemble_into_cache_and_feed_posture():
     assert src.feed_line(lines[0]) == "tof_grid_part" and cache.tof_grid is None
     assert src.feed_line(lines[1]) == "tof_grid"
     view = cache.snapshot()
-    assert view.tof_grid.data["grid_width"] == 16 and view.tof_grid.data["ts_ms"] == 500 and view.tof_grid.seq == 0x2A
-    assert view.tof_grid.data["distance_mm"] == golden_grid()[0]
-    assert view.tof_mlp.data["posture"] == "recline" and stub.grids[0]["frame_id"] == 0x2A
+    assert view.tof_grid.data["grid_width"] == 8 and view.tof_grid.data["ts_ms"] == 500 and view.tof_grid.seq == 0x2A
+    assert view.tof_grid.data["sensors"][0]["distance_mm"] == golden_grid()[0][:64]
+    assert view.tof_mlp.data["posture"] == "recline" and stub.samples[0]["frame_id"] == 0x2A
     assert src.stats.grid_parts == 2 and src.stats.grids == 1 and src.stats.unknown_types == {}
-    # 모델이 없어도 격자는 캐시에 남는다
+    # 모델이 없어도 표본은 캐시에 남는다
     plain = UartLineSource(SensorCache())
     assert [plain.feed_line(l) for l in lines] == ["tof_grid_part", "tof_grid"] and plain.cache.tof_mlp is None
     # raw 리더도 같은 경로

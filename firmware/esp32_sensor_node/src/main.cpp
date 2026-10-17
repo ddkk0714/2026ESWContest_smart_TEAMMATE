@@ -138,18 +138,23 @@ void writeTofPostureUart(uint32_t now_ms) {
 #endif
 }
 
-// 원본 격자 → TYPE 0x05 조각들(16×8 이면 2개). 자세 AI 모델은 Pi 4 에서 돈다(10-17 결정).
-// 조각마다 같은 now_ms·frame_id 를 쓰고 SEQ 만 올라간다. 한 조각이라도 못 쓰면 그 격자는 버린다
-// (hub 는 frame_id 가 바뀌면 미완성 격자를 폐기한다).
+// 센서별 원본 8×8 → TYPE 0x05 프레임(살아 있는 센서마다 하나, 같은 now_ms·frame_id, SEQ 만 올라감).
+// 자세 AI 모델은 Pi 4 에서 센서별로 추론해 융합한다(10-17 표준 — TofPayload.h). 16×8 스티칭은 보내지 않는다.
+// 한 프레임이라도 못 쓰면 나머지는 건너뛴다(hub 는 frame_id 가 바뀌면 미완성 표본을 폐기한다).
 void writeTofGridUart(uint32_t now_ms) {
 #if DESKMATE_UART2_TX
   static uint8_t payload[kTofGridMaxPayloadSize];  // 200 B — loop 스택 대신 정적
-  const uint8_t parts = tofGridPartCount(tof.width(), tof.height());
-  if (parts == 0) return;
+  const uint8_t sensors = tof.okCount();
+  if (sensors == 0) return;
   const uint8_t frame_id = tof_grid_frame_id++;
-  for (uint8_t part = 0; part < parts; ++part) {
-    const uint16_t len = encodeTofGridPart(tof.distance(), tof.status(), tof.width(), tof.height(), part,
-                                           frame_id, tof.okMask(), payload);
+  const uint8_t flags = (DESKMATE_TOF_FLIP_ROWS ? kTofGridFlagFlipRows : 0) |
+                        (DESKMATE_TOF_FLIP_COLS ? kTofGridFlagFlipCols : 0) |
+                        (DESKMATE_TOF_STACK_ROWS ? kTofGridFlagStackRows : 0) |
+                        (DESKMATE_TOF_SWAP ? kTofGridFlagSwap : 0);
+  for (uint8_t i = 0; i < DESKMATE_TOF_COUNT; ++i) {
+    if (!tof.sensorOk(i)) continue;
+    const uint16_t len = encodeTofSensorFrame(tof.sensorDistance(i), tof.sensorStatus(i), kTofSensorW, kTofSensorH,
+                                              i, sensors, frame_id, tof.okMask(), flags, payload);
     if (len == 0 ||
         !writeUartFrame(pi4_serial, kFrameTypeTofGrid, tof_grid_sequence++, now_ms, payload, len)) {
       return;
@@ -255,7 +260,7 @@ void loop() {
   }
   if (mmwave_ready) drowsy_detector.update(mmwave, now_ms);
 
-  // ToF: 매 루프 폴링(15 Hz ×2). 원본 격자(0x05)는 새 격자가 생긴 뒤 5 Hz 로 솎아 보내고,
+  // ToF: 매 루프 폴링(15 Hz ×2). 원본 8×8(0x05, 센서별)은 새 표본이 생긴 뒤 5 Hz 로 솎아 보내고,
   // 규칙 특징은 5 Hz 로, 자세 요약·USB 진단은 1 Hz 로 낸다.
   // 살아 있는 센서가 없으면 아무것도 보내지 않는다 — hub 는 freshness 로 미가용 처리한다.
   tof.poll(now_ms);

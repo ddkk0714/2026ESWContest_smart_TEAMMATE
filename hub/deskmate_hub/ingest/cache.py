@@ -35,7 +35,7 @@ class SensorCache:
     keystroke: Sample | None = None
     tof: Sample | None = None            # UART 0x03 tof_feature (5 Hz)
     tof_posture: Sample | None = None    # UART 0x04 자세 요약 (1 Hz)
-    tof_grid: Sample | None = None       # UART 0x05 원본 격자(조립 완료분, 5 Hz). 메모리 전용 — 발행·기록 금지
+    tof_grid: Sample | None = None       # UART 0x05 원본 8×8 센서 프레임 묶음(표본 하나, 5 Hz). 메모리 전용 — 발행·기록 금지
     tof_mlp: Sample | None = None        # posture/tof_mlp 가 격자마다 낸 자세 판정 (1 s 다수결)
     feedback: deque = field(default_factory=lambda: deque(maxlen=16))
     control_results: deque = field(default_factory=lambda: deque(maxlen=64))

@@ -9,8 +9,9 @@ L8 ─I2C─ ESP32 (env:tof_logger) ──USB 921600──► tof_log.py ──�
 ```
 
 - **수집 모드 전용이다.** 운영 펌웨어(`env:esp32dev`)에는 들어가지 않는다. 여기서는 원본 zone 배열이 USB 로
-  개발 PC 에 온다. 운영 펌웨어는 같은 원본 격자를 UART2 `0x05` 로 Pi 4 에만 보내고(2026-10-17, Pi 4 가 자세 MLP 를
-  돌린다) MQTT·로그로는 내보내지 않는다(firmware README "원칙"). 두 경로의 `d`(mm, -1)·`st`(원 status) 값은 같다.
+  개발 PC 에 온다. 운영 펌웨어는 같은 원본을 **센서별 8×8** UART2 `0x05` 프레임으로 Pi 4 에만 보내고(2026-10-17 표준 — 두 센서
+  시야가 대부분 겹쳐 16×8 은 한 장면이 아니다) MQTT·로그로는 내보내지 않는다(firmware README "원칙"). 두 경로의 `d`(mm, -1)·`st`(원
+  status) 값은 같다. 여기 세션의 16×8 `d` 는 열 0~7 = 센서 A, 8~15 = B 로 나눠 센서별 8×8 로 쓴다(학습·평가 단위도 센서 하나).
 - 한 프레임에 **센서 원본 8×8 거리·상태값**, **같은 프레임의 규칙 판정**, **그때 안내 중인 지시 자세**가 같이 남는다.
   - 지시 자세가 정답이다. 규칙 판정은 비교 대상이자 약한 라벨이다.
   - 규칙 라벨만으로 학습하면 모델은 규칙의 오류까지 그대로 배운다. 그래서 **평가는 항상 지시 자세로 한다.**
@@ -114,7 +115,7 @@ cd ../../firmware/esp32_sensor_node && pio test -e native -f test_tof_line   # �
   **2026-10-17 결정: 자세 모델 추론은 ESP32 가 아니라 Pi 4 에서 한다.** Pi 4 안의 배치는 미확정이고 실측 성능으로 정한다
   (후보 A 허브 Python MLP / 후보 B 별도 서비스 `deskmate_tofposture` + `tof_sim_v5` PostureNet — `docs/data-spec.md` §6.1).
   여기서 모은 실측 세션이 그 비교의 평가셋이다. 후보 A 의 경로는 이미 들어가 있다 —
-  ESP32 가 원본 격자를 UART `0x05`(행 단위 조각, 5 Hz)로 Pi 4 에 보내고(`firmware/README.md` "원칙"·`docs/data-spec.md` §13.1),
+  ESP32 가 원본 8×8 을 센서별 UART `0x05` 프레임(같은 frame_id, 5 Hz)으로 Pi 4 에 보내고(`firmware/README.md` "원칙"·`docs/data-spec.md` §13.1),
   Pi 4 `hub/deskmate_hub/posture/tof_mlp.py` 가 numpy 없는 순수 Python 으로 MLP 를 돌린다(제한 Python 에 numpy 가 없어서).
   가중치는 `python ../tof_sim/export_mlp_json.py <모델>.npz ../../hub/deskmate_hub/config/tof_mlp.json --grid 16x8`.
   지금 들어 있는 가중치는 시뮬 8×8 모델이라 실측 16×8 격자가 들어오면 MLP 는 `grid 16x8 ≠ model` 로 비켜서고

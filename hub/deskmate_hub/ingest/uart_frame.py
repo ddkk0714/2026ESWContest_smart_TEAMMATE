@@ -23,7 +23,7 @@ CRC_LEN = 2
 TYPE_TOF_DEBUG_DEPTH = 0x01
 TYPE_TOF_FEATURES = 0x03
 TYPE_TOF_POSTURE = 0x04
-TYPE_TOF_GRID = 0x05          # 원본 거리·상태 격자 조각 (Pi 4 자세 모델 입력, 2026-10-17)
+TYPE_TOF_GRID = 0x05          # 센서 한 개의 원본 8×8 거리·상태 프레임 (Pi 4 자세 모델 입력, 2026-10-17)
 TYPE_ENV = 0x10
 TYPE_MMWAVE = 0x20
 TYPE_HEARTBEAT = 0xF0
@@ -43,13 +43,19 @@ _HEARTBEAT = struct.Struct("<IHB")         # 7 B (+ tof_ok u8, 펌웨어 0x0120 
 #   · baseline_dev_pct u8 · flags u8 · nods u8
 _TOF = struct.Struct("<BBBBhHHBBBHHBhHBBBB")
 _TOF_POSTURE = struct.Struct("<BBBB")      # TYPE 0x04: present · posture · confidence_pct · drowsy
-# TYPE 0x05 tof_grid 조각 — firmware/.../sensors/tof/TofPayload.h. 16×8 int16+u8 = 384 B 가 LEN 상한 256 B 를
-# 넘어 행 단위로 조각 낸다(조각당 ≤64 zone). 헤더 8 B 뒤에 dist i16×n, status u8×n.
-#   grid_w · grid_h · row0 · rows · frame_id · sensor_mask(b0 A, b1 B) · part · parts
+# TYPE 0x05 tof_grid — 센서 한 개의 원본 8×8 프레임(firmware/.../sensors/tof/TofPayload.h). 표준(10-17): ToF 의 단위는
+# "센서 하나의 8×8". 두 센서는 시야가 대부분 겹쳐 16×8 스티칭은 한 장면이 아니므로 센서마다 한 프레임씩(같은 frame_id) 온다.
+# 헤더 8 B 뒤에 dist i16×n, status u8×n (n = grid_w×grid_h ≤ 64 → 최대 200 B, LEN 상한 256 B 안).
+#   grid_w · grid_h · sensor(물리 0 A/1 B) · sensors(이 표본의 센서 수) · frame_id · sensor_mask(b0 A, b1 B)
+#   · flags(b0 flip_rows, b1 flip_cols, b2 stack_rows, b3 swap) · reserved
 _TOF_GRID_HEADER = struct.Struct("<BBBBBBBB")
-TOF_GRID_MAX_ZONES_PER_PART = 64
+TOF_GRID_MAX_ZONES = 64
 TOF_GRID_NO_TARGET_MM = -1
 TOF_GRID_NO_TARGET_STATUS = 255
+TOF_GRID_FLAG_FLIP_ROWS = 0x01
+TOF_GRID_FLAG_FLIP_COLS = 0x02
+TOF_GRID_FLAG_STACK_ROWS = 0x04
+TOF_GRID_FLAG_SWAP = 0x08
 TOF_FLAG_BASELINE_READY = 0x01
 TOF_FLAG_DROWSY = 0x02
 TOF_FLAG_GEOMETRY_VALID = 0x04
@@ -255,16 +261,16 @@ def decode_payload(ftype: int, payload: bytes) -> dict[str, Any] | None:
     if ftype == TYPE_TOF_GRID:
         if len(payload) < _TOF_GRID_HEADER.size:
             raise FrameError("tof grid payload short")
-        grid_w, grid_h, row0, rows, frame_id, mask, part, parts = _TOF_GRID_HEADER.unpack_from(payload)
-        n = rows * grid_w
-        if (n == 0 or n > TOF_GRID_MAX_ZONES_PER_PART or parts == 0 or part >= parts
-                or row0 + rows > grid_h or len(payload) < _TOF_GRID_HEADER.size + 3 * n):
+        grid_w, grid_h, sensor, sensors, frame_id, mask, flags, _reserved = _TOF_GRID_HEADER.unpack_from(payload)
+        n = grid_w * grid_h
+        if (n == 0 or n > TOF_GRID_MAX_ZONES or sensors == 0 or sensor >= 8 or not (mask >> sensor) & 1
+                or len(payload) < _TOF_GRID_HEADER.size + 3 * n):
             raise FrameError("tof grid header inconsistent")
         off = _TOF_GRID_HEADER.size
         dist = list(struct.unpack_from(f"<{n}h", payload, off))
         status = list(payload[off + 2 * n:off + 3 * n])
-        return {"grid_width": int(grid_w), "grid_height": int(grid_h), "row0": int(row0), "rows": int(rows),
-                "frame_id": int(frame_id), "sensors_ok": int(mask), "part": int(part), "parts": int(parts),
+        return {"grid_width": int(grid_w), "grid_height": int(grid_h), "sensor": int(sensor), "sensors": int(sensors),
+                "frame_id": int(frame_id), "sensors_ok": int(mask), "flags": int(flags),
                 "distance_mm": dist, "status": status}
     return None
 
@@ -328,87 +334,67 @@ def encode_payload(ftype: int, data: dict[str, Any]) -> bytes:
     if ftype == TYPE_TOF_GRID:
         dist, status = list(data["distance_mm"]), list(data["status"])
         n = len(dist)
-        if n != len(status) or n != int(data["rows"]) * int(data["grid_width"]):
-            raise FrameError("tof grid part length mismatch")
-        head = _TOF_GRID_HEADER.pack(int(data["grid_width"]), int(data["grid_height"]), int(data["row0"]),
-                                     int(data["rows"]), int(data["frame_id"]) & 0xFF,
-                                     int(data.get("sensors_ok") or 0), int(data["part"]), int(data["parts"]))
+        if n != len(status) or n != int(data["grid_width"]) * int(data["grid_height"]):
+            raise FrameError("tof grid frame length mismatch")
+        head = _TOF_GRID_HEADER.pack(int(data["grid_width"]), int(data["grid_height"]), int(data["sensor"]),
+                                     int(data["sensors"]), int(data["frame_id"]) & 0xFF,
+                                     int(data.get("sensors_ok") or 0), int(data.get("flags") or 0), 0)
         body = struct.pack(f"<{n}h", *(TOF_GRID_NO_TARGET_MM if d is None else int(d) for d in dist))
         return head + body + bytes(int(s) & 0xFF for s in status)
     raise FrameError(f"no encoder for type {ftype:#04x}")
 
 
-# ---------------------------------------------------------------- tof grid 조각내기·조립
+# ---------------------------------------------------------------- tof 센서 프레임 만들기·모으기
 
-def tof_grid_rows_per_part(grid_w: int) -> int:
-    return max(1, TOF_GRID_MAX_ZONES_PER_PART // grid_w) if grid_w else 0
-
-
-def tof_grid_part_count(grid_w: int, grid_h: int) -> int:
-    per = tof_grid_rows_per_part(grid_w)
-    if per == 0 or grid_h == 0 or grid_w > TOF_GRID_MAX_ZONES_PER_PART:
-        return 0
-    return (grid_h + per - 1) // per
-
-
-def encode_tof_grid(grid_w: int, grid_h: int, distance_mm: list[int | None], status: list[int], *,
-                    frame_id: int, sensors_ok: int = 3) -> list[bytes]:
-    """전체 격자(row-major) → TYPE 0x05 payload 조각 목록. 펌웨어 encodeTofGridPart 와 같은 규칙(테스트·PC 시뮬레이터용)."""
-    parts = tof_grid_part_count(grid_w, grid_h)
-    if parts == 0 or len(distance_mm) != grid_w * grid_h or len(status) != grid_w * grid_h:
-        raise FrameError("tof grid shape")
-    per = tof_grid_rows_per_part(grid_w)
+def encode_tof_sensor_frames(frames: dict[int, tuple[list[int | None], list[int]]], *, frame_id: int,
+                             flags: int = 0, grid_w: int = 8, grid_h: int = 8) -> list[bytes]:
+    """{센서 번호: (dist, status)} → 센서마다 TYPE 0x05 payload 하나. 펌웨어 encodeTofSensorFrame 과 같은 규칙(테스트·PC 시뮬레이터용).
+    sensor_mask 는 주어진 센서 번호들로 만든다."""
+    if not frames:
+        raise FrameError("tof grid: no sensors")
+    mask = 0
+    for idx in frames:
+        mask |= 1 << int(idx)
     out: list[bytes] = []
-    for part in range(parts):
-        row0 = part * per
-        rows = min(per, grid_h - row0)
-        seg = slice(row0 * grid_w, (row0 + rows) * grid_w)
+    for idx in sorted(frames):
+        dist, status = frames[idx]
         out.append(encode_payload(TYPE_TOF_GRID, {
-            "grid_width": grid_w, "grid_height": grid_h, "row0": row0, "rows": rows, "frame_id": frame_id,
-            "sensors_ok": sensors_ok, "part": part, "parts": parts,
-            "distance_mm": distance_mm[seg], "status": status[seg]}))
+            "grid_width": grid_w, "grid_height": grid_h, "sensor": idx, "sensors": len(frames), "frame_id": frame_id,
+            "sensors_ok": mask, "flags": flags, "distance_mm": dist, "status": status}))
     return out
 
 
 class TofGridAssembler:
-    """0x05 조각들 → 전체 격자. frame_id 가 바뀌면 미완성 격자는 버린다(조각 유실 = 그 격자 폐기).
+    """같은 frame_id 의 센서 프레임들 → 표본 하나. frame_id 가 바뀌면 미완성 표본은 버린다(프레임 유실 = 그 표본 폐기).
 
-    완성된 격자: {"grid_width","grid_height","frame_id","sensors_ok","distance_mm"(w×h, -1 = 타깃 없음),"status"}
+    완성된 표본: {"grid_width","grid_height","frame_id","sensors_ok","flags",
+                  "sensors": {센서 번호: {"distance_mm"(w×h, -1 = 타깃 없음), "status"}}}
     """
 
     def __init__(self) -> None:
-        self._key: tuple[int, int, int, int] | None = None   # frame_id, w, h, parts
-        self._have: set[int] = set()
-        self._dist: list[int] = []
-        self._status: list[int] = []
+        self._key: tuple[int, int, int, int] | None = None   # frame_id, w, h, sensors
+        self._frames: dict[int, dict[str, list[int]]] = {}
         self._mask = 0
+        self._flags = 0
         self.completed = 0
         self.discarded = 0
 
-    def push(self, part: dict[str, Any]) -> dict[str, Any] | None:
-        key = (part["frame_id"], part["grid_width"], part["grid_height"], part["parts"])
+    def push(self, frame: dict[str, Any]) -> dict[str, Any] | None:
+        key = (frame["frame_id"], frame["grid_width"], frame["grid_height"], frame["sensors"])
         if key != self._key:
-            if self._key is not None and self._have:
+            if self._key is not None and self._frames:
                 self.discarded += 1
-            self._key = key
-            self._have = set()
-            n = part["grid_width"] * part["grid_height"]
-            self._dist = [TOF_GRID_NO_TARGET_MM] * n
-            self._status = [TOF_GRID_NO_TARGET_STATUS] * n
-            self._mask = 0
-        start = part["row0"] * part["grid_width"]
-        n = len(part["distance_mm"])
-        self._dist[start:start + n] = part["distance_mm"]
-        self._status[start:start + n] = part["status"]
-        self._mask |= int(part.get("sensors_ok") or 0)
-        self._have.add(part["part"])
-        if len(self._have) < part["parts"]:
+            self._key, self._frames, self._mask, self._flags = key, {}, 0, 0
+        self._frames[int(frame["sensor"])] = {"distance_mm": frame["distance_mm"], "status": frame["status"]}
+        self._mask |= int(frame.get("sensors_ok") or 0)
+        self._flags = int(frame.get("flags") or 0)
+        if len(self._frames) < frame["sensors"]:
             return None
-        grid = {"grid_width": key[1], "grid_height": key[2], "frame_id": key[0], "sensors_ok": self._mask,
-                "distance_mm": self._dist, "status": self._status}
-        self._key, self._have, self._dist, self._status = None, set(), [], []
+        sample = {"grid_width": key[1], "grid_height": key[2], "frame_id": key[0], "sensors_ok": self._mask,
+                  "flags": self._flags, "sensors": self._frames}
+        self._key, self._frames = None, {}
         self.completed += 1
-        return grid
+        return sample
 
 
 KIND_BY_TYPE = {TYPE_MMWAVE: "mmwave", TYPE_ENV: "env", TYPE_TOF_FEATURES: "tof",
