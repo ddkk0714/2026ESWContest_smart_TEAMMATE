@@ -1,5 +1,13 @@
 # atlas-tof — Pi 4 ToF 자세 서비스 (VL53L8CX ×2 → PostureNet)
 
+> **10-17 실기 반영.** 운영은 `docs/pi4-tofposture.md` 를 본다. 이 판에서 바뀐 것:
+> - UART `0x05` **표준 배치**(data-spec §13.1, 펌웨어 `TofPayload.h` 가 실제로 보내는 것)를 읽는다. 옛 v1 배치(첫 바이트 1)도 그대로 읽는다.
+>   표준 배치의 `flags` 는 펌웨어가 이미 적용한 방향이라 서비스는 뒤집지 않는다. `frame_id`(u8) 순환은 0xFF 로 잰다.
+> - JSON 키 뒤 공백(`"key": v`)을 허용한다.
+> - `relay/uart_relay_board.cpp` + `relay.sh`: hub 없이 `/dev/ttyAMA0` → tcp:9100 중계(HTTP `:8772/raw` 원본 격자 포함).
+>   hub 가 같은 UART 를 읽으면 안 된다. 운영은 hub 의 `uart_relay`(PR #44).
+> - `pc/`: `posture_view.html`(실시간 화면), `uart_relay_pc.py`(PC 에서 ssh 로 끌어와 중계), `noise_baseline.py`(잡음 기준선), `tof_live.py`.
+
 ```
 VL53L8CX ─I2C─ ESP32(bring-up / tof_logger 펌웨어) ─USB─► /dev/ttyUSB0 ┐
 VL53L8CX ─I2C─ ESP32                               ─USB─► /dev/ttyUSB1 ┼─► deskmate_tofposture ─HTTP :8771─► hub · 앱 · curl

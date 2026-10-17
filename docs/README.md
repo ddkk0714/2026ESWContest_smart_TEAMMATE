@@ -28,6 +28,8 @@
 |---|---|
 | [`hardware.md`](hardware.md) | 장비 역할, 배선, 센서, BOM |
 | [`atlas-build-handoff.md`](atlas-build-handoff.md) | Pi 5 Atlas IPK 빌드·실기 배포 점검 |
+| [`pi4-tofposture.md`](pi4-tofposture.md) | Pi 4 ToF 자세 서비스(`hub/atlas-tof`) 올리기·입력 경로·방향·실시간 화면·증상별 원인 |
+| [`tof-noise-baseline.md`](tof-noise-baseline.md) | 벽만 보게 두고 잰 ToF 잡음으로 "이 정도는 잡음" 기준 정하기(지그 나온 뒤) |
 | [`ilink-bluetooth-lamp.md`](ilink-bluetooth-lamp.md) | iLink BLE 조명 프로토콜·상태 피드백·PC 연결 절차 |
 | [`submission.md`](submission.md) | 결선 제출물·마감·시연 규칙 |
 | [`field-checklist.md`](field-checklist.md) | 실기 체크리스트 — 통신부터 센서·FSM·개입 화면·블루투스·시연까지, 기록표 포함 |
