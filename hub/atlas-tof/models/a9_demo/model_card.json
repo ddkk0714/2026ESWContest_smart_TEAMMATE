@@ -1,0 +1,171 @@
+{
+ "run": "ubai_a9_demo",
+ "checkpoint": "ckpt_best.pt",
+ "step": 33699,
+ "frames": 690155520,
+ "train_hours": 23.53,
+ "best_macro_f1": 0.8957930450923227,
+ "parameters": 72569,
+ "labels": [
+  "upright",
+  "lean_forward",
+  "recline",
+  "face_down",
+  "chin_rest",
+  "drowsy",
+  "away",
+  "misplaced",
+  "forward_head"
+ ],
+ "sensor": {
+  "name": "vl53l8cx",
+  "width": 8,
+  "height": 8,
+  "fov_h_deg": 45.0,
+  "fov_v_deg": 45.0
+ },
+ "hidden": 64,
+ "input": {
+  "frame": "센서 프레임 하나 = (2, H, W) float32",
+  "channel_0": "거리 mm / 4000 (유효한 zone 만, 아니면 0)",
+  "channel_1": "유효 zone 이면 1, 아니면 0. 유효 = 상태값 5·6·9·10 이고 거리 >= 0",
+  "layout": "row 0 = 위쪽, col 0 = 센서에서 볼 때 왼쪽 (row-major, 펌웨어 TofPosture 와 같음)",
+  "state": "GRU 은닉 상태 h (1, 1, hidden). 세션 시작 때 0 으로, 프레임마다 이어서 넘긴다",
+  "output": "logits (classes,) — argmax 가 자세. 라벨 순서는 labels",
+  "rate_hz": 10.0
+ },
+ "exported": "2026-10-17 00:56:52",
+ "bin": {
+  "file": "posture_net.bin",
+  "magic": "TOFPN001",
+  "header": "int32 H, W, classes, hidden",
+  "dtype": "float32 little-endian",
+  "tensors": [
+   {
+    "name": "enc.0.weight",
+    "shape": [
+     16,
+     2,
+     3,
+     3
+    ],
+    "offset_floats": 0,
+    "count": 288
+   },
+   {
+    "name": "enc.0.bias",
+    "shape": [
+     16
+    ],
+    "offset_floats": 288,
+    "count": 16
+   },
+   {
+    "name": "enc.2.weight",
+    "shape": [
+     32,
+     16,
+     3,
+     3
+    ],
+    "offset_floats": 304,
+    "count": 4608
+   },
+   {
+    "name": "enc.2.bias",
+    "shape": [
+     32
+    ],
+    "offset_floats": 4912,
+    "count": 32
+   },
+   {
+    "name": "enc.4.weight",
+    "shape": [
+     32,
+     32,
+     3,
+     3
+    ],
+    "offset_floats": 4944,
+    "count": 9216
+   },
+   {
+    "name": "enc.4.bias",
+    "shape": [
+     32
+    ],
+    "offset_floats": 14160,
+    "count": 32
+   },
+   {
+    "name": "enc.8.weight",
+    "shape": [
+     64,
+     512
+    ],
+    "offset_floats": 14192,
+    "count": 32768
+   },
+   {
+    "name": "enc.8.bias",
+    "shape": [
+     64
+    ],
+    "offset_floats": 46960,
+    "count": 64
+   },
+   {
+    "name": "gru.weight_ih_l0",
+    "shape": [
+     192,
+     64
+    ],
+    "offset_floats": 47024,
+    "count": 12288
+   },
+   {
+    "name": "gru.weight_hh_l0",
+    "shape": [
+     192,
+     64
+    ],
+    "offset_floats": 59312,
+    "count": 12288
+   },
+   {
+    "name": "gru.bias_ih_l0",
+    "shape": [
+     192
+    ],
+    "offset_floats": 71600,
+    "count": 192
+   },
+   {
+    "name": "gru.bias_hh_l0",
+    "shape": [
+     192
+    ],
+    "offset_floats": 71792,
+    "count": 192
+   },
+   {
+    "name": "head.weight",
+    "shape": [
+     9,
+     64
+    ],
+    "offset_floats": 71984,
+    "count": 576
+   },
+   {
+    "name": "head.bias",
+    "shape": [
+     9
+    ],
+    "offset_floats": 72560,
+    "count": 9
+   }
+  ]
+ }
+}

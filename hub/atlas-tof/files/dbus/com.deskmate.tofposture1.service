@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=com.deskmate.tofposture1
+Exec=/data/share/usr/atlas/services/com.deskmate.tofposture1/deskmate_tofposture
