@@ -19,17 +19,25 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "hub"))
 
 from deskmate_hub.ingest.uart_frame import (  # noqa: E402
-    TYPE_ENV, TYPE_HEARTBEAT, TYPE_MMWAVE, Frame, FrameError, cobs_encode, crc16_ccitt_false,
-    decode_frame, decode_payload, encode_frame, encode_payload, split_stream,
+    TYPE_ENV, TYPE_HEARTBEAT, TYPE_MMWAVE, TYPE_TOF_FEATURES, TYPE_TOF_POSTURE, Frame, FrameError,
+    cobs_encode, crc16_ccitt_false, decode_frame, decode_payload, encode_frame, encode_payload, split_stream,
 )
 
-_TYPES = {"mmwave": TYPE_MMWAVE, "env": TYPE_ENV, "heartbeat": TYPE_HEARTBEAT}
+_TYPES = {"mmwave": TYPE_MMWAVE, "env": TYPE_ENV, "heartbeat": TYPE_HEARTBEAT,
+          "tof": TYPE_TOF_FEATURES, "tof_posture": TYPE_TOF_POSTURE}
 _SAMPLES = {
+    "tof": {"present": True, "posture": "upright", "posture_confidence": 0.83, "motion_score": 0.05,
+            "head_delta_mm": -12, "nod_rate_hz": 0.05, "valid_zones": 120, "grid_width": 16, "grid_height": 8,
+            "coverage_ratio": 0.42, "presence_count": 54, "centroid_depth_mm": 612, "head_row_index": 0.25,
+            "shoulder_tilt_mm": 8, "motion_indicator_mm_s": 15, "posture_change_rate_per_min": 2,
+            "baseline_deviation": 0.37, "baseline_ready": True, "drowsy": False, "geometry_valid": True,
+            "sensors_ok": 3, "nods_in_window": 1},
+    "tof_posture": {"present": True, "posture": "upright", "posture_confidence": 0.83, "drowsy": False},
     "mmwave": {"present": True, "motion_state": "still", "motion_level": 12, "distance_cm": 55, "resp_bpm": 15,
                "resp_valid": True, "heart_bpm": None, "heart_valid": False, "drowsy_state": "AWAKE", "valid": True},
     "env": {"co2_ppm": 812, "temp_c": 26.4, "humidity_pct": 48.2, "lux": 310.0,
             "co2_valid": True, "temp_valid": True, "humidity_valid": True, "lux_valid": True},
-    "heartbeat": {"uptime_ms": 5000, "fw_version": 3, "mmwave_ok": True},
+    "heartbeat": {"uptime_ms": 5000, "fw_version": 3, "mmwave_ok": True, "tof_ok": 3},
 }
 
 

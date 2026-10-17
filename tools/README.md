@@ -7,6 +7,7 @@
 | 도구 | 용도 |
 |---|---|
 | [`node-red-visualizer/`](node-red-visualizer/README.md) | PC 에서 Pi 4 MQTT broker 를 구독·관찰하고 `state/phase`·`feedback/user`·`display/message` 합성 메시지를 주입. hub MQTT 발행이 생기기 전 화면 경로 확인용 |
+| [`sensor_monitor.py`](sensor_monitor.py) | ESP32 USB 를 직접 읽어 브라우저 한 페이지(기본 `127.0.0.1:8777`)에 **raw 와 판정을 같이** 보여준다 — 환경·mmWave 수치, ToF 두 센서 원본 8×8 히트맵(시작 때 `z` 로 켜는 `tof_grid` 줄, 펌웨어 0x0123+), 자세·재실·졸음 카드, 60 s 추이, 줄별 수신률, 보드 로그. 포트를 열 때 보드를 리셋하지 않는다. `python tools/sensor_monitor.py --port COM8 [--record out.jsonl]` |
 | [`uart_mqtt_bridge.py`](uart_mqtt_bridge.py) | ESP32 USB(UART0) JSON 라인을 MQTT 센서 envelope로 변환하고 날짜별 JSONL로 기록 |
 | [`mqtt_scenario_sim.py`](mqtt_scenario_sim.py) | 합성 센서 시나리오(착석→타이핑→정적/졸음→회복→이탈)를 계약 그대로 MQTT 로 발행. ESP32·collector 없이 hub·Node-RED·Pi 5 리허설 |
 | [`rehearsal_local.py`](rehearsal_local.py) | amqtt 로컬 브로커 + mock 플러그 + sim(short·demo) + `hub run --config fsm.demo.yaml` 을 한 번에 띄우고 전이 요약(약 6분). `--host 0.0.0.0` 이면 Pi 5 앱도 붙는다 |

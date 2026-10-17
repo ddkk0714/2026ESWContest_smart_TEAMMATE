@@ -23,15 +23,45 @@ CRC_LEN = 2
 TYPE_TOF_DEBUG_DEPTH = 0x01
 TYPE_TOF_FEATURES = 0x03
 TYPE_TOF_POSTURE = 0x04
+TYPE_TOF_GRID = 0x05          # 센서 한 개의 원본 8×8 거리·상태 프레임 (Pi 4 자세 모델 입력, 2026-10-17)
 TYPE_ENV = 0x10
 TYPE_MMWAVE = 0x20
 TYPE_HEARTBEAT = 0xF0
 
 _MOTION = {0: "none", 1: "still", 2: "active"}
 _DROWSY = {0: "NOPERSON", 1: "NOLOCK", 2: "WARMUP", 3: "AWAKE", 4: "DROWSY"}
+# 펌웨어 TofPosture enum 값 그대로 (firmware/.../preprocess/tof/TofPosture.h)
+_POSTURE = {0: "unknown", 1: "upright", 2: "lean_forward", 3: "recline", 4: "face_down",
+            5: "chin_rest", 6: "drowsy", 7: "away"}
 _MMWAVE = struct.Struct("<BBBHBBBBBB")     # 11 B
 _ENV = struct.Struct("<HhHHB")             # 9 B
-_HEARTBEAT = struct.Struct("<IHB")         # 7 B
+_HEARTBEAT = struct.Struct("<IHB")         # 7 B (+ tof_ok u8, 펌웨어 0x0120 부터 8 B)
+# TYPE 0x03 tof_feature 26 B — 필드 순서·단위는 firmware/.../sensors/tof/TofPayload.h
+#   present · posture · confidence_pct · motion_pct · head_delta_mm i16(0x7FFF null) · nod_rate_mhz u16(0xFFFF null)
+#   · valid_zones u16 · grid_w · grid_h · coverage_pct · presence_count u16 · centroid_mm u16(0xFFFF null)
+#   · head_row_pct u8(0xFF null) · shoulder_tilt_mm i16(0x7FFF null) · motion_mm_s u16 · change_per_min u8
+#   · baseline_dev_pct u8 · flags u8 · nods u8
+_TOF = struct.Struct("<BBBBhHHBBBHHBhHBBBB")
+_TOF_POSTURE = struct.Struct("<BBBB")      # TYPE 0x04: present · posture · confidence_pct · drowsy
+# TYPE 0x05 tof_grid — 센서 한 개의 원본 8×8 프레임(firmware/.../sensors/tof/TofPayload.h). 표준(10-17): ToF 의 단위는
+# "센서 하나의 8×8". 두 센서는 시야가 대부분 겹쳐 16×8 스티칭은 한 장면이 아니므로 센서마다 한 프레임씩(같은 frame_id) 온다.
+# 헤더 8 B 뒤에 dist i16×n, status u8×n (n = grid_w×grid_h ≤ 64 → 최대 200 B, LEN 상한 256 B 안).
+#   grid_w · grid_h · sensor(물리 0 A/1 B) · sensors(이 표본의 센서 수) · frame_id · sensor_mask(b0 A, b1 B)
+#   · flags(b0 flip_rows, b1 flip_cols, b2 stack_rows, b3 swap) · reserved
+_TOF_GRID_HEADER = struct.Struct("<BBBBBBBB")
+TOF_GRID_MAX_ZONES = 64
+TOF_GRID_NO_TARGET_MM = -1
+TOF_GRID_NO_TARGET_STATUS = 255
+TOF_GRID_FLAG_FLIP_ROWS = 0x01
+TOF_GRID_FLAG_FLIP_COLS = 0x02
+TOF_GRID_FLAG_STACK_ROWS = 0x04
+TOF_GRID_FLAG_SWAP = 0x08
+TOF_FLAG_BASELINE_READY = 0x01
+TOF_FLAG_DROWSY = 0x02
+TOF_FLAG_GEOMETRY_VALID = 0x04
+TOF_FLAG_SENSOR_A = 0x08
+TOF_FLAG_SENSOR_B = 0x10
+_TOF_NULL_I16 = 0x7FFF
 
 
 class FrameError(ValueError):
@@ -187,8 +217,71 @@ def decode_payload(ftype: int, payload: bytes) -> dict[str, Any] | None:
         if len(payload) < _HEARTBEAT.size:
             raise FrameError("heartbeat payload short")
         uptime, fw, mm_ok = _HEARTBEAT.unpack_from(payload)
-        return {"uptime_ms": int(uptime), "fw_version": int(fw), "mmwave_ok": bool(mm_ok)}
+        out = {"uptime_ms": int(uptime), "fw_version": int(fw), "mmwave_ok": bool(mm_ok)}
+        if len(payload) > _HEARTBEAT.size:  # 펌웨어 0x0120 부터: ToF 센서 동작 비트(b0 A, b1 B)
+            out["tof_ok"] = int(payload[_HEARTBEAT.size])
+        return out
+    if ftype == TYPE_TOF_FEATURES:
+        if len(payload) < _TOF.size:
+            raise FrameError("tof payload short")
+        (present, posture, conf, motion, head_delta, nod_mhz, valid_zones, grid_w, grid_h, coverage,
+         presence_count, centroid, head_row, shoulder, motion_mm_s, change_rate, baseline_dev, flags,
+         nods) = _TOF.unpack_from(payload)
+        sensors = (1 if flags & TOF_FLAG_SENSOR_A else 0) | (2 if flags & TOF_FLAG_SENSOR_B else 0)
+        return {
+            "present": bool(present),
+            "posture": _POSTURE.get(posture, "unknown"),
+            "posture_confidence": conf / 100.0,
+            "motion_score": motion / 100.0,
+            "head_delta_mm": None if head_delta == _TOF_NULL_I16 else int(head_delta),
+            "nod_rate_hz": None if nod_mhz == 0xFFFF else nod_mhz / 1000.0,
+            "valid_zones": int(valid_zones),
+            "grid_width": int(grid_w),
+            "grid_height": int(grid_h),
+            "coverage_ratio": coverage / 100.0,
+            "presence_count": int(presence_count),
+            "centroid_depth_mm": _nullable(centroid, 0xFFFF),
+            "head_row_index": None if head_row == 0xFF else head_row / 100.0,
+            "shoulder_tilt_mm": None if shoulder == _TOF_NULL_I16 else int(shoulder),
+            "motion_indicator_mm_s": int(motion_mm_s),
+            "posture_change_rate_per_min": int(change_rate),
+            "baseline_deviation": baseline_dev / 100.0,
+            "baseline_ready": bool(flags & TOF_FLAG_BASELINE_READY),
+            "drowsy": bool(flags & TOF_FLAG_DROWSY),
+            "geometry_valid": bool(flags & TOF_FLAG_GEOMETRY_VALID),
+            "sensors_ok": sensors,
+            "nods_in_window": int(nods),
+        }
+    if ftype == TYPE_TOF_POSTURE:
+        if len(payload) < _TOF_POSTURE.size:
+            raise FrameError("tof posture payload short")
+        present, posture, conf, drowsy = _TOF_POSTURE.unpack_from(payload)
+        return {"present": bool(present), "posture": _POSTURE.get(posture, "unknown"),
+                "posture_confidence": conf / 100.0, "drowsy": bool(drowsy)}
+    if ftype == TYPE_TOF_GRID:
+        if len(payload) < _TOF_GRID_HEADER.size:
+            raise FrameError("tof grid payload short")
+        grid_w, grid_h, sensor, sensors, frame_id, mask, flags, _reserved = _TOF_GRID_HEADER.unpack_from(payload)
+        n = grid_w * grid_h
+        if (n == 0 or n > TOF_GRID_MAX_ZONES or sensors == 0 or sensor >= 8 or not (mask >> sensor) & 1
+                or len(payload) < _TOF_GRID_HEADER.size + 3 * n):
+            raise FrameError("tof grid header inconsistent")
+        off = _TOF_GRID_HEADER.size
+        dist = list(struct.unpack_from(f"<{n}h", payload, off))
+        status = list(payload[off + 2 * n:off + 3 * n])
+        return {"grid_width": int(grid_w), "grid_height": int(grid_h), "sensor": int(sensor), "sensors": int(sensors),
+                "frame_id": int(frame_id), "sensors_ok": int(mask), "flags": int(flags),
+                "distance_mm": dist, "status": status}
     return None
+
+
+def _pct(value: Any, limit: int = 100) -> int:
+    v = int(round(float(value or 0.0) * 100))
+    return max(0, min(limit, v))
+
+
+def _posture_code(name: Any) -> int:
+    return {v: k for k, v in _POSTURE.items()}.get(str(name or "unknown"), 0)
 
 
 def encode_payload(ftype: int, data: dict[str, Any]) -> bytes:
@@ -211,9 +304,98 @@ def encode_payload(ftype: int, data: dict[str, Any]) -> bytes:
             int(round((data.get("humidity_pct") or 0.0) * 10)), int(data.get("lux") or 0), bits,
         )
     if ftype == TYPE_HEARTBEAT:
-        return _HEARTBEAT.pack(int(data.get("uptime_ms") or 0), int(data.get("fw_version") or 0),
-                               int(bool(data.get("mmwave_ok"))))
+        out = _HEARTBEAT.pack(int(data.get("uptime_ms") or 0), int(data.get("fw_version") or 0),
+                              int(bool(data.get("mmwave_ok"))))
+        if data.get("tof_ok") is not None:
+            out += bytes([int(data["tof_ok"]) & 0xFF])
+        return out
+    if ftype == TYPE_TOF_FEATURES:
+        flags = ((TOF_FLAG_BASELINE_READY if data.get("baseline_ready") else 0)
+                 | (TOF_FLAG_DROWSY if data.get("drowsy") else 0)
+                 | (TOF_FLAG_GEOMETRY_VALID if data.get("geometry_valid") else 0)
+                 | (TOF_FLAG_SENSOR_A if int(data.get("sensors_ok") or 0) & 1 else 0)
+                 | (TOF_FLAG_SENSOR_B if int(data.get("sensors_ok") or 0) & 2 else 0))
+        return _TOF.pack(
+            int(bool(data.get("present"))), _posture_code(data.get("posture")),
+            _pct(data.get("posture_confidence")), _pct(data.get("motion_score")),
+            _TOF_NULL_I16 if data.get("head_delta_mm") is None else int(data["head_delta_mm"]),
+            0xFFFF if data.get("nod_rate_hz") is None else int(round(float(data["nod_rate_hz"]) * 1000)),
+            int(data.get("valid_zones") or 0), int(data.get("grid_width") or 0), int(data.get("grid_height") or 0),
+            _pct(data.get("coverage_ratio")), int(data.get("presence_count") or 0),
+            0xFFFF if data.get("centroid_depth_mm") is None else int(data["centroid_depth_mm"]),
+            0xFF if data.get("head_row_index") is None else _pct(data["head_row_index"]),
+            _TOF_NULL_I16 if data.get("shoulder_tilt_mm") is None else int(data["shoulder_tilt_mm"]),
+            int(data.get("motion_indicator_mm_s") or 0), int(data.get("posture_change_rate_per_min") or 0),
+            _pct(data.get("baseline_deviation"), 255), flags, int(data.get("nods_in_window") or 0),
+        )
+    if ftype == TYPE_TOF_POSTURE:
+        return _TOF_POSTURE.pack(int(bool(data.get("present"))), _posture_code(data.get("posture")),
+                                 _pct(data.get("posture_confidence")), int(bool(data.get("drowsy"))))
+    if ftype == TYPE_TOF_GRID:
+        dist, status = list(data["distance_mm"]), list(data["status"])
+        n = len(dist)
+        if n != len(status) or n != int(data["grid_width"]) * int(data["grid_height"]):
+            raise FrameError("tof grid frame length mismatch")
+        head = _TOF_GRID_HEADER.pack(int(data["grid_width"]), int(data["grid_height"]), int(data["sensor"]),
+                                     int(data["sensors"]), int(data["frame_id"]) & 0xFF,
+                                     int(data.get("sensors_ok") or 0), int(data.get("flags") or 0), 0)
+        body = struct.pack(f"<{n}h", *(TOF_GRID_NO_TARGET_MM if d is None else int(d) for d in dist))
+        return head + body + bytes(int(s) & 0xFF for s in status)
     raise FrameError(f"no encoder for type {ftype:#04x}")
 
 
-KIND_BY_TYPE = {TYPE_MMWAVE: "mmwave", TYPE_ENV: "env"}
+# ---------------------------------------------------------------- tof 센서 프레임 만들기·모으기
+
+def encode_tof_sensor_frames(frames: dict[int, tuple[list[int | None], list[int]]], *, frame_id: int,
+                             flags: int = 0, grid_w: int = 8, grid_h: int = 8) -> list[bytes]:
+    """{센서 번호: (dist, status)} → 센서마다 TYPE 0x05 payload 하나. 펌웨어 encodeTofSensorFrame 과 같은 규칙(테스트·PC 시뮬레이터용).
+    sensor_mask 는 주어진 센서 번호들로 만든다."""
+    if not frames:
+        raise FrameError("tof grid: no sensors")
+    mask = 0
+    for idx in frames:
+        mask |= 1 << int(idx)
+    out: list[bytes] = []
+    for idx in sorted(frames):
+        dist, status = frames[idx]
+        out.append(encode_payload(TYPE_TOF_GRID, {
+            "grid_width": grid_w, "grid_height": grid_h, "sensor": idx, "sensors": len(frames), "frame_id": frame_id,
+            "sensors_ok": mask, "flags": flags, "distance_mm": dist, "status": status}))
+    return out
+
+
+class TofGridAssembler:
+    """같은 frame_id 의 센서 프레임들 → 표본 하나. frame_id 가 바뀌면 미완성 표본은 버린다(프레임 유실 = 그 표본 폐기).
+
+    완성된 표본: {"grid_width","grid_height","frame_id","sensors_ok","flags",
+                  "sensors": {센서 번호: {"distance_mm"(w×h, -1 = 타깃 없음), "status"}}}
+    """
+
+    def __init__(self) -> None:
+        self._key: tuple[int, int, int, int] | None = None   # frame_id, w, h, sensors
+        self._frames: dict[int, dict[str, list[int]]] = {}
+        self._mask = 0
+        self._flags = 0
+        self.completed = 0
+        self.discarded = 0
+
+    def push(self, frame: dict[str, Any]) -> dict[str, Any] | None:
+        key = (frame["frame_id"], frame["grid_width"], frame["grid_height"], frame["sensors"])
+        if key != self._key:
+            if self._key is not None and self._frames:
+                self.discarded += 1
+            self._key, self._frames, self._mask, self._flags = key, {}, 0, 0
+        self._frames[int(frame["sensor"])] = {"distance_mm": frame["distance_mm"], "status": frame["status"]}
+        self._mask |= int(frame.get("sensors_ok") or 0)
+        self._flags = int(frame.get("flags") or 0)
+        if len(self._frames) < frame["sensors"]:
+            return None
+        sample = {"grid_width": key[1], "grid_height": key[2], "frame_id": key[0], "sensors_ok": self._mask,
+                  "flags": self._flags, "sensors": self._frames}
+        self._key, self._frames = None, {}
+        self.completed += 1
+        return sample
+
+
+KIND_BY_TYPE = {TYPE_MMWAVE: "mmwave", TYPE_ENV: "env", TYPE_TOF_FEATURES: "tof",
+                TYPE_TOF_POSTURE: "tof_posture", TYPE_TOF_GRID: "tof_grid"}

@@ -14,7 +14,8 @@ from typing import Any
 
 from .cache import Sample, SensorCache
 from .uart_frame import (
-    KIND_BY_TYPE, TYPE_HEARTBEAT, Frame, FrameError, decode_frame, decode_payload, split_stream,
+    KIND_BY_TYPE, TYPE_HEARTBEAT, TYPE_TOF_GRID, Frame, FrameError, TofGridAssembler, decode_frame, decode_payload,
+    split_stream,
 )
 
 
@@ -25,6 +26,8 @@ class UartStats:
     heartbeats: int = 0
     unknown_types: dict[int, int] = field(default_factory=dict)
     last_heartbeat: dict[str, Any] | None = None
+    grids: int = 0                 # 완성된 0x05 표본 수(센서 프레임이 다 모인 것)
+    grid_parts: int = 0            # 받은 0x05 센서 프레임 수
 
 
 def parse_uart_line(line: str) -> Frame | None:
@@ -40,8 +43,12 @@ def parse_uart_line(line: str) -> Frame | None:
 
 
 def ingest_frame(cache: SensorCache, frame: Frame, stats: UartStats, received: float | None = None,
-                 node: str = "esp32") -> str | None:
-    """Frame 을 캐시에 반영. 반영된 kind(또는 'heartbeat') 를 돌려주고, 모르는 TYPE 은 None."""
+                 node: str = "esp32", *, grid: TofGridAssembler | None = None, posture: Any = None) -> str | None:
+    """Frame 을 캐시에 반영. 반영된 kind(또는 'heartbeat') 를 돌려주고, 모르는 TYPE 은 None.
+
+    0x05 센서 프레임은 `grid` 로 같은 frame_id 끼리 모아 표본이 완성될 때만 `tof_grid` 로 캐시에 넣고(미완성이면 'tof_grid_part'),
+    `posture`(posture.tof_mlp.TofMlpPosture 등 `update(grid, now) -> dict`)가 있으면 그 판정을 `tof_mlp` 로 넣는다.
+    """
     received = time.time() if received is None else received
     try:
         data = decode_payload(frame.type, frame.payload)
@@ -56,27 +63,46 @@ def ingest_frame(cache: SensorCache, frame: Frame, stats: UartStats, received: f
     if kind is None or data is None:
         stats.unknown_types[frame.type] = stats.unknown_types.get(frame.type, 0) + 1
         return None
+    if frame.type == TYPE_TOF_GRID:
+        stats.grid_parts += 1
+        if grid is None:
+            return "tof_grid_part"
+        full = grid.push(data)
+        if full is None:
+            return "tof_grid_part"
+        full["ts_ms"] = frame.ts_ms
+        cache.put("tof_grid", Sample(received=received, ts=received, seq=full["frame_id"], data=full))
+        stats.grids += 1
+        stats.frames += 1
+        if posture is not None:
+            verdict = posture.update(full, received)
+            if verdict is not None:
+                cache.put("tof_mlp", Sample(received=received, ts=received, seq=None, data=verdict))
+        return "tof_grid"
     cache.put(kind, Sample(received=received, ts=received, seq=frame.seq, data=data))
     stats.frames += 1
     return kind
 
 
 class UartLineSource:
-    """서비스 브리지 stdin 에서 온 라인을 캐시로 흘린다."""
+    """서비스 브리지 stdin 에서 온 라인을 캐시로 흘린다. `posture` 는 선택(없으면 0x03 규칙 판정만 쓴다)."""
 
-    def __init__(self, cache: SensorCache, node: str = "esp32") -> None:
+    def __init__(self, cache: SensorCache, node: str = "esp32", posture: Any = None) -> None:
         self.cache, self.node, self.stats = cache, node, UartStats()
+        self.grid, self.posture = TofGridAssembler(), posture
 
     def feed_line(self, line: str) -> str | None:
         frame = parse_uart_line(line.rstrip("\n"))
-        return None if frame is None else ingest_frame(self.cache, frame, self.stats, node=self.node)
+        return None if frame is None else ingest_frame(self.cache, frame, self.stats, node=self.node,
+                                                       grid=self.grid, posture=self.posture)
 
 
 class RawUartReader:
     """PC 개발용: 시리얼 raw 바이트 → 프레임 → 캐시. C++ 서비스와 같은 규칙(CRC 실패는 폐기)."""
 
-    def __init__(self, cache: SensorCache, node: str = "esp32") -> None:
+    def __init__(self, cache: SensorCache, node: str = "esp32", posture: Any = None) -> None:
         self.cache, self.node, self.stats = cache, node, UartStats()
+        self.grid, self.posture = TofGridAssembler(), posture
         self._buf = bytearray()
 
     def feed_bytes(self, chunk: bytes) -> list[str]:
@@ -88,7 +114,8 @@ class RawUartReader:
             except FrameError:
                 self.stats.dropped += 1
                 continue
-            kind = ingest_frame(self.cache, frame, self.stats, node=self.node)
+            kind = ingest_frame(self.cache, frame, self.stats, node=self.node, grid=self.grid,
+                                posture=self.posture)
             if kind:
                 kinds.append(kind)
         return kinds

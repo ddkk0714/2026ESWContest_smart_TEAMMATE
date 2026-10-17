@@ -78,6 +78,12 @@ def main() -> None:
                 "deskmate_hub/config/ingest.json",
                 json.dumps(ingest_config, ensure_ascii=False, separators=(",", ":")),
             )
+            # ToF 자세 MLP 가중치(이미 JSON). add_python_tree 는 .py 만 담으므로 따로 넣는다.
+            tof_mlp_json = args.ingest_config.with_name("tof_mlp.json")
+            if tof_mlp_json.exists():
+                archive.write(tof_mlp_json, "deskmate_hub/config/tof_mlp.json")
+            else:
+                print("build_payload: tof_mlp.json 없음 — ToF 자세는 ESP32 규칙 판정(0x03)만", file=sys.stderr)
             # control.yaml 도 같은 이유(제한 Python 에 PyYAML 부재)로 JSON 으로 함께 넣는다.
             control_yaml = args.config.with_name("control.yaml")
             if control_yaml.exists():
