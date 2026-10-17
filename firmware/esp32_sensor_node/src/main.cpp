@@ -62,9 +62,11 @@ TofArray tof(tofConfig());  // 전역: zone 버퍼·추정기가 커서 스택�
 uint32_t last_mmwave_ms = 0;
 uint32_t last_environment_ms = 0;
 uint32_t last_heartbeat_ms = 0;
-uint32_t last_tof_feature_ms = 0;
+// ToF 0x03/0x05 는 "다음 기한" 타이머다(periodDue). 기한을 now 로 덮는 방식은 루프·표본 위상만큼 매번 늦어져
+// 10-17 실측에서 0x05 가 센서당 ≈4 Hz(264 ms), 0x03 이 4.2 Hz 로 떨어졌다.
+uint32_t next_tof_feature_ms = 0;
 uint32_t last_tof_posture_ms = 0;
-uint32_t last_tof_grid_ms = 0;
+uint32_t next_tof_grid_ms = 0;
 uint32_t last_c1001_retry_ms = 0;
 uint32_t c1001_retry_interval_ms = kC1001RetryMs;
 uint16_t mmwave_sequence = 0;
@@ -72,6 +74,8 @@ uint16_t environment_sequence = 0;
 uint16_t heartbeat_sequence = 0;
 uint16_t tof_sequence = 0;  // 0x03·0x04 가 같은 흐름을 쓴다
 uint16_t tof_grid_sequence = 0;  // 0x05 조각마다 +1. 같은 격자의 조각은 frame_id 로 묶인다
+uint32_t tof_grid_tx = 0;        // 보낸 0x05 프레임 수(USB tof_feature 의 tx_grid — 송신 주기 실측용)
+uint32_t tof_feature_tx = 0;     // 보낸 0x03 프레임 수(tx_feature)
 uint8_t tof_grid_frame_id = 0;
 bool mmwave_ready = false;
 
@@ -88,6 +92,15 @@ WireDrowsyState wireDrowsyState(DrowsyState state) {
     default:
       return WireDrowsyState::kNoPerson;
   }
+}
+
+// 주기 타이머: 기한이 지났으면 true 를 돌려주고 기한을 period 만큼 민다(평균 주기가 정확히 period).
+// 한 주기 넘게 뒤처졌으면(센서가 한동안 죽어 있었거나 루프가 막혔으면) now 기준으로 재동기한다.
+bool periodDue(uint32_t now_ms, uint32_t& next_ms, uint32_t period_ms) {
+  if (static_cast<int32_t>(now_ms - next_ms) < 0) return false;
+  next_ms += period_ms;
+  if (static_cast<int32_t>(now_ms - next_ms) >= 0) next_ms = now_ms + period_ms;
+  return true;
 }
 
 void writeMmwaveUart(uint32_t now_ms, const MmwaveSample& sample, DrowsyState drowsy_state) {
@@ -124,8 +137,10 @@ void writeTofFeatureUart(uint32_t now_ms) {
 #if DESKMATE_UART2_TX
   uint8_t payload[kTofFeaturePayloadSize];
   encodeTofFeaturePayload(tof.features(), tof.okMask(), payload);
-  writeUartFrame(pi4_serial, kFrameTypeTofFeatures, tof_sequence++, now_ms, payload,
-                 sizeof(payload));
+  if (writeUartFrame(pi4_serial, kFrameTypeTofFeatures, tof_sequence++, now_ms, payload,
+                     sizeof(payload))) {
+    ++tof_feature_tx;
+  }
 #endif
 }
 
@@ -159,6 +174,7 @@ void writeTofGridUart(uint32_t now_ms) {
         !writeUartFrame(pi4_serial, kFrameTypeTofGrid, tof_grid_sequence++, now_ms, payload, len)) {
       return;
     }
+    ++tof_grid_tx;
   }
 #endif
 }
@@ -260,24 +276,23 @@ void loop() {
   }
   if (mmwave_ready) drowsy_detector.update(mmwave, now_ms);
 
-  // ToF: 매 루프 폴링(15 Hz ×2). 원본 8×8(0x05, 센서별)은 새 표본이 생긴 뒤 5 Hz 로 솎아 보내고,
+  // ToF: 매 루프 폴링(15 Hz ×2). 원본 8×8(0x05, 센서별)은 5 Hz 기한마다 그 뒤 첫 표본을 보내고,
   // 규칙 특징은 5 Hz 로, 자세 요약·USB 진단은 1 Hz 로 낸다.
   // 살아 있는 센서가 없으면 아무것도 보내지 않는다 — hub 는 freshness 로 미가용 처리한다.
   tof.poll(now_ms);
   const bool tof_new_grid = tof.frameReady();
   if (tof.okCount() > 0) {
-    if (tof_new_grid && now_ms - last_tof_grid_ms >= kTofGridPeriodMs) {
-      last_tof_grid_ms = now_ms;
+    // 0x05 는 기한이 지난 뒤 처음 생긴 표본을 보낸다(기한은 표본 시각이 아니라 period 격자에 맞춰 민다).
+    if (tof_new_grid && periodDue(now_ms, next_tof_grid_ms, kTofGridPeriodMs)) {
       writeTofGridUart(now_ms);
     }
-    if (now_ms - last_tof_feature_ms >= kTofFeaturePeriodMs) {
-      last_tof_feature_ms = now_ms;
+    if (periodDue(now_ms, next_tof_feature_ms, kTofFeaturePeriodMs)) {
       writeTofFeatureUart(now_ms);
     }
     if (now_ms - last_tof_posture_ms >= kTofPosturePeriodMs) {
       last_tof_posture_ms = now_ms;
       writeTofPostureUart(now_ms);
-      writeTofJson(Serial, now_ms, tof.features(), tof.okMask());
+      writeTofJson(Serial, now_ms, tof.features(), tof.okMask(), tof_grid_tx, tof_feature_tx);
     }
   } else if (now_ms - last_tof_posture_ms >= kTofRetryMs) {
     last_tof_posture_ms = now_ms;

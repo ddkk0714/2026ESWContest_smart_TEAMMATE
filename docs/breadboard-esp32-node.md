@@ -92,7 +92,7 @@ SATEL-VL53L8 보드를 쓰면 PWREN 은 3.3 V(IOVDD) 로, AVDD/IOVDD 는 보드 
    - `no_ack`: SDA/SCL/LPn/NCS/SPI_I2C_N 배선, 전원.
    - `init` 실패: I2C 속도를 400 kHz 로, 선 길이 줄이기.
    - `set_i2c_address` 실패: A 를 올릴 때 B 의 LPn 이 HIGH 로 떠 있는지(배선 바뀜).
-2. 1 Hz `{"t":"tof_feature",...}` 줄에 `sensors_ok`·`grid_width/height`·`posture`.
+2. 1 Hz `{"t":"tof_feature",...}` 줄에 `sensors_ok`·`grid_width/height`·`posture`. `tx_grid`/`tx_feature` 는 보낸 UART 0x05/0x03 누계 — 1 s 차분이 10(센서 2개)·5 면 송신 주기 정상(펌웨어 0x0122).
 3. Pi 4 에서 `pi4-uart-check.sh` 로 `rx` 가 늘고(ToF 0x03 5 Hz + 0x04·0x20·0xF0 1 Hz ≈ 8 프레임/s), `/api/state` 의
    `sensor_summary.tof.posture` 가 나온다. Python 허브가 살아 있으면 같은 값이 `state/phase` 로 발행된다.
    - **10-17 실측(Pi 4 허브, 382e821 IPK)**: `uart_rx` rx ≈15.5 프레임/s·`crc_errors=0`·`discarded=0`; 0x05 는 hub 브리지 로그

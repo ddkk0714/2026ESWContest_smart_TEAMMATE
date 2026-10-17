@@ -60,13 +60,12 @@ bool TofArray::startSensor(uint8_t i, uint32_t now_ms) {
   // begin() 이 LPn 을 LOW→HIGH 로 올리고 주소를 기본값으로 둔다.
   s.begin(VL53L8CX_DEFAULT_I2C_ADDRESS);
   delay(10);
-  // 찾는 순서: 목표 주소(소프트 리셋 뒤 이미 바뀐 경우) → 기본 0x52 → 치워 둔 0x56(LPn 이 안 먹어
-  // parkStuckSensor() 가 옮긴 경우). 실기 10-16: B 의 LPn 이 효과가 없어도 이렇게 하면 둘 다 올라온다.
+  // 찾는 순서: 목표 주소(ESP32 만 리셋돼 센서가 이전 주소·측거를 유지하는 경우) → 기본 0x52(전원 재투입 뒤).
   uint16_t current = 0;
-  const uint16_t candidates[3] = {target, VL53L8CX_DEFAULT_I2C_ADDRESS, kTofParkedAddress};
-  for (uint8_t k = 0; k < 3 && current == 0; ++k) {
-    if (k > 0 && candidates[k] == target) continue;
-    if (acks(candidates[k])) current = candidates[k];
+  if (acks(target)) {
+    current = target;
+  } else if (target != VL53L8CX_DEFAULT_I2C_ADDRESS && acks(VL53L8CX_DEFAULT_I2C_ADDRESS)) {
+    current = VL53L8CX_DEFAULT_I2C_ADDRESS;
   }
   if (current == 0) {
     fail(i, "no_ack", 0);
@@ -85,14 +84,7 @@ bool TofArray::startSensor(uint8_t i, uint32_t now_ms) {
     stopSensor(i);
     return false;
   }
-  st = s.init();  // 펌웨어 업로드, 1 MHz 에서 약 1~2 s
-  if (st != VL53L8CX_STATUS_OK) {
-    // 실기 10-16: ESP32 만 리셋되면 센서는 이전 실행의 연속 측거를 계속하고 있어 첫 init 이
-    // 코드 3(NACK)으로 떨어지고 두 번째는 된다. 멈추고 한 번 더.
-    s.stop_ranging();
-    delay(50);
-    st = s.init();
-  }
+  st = initSensor(s, i == 0 ? "A" : "B");  // 펌웨어 업로드, 1 MHz 에서 약 1~2 s
   if (st != VL53L8CX_STATUS_OK) {
     fail(i, "init", st);
     stopSensor(i);
@@ -143,7 +135,56 @@ bool TofArray::startSensor(uint8_t i, uint32_t now_ms) {
   return true;
 }
 
+uint8_t TofArray::initSensor(VL53L8CX &s, const char *tag) {
+  const uint32_t t0 = millis();
+  uint8_t st = s.init();
+  if (st != VL53L8CX_STATUS_OK) {
+    // 폴백: 멈추고 한 번 더. (측거 중인 센서도 LPn 이 HIGH 면 첫 init 이 된다 — 10-17 실측 A 0x54 1.3 s.
+    // 실패는 LPn LOW 인 센서에 init 을 건 경우(parkStuckSensor 의 옛 경로)뿐이었다.)
+    s.stop_ranging();
+    delay(50);
+    st = s.init();
+  }
+  if (log_ != nullptr) {
+    log_->print(F("tof "));
+    log_->print(tag);
+    log_->print(F(": init="));
+    log_->print(st);
+    log_->print(F(" ("));
+    log_->print(millis() - t0);
+    log_->println(F(" ms)"));
+  }
+  return st;
+}
+
+void TofArray::softReboot(VL53L8CX &s) {
+  // vl53l8cx_init() 맨 앞의 "SW reboot sequence" 만(그 뒤의 2 s 폴·펌웨어 업로드 없이). 리부트된 센서는
+  // 미초기화 상태라 LPn LOW 를 다시 따라 버스에서 빠진다(10-17 실측: 리부트 뒤 0x52 ACK 없음).
+  auto wr = [&s](uint16_t reg, uint8_t v) { s.IO_Write(reg, &v, 1); };
+  uint8_t tmp = 0;
+  wr(0x7fff, 0x00);
+  wr(0x0009, 0x04);
+  wr(0x000F, 0x40);
+  wr(0x000A, 0x03);
+  s.IO_Read(0x7FFF, &tmp, 1);
+  wr(0x000C, 0x01);
+  wr(0x0101, 0x00);
+  wr(0x0102, 0x00);
+  wr(0x010A, 0x01);
+  wr(0x4002, 0x01);
+  wr(0x4002, 0x00);
+  wr(0x010A, 0x03);
+  wr(0x0103, 0x01);
+  wr(0x000C, 0x00);
+  wr(0x000F, 0x43);
+  delay(1);
+  wr(0x000F, 0x40);
+  wr(0x000A, 0x01);
+  delay(100);
+}
+
 void TofArray::begin(uint32_t now_ms, Print *log) {
+  log_ = log;
   // 모든 LPn 을 먼저 LOW 로: 두 센서가 같은 기본 주소로 동시에 깨어 있지 않게 한다.
   for (uint8_t i = 0; i < cfg_.count; ++i) stopSensor(i);
   cfg_.wire->begin(cfg_.sda, cfg_.scl, cfg_.i2c_hz);
@@ -158,6 +199,11 @@ void TofArray::begin(uint32_t now_ms, Print *log) {
       }
       delay(20);
       log->print(on < 0 ? F(" [all LPn low]") : (on == 0 ? F(" [A on]") : F(" [B on]")));
+      // 핀 readback: 출력으로 몰고 있는데 HIGH 로 읽히면 바깥에서 HIGH 로 묶인 것(배선·모듈 풀업).
+      log->print(F(" pins="));
+      for (uint8_t i = 0; i < cfg_.count; ++i) {
+        log->print(cfg_.lpn[i] >= 0 ? (digitalRead(cfg_.lpn[i]) ? "H" : "L") : "-");
+      }
       uint8_t found = 0;
       for (uint8_t a7 = 0x08; a7 <= 0x77 && found < 6; ++a7) {
         cfg_.wire->beginTransmission(a7);
@@ -182,22 +228,28 @@ void TofArray::begin(uint32_t now_ms, Print *log) {
 }
 
 void TofArray::parkStuckSensor(Print *log) {
-  // 모든 LPn 이 LOW 인 상태. 기본 주소가 응답하면 LPn 으로 뗄 수 없는 센서가 하나 있다는 뜻이다.
-  // (둘 다 안 떼어지면 어차피 충돌이라 여기서 못 고친다.)
+  // 모든 LPn 이 LOW 인 상태. 전원 재투입 직후(둘 다 미초기화)면 아무 주소도 응답하지 않는다 — 그대로 A → B 순서로
+  // 올리며 A 를 목표 주소로 옮긴다(이 경로는 손대지 않는다).
   if (!acks(VL53L8CX_DEFAULT_I2C_ADDRESS)) return;
-  if (acks(kTofParkedAddress)) return;  // 이미 치워 둔 센서가 있다(소프트 리셋 뒤)
+  // 기본 주소가 응답한다 = 이전 실행이 init 한 센서가 LPn 을 무시한 채 아직 측거 중이다(ESP32 만 리셋).
+  // 10-17 실측: 이런 센서는 주소 ACK·레지스터 읽기(is_alive)는 되지만 LPn LOW 인 채로 init 을 걸면 코드 3 으로
+  // 9.3 s(2 s 폴 + 5 s stop_ranging + 2 s 폴)를 버리고 실패한다. 0x56 으로 "치우기"는 한 번도 성공한 적이 없다.
+  const bool a_kept = cfg_.count > 1 && cfg_.address[0] != VL53L8CX_DEFAULT_I2C_ADDRESS && acks(cfg_.address[0]);
+  if (a_kept) {
+    // A 는 목표 주소, B 는 기본 주소 — 이전 부팅이 끝까지 갔고 주소가 겹치지 않는다. startSensor 가 LPn 을 올린 뒤
+    // 각자의 주소로 init 하면 된다(측거 중이어도 한 번에 된다).
+    if (log != nullptr) log->println(F("tof: sensors keep previous addresses (ESP32 soft reset) -> no park"));
+    return;
+  }
+  // 목표 주소는 비었는데 0x52 가 응답: 센서 하나(또는 둘)가 0x52 에서 LPn 을 무시하고 있다(이전 부팅이 A 의 주소
+  // 변경 전에 끊긴 경우). SW 리부트만 보내 미초기화 상태로 되돌린다 — 그러면 LPn LOW 를 따라 버스에서 빠지고,
+  // 이후는 전원 재투입과 같은 경로(A 먼저 0x54 로)가 된다.
   VL53L8CX stuck(cfg_.wire, -1);
   stuck.begin(VL53L8CX_DEFAULT_I2C_ADDRESS);
-  uint8_t st = stuck.init();
-  if (st != VL53L8CX_STATUS_OK) {  // 이전 실행의 측거가 돌고 있으면 첫 init 이 실패한다(startSensor 와 같음)
-    stuck.stop_ranging();
-    delay(50);
-    st = stuck.init();
-  }
-  if (st == VL53L8CX_STATUS_OK) st = stuck.set_i2c_address(kTofParkedAddress);
+  softReboot(stuck);
   if (log != nullptr) {
-    log->print(F("tof: sensor stuck on bus with LPn low -> parked at 0x56, status="));
-    log->println(st);
+    log->print(F("tof: sensor at 0x52 ignores LPn low -> SW reboot, acks after="));
+    log->println(acks(VL53L8CX_DEFAULT_I2C_ADDRESS) ? 1 : 0);
   }
 }
 

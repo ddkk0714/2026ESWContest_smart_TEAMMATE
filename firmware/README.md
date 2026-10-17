@@ -160,7 +160,7 @@ ESP32 펌웨어 0x0121, Pi 4 `/dev/serial0 → ttyAMA0` 115200(getty 는 failed 
 
 - C++ `uart_rx`: `rx` 516 → 982 /30 s(전체 ≈15.5 프레임/s), **`discarded=0 crc_errors=0`**.
 - hub 브리지(`[bridge] uart …`, 이 커밋부터 30 s 주기·0x05 카운터·MLP 판정 포함): **`parts` +238~239 /30 s ≈ 7.9 /s = 센서당 ≈4 Hz**
-  (5 Hz 가 아닌 것은 펌웨어 타이머 쪽으로 알려진 문제), **`grids` +119~120 /30 s ≈ 4.0 /s**(두 센서 프레임이 다 모인 표본),
+  (5 Hz 가 아닌 것은 펌웨어 타이머 위상 문제 — 아래 실측(2)에서 고쳐 10.2 /s), **`grids` +119~120 /30 s ≈ 4.0 /s**(두 센서 프레임이 다 모인 표본),
   **`grid_discarded=0`**, `dropped=0`, 하트비트 ≈1 /s, `unknown={}`.
 - 115200 에서 0x03/0x04·mmWave 0x20·환경 0x10 이 같이 들어오고 `/api/state` `sensor_summary` 에 temp 23.9·humidity 47.9·lux 418·mmwave 가
   그대로 찍힘 — 밀림 없음. 링크 속도를 올릴 이유는 아직 없다.
@@ -170,6 +170,35 @@ ESP32 펌웨어 0x0121, Pi 4 `/dev/serial0 → ttyAMA0` 115200(getty 는 failed 
 - 아직 안 본 것: 한쪽 센서만 살 때(`sensors` 1), 격자 방향(손 들기), 사람 착석 시 MLP 기준선·판정 정확도.
 - 설치는 `arc install` 대신 빌드 산출물 `hub/atlas/build/arm64/deskmate_hub_service`(zip payload 포함 ELF)를 scp 로 서비스 디렉터리에 덮고
   `chown u0_a5015:g0_a5015` 뒤 `pi4-hub-activate.sh` 를 돌렸다(계정 재할당을 피한다). 보드 시계는 실제보다 하루 가량 늦다(journal 10-16 16:5x KST).
+
+**2026-10-17 실측(2) — 0x05/0x03 송신 주기를 정확히 5 Hz 로, ESP32 소프트 리셋 뒤 부팅 13.3 s → 4.2 s.** 펌웨어 0x0122.
+
+- **송신 주기.** `main.cpp` 의 ToF 타이머를 "기한을 now 로 덮기" 에서 `periodDue()`(기한을 period 씩 밀고, 한 주기 넘게 뒤처지면
+  now 로 재동기)로 바꿨다. 덮는 방식은 15 Hz 표본(66 ms) 위상에 걸려 0x05 가 264 ms(≈4 Hz), 0x03 이 루프 지연만큼 늦어 4.2 Hz 였다.
+  실측은 Pi 4 `/dev/ttyAMA0` 8 s raw 캡처(허브 미기동 상태, `stty -F /dev/ttyAMA0 115200 raw -echo; cat > /tmp/esp.bin`)를
+  `hub/deskmate_hub/ingest/uart_frame.py` `split_stream/decode_frame` 으로 센 것: **0x05 80 프레임 = 10.17 /s(센서 0·1 각 40), SEQ 갭 0**,
+  표본 간격 198~199 ms 가 대부분(최대 220); **0x03 40 = 5.09 /s**, 간격 198~200 ms(0x03·0x04 는 SEQ 를 같이 쓰므로 둘을 합쳐 연속);
+  0x04·0x20·0xF0 1.02 /s, 0x10 0.25 /s, 디코드·CRC 오류 0. USB `tof_feature` 줄에 누계 `tx_grid`/`tx_feature` 를 붙였다 — 1 s 차분이
+  9.8~10.0 / 4.9~5.0 (30 s 관측).
+- **부팅 시간.** 원인은 `TofArray::parkStuckSensor()` 였다. ESP32 만 리셋되면 두 센서는 전원이 유지돼 이전 주소(A 0x54·B 0x52)로
+  측거를 계속하며 **LPn LOW 를 무시한다**(스캔에 `[all LPn low] 0x52,0x54`). 이때 0x52 는 주소 ACK·`is_alive`·레지스터 읽기는 되지만
+  LPn 이 LOW 인 채 `init()` 을 걸면 코드 3(NACK 2 | 폴 타임아웃 1)으로 2 s 폴 → `stop_ranging` 5 s 타임아웃 → 2 s 폴 = **9.3 s 를 쓰고 실패**
+  했고(0x56 "치우기"는 한 번도 성공한 적 없음), 그 뒤 `startSensor` 가 LPn 을 올리고 init 하면 측거 중이어도 한 번에 됐다(A·B 각 1.32 s).
+  고친 것: (1) A 의 목표 주소와 0x52 가 둘 다 응답하면(이전 부팅이 끝까지 간 소프트 리셋) 주소가 안 겹치니 park 를 건너뛴다.
+  (2) 0x52 만 응답하면(이전 부팅이 A 의 주소 변경 전에 끊긴 경우) `vl53l8cx_init()` 맨 앞의 SW 리부트 시퀀스만 보낸다(`softReboot`, ≈100 ms)
+  — 리부트된 센서는 미초기화 상태라 LPn LOW 를 다시 따라 버스에서 빠지고(실측 `acks after=0`), 이후는 전원 재투입과 같은 경로다.
+  (3) 0x56 후보·`kTofParkedAddress` 제거, 센서별 `tof A: init=0 (1319 ms)` 진단 줄 추가.
+  실측(USB 부팅 로그, 호스트 시각): 소프트 리셋 2회 모두 `VL53L8CX x2: ok_mask=3` 가 **4.16~4.17 s**(스캔 0.4 s + A 1.32 s + B 1.32 s;
+  이전 13.33 s). "0x52 만 응답" 경로는 임시 USB 명령으로 A 를 SW 리부트한 직후 리셋해 재현 — `[all LPn low] 0x52` → `SW reboot,
+  acks after=0` → `ok_mask=3` 4.17 s.
+  **미초기화 센서에 `stop_ranging()` 을 먼저 부르는 방법은 쓰지 않았다**: 라이브러리가 레지스터 0x06 bit 7 을 10 ms × 500 회 폴하므로
+  부팅 안 된 센서에서는 5 s 타임아웃까지 간다(`vl53l8cx_api.c` `vl53l8cx_stop_ranging`). 측거 중 판별용으로 본 0x06 도 측거 중 0x31 이라
+  bit 7 로는 못 가른다.
+- **사용자 확인 필요 — 전원 재투입 경로.** 둘 다 미초기화(0x52, LPn 정상)인 경로의 코드는 그대로다(0x52 무응답이면 park 즉시 return,
+  `startSensor` 의 "0x52 로 init → A 만 0x54 로 변경" 로직 불변). USB 를 뽑았다 꽂은 뒤 부팅 로그에서 `tof A: init=0` / `tof B: init=0`
+  과 `ok_mask=3` 시각(기대 ≈4.2 s)을 한 번 확인할 것.
+- Pi 4 상태 메모: 이 캡처 시점에 허브 프로세스가 없었다(`ps` 0, 저널에 `[bridge]` 줄 없음) — 그래서 포트를 직접 읽을 수 있었다.
+  허브를 다시 올리려면 `pi4-hub-activate.sh`.
 
 **학습 데이터 수집 모드(`env:tof_logger`, 운영 아님).** VL53L8CX 8×8 을 ST 공식 라이브러리로 읽어 원본 zone 과
 규칙 판정을 USB 한 줄 JSON(`{"t":"tof",...}`, 921600)으로 PC 에 보낸다. `src/tof_logger/` 는 운영 빌드에서 빠진다

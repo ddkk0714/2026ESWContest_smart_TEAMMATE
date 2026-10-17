@@ -37,7 +37,6 @@ constexpr uint16_t kTofSensorZones = kTofSensorW * kTofSensorH;
 constexpr uint16_t kTofArrayZones = kTofSensorZones * kTofMaxSensors;
 // LPn 선이 안 먹어 버스에서 뗄 수 없는 센서를 임시로 옮겨 두는 주소(8-bit).
 // 실기 10-16: B 의 LPn 이 효과가 없어 전원 재투입 뒤 둘 다 0x52 로 깨면 첫 init 이 충돌했다.
-constexpr uint16_t kTofParkedAddress = 0x56;
 
 struct TofArrayConfig {
   TwoWire *wire = &Wire1;
@@ -93,9 +92,14 @@ class TofArray {
 
  private:
   bool acks(uint16_t address8) const;
-  // 모든 LPn 이 LOW 인데 기본 주소가 응답하면(LPn 이 안 먹는 센서) 그 센서를 kTofParkedAddress 로 옮긴다.
+  // 모든 LPn 이 LOW 인데 기본 주소가 응답하면(이전 실행이 init 해 LPn 을 무시하는 센서): 주소가 이미 갈려 있으면
+  // 그대로 두고, 0x52 에만 몰려 있으면 SW 리부트로 미초기화 상태로 되돌린다.
   void parkStuckSensor(Print *log);
   bool startSensor(uint8_t i, uint32_t now_ms);
+  // init(펌웨어 업로드 ≈1.3 s) + 실패 시 stop_ranging 뒤 한 번 더. log 가 있으면 상태·소요 ms 한 줄.
+  uint8_t initSensor(VL53L8CX &s, const char *tag);
+  // vl53l8cx_init() 의 SW 리부트 시퀀스만 보낸다(≈100 ms). 리부트된 센서는 미초기화라 LPn LOW 를 다시 따른다.
+  static void softReboot(VL53L8CX &s);
   void stopSensor(uint8_t i);
   bool readSensor(uint8_t i);
   void fail(uint8_t i, const char *where, int code);
@@ -103,6 +107,7 @@ class TofArray {
   void stitch(uint32_t now_ms);
 
   TofArrayConfig cfg_;
+  Print *log_ = nullptr;  // begin() 의 log. 부팅·재시도 진단 한 줄씩
   VL53L8CX *sensor_[kTofMaxSensors] = {nullptr, nullptr};
   VL53L8CX_ResultsData results_;  // 약 1.5 KB, 센서가 번갈아 쓴다
   TofPostureEstimator estimator_;

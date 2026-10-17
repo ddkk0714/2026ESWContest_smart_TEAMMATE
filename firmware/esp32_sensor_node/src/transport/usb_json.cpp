@@ -75,7 +75,8 @@ void writeEnvironmentJson(Stream& output, uint32_t now_ms,
   output.println(F("}"));
 }
 
-void writeTofJson(Stream& output, uint32_t now_ms, const TofFeatures& f, uint8_t sensor_mask) {
+void writeTofJson(Stream& output, uint32_t now_ms, const TofFeatures& f, uint8_t sensor_mask,
+                  uint32_t tx_grid, uint32_t tx_feature) {
   output.print(F("{\"t\":\"tof_feature\",\"ms\":"));
   output.print(now_ms);
   output.print(F(",\"present\":"));
@@ -110,6 +111,10 @@ void writeTofJson(Stream& output, uint32_t now_ms, const TofFeatures& f, uint8_t
   output.print(f.nods_in_window);
   output.print(F(",\"sensors_ok\":"));
   output.print(sensor_mask);
+  output.print(F(",\"tx_grid\":"));
+  output.print(tx_grid);
+  output.print(F(",\"tx_feature\":"));
+  output.print(tx_feature);
   output.println(F("}"));
 }
 
