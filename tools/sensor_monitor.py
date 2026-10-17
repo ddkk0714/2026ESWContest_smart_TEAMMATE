@@ -223,7 +223,7 @@ pre{margin:0;font-size:11px;line-height:1.35;max-height:220px;overflow:auto;whit
 .ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
 </style></head><body>
 <header><h1>DESKMATE 센서 모니터</h1><span id="port" class="pill">포트</span><span id="up" class="pill">0 s</span>
-<span class="pill">명령: <button data-c="z">z ToF 격자 토글</button> <button data-c="b">b 기준선</button> <button data-c="g">g 배경</button> <button data-c="r">r 추정기 초기화</button></span></header>
+<span class="pill">명령: <button data-c="z">z ToF 격자 토글</button> <button data-c="b">b 기준선</button> <button data-c="g">g 배경</button> <button data-c="r">r 추정기 초기화</button> <button data-c="i">i 환경 I2C 스캔</button></span></header>
 <main>
 <section><h2>raw · ToF 원본 8×8 (mm) <span id="gridinfo"></span></h2>
  <div class="grids">
@@ -329,7 +329,7 @@ def make_handler(state: MonitorState, reader: SerialReader, interval: float):
             url = urlparse(self.path)
             if url.path == "/cmd":
                 c = parse_qs(url.query).get("c", [""])[0]
-                ok = len(c) == 1 and c in "bgrz" and reader.send(c)
+                ok = len(c) == 1 and c in "bgrzi" and reader.send(c)
                 self.send_response(200 if ok else 400)
                 self.end_headers()
             else:

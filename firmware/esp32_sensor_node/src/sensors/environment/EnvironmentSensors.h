@@ -14,6 +14,8 @@ class EnvironmentSensors {
   explicit EnvironmentSensors(TwoWire& wire);
 
   void begin(uint32_t now_ms, EnvironmentSample& sample);
+  // 환경 I2C 버스(Wire, GPIO21/22) 0x08~0x77 을 찔러 ACK 하는 7-bit 주소를 한 줄로 찍는다(USB 'i'). 기대: SCD41 0x62 · BH1750 0x23.
+  void scanBus(Print& out);
   void poll(uint32_t now_ms, EnvironmentSample& sample);
 
  private:

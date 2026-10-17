@@ -217,13 +217,14 @@ void writeHeartbeatUart(uint32_t now_ms) {
 
 // USB 로 받는 한 글자 명령(수집 모드와 같은 글자):
 //   b  바른 자세 기준선 다시 잡기   g  다음 프레임을 배경으로(빈 자리에서)   r  추정기 초기화
-//   z  원본 8×8 USB 출력(tof_grid) 켜기/끄기 — 기본 꺼짐
+//   z  원본 8×8 USB 출력(tof_grid) 켜기/끄기 — 기본 꺼짐   i  환경 I2C 버스 주소 스캔(SCD41 0x62·BH1750 0x23 확인)
 void handleUsbCommands() {
   while (Serial.available() > 0) {
     switch (Serial.read()) {
       case 'b': tof.estimator().resetBaseline(); Serial.println(F("# tof baseline reset")); break;
       case 'g': tof.estimator().requestBackgroundCapture(); Serial.println(F("# tof background capture")); break;
       case 'r': tof.estimator().reset(); Serial.println(F("# tof estimator reset")); break;
+      case 'i': environment_sensors.scanBus(Serial); break;
       case 'z':
         usb_tof_grid = !usb_tof_grid;
         Serial.println(usb_tof_grid ? F("# tof_grid usb on") : F("# tof_grid usb off"));

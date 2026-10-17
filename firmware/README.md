@@ -210,6 +210,12 @@ UART 0x05 와 같은 표본·같은 `frame_id` 를 센서별 `d`(mm, -1)·`st`(2
 `tools/sensor_monitor.py --port COM8` 이 시작할 때 `z` 를 보내고 끝날 때 다시 보내 끈다. 실측: 모니터 수신 `tof_grid` 4.99 Hz, 켠 상태에서
 `tx_grid`/`tx_feature` 차분 10/5 유지.
 
+**2026-10-17 SCD41 소프트 리셋 뒤 `error=268` 수정 + USB `i` 환경 I2C 스캔.** 268 = Sensirion `WriteError|I2cAddressNack`: ESP32 만
+리셋되면 SCD41 은 전원이 유지돼 이전 실행의 주기 측정이 계속 돌고, 그 상태에서는 `start_periodic_measurement` 에 주소 ACK 조차 안 한다
+(전원 재투입 뒤에는 바로 된다 — ToF 의 LPn 무시와 같은 종류). `beginScd41` 이 실패하면 `stop_periodic_measurement`(500 ms) 뒤 한 번 더
+시작한다. USB `i` 는 Wire(GPIO21/22) 0x08~0x77 을 찔러 ACK 주소를 찍는다 — 실측 `0x23,0x62`(BH1750·SCD41), 플래시 직후(소프트 리셋)에도
+CO₂ 622 ppm 유효. 모니터 페이지의 `i 환경 I2C 스캔` 버튼이 같은 명령이다.
+
 **학습 데이터 수집 모드(`env:tof_logger`, 운영 아님).** VL53L8CX 8×8 을 ST 공식 라이브러리로 읽어 원본 zone 과
 규칙 판정을 USB 한 줄 JSON(`{"t":"tof",...}`, 921600)으로 PC 에 보낸다. `src/tof_logger/` 는 운영 빌드에서 빠진다
 (`env:esp32dev` 의 `build_src_filter`). PC 쪽 수집기·배선·방향 확인은 [`dataset/tof_logger/README.md`](../dataset/tof_logger/README.md).
