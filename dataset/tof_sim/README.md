@@ -94,9 +94,14 @@ python ../tof_logger/inspect_session.py data/sessions/<세션>   # 실기 세션
   1. 같은 자세의 실기·시뮬레이션 8×8 을 나란히 놓고 `L8Params`(문턱·잡음)와 반사율 범위를 맞춘다.
   2. **최종 평가는 실기 지시 자세 세션으로만** 한다.
 
-## Pi 4 허브 탑재 (2026-10-17)
+## Pi 4 허브 탑재 (2026-10-17, 후보 A — 미확정)
 
-자세 MLP 는 ESP32 가 아니라 **Pi 4 허브에서 순수 Python 으로** 돈다(제한 Python 에 numpy 가 없다). 경로:
+여기의 MLP 는 PR #39 의 **단일 L8 비교용 기준선**이다. 자세 모델 배치는 아직 정해지지 않았고 실측 성능이 좋은 쪽을 따른다:
+(A) 이 MLP 를 Pi 4 허브에서 순수 Python 으로 돌리기(아래, 구현됨), (B) `feat/tof-sim-v5` 의 `dataset/tof_sim_v5` PostureNet
+(CNN+GRU, 센서당 (2,8,8), 두 센서 따로 추론해 log-softmax 합; `posture_models_9label_20261017`, 기본 `ubai_r9_lowlr`)을 Pi 4 별도 서비스
+`deskmate_tofposture`(HTTP 8771)에서 돌리고 `hub/atlas` 가 0x05 를 tcp:9100 으로 중계하기. 어느 쪽이든 ESP32 → Pi 4 의 0x05 원본 격자는 같다.
+
+(A) 의 경로:
 
 ```
 ESP32 ─UART 0x05(원본 16×8 거리·상태, 행 단위 조각, 5 Hz)─► Pi 4 uart_frame.TofGridAssembler ─► posture/tof_mlp.py

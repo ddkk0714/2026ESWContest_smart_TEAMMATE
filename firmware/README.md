@@ -42,7 +42,8 @@ GPIO16/17 은 WROVER 계열에서 PSRAM 용이다. 현재 `esp32dev`(WROOM)라 �
 
 ## 원칙
 
-- **ToF 원본 격자는 Pi 4 까지만 간다(2026-10-17 개정).** 자세 AI 모델은 Pi 4 허브에서 돌리기로 해, 이 노드는
+- **ToF 원본 격자는 Pi 4 까지만 간다(2026-10-17 개정).** 자세 AI 모델은 Pi 4 에서 돌리기로 해(허브 안 MLP 인지 별도 서비스인지는
+  실측 성능으로 정한다 — `docs/data-spec.md` §6.1 후보 A/B), 이 노드는
   VL53L8CX 원본 16×8 거리·상태 격자를 UART `0x05` 로 Pi 4 에 넘긴다(행 단위 조각, 5 Hz). 격자는 유선 UART 와
   Pi 4 메모리 안에서만 다루고 MQTT·로그·화면으로는 나가지 않는다. 노드 규칙 추정기의 특징값(`0x03`)·요약(`0x04`)은
   그대로 보내며, 축소 depth map(`0x01`)은 명시적 디버그/UI 모드에서만 최대 2Hz 로 허용하는 별개 예약이다.
@@ -89,8 +90,9 @@ ESP32 는 Pi 4 와 유선이므로 Wi-Fi 자격증명이 기본 경로에 필요
 
 `src/preprocess/tof/TofPosture.{h,cpp}` — 멀티존 거리 프레임 → roadmap §4-4 기하 특징 7종 →
 `docs/data-spec.md` §6.1 `tof_feature`(posture enum · `motion_score` · `head_delta_mm` · `nod_rate_hz`).
-Arduino 의존이 없는 순수 C++ 다. **10-17 부터 이 규칙 판정은 Pi 4 MLP 의 폴백이다** — 원본 격자는 `0x05` 로 Pi 4 에
-가고, Pi 4 `posture/tof_mlp.py` 가 자세를 낸다. 끄덕임·졸음은 시간 현상이라 계속 여기서 판정해 `0x03` flags 로 보낸다.
+Arduino 의존이 없는 순수 C++ 다. **10-17 부터 자세 모델 판정은 Pi 4 몫이고 이 규칙 판정은 비교·폴백용이다** — 원본 격자는 `0x05` 로
+Pi 4 에 가고, Pi 4 의 모델(후보 A 허브 `posture/tof_mlp.py` / 후보 B `deskmate_tofposture`, 미확정)이 자세를 낸다.
+끄덕임·졸음은 시간 현상이라 계속 여기서 판정해 `0x03` flags 로 보낸다.
 
 - **자세:** 바른자세 · 상체 앞으로 · 뒤로 젖힘 · 엎드림 · 턱괴기 · 꾸벅 졸음 · 자리비움.
   정의는 팀에 이미 검증된 두 판정을 ToF 물리량으로 옮겼다 — `display/atlas/camsvc/src/posture_pose`
@@ -134,9 +136,13 @@ Arduino 의존이 없는 순수 C++ 다. **10-17 부터 이 규칙 판정은 Pi 
   각 200 B)으로 싼다. `main.cpp` `writeTofGridUart` 가 새 격자가 생긴 뒤 5 Hz(`kTofGridPeriodMs`)로 보내며, 조각마다 같은
   `TS`·`frame_id`, SEQ 는 별도 카운터(`tof_grid_sequence`). 한 조각이라도 못 쓰면 그 격자는 통째로 건너뛴다.
   펌웨어 버전 0x0121. 호스트 테스트 `test_tof_payload` 6개(골든 조각 hex 2개는 hub `test_uart_frame` 와 공유).
-- Pi 4 쪽: `hub/deskmate_hub/ingest/uart_frame.py` `TofGridAssembler` 가 조립해 `SensorCache.tof_grid` 에 두고,
+- Pi 4 쪽 후보 A(이 커밋에 구현): `hub/deskmate_hub/ingest/uart_frame.py` `TofGridAssembler` 가 조립해 `SensorCache.tof_grid` 에 두고,
   `hub/deskmate_hub/posture/tof_mlp.py` 가 numpy 없는 순수 Python MLP(192→64→10, `dataset/tof_sim/train_mlp.py` 가중치를
   `export_mlp_json.py` 로 변환)로 자세를 낸다. 0x03 규칙 판정은 MLP 가 못 낼 때의 폴백으로 유지.
+- Pi 4 쪽 후보 B(이 저장소엔 아직 없음): 별도 서비스 `deskmate_tofposture`(HTTP 8771, `dataset/tof_sim_v5` PostureNet CNN+GRU,
+  센서당 (2,8,8) 입력·GRU 상태 유지·두 센서 융합)가 판정하고 `hub/atlas` 는 0x05 를 tcp:9100 으로 중계만 한다.
+  **둘 중 무엇을 쓸지는 미확정이며 실측 세션 정확도로 정한다.** 소비자는 `grid_w`·`sensor_mask` 로 센서별 8×8 로 나눌 수 있다
+  (가로 배치면 열 0~7 = A, 8~15 = B).
 
 **아직 안 한 것: 실기.** 두 센서 주소 배정·15 Hz ×2 유지·격자 방향·임계값은 보드에 붙여 봐야 안다.
 처음 켤 때 볼 것은 `docs/breadboard-esp32-node.md` "처음 켤 때 보는 것". 0x05 에 대해 실기에서 볼 것:
