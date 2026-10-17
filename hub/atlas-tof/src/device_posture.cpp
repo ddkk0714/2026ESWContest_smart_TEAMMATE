@@ -94,7 +94,7 @@ void DevicePosture::feed(int sensor, const TofLine& line, int64_t now_ms) {
     bool rewind = false;
     if (f.seq16) {
         if (s.seq16_known) {
-            const uint32_t delta = (f.seq - s.last_seq16) & 0xFFFFu;
+            const uint32_t delta = (f.seq - s.last_seq16) & f.seq_mask;
             if (delta == 0) { ++s.st.duplicates; return; }
             if (delta > 10) rewind = true;
             else if (delta > 1) ++s.st.seq_gaps;

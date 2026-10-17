@@ -140,6 +140,70 @@ void testParser() {
         const auto sxs = dx.sensors(0)[0];
         check(sxs.flip_cols && !sxs.flip_rows && sxs.frames == 1, "cross vector: flip_cols applied by default");
     }
+    {   // 표준 배치(data-spec §13.1) — 펌웨어 test_tof_payload 의 골든과 같은 hex. 실기 ESP32 가 보내는 것.
+        const std::string g0 =
+            "080800022a030200ffffc501c801cb01ce01d101d401d701da01dd01e001ffffe601e901ec01ef01f201f501f801fb01fe010102"
+            "ffff07020a020d0210021302160219021c021f022202ffff28022b022e023102340237023a023d0240024302ffff49024c024f02"
+            "5202550258025b025e0261026402ffff6a026d0270027302760279027c027f02ff09060005090600050906ff0509060005090600"
+            "0509ff00050906000509060005ff06000509060005090600ff09060005090600050906ff0509060005090600";
+        const std::string g1 =
+            "080801022a03020082028502ffff8b028e029102940297029a029d02a002a302a602ffffac02af02b202b502b802bb02be02c102"
+            "c402c702ffffcd02d002d302d602d902dc02df02e202e502e802ffffee02f102f402f702fa02fd020003030306030903ffff0f03"
+            "1203150318031b031e032103240327032a03ffff30033303360339033c033f030509ff00050906000509060005ff060005090600"
+            "05090600ff09060005090600050906ff05090600050906000509ff00050906000509060005ff060005090600";
+        auto std_line = [](const std::string& hex, unsigned ts) {
+            return "UART\t{\"type\":5,\"seq\":9,\"ts_ms\":" + std::to_string(ts) + ",\"payload_hex\":\"" + hex + "\"}";
+        };
+        static const uint8_t kSt[4] = {5, 9, 6, 0};
+        auto zones_ok = [&](const tof::TofLine& x, int base) {
+            for (int z = 0; z < 64; ++z) {
+                const int i = base + z;
+                if (i % 11 == 0) { if (x.frame.d[z] != -1 || x.frame.st[z] != 255) return false; }
+                else if (x.frame.d[z] != 450 + 3 * i || x.frame.st[z] != kSt[i % 4]) return false;
+            }
+            return true;
+        };
+        tof::TofLine a, b, sp;
+        check(tof::parseTofLine(std_line(g0, 1234), a) && a.kind == tof::LineKind::Frame && a.sensor_id == 0 &&
+                  a.frame.w == 8 && a.frame.h == 8 && a.frame.seq == 0x2A && a.frame.seq16 && a.frame.seq_mask == 0xFF &&
+                  a.frame.ms == 1234 && a.frame.has_status && a.frame.flip_rows_hint == 0 && a.frame.flip_cols_hint == 0,
+              "standard 0x05: header (sensor 0, frame_id 0x2A, flags are already applied -> no flip hint)");
+        check(zones_ok(a, 0), "standard 0x05: golden part 0 zones (-1/255 every 11th, else 450+3i)");
+        check(tof::parseTofLine(std_line(g1, 1234), b) && b.sensor_id == 1 && zones_ok(b, 64),
+              "standard 0x05: golden part 1 (sensor 1)");
+        const std::string spaced = "UART\t{\"type\": 5, \"seq\": 9, \"ts_ms\": 77, \"payload_hex\": \"" + g0 + "\"}";
+        check(tof::parseTofLine(spaced, sp) && sp.kind == tof::LineKind::Frame && sp.frame.ms == 77 && zones_ok(sp, 0),
+              "UART line with spaces after ':' (json.dumps default)");
+        std::string bad = g0;
+        bad[10] = '0'; bad[11] = '1';                       // sensor_mask 0x01 이지만 sensor 0 은 그대로 → 되고
+        tof::TofLine m;
+        check(tof::parseTofLine(std_line(bad, 1), m), "standard 0x05: sensor bit set in mask is accepted");
+        bad = g1; bad[10] = '0'; bad[11] = '1';             // sensor 1 인데 mask 에 b1 없음 → 거절
+        check(!tof::parseTofLine(std_line(bad, 1), m), "standard 0x05: sensor not in sensor_mask is rejected");
+
+        // frame_id u8 순환: 250 → 3 (delta 9) 은 유실, 같은 값은 중복, 3 → 100 은 리셋. 기본 설정에서 안 뒤집는다.
+        auto with_fid = [&](int fid) { std::string h = g0; char c[3]; std::snprintf(c, sizeof c, "%02x", fid & 255);
+                                       h[8] = c[0]; h[9] = c[1]; return std_line(h, 1); };
+        tof::DevicePosture dq;
+        std::string e3;
+        dq.loadModel(bin_for_tests, &e3);
+        const int sq = dq.addSensor("std");
+        tof::TofLine f1, f2, f3, f4;
+        tof::parseTofLine(with_fid(250), f1);
+        tof::parseTofLine(with_fid(3), f2);
+        tof::parseTofLine(with_fid(3), f3);
+        tof::parseTofLine(with_fid(100), f4);
+        dq.feed(sq, f1, 0);
+        dq.feed(sq, f2, 100);
+        const auto q1 = dq.sensors(100)[0];
+        dq.feed(sq, f3, 110);
+        const auto q2 = dq.sensors(110)[0];
+        dq.feed(sq, f4, 200);
+        const auto q3 = dq.sensors(200)[0];
+        check(q1.resets == 0 && q1.seq_gaps == 1 && !q1.flip_cols && !q1.flip_rows,
+              "standard 0x05: frame_id 250->3 wraps as a gap, no reset, no flip by default");
+        check(q2.duplicates == 1 && q3.resets == 1, "standard 0x05: same frame_id is a duplicate, jump > 10 resets");
+    }
     {   // frame_seq u16 순환은 리셋이 아니고, 크게 되감기면(재부팅) 리셋
         tof::DevicePosture dp;
         std::string err;
