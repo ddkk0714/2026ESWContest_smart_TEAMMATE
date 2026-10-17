@@ -60,3 +60,6 @@ FSM/
 .DS_Store
 Thumbs.db
 *.swp
+
+# --- ATLAS (ARC CLI 빌드 산출물) ---
+*.ipk
