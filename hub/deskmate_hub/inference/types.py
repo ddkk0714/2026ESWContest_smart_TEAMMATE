@@ -33,10 +33,25 @@ class Signal:
     phi: 집중(C_focus) 기여도, delta: 피로(C_fatigue) 기여도, 둘 다 [0,1].
     available=False 이면 scoring 에서 제외하고 분모를 재정규화한다
     (예: 비타이핑 구간의 keystroke, 정지 구간 밖의 respiration).
+
+    reasons 는 하위 원인의 요약 라벨이다(docs/guard-spec.md §4 가 어휘 정본).
+    scoring 은 쓰지 않고 guards 만 참조한다 — 스칼라로 뭉개진 신호 안에서
+    "온도가 높다" 와 "CO₂ 가 높다" 를 가르는 유일한 근거다.
     """
     phi: float = 0.0
     delta: float = 0.0
     available: bool = True
+    confidence: float = 1.0
+    reasons: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        # replay/ingest 는 JSON 배열로 준다. 비교·해시가 가능하도록 튜플로 고정한다.
+        if not isinstance(self.reasons, tuple):
+            self.reasons = tuple(self.reasons or ())
+
+    def has(self, reason: str) -> bool:
+        """가용한 신호에서만 reason 이 성립한다. 미가용이면 항상 거짓."""
+        return self.available and reason in self.reasons
 
 
 @dataclass
@@ -73,3 +88,4 @@ class TickResult:
     actions: list[str] = field(default_factory=list)
     gate: GateMode = GateMode.NONE
     cause: str | None = None        # dominant 그룹 (environment/posture/cognitive)
+    guards: list[str] = field(default_factory=list)  # 이번 tick 에 성립한 guard 이름

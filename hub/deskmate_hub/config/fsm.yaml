@@ -50,3 +50,40 @@ routing:
   environment: [environment]          # 환경성 → ACTION_ENV
   posture: [posture, respiration]     # 자세성/생리 → ACTION_POSTURE
   cognitive: [elapsed, keystroke]     # 인지성 → ACTION_BREAK
+
+# 조합 조건(guard) — 가중합이 표현하지 못하는 다신호 AND 규칙. docs/guard-spec.md
+# reasons 어휘는 guard-spec.md §4 가 정본이고 features/ 가 채운다.
+# 신호가 available=false 면 그 조건은 거짓이므로, 아직 안 들어오는 신호를
+# 참조하는 guard 는 조용히 성립하지 않고 나머지 경로는 그대로 돈다.
+guards:
+  drowsy:                 # 심박 느림 + 자세 굽음 + 고개 떨굼 → 졸음 → 깨우고 환기
+    enabled: false        # E-3(심박 사용) · mmWave go/no-go 통과 후 활성
+    all:
+      - {signal: respiration, reason: heart_slow}
+      - {signal: posture, reason: slouch}
+      - {signal: posture, reason: head_down}
+    hold_sec: 60
+    route_to: environment
+    actions: [wake_alert]
+
+  heart_spike:            # 평소보다 갑자기 빠른 심박 → 경고
+    enabled: false        # E-3 확정 전까지 비활성
+    all:
+      - {signal: respiration, reason: heart_fast}
+    hold_sec: 30
+    actions: [heart_alert]
+
+  hot_room:               # 평소보다 온도 높음 → 에어컨 (환기와 구분된다)
+    all:
+      - {signal: environment, reason: temp_high}
+    hold_sec: 120
+    route_to: environment
+    actions: [cool_down]
+
+  slouch_with_idle:       # fsm-spec 자세 해석 분기: 숙임 + 키입력↓ → 피로↑
+    all:
+      - {signal: posture, reason: slouch}
+      - {signal: keystroke, reason: typing_idle}
+    hold_sec: 60
+    route_to: posture
+    actions: [posture_nudge]
