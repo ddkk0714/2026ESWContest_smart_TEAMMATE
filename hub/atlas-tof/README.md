@@ -78,7 +78,7 @@ arc build hub/atlas-tof          # -> hub/atlas-tof/build/arm64/ipk/com.deskmate
 | `TOFPOSTURE_PORTS` | (자동) | 콤마로 나눈 입력. 비우면 `/dev/ttyUSB*` `/dev/ttyACM*` 를 시작 때와 5초마다 찾아 최대 4개. `tcp:9001` = 그 포트로 PC 가 넘기는 줄, `tcp:9100` = hub/atlas 가 넘기는 UART 0x05 줄(운영), 보통 파일 = 리플레이(`녹화.jsonl@COM5` 로 포트 하나만) |
 | `TOFPOSTURE_BAUD` | auto | 921600→115200→460800→230400 중 센서 줄이 읽히는 값(바이트는 오는데 3 s 동안 줄이 없으면 다음). 숫자로 고정 가능 |
 | `TOFPOSTURE_MODEL` | `<exe>/models/posture_net.bin` | 가중치 (클래스 수·은닉 폭은 파일 헤더에서 읽음) |
-| `TOFPOSTURE_FLIP_ROWS` / `_COLS` | 0 / 0 | 1 이면 받은 격자를 위아래/좌우로 뒤집는다. 장착 방향 보정(`tof_live.py --show` 로 정함) |
+| `TOFPOSTURE_FLIP_ROWS` / `_COLS` | 비움 | 1 이면 받은 격자를 위아래/좌우로 뒤집는다. **UART 0x05 표준 배치는 펌웨어가 이미 장면 방향으로 보내므로 비워 둔다**(flags 는 적용한 변환 기록). USB·PC 경로에서 장착 방향을 바꿀 때만 쓴다(`tof_live.py --show` 로 정함) |
 | `TOFPOSTURE_HTTP` / `TOFPOSTURE_BIND` | 8771 / 0.0.0.0 | HTTP. 8765(hub)·8770(camsvc)과 겹치지 않게. 0 이면 끔 |
 | `TOFPOSTURE_RATE_HZ` | 10 | 모델 스텝 주기 = 학습 프레임률. **바꾸면 안 된다** |
 | `TOFPOSTURE_STALE_MS` | 1000 | 이보다 오래 조용한 센서는 offline(융합 제외, 돌아오면 GRU 리셋) |

@@ -60,7 +60,9 @@ def to_service_payload(p: bytes, trk: SeqTracker):
     if n == 0 or n > 64 or len(p) < 8 + 3 * n: raise ValueError(f"grid size {gw}x{gh} len {len(p)}")
     dist = struct.unpack_from(f"<{n}h", p, 8)
     st = p[8 + 2 * n: 8 + 3 * n]
-    sflags = 1 | 2 | (4 if flags & 0x01 else 0) | (8 if flags & 0x02 else 0)
+    # 펌웨어 flags 는 이미 적용한 방향 변환(data-spec §13.1). 서비스 v1 b2/b3 는 '받는 쪽이 뒤집을 것' 이라
+    # 그대로 옮기면 두 번 뒤집힌다 → 방향 비트는 0.
+    sflags = 1 | 2
     seq = trk.next(sensor, fid)
     out = struct.pack("<BBBBBBH", 1, sensor, sflags, gw, gh, 0, seq)
     out += struct.pack(f"<{n}H", *[(0 if d < 0 else min(d, 0xFFFE)) for d in dist]) + bytes(st)
