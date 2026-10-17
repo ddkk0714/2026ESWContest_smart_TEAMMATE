@@ -5,21 +5,30 @@ SensorFrame(JSON). 8월 실측 로그를 이 형식으로 저장하면 반복 �
 
 JSONL 스키마(줄당 하나):
     {"now": 0, "present": true, "pc_ratio": 0.9,
-     "signals": {"posture": {"delta": 0.9, "phi": 0.1, "available": true}, ...},
+     "signals": {"posture": {"delta": 0.9, "phi": 0.1, "available": true,
+                             "reasons": ["slouch", "head_down"]}, ...},
      "touch": true}
 누락 필드는 기본값. '#' 로 시작하거나 빈 줄은 주석으로 건너뛴다.
+`reasons` 는 guard 가 참조하는 하위 원인 라벨이다(docs/guard-spec.md §4).
 """
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Iterable, Iterator
 
 from .inference import FSMEngine, SensorFrame, Signal
 
+_SIGNAL_FIELDS = {f.name for f in fields(Signal)}
+
+
+def signal_from_dict(d: dict) -> Signal:
+    """알 수 없는 필드는 무시한다 — data-spec §14 의 minor 버전 규칙."""
+    return Signal(**{k: v for k, v in d.items() if k in _SIGNAL_FIELDS})
+
 
 def frame_from_dict(d: dict) -> SensorFrame:
-    signals = {k: Signal(**v) for k, v in (d.get("signals") or {}).items()}
+    signals = {k: signal_from_dict(v) for k, v in (d.get("signals") or {}).items()}
     return SensorFrame(
         now=float(d["now"]),
         present=bool(d.get("present", True)),

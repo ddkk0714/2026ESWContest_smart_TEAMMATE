@@ -13,6 +13,7 @@ from typing import Any
 from .cause import dominant_cause, group_contributions
 from .config import load_config
 from .context import detect_context
+from .guards import GuardEvaluator
 from .scoring import compute_scores
 from .states import CAUSE_TO_ACTION, FOCUS_STATES, State
 from .types import Context, GateMode, Scores, SensorFrame, TickResult
@@ -37,6 +38,9 @@ class FSMEngine:
         self.state: State = State.IDLE
         self.context: Context = Context.MIXED
         self.scores: Scores | None = None
+        # 조합 조건(guard) — 가중합과 병렬로 도는 별도 층. docs/guard-spec.md
+        self._guards = GuardEvaluator(self.cfg)
+        self.active_guards: list[str] = []
 
         # 타이머(전이 진입 시각·기준값)
         self._state_since: float = 0.0
@@ -85,6 +89,11 @@ class FSMEngine:
         actions: list[str] = []
         gate = GateMode.NONE
         cause: str | None = None
+
+        # guard 평가는 상태 전이보다 먼저다. actions 는 새로 성립한 tick 에만
+        # 방출한다 — 유지되는 동안 매 tick 반복하면 개입이 폭주한다.
+        self.active_guards, newly_active = self._guards.evaluate(frame, now)
+        actions.extend(self._guards.actions_for(newly_active))
 
         # 재실 타이머
         if frame.present:
@@ -174,6 +183,13 @@ class FSMEngine:
             groups = group_contributions(frame, c.fatigue_weights, self.cfg)
             options = [g for g in self._remaining_options if g in groups] or self._remaining_options
             cause = max(options, key=lambda g: groups.get(g, 0.0)) if options else "cognitive"
+            # guard 가 원인을 지목하면 dominant 대신 그것을 쓴다. 단 아직 시도하지
+            # 않은 원인일 때만 — 아니면 ESCALATE→CAUSE_ANALYSIS 로 되돌아왔을 때
+            # 같은 개입을 무한 반복한다.
+            forced = self._guards.route_for(self.active_guards)
+            if forced and forced in options:
+                cause = forced
+                actions.append(f"guard_route:{forced}")
             if cause in self._remaining_options:
                 self._remaining_options.remove(cause)
             gate = self._action_gate(c.c_fatigue)
@@ -242,4 +258,5 @@ class FSMEngine:
             actions=actions,
             gate=gate,
             cause=cause,
+            guards=list(self.active_guards),
         )
