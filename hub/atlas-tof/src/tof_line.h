@@ -17,6 +17,10 @@
 //   payload v1 = version u8 · sensor_id u8 · flags u8(b0 valid, b1 has_status, b2 flip_rows_needed, b3 flip_cols_needed) ·
 //   w u8 · h u8 · reserved u8 · frame_seq u16 · dist_mm u16×64(0 = 타깃 없음, 0xFFFF 도 무효) · target_status u8×64, little-endian.
 //   zone 은 센서 원본 순서로 오고, 받는 쪽이 b2/b3 대로 뒤집는다(TOFPOSTURE_FLIP_* 가 있으면 그것이 우선).
+//   **표준 배치(data-spec §13.1, 펌웨어 TofPayload.h — 2026-10-17 실기가 보내는 것)** 도 읽는다. 첫 바이트가 1 이 아니면 이것:
+//   grid_w u8 · grid_h u8 · sensor u8 · sensors u8 · frame_id u8 · sensor_mask u8 · flags u8 · reserved u8 ·
+//   dist i16×n(-1 = 없음) · status u8×n(255 = 없음). flags 는 펌웨어가 **이미 적용한** 방향 변환이라 받는 쪽은 안 뒤집는다.
+//   frame_id 는 u8 이라 delta 를 0xFF 로 잰다(TofFrame::seq_mask). valid 비트가 없어 늘 Frame 이다.
 //   frame_seq 는 센서마다 +1 씩 도는 u16: delta=(new-old)&0xFFFF 가 0 이면 중복(버림), 1..10 진행, 그 밖이면 GRU 리셋.
 //   한 줄에 센서 번호가 들어 있으므로 한 연결로 여러 센서가 온다(TofLine::sensor_id).
 // JSON 라이브러리 없이 키를 직접 찾는다. 두 형식 모두 zone 은 장면 방향(row 0 = 위, col 0 = 센서 기준 왼쪽)으로
@@ -41,7 +45,8 @@ struct TofFrame {
     std::string label;          // 리플레이 파일의 정답 (없으면 빈 문자열)
     int8_t flip_rows_hint = -1; // UART 0x05 flags b2/b3: 받는 쪽이 뒤집어야 하나 (-1 = 형식에 정보 없음)
     int8_t flip_cols_hint = -1;
-    bool seq16 = false;         // seq 가 UART 0x05 frame_seq(u16, delta 규칙) 인가
+    bool seq16 = false;         // seq 가 UART 0x05 순번(delta 규칙)인가
+    uint32_t seq_mask = 0xFFFFu; // seq16 의 순환 폭: 옛 v1 frame_seq u16 = 0xFFFF, 표준 배치 frame_id u8 = 0xFF
 };
 
 struct TofHello {
