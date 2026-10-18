@@ -30,6 +30,7 @@ import 'settings_store.dart';
 import 'state_source.dart';
 import 'privacy_page.dart';
 import 'privacy_state.dart';
+import 'workspace_shell.dart';
 
 const _hubUrl = String.fromEnvironment('DESKMATE_HUB_URL');
 const _mqttHost = String.fromEnvironment('DESKMATE_MQTT_HOST');
@@ -765,12 +766,31 @@ class _DashboardPageState extends State<DashboardPage> {
     unawaited(_musicChanges.cancel());
     unawaited(_musicVolumeChanges.cancel());
     unawaited(_music.dispose());
+    unawaited(_feedbackController.dispose());
     unawaited(_bluetooth.close());
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    return DeskmateWorkspace(
+      state: _override ?? _state,
+      demo: _source is DemoStateSource,
+      music: _music,
+      feedback: _feedbackController,
+      developerBuilder: (context) => Theme(
+        data: buildDeskmateTheme(),
+        child: _buildDeveloperTools(context),
+      ),
+      onConnections: () => setState(() => _view = _AppView.bluetooth),
+      pendingRequest: _hasPendingRequest,
+      onAccept: () => unawaited(_feedback('accept')),
+      onReject: () => unawaited(_feedback('reject')),
+      onUndo: () => unawaited(_undoAuto()),
+    );
+  }
+
+  Widget _buildDeveloperTools(BuildContext context) {
     final state = _override ?? _state;
     return Scaffold(
       body: SafeArea(
