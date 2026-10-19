@@ -7,12 +7,24 @@ namespace tof {
 namespace {
 
 // line 에서 "key": 다음 위치. 없으면 npos.
+// "key" 와 ':' 사이·뒤의 공백은 건너뛴다(Python json.dumps 기본값이 ": " 이다).
 size_t findKey(const std::string& line, const char* key) {
     std::string pat = "\"";
     pat += key;
-    pat += "\":";
-    const size_t p = line.find(pat);
-    return p == std::string::npos ? p : p + pat.size();
+    pat += "\"";
+    size_t from = 0;
+    for (;;) {
+        size_t p = line.find(pat, from);
+        if (p == std::string::npos) return p;
+        p += pat.size();
+        while (p < line.size() && (line[p] == ' ' || line[p] == '	')) ++p;
+        if (p < line.size() && line[p] == ':') {
+            ++p;
+            while (p < line.size() && (line[p] == ' ' || line[p] == '	')) ++p;
+            return p;
+        }
+        from = p;   // 값 안에 같은 글자가 있었다 — 다음 것을 찾는다
+    }
 }
 
 bool readInt(const std::string& line, const char* key, long& value) {
@@ -200,7 +212,33 @@ bool parseUartZonesLine(const std::string& line, TofLine& out) {
     }
     const auto u8 = [&](size_t o) { return static_cast<uint8_t>(p[o]); };
     const auto u16 = [&](size_t o) { return static_cast<uint16_t>(u8(o) | (u8(o + 1) << 8)); };
-    if (p.size() < 8 || u8(0) != 1) return false;                 // payload version 1 만
+    if (p.size() < 8) return false;
+    if (u8(0) != 1) {
+        // 표준 배치(data-spec §13.1): grid_w · grid_h · sensor · sensors · frame_id · sensor_mask · flags · reserved
+        const int gw = u8(0), gh = u8(1), gn = gw * gh;
+        if (gw <= 0 || gh <= 0 || gn > kMaxZones || p.size() < 8 + 3 * static_cast<size_t>(gn)) return false;
+        const int sensor = u8(2), mask = u8(5);
+        if (sensor >= 8 || !((mask >> sensor) & 1)) return false;
+        TofFrame& g = out.frame;
+        g.w = gw; g.h = gh;
+        g.seq = u8(4);
+        g.seq16 = true;
+        g.seq_mask = 0xFFu;
+        g.ms = static_cast<uint32_t>(ts);
+        g.has_status = true;
+        for (int i = 0; i < gn; ++i) {
+            const int16_t dmm = static_cast<int16_t>(u16(8 + 2 * i));
+            const uint8_t st = u8(8 + 2 * gn + i);
+            g.d[i] = (dmm <= 0 || st == 255) ? int16_t(-1) : dmm;
+            g.st[i] = st;
+        }
+        g.flip_rows_hint = 0;                                      // 펌웨어가 이미 장면 방향으로 돌려 보냈다
+        g.flip_cols_hint = 0;
+        out.sensor_id = sensor;
+        out.kind = LineKind::Frame;
+        (void)seq;
+        return true;
+    }
     const int w = u8(3), h = u8(4), n = w * h;
     if (w <= 0 || h <= 0 || n > kMaxZones || p.size() < 8 + 3 * static_cast<size_t>(n)) return false;
     const uint8_t flags = u8(2);
