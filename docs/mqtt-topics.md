@@ -450,3 +450,12 @@ GATT 연결 이후, 각 프레임 쓰기 직전에 만료·권한·수동 변경
 Hub도 새 pending 제안이 없고 현재/직전 에피소드의 ID 목록과 일치할 때만 처리한다.
 이전 결과 카드의 늦은 터치가 새 에피소드의 명령을 되돌리는 것을 차단한다.
 휴식/자세 카드의 기존 feedback 및 기존 client payload는 유지한다.
+
+### 독립 Mock Gateway 실행
+
+일반 Linux의 `deskmate_hub.control.gateway_service`는 기존 cmd/result QoS1 계약만 사용한다.
+명시적 Mock 실행과 private journal이 필요하며, 등록된 `mock_*` target과
+`data.execution_mode=mock`인 명령만 처리한다. 결과는 `node=device-gateway-mock`,
+retain=false다. 재시작/재연결 시 journal의 결과를 다시 알릴 수 있지만 명령은 재실행하지 않는다.
+기존 BLE/실기 controller의 target을 소유하지 않는다. 실행·인증·TLS·ACL·저장 위치는
+[mock-device-gateway.md](mock-device-gateway.md)를 참조한다.
