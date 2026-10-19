@@ -81,6 +81,10 @@ def build_dataset(*, name: str, synthetic: str = "default,short,demo", seeds: st
                              "state_sha256": hashlib.sha256(state_path.read_bytes()).hexdigest(), "ticks": len(ticks)})
     if not sessions:
         raise ValueError("합성 시나리오 또는 로그가 하나 이상 필요합니다")
+    profiles = {tick.get("feature_profile") for _, ticks, _ in sessions for tick in ticks}
+    if len(profiles) != 1:
+        raise ValueError("mixed feature profiles; build separate datasets")
+    feature_profile = profiles.pop()
     # Offset variants must remain together across train/test.
     from ml.training.train_common import group_id
     groups = sorted({group_id(session[0]) for session in sessions})
@@ -126,6 +130,7 @@ def build_dataset(*, name: str, synthetic: str = "default,short,demo", seeds: st
     manifest = {
         "name": name, "created_at": datetime.now(timezone.utc).isoformat(),
         "features": list(frames.FEATURES), "classes": list(frames.CLASSES),
+        "feature_profile": feature_profile,
         "window": window, "stride": stride, "seed": seed, "eval_fraction": eval_fraction,
         "sessions": {"total": len(sessions), "train": sorted(train_ids), "test": sorted(test_ids)},
         "materials": material + [{"source": "esm", "path": path,

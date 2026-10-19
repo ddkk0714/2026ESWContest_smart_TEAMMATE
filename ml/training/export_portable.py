@@ -47,7 +47,8 @@ def export(model_path, dataset, output, *, normalization, period=10, policy_path
         layer = model.get_layer(name)
         if not isinstance(layer, tf.keras.layers.Dense) or layer.units != units or layer.activation.__name__ != activation:
             raise ValueError("unsupported dense")
-    metadata = model_metadata(width, period, normalization)
+    metadata = model_metadata(width, period, normalization,
+                              feature_profile=data["manifest"].get("feature_profile"))
     layers = {}
     for name in ("conv1", "conv2", "embedding", "personal_head"):
         weights, bias = model.get_layer(name).get_weights()
