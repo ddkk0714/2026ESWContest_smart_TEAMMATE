@@ -17,6 +17,8 @@ from typing import Any, TextIO
 from .inference import (FSMEngine, GateMode, SensorFrame, SessionRecorder, State,
                         load_config, report_envelope)
 from .control import ControlDispatcher, MockPlugAdapter, load_control_config
+from .control.devices import DeviceRegistry
+from .control.environment_policy import EnvironmentControlPolicy, MockControlTransport, load_environment_control_config
 from .features import BaselineStore
 from .ingest import SensorCache, SessionTracker, build_frame, load_ingest_config, sensor_summary
 from .presentation import state_envelope
@@ -46,6 +48,9 @@ class LiveHub:
         publish_request=None,
         publish_control=None,
         control_cfg: dict[str, Any] | None = None,
+        environment_control_cfg: dict[str, Any] | None = None,
+        device_registry: DeviceRegistry | None = None,
+        environment_mock_transport: MockControlTransport | None = None,
         personalization_cfg: dict[str, Any] | None = None,
         privacy_cfg: dict[str, Any] | None = None,
         ondevice_cfg: dict[str, Any] | None = None,
@@ -82,7 +87,32 @@ class LiveHub:
         self.control_cfg = control_cfg if control_cfg is not None else load_control_config()
         self.control: ControlDispatcher | None = None
         self.mock_plug: MockPlugAdapter | None = None
-        if self.control_cfg.get("enabled"):
+        self.environment_policy = EnvironmentControlPolicy(
+            environment_control_cfg if environment_control_cfg is not None else load_environment_control_config(),
+            device_registry if device_registry is not None else DeviceRegistry(),
+        )
+        if self.control_cfg.get("enabled") and self.environment_policy.enabled:
+            # Mock-only milestone: never publish these commands to a live broker.
+            # All gates, request IDs, feedback, expiry and undo stay in Dispatcher.
+            if environment_mock_transport is not None and not isinstance(environment_mock_transport, MockControlTransport):
+                raise ValueError("environment transport must be explicitly Mock")
+            if environment_mock_transport is None:
+                self.mock_plug = MockPlugAdapter(self.cache.put_control_result)
+            def publish_mock(command):
+                self.mock_plug.handle_command(command)
+                registry = self.environment_policy.registry
+                device = registry.devices[command["target_id"]]
+                values = dict(device.state, **{command["operation"]: command["value"]})
+                registry.observe(device.target_id, values, self._control_now,
+                                 expected={command["operation"]: command["value"]})
+            self.control = ControlDispatcher(
+                self.control_cfg, publish_cmd=((lambda command: environment_mock_transport.publish(dict(command, execution_mode="mock"))) if environment_mock_transport else publish_mock),
+                plan_commands=self.environment_policy.plan,
+                plan_advice=self.environment_policy.advice,
+                dispatch_guard=self.environment_policy.can_dispatch,
+                on_dispatched=self.environment_policy.dispatched,
+            )
+        elif self.control_cfg.get("enabled"):
             log = lambda m: print(m, file=self.out, flush=True)  # noqa: E731
             if str(self.control_cfg.get("adapter", "mqtt")) == "mock" or publish_control is None:
                 self.mock_plug = MockPlugAdapter(self.cache.put_control_result)
@@ -110,6 +140,10 @@ class LiveHub:
     def tick_once(self, now: float | None = None) -> dict[str, Any]:
         now = time.time() if now is None else now
         view = self.cache.snapshot()
+        self._control_now = now
+        # Observe before processing an acceptance: stale/invalid/new manual state
+        # must invalidate a proposed command rather than be checked a tick later.
+        self.environment_policy.observe(view.env, now)
         for feedback, received in self.cache.pop_feedback_events():
             if feedback.get("kind") == "personalization":
                 self.privacy.handle(feedback)
@@ -121,6 +155,12 @@ class LiveHub:
                 # request_id 가 오면 현재 질문과 맞는지 본다. 없거나 'atlas-display'(HTTP 시절 기본값)면 그대로 받는다.
                 rid = feedback.get("request_id")
                 current = self.pending_request["data"]["request_id"] if self.pending_request else None
+                episode = (self.control.episode or (self.control.history[-1] if self.control.history else None)) if self.control else None
+                undo_ids = [command.command_id for command in episode.commands] if episode else []
+                if "undo_command_ids" in feedback and (verdict != "reject" or current is not None
+                        or not undo_ids or feedback["undo_command_ids"] != undo_ids):
+                    print("[control] stale undo plan ignored", file=self.out)
+                    continue
                 if verdict not in ("accept", "reject", "correct", "timeout"):
                     print(f"[esm] 알 수 없는 verdict: {verdict!r}", file=self.out)
                 elif verdict == "correct":
@@ -135,6 +175,12 @@ class LiveHub:
                         self._record_feedback(feedback, now, request)
                         if self.control is not None:
                             self.control.on_feedback("timeout", now)
+                elif (self.environment_policy.enabled and self.control is not None
+                      and self.control.episode is not None and self.control.episode.awaiting_user
+                      and (current is None or rid != current)):
+                    # New device proposals require the exact existing card ID.
+                    # The legacy HTTP fallback remains unchanged when policy is off.
+                    print("[control] feedback without matching request_id ignored", file=self.out)
                 elif rid in (None, "", "atlas-display", current):
                     request = self.pending_request
                     self.tracker.pending_feedback = verdict
@@ -181,6 +227,7 @@ class LiveHub:
         summary = sensor_summary(view, now, self.ingest_cfg, self.tracker)
         if self.control is not None:
             summary["control"] = self.control.summary()
+            summary["control"]["execution_mode"] = ("mock" if self.environment_policy.enabled or self.mock_plug is not None else "live")
         if self.tracker.baseline is not None:
             snap = self.tracker.baseline.snapshot()
             summary["baseline"] = {"calibrating": snap["calibrating"], "ready": sorted(snap["session"]),
@@ -329,6 +376,12 @@ class LiveHub:
         if result.gate is not GateMode.SUGGEST:
             self.pending_request = None
             return
+        if (result.state is State.ACTION_ENV and self.environment_policy.enabled
+                and self.control is not None and self.control.episode is not None
+                and not self.control.episode.awaiting_user):
+            # Do not ask for an unavailable/stale/cooldown-blocked plan.
+            self.pending_request = None
+            return
         kind, prompt = self._REQUEST_STATES[result.state]
         expires = float(self.fsm_cfg["timers"].get("focus_break_poll_sec", 180))
         if result.state is State.ACTION_ENV and self.control is not None:
@@ -342,6 +395,11 @@ class LiveHub:
                 "c_fatigue": round(float(result.scores.c_fatigue), 4),
             },
         }
+        if result.state is State.ACTION_ENV and self.control is not None:
+            # Immutable card snapshot, same dispatcher plan as state/phase.
+            plan = self.control.summary()
+            plan["execution_mode"] = ("mock" if self.environment_policy.enabled or self.mock_plug is not None else "live")
+            self.pending_request["data"]["control_plan"] = json.loads(json.dumps(plan))
         self.seq += 1
         self.publish_request(self.pending_request)
 

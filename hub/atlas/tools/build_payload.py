@@ -87,6 +87,12 @@ def main() -> None:
                     "deskmate_hub/config/control.json",
                     json.dumps(control_config, ensure_ascii=False, separators=(",", ":")),
                 )
+            environment_yaml = args.config.with_name("environment_control.yaml")
+            if environment_yaml.exists():
+                with environment_yaml.open(encoding="utf-8") as source:
+                    environment_config = yaml.safe_load(source)
+                archive.writestr("deskmate_hub/config/environment_control.json",
+                                 json.dumps(environment_config, ensure_ascii=False, separators=(",", ":")))
             personalization_yaml = args.config.with_name("personalization.yaml")
             if personalization_yaml.exists():
                 with personalization_yaml.open(encoding="utf-8") as source:
