@@ -30,7 +30,18 @@ bool EnvironmentSensors::beginScd41(uint32_t now_ms,
   last_scd41_init_attempt_ms_ = now_ms;
   scd41_.begin(wire_, SCD41_I2C_ADDR_62);
 
-  const int16_t error = scd41_.startPeriodicMeasurement();
+  int16_t error = scd41_.startPeriodicMeasurement();
+  if (error != kNoError) {
+    // 실기 10-17: ESP32 만 리셋되면(USB 플래시·EN) SCD41 은 전원이 유지돼 이전 실행의 주기 측정이 계속 돌고 있고,
+    // 그 상태에서는 start 명령을 받지 않아 268(WriteError|I2cAddressNack)이 난다. 멈추고(≤500 ms) 다시 시작한다.
+    const int16_t stop_error = scd41_.stopPeriodicMeasurement();
+    delay(500);
+    error = scd41_.startPeriodicMeasurement();
+    Serial.print(F("SCD41 start retry after stop: stop="));
+    Serial.print(stop_error);
+    Serial.print(F(" start="));
+    Serial.println(error);
+  }
   scd41_initialized_ = error == kNoError;
   sample.scd41.initialized = scd41_initialized_;
   if (!scd41_initialized_) {
@@ -41,6 +52,22 @@ bool EnvironmentSensors::beginScd41(uint32_t now_ms,
     Serial.println(F("SCD41 periodic measurement started"));
   }
   return scd41_initialized_;
+}
+
+void EnvironmentSensors::scanBus(Print& out) {
+  out.print(F("env i2c scan (7-bit addr):"));
+  uint8_t found = 0;
+  for (uint8_t a7 = 0x08; a7 <= 0x77; ++a7) {
+    wire_.beginTransmission(a7);
+    if (wire_.endTransmission() == 0) {
+      out.print(found ? "," : " ");
+      out.print(F("0x"));
+      out.print(a7, HEX);
+      ++found;
+    }
+  }
+  if (found == 0) out.print(F(" none"));
+  out.println(F("  (expect SCD41 0x62, BH1750 0x23)"));
 }
 
 bool EnvironmentSensors::beginBh1750(uint32_t now_ms,

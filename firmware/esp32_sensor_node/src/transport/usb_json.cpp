@@ -75,4 +75,84 @@ void writeEnvironmentJson(Stream& output, uint32_t now_ms,
   output.println(F("}"));
 }
 
+void writeTofJson(Stream& output, uint32_t now_ms, const TofFeatures& f, uint8_t sensor_mask,
+                  uint32_t tx_grid, uint32_t tx_feature) {
+  output.print(F("{\"t\":\"tof_feature\",\"ms\":"));
+  output.print(now_ms);
+  output.print(F(",\"present\":"));
+  writeBool(output, f.present);
+  output.print(F(",\"posture\":\""));
+  output.print(tofPostureName(f.posture));
+  output.print(F("\",\"posture_confidence\":"));
+  output.print(f.posture_confidence, 2);
+  output.print(F(",\"motion_score\":"));
+  output.print(f.motion_score, 2);
+  output.print(F(",\"head_delta_mm\":"));
+  writeNullableFloat(output, f.head_delta_valid, f.head_delta_mm, 0);
+  output.print(F(",\"nod_rate_hz\":"));
+  writeNullableFloat(output, f.nod_rate_valid, f.nod_rate_hz, 3);
+  output.print(F(",\"valid_zones\":"));
+  output.print(f.valid_zones);
+  output.print(F(",\"grid_width\":"));
+  output.print(f.grid_width);
+  output.print(F(",\"grid_height\":"));
+  output.print(f.grid_height);
+  output.print(F(",\"coverage_ratio\":"));
+  output.print(f.coverage_ratio, 2);
+  output.print(F(",\"centroid_depth_mm\":"));
+  writeNullableFloat(output, f.geometry_valid, f.centroid_depth_mm, 0);
+  output.print(F(",\"head_row_index\":"));
+  writeNullableFloat(output, f.geometry_valid, f.head_row_index, 2);
+  output.print(F(",\"baseline_ready\":"));
+  writeBool(output, f.baseline_ready);
+  output.print(F(",\"drowsy\":"));
+  writeBool(output, f.drowsy);
+  output.print(F(",\"nods_in_window\":"));
+  output.print(f.nods_in_window);
+  output.print(F(",\"sensors_ok\":"));
+  output.print(sensor_mask);
+  output.print(F(",\"tx_grid\":"));
+  output.print(tx_grid);
+  output.print(F(",\"tx_feature\":"));
+  output.print(tx_feature);
+  output.println(F("}"));
+}
+
+void writeTofGridJson(Stream& output, uint32_t now_ms, uint8_t frame_id, uint8_t sensor_mask, uint8_t flags,
+                      uint8_t w, uint8_t h, uint8_t count, const int16_t* const* dist, const uint8_t* const* status) {
+  output.print(F("{\"t\":\"tof_grid\",\"ms\":"));
+  output.print(now_ms);
+  output.print(F(",\"frame\":"));
+  output.print(frame_id);
+  output.print(F(",\"sensors_ok\":"));
+  output.print(sensor_mask);
+  output.print(F(",\"w\":"));
+  output.print(w);
+  output.print(F(",\"h\":"));
+  output.print(h);
+  output.print(F(",\"flags\":"));
+  output.print(flags);
+  output.print(F(",\"s\":["));
+  const uint16_t zones = static_cast<uint16_t>(w) * h;
+  for (uint8_t i = 0; i < count; ++i) {
+    if (i > 0) output.print(',');
+    if ((sensor_mask & (1u << i)) == 0) {
+      output.print(F("null"));
+      continue;
+    }
+    output.print(F("{\"d\":["));
+    for (uint16_t z = 0; z < zones; ++z) {
+      if (z > 0) output.print(',');
+      output.print(dist[i][z]);
+    }
+    output.print(F("],\"st\":["));
+    for (uint16_t z = 0; z < zones; ++z) {
+      if (z > 0) output.print(',');
+      output.print(status[i][z]);
+    }
+    output.print(F("]}"));
+  }
+  output.println(F("]}"));
+}
+
 }  // namespace deskmate

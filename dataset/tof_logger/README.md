@@ -8,8 +8,10 @@ L8 ─I2C─ ESP32 (env:tof_logger) ──USB 921600──► tof_log.py ──�
           원본 8×8 + 규칙 판정(TofPosture)          + 지시 자세(정답)      frames.jsonl · meta.json
 ```
 
-- **수집 모드 전용이다.** 운영 펌웨어(`env:esp32dev`)에는 들어가지 않는다. 원본 zone 배열은 USB 로
-  개발 PC 에만 오고 MQTT·UART2 운영 경로로는 나가지 않는다(firmware README "원칙").
+- **수집 모드 전용이다.** 운영 펌웨어(`env:esp32dev`)에는 들어가지 않는다. 여기서는 원본 zone 배열이 USB 로
+  개발 PC 에 온다. 운영 펌웨어는 같은 원본을 **센서별 8×8** UART2 `0x05` 프레임으로 Pi 4 에만 보내고(2026-10-17 표준 — 두 센서
+  시야가 대부분 겹쳐 16×8 은 한 장면이 아니다) MQTT·로그로는 내보내지 않는다(firmware README "원칙"). 두 경로의 `d`(mm, -1)·`st`(원
+  status) 값은 같다. 여기 세션의 16×8 `d` 는 열 0~7 = 센서 A, 8~15 = B 로 나눠 센서별 8×8 로 쓴다(학습·평가 단위도 센서 하나).
 - 한 프레임에 **센서 원본 8×8 거리·상태값**, **같은 프레임의 규칙 판정**, **그때 안내 중인 지시 자세**가 같이 남는다.
   - 지시 자세가 정답이다. 규칙 판정은 비교 대상이자 약한 라벨이다.
   - 규칙 라벨만으로 학습하면 모델은 규칙의 오류까지 그대로 배운다. 그래서 **평가는 항상 지시 자세로 한다.**
@@ -24,15 +26,10 @@ cd firmware/esp32_sensor_node
 pio run -e tof_logger -t upload
 ```
 
-배선(SATEL-VL53L8 기준)은 아래와 같다. 핀은 `src/tof_logger/main.cpp` 맨 위 매크로로 바꾼다.
-
-| L8 | ESP32 | 메모 |
-|---|---|---|
-| SDA / SCL | GPIO21 / GPIO22 | `DESKMATE_TOF_SDA/SCL`. I2C 1 MHz(`DESKMATE_TOF_I2C_HZ`). 배선이 길어 init 이 실패하면 400000 |
-| LPn | 3.3 V 또는 GPIO | `DESKMATE_TOF_LPN_PIN`(-1 = 3.3 V 로 묶음). LOW 면 I2C 가 안 된다 |
-| PWREN | 3.3 V 또는 GPIO | `DESKMATE_TOF_PWREN_PIN` |
-| SPI_I2C_N | GND | I2C 모드 |
-| VDD/IOVDD, GND | 3.3 V, GND | 보드 규격 확인 |
+**2026-10-16 부터 센서 두 개(VL53L8CX ×2)를 한 격자(16×8, 또는 8×16)로 붙여 기록한다.** 배선은 운영 펌웨어와 같다 —
+`include/pins.h` 와 [`docs/breadboard-esp32-node.md`](../../docs/breadboard-esp32-node.md) (SDA 23 · SCL 18 · LPn A 32 / B 33 ·
+NCS·SPI_I2C_N GND). 한쪽 센서만 올라오면 8×8 로 떨어지고, `w`·`h` 가 줄마다 들어 있으니 수집기는 그대로 돈다.
+배치·방향은 `platformio.ini` 의 `-DDESKMATE_TOF_STACK_ROWS/FLIP_ROWS/FLIP_COLS/SWAP/COUNT` 로 바꾼다(`src/tof_logger/main.cpp` 위쪽).
 
 부팅하면 센서 펌웨어(약 84 KB)를 올리느라 몇 초가 걸린다. 실패하면 `{"t":"tof_err","where":"init",...}` 를
 보내고 3초마다 다시 시도한다. 수집기 화면에 `센서 오류: init` 으로 나온다.
@@ -64,15 +61,16 @@ python inspect_session.py data/sessions/<세션> --npz s.npz        # 학습용 
 
 ## 처음 붙였을 때: 방향 확인
 
-센서 zone 순서가 장면의 어느 쪽인지는 장착 방향에 따라 다르다. 로그에는 **센서 순서 원본**이 남고,
-장면 방향(row 0 = 위, 왼쪽 = 센서가 바라볼 때 왼쪽)으로 돌리는 것은 읽을 때 한다.
-그래서 방향을 잘못 잡아도 데이터는 버리지 않는다.
+센서 zone 순서가 장면의 어느 쪽인지는 장착 방향에 따라 다르다. **10-16 부터 로그의 `d`·`st` 는 펌웨어가
+이미 장면 방향으로 돌려 두 센서를 이어 붙인 격자**다(붙이려면 방향을 먼저 맞춰야 해서). hello 의 `flip_rows/flip_cols` 는
+그래서 항상 false 다. 방향이 틀렸으면 한 센서 분(8×8 블록)씩 다시 뒤집어 쓸 수 있으니 데이터는 버리지 않는다.
 
 1. 짧게 프로토콜을 한 번 돌리고 `inspect_session.py` 의 자세별 평균 거리맵을 본다.
 2. 바른 자세에서 **머리(가까운 값)가 위쪽 가운데**에 있어야 한다.
    왼손 턱괴기는 센서에서 보면 **오른쪽 열**에 팔 기둥이 생겨야 한다.
 3. 다르면 `--flip-rows 1`·`--flip-cols 0` 처럼 바꿔 가며 맞는 조합을 찾는다.
-4. 찾은 값을 펌웨어 `DESKMATE_TOF_FLIP_ROWS/COLS` 에 넣고 다시 굽는다. 기본값(flip_cols=1)은 ST 예제의 표시 방식이고, 실측 확인 전이다.
+4. 찾은 값을 펌웨어 `DESKMATE_TOF_FLIP_ROWS/COLS`(센서별 8×8)·`DESKMATE_TOF_STACK_ROWS`(가로/세로 붙임)·`DESKMATE_TOF_SWAP`(A/B 자리)에 넣고 다시 굽는다.
+   기본값(flip_cols=1, 가로 붙임, A 가 왼쪽)은 ST 예제의 표시 방식이고, 실측 확인 전이다.
    - 이 값은 온보드 규칙 판정이 쓰는 방향이다. 방향이 틀리면 규칙 판정(약한 라벨)도 틀린다.
 
 ## 파일
@@ -113,4 +111,12 @@ cd ../../firmware/esp32_sensor_node && pio test -e native -f test_tof_line   # �
 
 - **실기 확인.** 아직 L8 을 붙여 돌려 보지 않았다. 컴파일, 호스트 테스트, 가짜 소스 전 구간만 확인했다.
   처음 붙일 때 볼 것은 init 성공 여부, 15 fps, seq 갭, 방향이다.
-- 학습 스크립트(`cam-teacher/train_l8.py` 의 MLP 를 실측 8×8 입력으로 옮기기)와 int8 변환, ESP32 탑재.
+- 실측 16×8 세션으로 학습하기(`../tof_sim/train_mlp.py` 는 세션 형식이 같아 그대로 쓴다 — 입력이 384 가 된다).
+  **2026-10-17 결정: 자세 모델 추론은 ESP32 가 아니라 Pi 4 에서 한다.** Pi 4 안의 배치는 미확정이고 실측 성능으로 정한다
+  (후보 A 허브 Python MLP / 후보 B 별도 서비스 `deskmate_tofposture` + `tof_sim_v5` PostureNet — `docs/data-spec.md` §6.1).
+  여기서 모은 실측 세션이 그 비교의 평가셋이다. 후보 A 의 경로는 이미 들어가 있다 —
+  ESP32 가 원본 8×8 을 센서별 UART `0x05` 프레임(같은 frame_id, 5 Hz)으로 Pi 4 에 보내고(`firmware/README.md` "원칙"·`docs/data-spec.md` §13.1),
+  Pi 4 `hub/deskmate_hub/posture/tof_mlp.py` 가 numpy 없는 순수 Python 으로 MLP 를 돌린다(제한 Python 에 numpy 가 없어서).
+  가중치는 `python ../tof_sim/export_mlp_json.py <모델>.npz ../../hub/deskmate_hub/config/tof_mlp.json --grid 16x8`.
+  지금 들어 있는 가중치는 시뮬 8×8 모델이라 실측 16×8 격자가 들어오면 MLP 는 `grid 16x8 ≠ model` 로 비켜서고
+  규칙 판정(0x03)이 쓰인다 — 실측 모델을 만들어 바꿔 넣는 것이 다음 일이다.

@@ -36,6 +36,17 @@ def ks(now, *, typing=True, idle=0.2, cv=0.3, corr=0.05, input_active=True):
     })
 
 
+def tof(now, *, present=True, posture="upright", conf=0.9, motion=0.05, nod=None, drowsy=False, seq=None):
+    return Sample(received=now, ts=now, seq=seq, data={
+        "present": present, "posture": posture, "posture_confidence": conf, "motion_score": motion,
+        "head_delta_mm": -5, "nod_rate_hz": nod, "valid_zones": 120, "grid_width": 16, "grid_height": 8,
+        "coverage_ratio": 0.4, "presence_count": 50, "centroid_depth_mm": 600, "head_row_index": 0.25,
+        "shoulder_tilt_mm": 3, "motion_indicator_mm_s": 10, "posture_change_rate_per_min": 0,
+        "baseline_deviation": 0.1, "baseline_ready": True, "drowsy": drowsy, "geometry_valid": True,
+        "sensors_ok": 3, "nods_in_window": 0,
+    })
+
+
 def env(now, *, co2=700, valid=True):
     return Sample(received=now, ts=now, seq=None, data={
         "co2_ppm": co2, "temp_c": 25.0, "humidity_pct": 45.0, "lux": 300,
@@ -44,6 +55,99 @@ def env(now, *, co2=700, valid=True):
 
 
 # ── 매핑 ────────────────────────────────────────────────────────────
+
+def test_tof_posture_replaces_mmwave_substitute(cfg):
+    cache = SensorCache()
+    tr = SessionTracker()
+    cache.put("mmwave", mm(100.0, level=80))          # mmWave 만 보면 phi 0.8 (안절부절)
+    cache.put("tof", tof(100.0, posture="upright"))   # ToF 는 바른 자세
+    f = build_frame(cache.snapshot(), 100.0, cfg, tr, fsm_state=State.IDLE)
+    s = f.get("posture")
+    assert s.available and s.phi == pytest.approx(0.05 * cfg["tof"]["motion_phi_weight"]) and s.delta == 0.0
+    assert f.get("respiration").available  # 호흡은 여전히 mmWave 에서
+    assert f.present and f.touch is True
+
+
+def mlp(now, *, posture="face_down", conf=0.9, ready=True):
+    return Sample(received=now, ts=now, seq=None, data={
+        "posture": posture, "posture_confidence": conf, "present": True, "baseline_ready": ready,
+        "raw_posture": posture, "source": "mlp", "frames": 100,
+    })
+
+
+def test_tof_mlp_verdict_overrides_rule_posture(cfg):
+    """Pi 4 MLP(원본 격자) 판정이 신선하고 기준선이 잡혀 있으면 0x03 규칙 자세 대신 쓴다(10-17)."""
+    cache = SensorCache()
+    tr = SessionTracker()
+    cache.put("tof", tof(100.0, posture="upright"))           # 규칙은 바른 자세
+    cache.put("tof_mlp", mlp(100.0, posture="face_down"))     # MLP 는 엎드림
+    f = build_frame(cache.snapshot(), 100.0, cfg, tr, fsm_state=State.MONITOR)
+    assert f.signals["posture"].phi == 1.0 and f.signals["posture"].delta == 1.0
+    out = sensor_summary(cache.snapshot(), 100.0, cfg, tr)
+    assert out["tof"]["posture"] == "face_down" and out["tof"]["posture_source"] == "mlp"
+    # MLP 전용 클래스(거북목)도 표에 있어 증거가 난다
+    cache.put("tof_mlp", mlp(100.0, posture="forward_head"))
+    f = build_frame(cache.snapshot(), 100.0, cfg, tr, fsm_state=State.MONITOR)
+    assert f.signals["posture"].phi == pytest.approx(cfg["tof"]["posture_phi"]["forward_head"])
+
+
+def test_tof_mlp_falls_back_to_rule_when_stale_or_not_ready(cfg):
+    cache = SensorCache()
+    tr = SessionTracker()
+    cache.put("tof", tof(100.0, posture="upright"))
+    cache.put("tof_mlp", mlp(100.0, posture="face_down", ready=False))   # 기준선 전 → 규칙
+    f = build_frame(cache.snapshot(), 100.0, cfg, tr, fsm_state=State.MONITOR)
+    assert f.signals["posture"].phi == pytest.approx(0.05 * cfg["tof"]["motion_phi_weight"])
+    assert sensor_summary(cache.snapshot(), 100.0, cfg, tr)["tof"]["posture_source"] == "rule"
+    cache.put("tof_mlp", mlp(90.0, posture="face_down"))                 # 낡음 → 규칙
+    cache.put("tof", tof(100.0, posture="upright"))
+    f = build_frame(cache.snapshot(), 100.0, cfg, tr, fsm_state=State.MONITOR)
+    assert f.signals["posture"].delta == 0.0
+    # posture_source: rule 이면 MLP 를 아예 안 본다
+    rule_cfg = json.loads(json.dumps(cfg))
+    rule_cfg["tof"]["posture_source"] = "rule"
+    cache.put("tof_mlp", mlp(100.0, posture="face_down"))
+    f = build_frame(cache.snapshot(), 100.0, rule_cfg, tr, fsm_state=State.MONITOR)
+    assert f.signals["posture"].delta == 0.0
+
+
+def test_tof_face_down_and_drowsy_are_fatigue_evidence(cfg):
+    cache = SensorCache()
+    cache.put("tof", tof(100.0, posture="face_down", conf=0.8))
+    f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.MONITOR)
+    assert f.get("posture").delta == 1.0 and f.get("posture").phi == 1.0
+    assert not f.get("respiration").available  # mmWave 없음
+    cache.put("tof", tof(110.0, posture="upright", nod=0.05, drowsy=True))
+    f = build_frame(cache.snapshot(), 110.0, cfg, SessionTracker(), fsm_state=State.MONITOR)
+    assert f.get("posture").delta == 1.0
+
+
+def test_tof_low_confidence_is_unknown_and_stale_falls_back(cfg):
+    cache = SensorCache()
+    tr = SessionTracker()
+    cache.put("tof", tof(100.0, posture="face_down", conf=0.1))  # min_confidence 아래 → unknown
+    f = build_frame(cache.snapshot(), 100.0, cfg, tr, fsm_state=State.MONITOR)
+    assert f.get("posture").available and f.get("posture").delta == 0.0
+    cache.put("mmwave", mm(100.0, level=40))
+    f = build_frame(cache.snapshot(), 100.0 + cfg["freshness_sec"]["tof"] + 1, cfg, tr, fsm_state=State.MONITOR)
+    assert f.get("posture").phi == pytest.approx(0.4)  # ToF 가 낡으면 mmWave 대체로 돌아간다
+
+
+def test_tof_away_without_mmwave_is_absent(cfg):
+    cache = SensorCache()
+    cache.put("tof", tof(100.0, present=False, posture="away"))
+    f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.IDLE)
+    assert f.present is False and not f.get("posture").available
+
+
+def test_sensor_summary_includes_tof(cfg):
+    cache = SensorCache()
+    cache.put("tof", tof(100.0, posture="chin_rest", conf=0.7))
+    out = sensor_summary(cache.snapshot(), 100.0, cfg)
+    assert out["present"] is True
+    assert out["tof"]["posture"] == "chin_rest" and out["tof"]["sensors_ok"] == 3
+    assert "head_delta_mm" in out["tof"] and "presence_count" not in out["tof"]
+
 
 def test_no_samples_everything_unavailable(cfg):
     cache = SensorCache()

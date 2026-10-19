@@ -25,8 +25,8 @@ namespace deskmate {
 //  `rule` 은 같은 프레임에서 기존 규칙 추정기(TofPosture)가 낸 판정이다.
 // ============================================================================
 
-// 64 zone 기준 한 줄은 약 700 B. 여유를 두고 잡는다.
-constexpr size_t kTofLineMax = 1400;
+// 64 zone 기준 한 줄은 약 700 B, 두 센서(128 zone)면 약 1.4 KB. 여유를 두고 잡는다.
+constexpr size_t kTofLineMax = 2400;
 
 // 센서 순서 → 추정기 좌표(row 0 = 위, col 은 센서가 바라보는 방향 기준 왼→오른쪽).
 void remapZones(const int16_t *src_d, const uint8_t *src_st, int16_t *dst_d, uint8_t *dst_st,

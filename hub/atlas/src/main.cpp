@@ -1,6 +1,7 @@
 #include <sdbus-c++/sdbus-c++.h>
 
 #include "mqtt_client.h"
+#include "uart_relay.h"
 #include "uart_rx.h"
 
 #include <arpa/inet.h>
@@ -64,7 +65,21 @@ struct NativeSensorState {
     std::optional<bool> present;
     std::optional<bool> heart_valid;
     std::optional<std::string> motion_state;
+    // ToF (UART TYPE 0x03/0x04, 10-16). 여기서는 자세 enum·신뢰도만 본다. 원본 격자(0x05, 10-17)는
+    // Python 브리지(posture/tof_mlp.py)만 읽고, 이 네이티브 요약은 노드 규칙 판정을 그대로 쓴다.
+    std::optional<bool> tof_present;
+    std::optional<std::string> tof_posture;
+    std::optional<int> tof_confidence_pct;
+    std::optional<bool> tof_drowsy;
     unsigned long long sequence = 0;
+
+    static const char* postureName(unsigned char code)
+    {
+        // firmware/esp32_sensor_node/src/preprocess/tof/TofPosture.h 의 enum 순서
+        static const char* const names[] = {"unknown", "upright", "lean_forward", "recline",
+                                            "face_down", "chin_rest", "drowsy", "away"};
+        return code < 8 ? names[code] : "unknown";
+    }
 
     static int readLe16(const std::vector<unsigned char>& bytes, std::size_t offset)
     {
@@ -98,13 +113,22 @@ struct NativeSensorState {
     {
         const bool is_environment = line.rfind("UART\t{\"type\":16,", 0) == 0;
         const bool is_mmwave = line.rfind("UART\t{\"type\":32,", 0) == 0;
-        if (!is_environment && !is_mmwave) return false;
+        const bool is_tof = line.rfind("UART\t{\"type\":3,", 0) == 0 ||
+                            line.rfind("UART\t{\"type\":4,", 0) == 0;
+        if (!is_environment && !is_mmwave && !is_tof) return false;
 
         const auto bytes = payloadBytes(line);
         if (bytes.empty()) return false;
 
         std::lock_guard<std::mutex> lock(mutex);
-        if (is_environment) {
+        if (is_tof) {
+            // 0x03(26 B)과 0x04(4 B) 모두 앞 3 B 가 present · posture · confidence_pct 다.
+            if (bytes.size() < 4) return false;
+            tof_present = bytes[0] != 0;
+            tof_posture = postureName(bytes[1]);
+            tof_confidence_pct = bytes[2];
+            tof_drowsy = bytes.size() >= 26 ? (bytes[24] & 0x02) != 0 : bytes[3] != 0;
+        } else if (is_environment) {
             if (bytes.size() < 9) return false;
             const int valid = bytes[8];
             if (valid & 1) co2 = readLe16(bytes, 0);
@@ -154,9 +178,18 @@ struct NativeSensorState {
         append_number("humidity_pct", humidity_pct);
         append_number("lux", lux);
 
-        if (present) {
+        if (present || tof_present) {
             if (has_field) output << ',';
-            output << "\"present\":" << (*present ? "true" : "false");
+            const bool any = (present && *present) || (tof_present && *tof_present);
+            output << "\"present\":" << (any ? "true" : "false");
+            has_field = true;
+        }
+
+        if (tof_posture) {
+            if (has_field) output << ',';
+            output << "\"tof\":{\"posture\":\"" << *tof_posture << "\",\"posture_confidence\":"
+                   << (tof_confidence_pct ? *tof_confidence_pct : 0) / 100.0
+                   << ",\"drowsy\":" << ((tof_drowsy && *tof_drowsy) ? "true" : "false") << '}';
             has_field = true;
         }
 
@@ -618,8 +651,13 @@ int main()
         NativeSensorState native_sensors;
         std::atomic<bool> http_failed{false};
         std::mutex bridge_input_mutex;
+        // ToF 원본 격자(TYPE 0x05)를 별도 자세 서비스(deskmate_tofposture, tcp:9100)에 복사해 준다.
+        // /dev/serial0 은 이 프로세스가 혼자 읽어야 하므로 줄 단위로 넘긴다. 받는 쪽이 없으면 무해.
+        deskmate::UartRelay relay(deskmate::uartRelayConfigFromEnvironment());
+        relay.start();
         deskmate::UartReceiver uart(deskmate::uartRxConfigFromEnvironment(),
-            [&hub, &bridge_input_mutex, &native_sensors, &state](const std::string& line) {
+            [&hub, &bridge_input_mutex, &native_sensors, &state, &relay](const std::string& line) {
+                relay.publish(line);
                 // 센서 값은 브리지 생사와 무관하게 항상 갱신해 둔다.
                 // 브리지가 죽는 순간 곧바로 대신 내보낼 수 있어야 한다.
                 const bool native_consumed = native_sensors.consume(line);
@@ -689,6 +727,7 @@ int main()
 
         g_stop_requested = 1;
         uart.stop();
+        relay.stop();
         if (mqtt.connected()) {
             mqtt.publish(kHealthTopic, R"({"node":"hub","status":"offline"})", 1, true);
             std::this_thread::sleep_for(std::chrono::milliseconds(200));

@@ -22,9 +22,16 @@
 | C1001 VIN/GND | ESP32 VIN(5V) / 공통 GND | ESP32 는 PC USB 전원으로 C1001 에 5V 공급 |
 | ESP32 UART2 TX → Pi 4 | GPIO25 → Pi 4 물리 10번(GPIO15 RX) | 교차 연결 |
 | ESP32 UART2 RX ← Pi 4 | GPIO26 ← Pi 4 물리 8번(GPIO14 TX) | |
+| VL53L8CX A·B SDA/SCL → ESP32 | GPIO23 / GPIO18 (`Wire1`, 1 MHz) | 두 모듈이 같은 선. **2026-10-16 설계, 실측 전** |
+| VL53L8CX A LPn / B LPn ← ESP32 | GPIO32 / GPIO33 | A 만 주소 0x54 로 바꾼다. NCS·SPI_I2C_N 은 GND, INT·MISO 비움 |
+| VL53L8CX VIN/GND | ESP32 VIN(5V) / 공통 GND | 76EHwan 모듈(온보드 레귤레이터) 기준. ESP32 는 5V 입력 불가 — 풀업 전압 확인 |
+| SCD41·BH1750 SDA/SCL | GPIO21 / GPIO22 (`Wire`, 100 kHz) | ToF 와 버스를 나누지 않는다(SCD41 100 kHz 상한) |
+| DHT22 DATA | GPIO27 | |
 | 공통 GND | ESP32 GND → Pi 4 물리 6번, C1001 GND → Pi 4 물리 9번 | 세 장치 기준 전압 통일 |
 | Pi 4 ↔ Pi 5 | RJ45 유선 LAN (DHCP 주소 확인) | MQTT 1883 + SSH 22 |
 
+- **브레드보드 전체 배치·핀 충돌 정리: [`breadboard-esp32-node.md`](breadboard-esp32-node.md)** (그림 `img/breadboard-esp32-node.svg`).
+  `76EHwan/ESP32_VL53L8` 의 L8 배선(LPn 16·SPI_I2C_N 17·NCS 5)은 C1001(16/17)과 겹쳐서 그대로 못 쓴다.
 - Pi 4 와 ESP32 의 5V 는 직접 연결하지 않는다. 각 보드는 자기 전원을 쓴다.
 - Pi 4 `/dev/serial0` 은 심볼릭 링크다. **어느 노드를 가리키는지 매번 확인한다.**
   2026-09-16 실측은 `→ ttyS0`(mini UART) 였고, 그 기준으로 `serial-getty@ttyS0` 정지와
@@ -47,7 +54,7 @@
 
 | 센서 | 부품 | 인터페이스 | 용도 |
 |---|---|---|---|
-| ToF 54×42 | VL53L9CX | **미결(09-19 결정)** — Path A: Pi 4 MIPI CSI-2(풀해상도 30~100 Hz) / Path B: ESP32 I2C 1 MHz(풀 18~22 fps, 27×21 binning 30 Hz+) | 재실·자세·모션·노딩. 스켈레톤 트래킹은 오프라인 검증 |
+| ToF 8×8 ×2 | **VL53L8CX ×2** (VL53L9CX 는 센서 실장 폴트로 포기, 10-12) | **Path B 확정(10-16): ESP32 I2C `Wire1` 1 MHz, 15 Hz, 두 센서를 16×8(또는 8×16) 한 격자로** | 재실·자세·모션·노딩. 최소 사용 소자 2개. 배선 `breadboard-esp32-node.md` |
 | ToF 시험용 | VL53L0X | Pi 5 I2C `0x29` | 연결·I2C bring-up 전용, 제품 센서 아님 |
 | mmWave | SEN0623 (DFRobot C1001, 60 GHz) | ESP32 UART1, 115200 8N1 | 재실·정지/활동·체동(0–100)·거리·호흡/심박 **보조**. 체동 중심 졸음 FSM, ToF 교차 검증 |
 | CO₂ | SEN0536 (SCD41) | ESP32 I2C `0x62`, 5 s 주기 | **CO₂ 전용.** 자체 T/RH 출력은 쓰지 않는다(2026-09-14 확정: 보정 없음·단일 센서) |
