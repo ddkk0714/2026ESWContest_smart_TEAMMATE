@@ -61,6 +61,15 @@ class IlinkLampFeedback {
   DateTime? _lastOkAt;
   Object? _lastError;
   Future<void> _writes = Future.value();
+  int _revision = 0;
+  bool _manualOverride = false;
+  bool _environmentOwnsLamp = false;
+  bool get manualOverride => _manualOverride;
+  void resumeAutomaticControl() {
+    _revision++;
+    _manualOverride = false;
+    _environmentOwnsLamp = false;
+  }
 
   bool get configured => _address?.isNotEmpty ?? false;
   String? get address => _address;
@@ -70,6 +79,7 @@ class IlinkLampFeedback {
 
   void select(String address) {
     if (_address == address) return;
+    _revision++;
     _address = address;
     _connection = null;
     _lastOkAt = null;
@@ -88,7 +98,10 @@ class IlinkLampFeedback {
 
   Future<bool> _connect() async {
     try {
-      _connection = await _bluetooth.connectLamp(_address!);
+      final address = _address!;
+      final connection = await _bluetooth.connectLamp(address);
+      if (_address != address) return false;
+      _connection = connection;
       _lastError = null;
       return true;
     } catch (error) {
@@ -102,30 +115,58 @@ class IlinkLampFeedback {
     await writeFrames(ilinkFramesForPhase(phase));
   }
 
-  Future<bool> setBrightness(int value) => writeFrames([
-        ilinkFrame([0x01, 0x08, 0x05, 0x01]),
-        ilinkFrame([0x01, 0x08, 0x01, value]),
-      ]);
+  Future<bool> setBrightness(int value) {
+    _revision++;
+    _manualOverride = true;
+    final revision = _revision;
+    return _queueFrames([
+      ilinkFrame([0x01, 0x08, 0x05, 0x01]),
+      ilinkFrame([0x01, 0x08, 0x01, value]),
+    ], null, () => revision == _revision);
+  }
 
   /// Phase feedback and explicit commands must not interleave BLE frames.
-  Future<bool> writeFrames(List<List<int>> frames, {num? expiresTsMs}) {
-    final next = _writes.then((_) => _writeFrames(frames, expiresTsMs));
+  Future<bool> writeFrames(List<List<int>> frames,
+      {num? expiresTsMs,
+      bool control = false,
+      bool Function()? stillAuthorized}) {
+    if (_manualOverride || (!control && _environmentOwnsLamp)) {
+      return Future.value(false);
+    }
+    if (control) {
+      _environmentOwnsLamp = true;
+      _revision++;
+    }
+    final revision = _revision;
+    return _queueFrames(
+        frames,
+        expiresTsMs,
+        () =>
+            revision == _revision &&
+            !_manualOverride &&
+            (stillAuthorized?.call() ?? true));
+  }
+
+  Future<bool> _queueFrames(
+      List<List<int>> frames, num? expiresTsMs, bool Function() valid) {
+    final next = _writes.then((_) => _writeFrames(frames, expiresTsMs, valid));
     _writes = next.then<void>((_) {});
     return next;
   }
 
-  Future<bool> _writeFrames(List<List<int>> frames, num? expiresTsMs) async {
+  Future<bool> _writeFrames(
+      List<List<int>> frames, num? expiresTsMs, bool Function() valid) async {
     if (!configured || frames.isEmpty) return false;
     bool expired() =>
         expiresTsMs != null &&
         DateTime.now().millisecondsSinceEpoch >= expiresTsMs;
     // 끊긴 GATT 세션은 재사용하지 않고 한 번만 새 세션으로 되풀이한다.
     for (var attempt = 0; attempt < 2; attempt++) {
-      if (expired()) return false;
+      if (expired() || !valid()) return false;
       if (!await connect()) continue;
       try {
         for (final frame in frames) {
-          if (expired()) return false;
+          if (expired() || !valid()) return false;
           await _bluetooth.writeCharacteristic(_connection!,
               serviceId: ilinkServiceUuid,
               characteristicId: ilinkWriteUuid,
@@ -161,6 +202,7 @@ class FeedbackCoordinator {
   set enabled(bool value) {
     if (_enabled == value) return;
     _enabled = value;
+    if (value) lamp.resumeAutomaticControl();
     _lastLampKey = null;
     _lastMusicKey = null;
     _acceptedAction = null;
@@ -172,6 +214,7 @@ class FeedbackCoordinator {
   bool _applying = false;
   DisplayState? _latest;
   final _commandResults = <String, Future<Map<String, dynamic>>>{};
+  String? _lastControlId;
   String? lastControlError;
   Object? lastAudioError;
 
@@ -284,13 +327,25 @@ class FeedbackCoordinator {
       return {
         'command_id': command['command_id'],
         'status': status,
-        if (status == 'succeeded') 'actual_value': command['value'],
+        // A GATT write acknowledges transport, not the physical lamp state.
+        if (status == 'executing') 'confirmation': 'transport_only',
         if (error != null) 'error_code': error,
-        'completed_ts_ms': DateTime.now().millisecondsSinceEpoch,
+        'completed_ts_ms': status == 'executing'
+            ? null
+            : DateTime.now().millisecondsSinceEpoch,
       };
     }
 
+    if (command['execution_mode'] == 'mock') {
+      return result('cancelled', 'mock_command_blocked');
+    }
     if (!enabled) return result('failed', 'feedback_disabled');
+    if (lamp.manualOverride) return result('cancelled', 'manual_override');
+    if (command['gate'] == 'undo' &&
+        (command['undo_of_command_id'] == null ||
+            command['undo_of_command_id'] != _lastControlId)) {
+      return result('cancelled', 'superseded_command');
+    }
     final expires = command['expires_ts_ms'];
     if (expires is! num ||
         !expires.isFinite ||
@@ -320,7 +375,10 @@ class FeedbackCoordinator {
     } else {
       return result('failed', 'unsupported_operation_or_value');
     }
-    if (!await lamp.writeFrames(frames, expiresTsMs: expires)) {
+    if (!await lamp.writeFrames(frames,
+        expiresTsMs: expires, control: true, stillAuthorized: () => enabled)) {
+      if (lamp.manualOverride) return result('cancelled', 'manual_override');
+      if (!enabled) return result('cancelled', 'feedback_disabled');
       return result(
           'failed',
           expires <= DateTime.now().millisecondsSinceEpoch
@@ -335,6 +393,7 @@ class FeedbackCoordinator {
         lastAudioError = error;
       }
     }
-    return result('succeeded');
+    _lastControlId = command['command_id'] as String;
+    return result('executing', 'device_state_unconfirmed');
   }
 }

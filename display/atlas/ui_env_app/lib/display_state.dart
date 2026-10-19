@@ -1,3 +1,5 @@
+import 'control_state.dart';
+
 class DisplayState {
   const DisplayState({
     required this.fsmState,
@@ -10,6 +12,8 @@ class DisplayState {
     required this.reasons,
     required this.sequence,
     required this.timestamp,
+    this.control,
+    this.hubBootId,
     this.cause,
     this.present,
     this.co2Ppm,
@@ -25,6 +29,8 @@ class DisplayState {
     this.envFlags = const [],
   });
 
+  final ControlState? control;
+  final String? hubBootId;
   final String fsmState;
   final String phase;
   final String context;
@@ -60,6 +66,8 @@ class DisplayState {
     final sensors = _map(data['sensor_summary']);
     final mmwave = _map(sensors['mmwave']);
     return DisplayState(
+      control: ControlState.parse(sensors['control']),
+      hubBootId: envelope['boot_id']?.toString(),
       fsmState: _requiredString(data, 'fsm_state'),
       phase: _requiredString(data, 'phase'),
       context: _requiredString(data, 'context'),

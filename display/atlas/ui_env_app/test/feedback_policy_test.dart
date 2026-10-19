@@ -12,6 +12,82 @@ void main() {
   const firstAddress = 'AA:BB:CC:DD:EE:01';
   const secondAddress = 'AA:BB:CC:DD:EE:02';
 
+  test(
+      'manual override wins against in-flight phase and delayed environment commands until explicit re-enable',
+      () async {
+    final bluetooth = _FakeBluetooth()
+      ..connectDelay = const Duration(milliseconds: 40);
+    final lamp = IlinkLampFeedback(bluetooth)..select(firstAddress);
+    final coordinator = FeedbackCoordinator(
+        music: _FakeMusic(), lamp: lamp, bluetooth: bluetooth)
+      ..enabled = true;
+    final phase = coordinator.apply(_state('FOCUS_PC', phase: 'focus'));
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    final manual = lamp.setBrightness(99);
+    await phase;
+    expect(await manual, isTrue);
+    expect(bluetooth.frames, [
+      ilinkFrame([1, 8, 5, 1]),
+      ilinkFrame([1, 8, 1, 99])
+    ]);
+    final count = bluetooth.writeCount;
+    await coordinator.apply(_state('RECOVERY', phase: 'recovery'));
+    final blocked = await coordinator.handleControlCommand(_command('late'));
+    expect(blocked?['status'], 'cancelled');
+    expect(blocked?['error_code'], 'manual_override');
+    expect(bluetooth.writeCount, count);
+    coordinator.enabled = false;
+    coordinator.enabled = true;
+    expect((await coordinator.handleControlCommand(_command('new')))?['status'],
+        'executing');
+  });
+  test(
+      'manual action during environment connect cancels queued automatic write',
+      () async {
+    final bluetooth = _FakeBluetooth()
+      ..connectDelay = const Duration(milliseconds: 40);
+    final lamp = IlinkLampFeedback(bluetooth)..select(firstAddress);
+    final coordinator = FeedbackCoordinator(
+        music: _FakeMusic(), lamp: lamp, bluetooth: bluetooth)
+      ..enabled = true;
+    final automatic = coordinator.handleControlCommand(_command('race'));
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    final manual = lamp.setBrightness(33);
+    expect((await automatic)?['error_code'], 'manual_override');
+    await manual;
+    expect(bluetooth.frames.last, ilinkFrame([1, 8, 1, 33]));
+    expect(bluetooth.frames.length, 2);
+  });
+  test(
+      'environment owns brightness through MONITOR/recovery; stale undo and Mock never actuate',
+      () async {
+    final bluetooth = _FakeBluetooth();
+    final coordinator = FeedbackCoordinator(
+        music: _FakeMusic(),
+        lamp: IlinkLampFeedback(bluetooth)..select(firstAddress),
+        bluetooth: bluetooth)
+      ..enabled = true;
+    await coordinator.handleControlCommand(_command('first'));
+    final count = bluetooth.writeCount;
+    await coordinator.apply(_state('MONITOR', phase: 'focus'));
+    await coordinator.apply(_state('RECOVERY', phase: 'recovery'));
+    expect(bluetooth.writeCount, count);
+    await coordinator
+        .handleControlCommand({..._command('second'), 'value': 80});
+    expect(
+        (await coordinator.handleControlCommand({
+          ..._command('old-undo'),
+          'gate': 'undo',
+          'undo_of_command_id': 'first'
+        }))?['error_code'],
+        'superseded_command');
+    final after = bluetooth.writeCount;
+    expect(
+        (await coordinator.handleControlCommand(
+            {..._command('mock'), 'execution_mode': 'mock'}))?['error_code'],
+        'mock_command_blocked');
+    expect(bluetooth.writeCount, after);
+  });
   testWidgets(
       'manual brightness and music tests work with automatic feedback off',
       (tester) async {
@@ -174,8 +250,10 @@ void main() {
       coordinator.handleControlCommand(command),
       coordinator.handleControlCommand(command),
     ]);
-    expect(results[0]?['status'], 'succeeded');
-    expect(results[0]?['actual_value'], 70);
+    expect(results[0]?['status'], 'executing');
+    expect(results[0]?.containsKey('actual_value'), isFalse);
+    expect(results[0]?['confirmation'], 'transport_only');
+    expect(results[0]?['completed_ts_ms'], isNull);
     expect(results[1], results[0]);
     expect(bluetooth.frames, [
       ilinkFrame([1, 8, 5, 1]),
@@ -186,9 +264,13 @@ void main() {
             {..._command('other'), 'target_id': 'vent_fan'}),
         isNull);
     expect(bluetooth.writeCount, 2);
-    final undo = await coordinator.handleControlCommand(
-        {..._command('undo'), 'gate': 'undo', 'value': 40});
-    expect(undo?['status'], 'succeeded');
+    final undo = await coordinator.handleControlCommand({
+      ..._command('undo'),
+      'gate': 'undo',
+      'value': 40,
+      'undo_of_command_id': 'c1'
+    });
+    expect(undo?['status'], 'executing');
     expect(bluetooth.frames.last, ilinkFrame([1, 8, 1, 40]));
   });
 
@@ -227,7 +309,7 @@ void main() {
         'bluetooth_write_failed');
     expect(
         (await coordinator.handleControlCommand(_command('retry')))?['status'],
-        'succeeded');
+        'executing');
   });
 
   test('a failed write discards GATT and succeeds after one reconnection',
