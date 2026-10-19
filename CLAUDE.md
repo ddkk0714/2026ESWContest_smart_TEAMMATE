@@ -162,6 +162,9 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 - ✅ `report.py` 세션 리포트·`session/report` 10 s 스냅샷 main. 정량 지표 `metrics`(수용률·무응답률·되돌림률·정정률·회복 시간)는 (DI).
 - 🟡 `control/` ACTION_* → 실제 제어 — iLink 램프(main), 디스패처(`feat/edge-hub-port`), 스마트 플러그 미선정. 10-05.
 - ⬜ 2단계 TFLite 확신도 → 게이트 융합 — 10-19, 선택적.
+- 🚧 조합 조건(guard) — 가중합이 못 쓰는 다신호 AND 규칙(`docs/guard-spec.md`, 브랜치 `feat/fsm-guard`).
+  `config/fsm.yaml` 의 `guards:` 에 선언. `features` 가 `Signal.reasons` 를 채워야 동작한다
+  → guard-spec §4 가 요청 어휘 목록. 팀 승인 대기(E-1).
 - 🚧 MONITOR 의 RL 정책 — 고정 규칙 유지. 로그 축적 후.
 
 ---
