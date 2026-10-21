@@ -40,6 +40,7 @@ class DeskmateSettings {
     this.speaker,
     this.lamp,
     this.fan,
+    this.previewHost,
   });
 
   final String? mqttHost;
@@ -49,6 +50,9 @@ class DeskmateSettings {
   final SavedBluetoothDevice? lamp;
   final SavedBluetoothDevice? fan;
 
+  /// 개발자 화면의 프리뷰 탭이 ToF 원본·자세 라벨을 읽을 Pi 4 주소(IP 또는 호스트 이름). 비우면 MQTT 호스트를 쓴다.
+  final String? previewHost;
+
   static const empty = DeskmateSettings();
 
   bool get isEmpty =>
@@ -57,7 +61,8 @@ class DeskmateSettings {
       postureUrl == null &&
       speaker == null &&
       lamp == null &&
-      fan == null;
+      fan == null &&
+      previewHost == null;
 
   DeskmateSettings copyWith({
     String? mqttHost,
@@ -72,6 +77,8 @@ class DeskmateSettings {
     bool clearLamp = false,
     SavedBluetoothDevice? fan,
     bool clearFan = false,
+    String? previewHost,
+    bool clearPreviewHost = false,
   }) =>
       DeskmateSettings(
         mqttHost: clearMqttHost ? null : mqttHost ?? this.mqttHost,
@@ -80,6 +87,7 @@ class DeskmateSettings {
         speaker: clearSpeaker ? null : speaker ?? this.speaker,
         lamp: clearLamp ? null : lamp ?? this.lamp,
         fan: clearFan ? null : fan ?? this.fan,
+        previewHost: clearPreviewHost ? null : previewHost ?? this.previewHost,
       );
 
   Map<String, Object?> toJson() {
@@ -102,6 +110,9 @@ class DeskmateSettings {
     if (fan != null) {
       json['fan'] = fan!.toJson();
     }
+    if (previewHost != null) {
+      json['preview_host'] = previewHost;
+    }
     return json;
   }
 
@@ -113,6 +124,7 @@ class DeskmateSettings {
         rawPort is int && rawPort >= 1 && rawPort <= 65535 ? rawPort : null;
     final rawPosture = json['posture_url'];
     final posture = rawPosture is String ? _validHttpUrl(rawPosture) : null;
+    final rawPreviewHost = json['preview_host'];
     return DeskmateSettings(
       mqttHost: host,
       mqttPort: port,
@@ -120,7 +132,16 @@ class DeskmateSettings {
       speaker: SavedBluetoothDevice._from(json['speaker']),
       lamp: SavedBluetoothDevice._from(json['lamp']),
       fan: SavedBluetoothDevice._from(json['fan']),
+      previewHost: rawPreviewHost is String ? validHostName(rawPreviewHost) : null,
     );
+  }
+
+  /// IP 나 호스트 이름만 받는다(스킴·경로 없이). 모양이 아니면 null.
+  static String? validHostName(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty || text.length > 253) return null;
+    if (!RegExp(r'^[A-Za-z0-9.\-]+$').hasMatch(text)) return null;
+    return text;
   }
 
   static String? _validHttpUrl(String raw) {
