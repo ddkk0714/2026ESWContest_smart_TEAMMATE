@@ -97,3 +97,24 @@ def fsm_record(result: TickResult, *, retry: bool = False) -> dict[str, Any]:
         "retry": retry, "context": getattr(result.context, "value", result.context),
         "guards": list(getattr(result, "guards", []) or []),
     }
+
+
+def arm_commands(device: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """arm 의 `device`(personalize.yaml) 를 control.yaml `actions` 와 같은 명령 spec 목록으로.
+
+    조명은 `{target_id, brightness, undo: {brightness}}` → set_brightness 하나(색온도는 Pi 5 조명 어댑터가 아직
+    set_color_temperature 를 받지 않아 보내지 않는다). 그 밖은 `{target_id, operation, value, undo_value}` 그대로.
+    device 가 없으면(화면·음성·휴식 arm) 빈 목록 — 제어 명령 없이 카드·안내만 나간다.
+    """
+    if not device:
+        return []
+    if "operation" in device:
+        return [{"target_id": device["target_id"], "operation": device["operation"],
+                 "value": device.get("value"), "undo_value": device.get("undo_value")}]
+    out: list[dict[str, Any]] = []
+    undo = device.get("undo") or {}
+    if "brightness" in device:
+        out.append({"target_id": device["target_id"], "operation": "set_brightness",
+                    "value": device["brightness"], "undo_value": undo.get("brightness")})
+    return out
+

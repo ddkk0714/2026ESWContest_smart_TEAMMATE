@@ -26,9 +26,10 @@ from .personalization.privacy import PersonalizationPrivacy, load_privacy_config
 from .personalization.ondevice import OnDeviceLearner, load_ondevice_config
 
 try:  # 개인화 로그 기록(personalize/record.py). 설정·패키지를 못 읽으면 기록만 빠지고 허브는 돈다.
-    from .personalize import EpisodeRecorder, load_personalize_config
+    from .personalize import EpisodeRecorder, InterventionPolicy, load_personalize_config
 except ImportError:  # pragma: no cover
     EpisodeRecorder = None  # type: ignore[assignment,misc]
+    InterventionPolicy = None  # type: ignore[assignment,misc]
     load_personalize_config = None  # type: ignore[assignment]
 
 
@@ -58,6 +59,7 @@ class LiveHub:
         personalization_backend_factory=None,
         personalize_cfg: dict[str, Any] | None = None,
         personalize_log_path: str | None = None,
+        personalize_policy_path: str | None = None,
         frame_log: TextIO | None = None,
         state_log: TextIO | None = None,
         out: TextIO = sys.stdout,
@@ -116,12 +118,24 @@ class LiveHub:
         # logs/personalize-<boot_id>.jsonl 에 한 줄씩 쓴다. 정책(enabled)은 별개 — 꺼져 있어도 기록은 쌓는다.
         self.personalize_cfg = personalize_cfg if personalize_cfg is not None else (
             load_personalize_config() if load_personalize_config is not None else {})
+        # `enabled: true` 면 3층 정책(InterventionPolicy, numpy)도 켜서 결정 tick 에 arm·전달 게이트를 고르고
+        # profiles/<profile_id>/policy.json 에 학습 상태를 저장한다. numpy 가 없으면(Pi 4) 기록만 남긴다.
         self.personalize_recorder: EpisodeRecorder | None = None
-        if EpisodeRecorder is not None and self.personalize_cfg.get("record"):
-            path = personalize_log_path or os.path.join(
-                self.personalize_cfg.get("log_dir") or "logs", f"personalize-{self.boot_id}.jsonl")
-            self.personalize_recorder = EpisodeRecorder(self.personalize_cfg, path, boot_id=self.boot_id,
-                                            ingest_cfg=self.ingest_cfg, on_log=lambda m: print(m, file=self.out))
+        self.personalize_policy = None
+        if EpisodeRecorder is not None and (self.personalize_cfg.get("record") or self.personalize_cfg.get("enabled")):
+            log_dir = self.personalize_cfg.get("log_dir") or "logs"
+            path = personalize_log_path or os.path.join(log_dir, f"personalize-{self.boot_id}.jsonl")
+            policy_path = None
+            if self.personalize_cfg.get("enabled"):
+                if InterventionPolicy is None:
+                    print("[personalize] enabled 지만 numpy 가 없어 정책 없이 기록만 한다", file=self.out)
+                else:
+                    policy_path = personalize_policy_path or os.path.join(
+                        log_dir, "profiles", str(self.personalize_cfg.get("profile_id", "default")), "policy.json")
+                    self.personalize_policy = InterventionPolicy.load(policy_path, self.personalize_cfg)
+            self.personalize_recorder = EpisodeRecorder(
+                self.personalize_cfg, path, boot_id=self.boot_id, ingest_cfg=self.ingest_cfg,
+                on_log=lambda m: print(m, file=self.out), policy=self.personalize_policy, policy_path=policy_path)
         self.ondevice_cfg = ondevice_cfg if ondevice_cfg is not None else load_ondevice_config()
         self.ondevice = OnDeviceLearner(self.ondevice_cfg, self.privacy)
 
@@ -189,14 +203,33 @@ class LiveHub:
         self._last_result = result
         self.tracker.observe_state(result.state, now)
         self.recorder.observe(frame, result)
-        if self.control is not None:
-            if result.state is State.ACTION_ENV and prev_state is not State.ACTION_ENV:
-                self.control.on_enter_action(result.state.value, result.cause, result.gate, now)
-            elif prev_state is State.ACTION_ENV and result.state is not State.ACTION_ENV:
-                self.control.close_episode()
-
         # tracker 를 넘겨야 세션 시작 대비 CO₂ 상승(co2_rising)도 화면 이유에 실린다.
         summary = sensor_summary(view, now, self.ingest_cfg, self.tracker)
+        # 개인화: 결정 tick(route:<cause>)에 에피소드를 열고, 정책이 켜져 있으면 arm·전달 게이트를 고른다.
+        # 정책은 FSM 게이트를 낮추기만 한다(auto → suggest). 제어·질문·발행보다 먼저 돌아야 그 결과가 반영된다.
+        specs = None
+        if self.personalize_recorder is not None:
+            request_kind = self._REQUEST_STATES.get(result.state)
+            self.personalize_recorder.on_tick(
+                frame, result, prev_state, view, now, retry=bool(getattr(self.engine, "_retry", False)),
+                env_flags=summary.get("env_flags") or (), fsm_action=request_kind[1] if request_kind else None)
+            decision = self.personalize_recorder.last_decision
+            if decision is not None:
+                if decision.delivered_gate == "suggest" and result.gate is GateMode.AUTO:
+                    result.gate = GateMode.SUGGEST
+                    result.actions.append("personalize:ask")
+                specs = self.personalize_recorder.commands_for(decision)
+            if self.personalize_recorder.last_view is not None:
+                summary["personalize"] = self.personalize_recorder.last_view
+        if self.control is not None:
+            # 제어 에피소드: ACTION_ENV 는 control.yaml 기본 명령으로, 다른 ACTION_* 는 정책이 기기 arm(조명 등)을
+            # 골랐을 때만(specs 비어 있지 않음). 자동이면 바로 실행하고 되돌리기 창이 열린다.
+            entered = result.state in self._REQUEST_STATES and result.state is not prev_state
+            if entered and (result.state is State.ACTION_ENV or specs):
+                self.control.on_enter_action(result.state.value, result.cause, result.gate, now, specs=specs)
+            elif (prev_state in self._REQUEST_STATES and result.state is not prev_state
+                  and self.control.episode is not None):
+                self.control.close_episode()
         if self.control is not None:
             summary["control"] = self.control.summary()
         if self.tracker.baseline is not None:
@@ -218,11 +251,6 @@ class LiveHub:
         envelope = state_envelope(result, boot_id=self.boot_id, seq=self.seq, ts=now, sensor_summary=summary)
         self.seq += 1
         self.publish(envelope)
-        if self.personalize_recorder is not None:
-            request_kind = self._REQUEST_STATES.get(result.state)
-            self.personalize_recorder.on_tick(
-                frame, result, prev_state, view, now, retry=bool(getattr(self.engine, "_retry", False)),
-                env_flags=summary.get("env_flags") or (), fsm_action=request_kind[1] if request_kind else None)
         self._maybe_request(result, prev_state, now)
         if (self.personalize_recorder is not None and self.personalize_recorder.last_episode_id
                 and self.pending_request is not None):
@@ -371,6 +399,12 @@ class LiveHub:
                 "c_fatigue": round(float(result.scores.c_fatigue), 4),
             },
         }
+        view = self.personalize_recorder.last_view if self.personalize_recorder is not None else None
+        if view is not None and view.get("episode_id") == self.personalize_recorder.last_episode_id:
+            # 개인화 정책이 고른 개입과 "왜 이 개입인지" 한 줄 — 화면 카드가 그대로 보여 준다
+            self.pending_request["data"]["explanation"] = view.get("explanation")
+            self.pending_request["data"]["arm"] = view.get("arm")
+            self.pending_request["data"]["arm_label"] = view.get("arm_label")
         self.seq += 1
         self.publish_request(self.pending_request)
 

@@ -156,6 +156,7 @@ class InterventionPolicy:
         self._session_results: list[bool] = []     # 개입별 유효 여부 (시간순)
         self._sleep_done = False
         self._pending_effect: dict[int, bool] = {}
+        self._undone: set[str] = set()      # 이 세션에서 되돌린 arm — 다시 자동으로 내지 않고 묻는다(gate.undo_blocks_auto_in_session)
 
     # ── 상태 ─────────────────────────────────────────────────
     @property
@@ -177,6 +178,7 @@ class InterventionPolicy:
             self._session_results = []
             self._sleep_done = False
             self._pending_effect = {}
+            self._undone = set()
 
     def reset_session(self) -> None:
         self._session_id = None
@@ -291,7 +293,8 @@ class InterventionPolicy:
         arm = max(scores, key=scores.get)
         spec = self.arms[arm]
         threshold = self.auto_threshold(arm)
-        if gate_s == "auto" and spec.auto and sit.c_fatigue >= threshold:
+        blocked = arm in self._undone and bool(self.cfg["gate"].get("undo_blocks_auto_in_session", True))
+        if gate_s == "auto" and spec.auto and sit.c_fatigue >= threshold and not blocked:
             delivered = "auto"
         else:
             delivered = "suggest"
@@ -320,6 +323,9 @@ class InterventionPolicy:
         g = self.cfg["gate"]
         if verdict == "undo":
             self.undo_penalty[arm] = min(float(g["undo_penalty_max"]), self.undo_penalty[arm] + float(g["undo_penalty_step"]))
+            self._undone.add(arm)
+            # 되돌린 실행은 없던 일이라 쿨다운을 풀어 준다 — 같은 상황이 다시 오면 이 arm 을 (자동 대신) 다시 물을 수 있다
+            self.last_exec.pop(arm, None)
         elif verdict == "auto_kept":
             self.undo_penalty[arm] = max(0.0, self.undo_penalty[arm] - float(g["undo_penalty_decay"]))
         if verdict == "reject":
@@ -398,7 +404,12 @@ class InterventionPolicy:
         if st["effect_n"]:
             parts.append(f"효과 {st['effect_sum'] / st['effect_n']:+.2f}")
         if fsm_gate == "auto" and delivered == "suggest":
-            if st["undo"]:
+            if arm in self._undone:
+                parts.append("지난번 되돌리셔서 이번엔 여쭙니다")
+            elif self._undone:
+                undone = next(iter(sorted(self._undone)))
+                parts.append(f"지난번 {self._label(undone)} 되돌리셔서 이번엔 여쭙니다")
+            elif st["undo"]:
                 parts.append(f"되돌리기 {int(st['undo'])}회라 묻고 진행")
             elif not self.arms[arm].auto:
                 parts.append("사용자 행동이 필요해 묻고 진행")

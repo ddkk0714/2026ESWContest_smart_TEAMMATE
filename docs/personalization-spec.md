@@ -25,7 +25,7 @@
 | 1층 규칙 FSM | `SensorFrame`(10 s) | `TickResult(state, cause, gate, c_fatigue, …)` | 10 s | `inference/engine.py` (수정 없음) |
 | 2층 사용자 프로필 | 개인화 로그 JSONL | `DailyStats`(일 단위) → `ProfileSummary`(최근 N일 집계) | 세션 종료·하루 1회 | `personalize/profile.py` |
 | 3층 개입 선택 정책 | 상황 벡터 + cause + gate + 프로필 | 개입 후보 1개 + 전달 게이트 + 설명 한 줄 | ACTION_* 진입 tick | `personalize/policy.py` |
-| 기록(2층의 입력) | 결정 tick 의 상황·FSM 결과, 피드백, 10 분 뒤 C_fatigue | `personalize_episode`·`personalize_session` JSONL | tick | `personalize/record.py` ← `live.py` (10-21 연결, `record: true`. numpy 없음) |
+| 기록(2층의 입력) | 결정 tick 의 상황·FSM 결과, 피드백, 10 분 뒤 C_fatigue | `personalize_episode`·`personalize_session` JSONL | tick | `personalize/record.py` ← `live.py` (10-21 연결, `record: true`. numpy 없음. `enabled: true` 면 같은 자리에서 3층 `decide()` 호출) |
 
 연결점은 `personalize/adapter.py` 하나다. `TickResult.actions` 에 `route:<cause>` 가 들어 있는 tick(= CAUSE_ANALYSIS 가
 ACTION_* 로 보낸 직후)이 **결정 시점**이다. 그 tick 의 `SensorFrame`/`TickResult` 와, 프레임이 싣지 않는 부가 정보
@@ -145,6 +145,17 @@ score(a) = w_accept·(θ̃_a,accept · x) + w_effect·(θ̃_a,effect · x)
 | 거절 재제안 금지 | 세션 내 재제안 금지 | 세션 id 별 거절 arm 집합. `END`/`IDLE` 로 세션이 바뀌면 비운다 |
 | 세션당 개입 상한 | (`agent-briefing` 기본값 7) | `max_per_session`(6) 넘으면 결정하지 않는다 |
 | 무음 시간 | — | `quiet_hours` 안에서는 `sound_cue`·`posture_voice` 를 후보에서 뺀다 |
+
+**되돌리기 규칙(10-21 추가, `gate.undo_blocks_auto_in_session`)** — 자동 실행을 사용자가 되돌리면 (1) 그 arm 의 개인 자동 문턱이
+`undo_penalty_step` 만큼 올라가고(위), (2) **같은 세션에서는 그 arm 을 다시 자동으로 내지 않고 묻는다**, (3) 그 arm 의 쿨다운은 푼다
+(되돌린 실행은 없던 일이므로 같은 상황이 오면 묻는 것으로 바뀐다). 수용도 보상 −2 가 바로 반영되므로 다음 결정은 보통 다른 arm 을 고르고,
+설명 줄에 "지난번 <되돌린 개입> 되돌리셔서 이번엔 여쭙니다" 가 붙는다. 시연(`tools/demo_dryrun.py --scenario undo_learn --personalize --undo-at <초>`,
+`docs/demo-scenario.md` §6)은 이 규칙으로 "되돌리기 한 번에 행동이 바뀐다" 를 2분대에 보여 준다.
+
+**live 연결(10-21)** — `live.py` 는 결정 tick 마다 `personalize/record.py` 를 통해 `decide()` 를 부르고, 정책이 `suggest` 로 낮추면
+`TickResult.gate` 를 바꿔 제어 디스패처·질문 카드·`state/phase` 가 모두 그 게이트를 따른다. 정책이 고른 arm 에 `device` 가 있으면 그 명령
+(`adapter.arm_commands`, 조명은 `set_brightness` 만)을 디스패처에 넘겨 **ACTION_ENV 가 아닌 상태(ACTION_BREAK·ACTION_POSTURE)에서도** 실행·되돌리기가
+된다. 후보가 없거나 세션 상한이면 FSM 기본 동작이다. 정책 상태는 `logs/profiles/<profile_id>/policy.json` 에 피드백·결과마다 저장한다.
 
 ## 6. 취침 권유 — 밴딧 밖의 규칙
 

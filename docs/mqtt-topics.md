@@ -283,6 +283,12 @@ hub 가 현재 발행하는 종류(2026-09-16, `live.py`): **제안 게이트(0.
 자동(≥0.75)은 실행 후 알림이라 질문하지 않는다. retain 하지 않는다. display 는 `request_id` 를 기억해 `feedback/user` 에 실어 보내고,
 hub 는 현재 질문의 `request_id`(또는 `request_id` 생략·`atlas-display`)만 반영한다. 신호 충돌(`state_disambiguation`)은 4-B §5 에서 추가.
 
+**개인화 정책이 켜져 있으면(`personalize.yaml enabled: true`, 2026-10-21)** `data` 에 세 필드가 더 실린다 — `explanation`(왜 이 개입인지 한 줄,
+예 `"조도 80 lx 어두움 · 졸음 2회 · 지난번 조명 밝고 차갑게 되돌리셔서 이번엔 여쭙니다 · 기본 정책 · 피드백 1건"`), `arm`(개입 id, `personalization-spec.md` §4),
+`arm_label`(한국어 이름). 화면은 카드에 `explanation` 을 그대로 보여 준다. 정책이 FSM 의 자동 게이트를 제안으로 낮춘 경우 `evidence` 에 `personalize:ask` 가 들어 있다.
+같은 내용이 `state/phase` 의 `data.sensor_summary.personalize` 에도 실린다(`{episode_id, arm, arm_label, source, explanation, fsm_gate, delivered_gate,
+policy_mode, n_personal, auto_threshold}`; 에피소드가 닫히면 `closed: true, outcome`) — 자동 실행 알림이 "왜" 를 보여 줄 때 쓴다.
+
 ### `deskmate/control/cmd`
 
 data-spec §10 `control_command` 필드 그대로(2026-09-16, `hub/deskmate_hub/control/`). 발행 조건은 `config/control.yaml`:

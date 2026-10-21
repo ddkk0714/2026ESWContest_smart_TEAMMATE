@@ -12,7 +12,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from .adapter import SituationExtras, extras_from_cache, fsm_record, is_decision_tick, local_clock, situation_from_tick
+from .adapter import (SituationExtras, arm_commands, extras_from_cache, fsm_record, is_decision_tick, local_clock,
+                      situation_from_tick)
 from .log import PersonalizeLogger, local_iso
 from .rewards import REWARD_ACCEPT
 
@@ -100,12 +101,21 @@ def fallback_decision(gate: Any, *, fsm_action: str | None) -> dict[str, Any]:
 
 
 class EpisodeRecorder:
-    """LiveHub 가 소유. on_tick → (link_request) → on_feedback → (on_tick 이 10 분 뒤 닫음)."""
+    """LiveHub 가 소유. on_tick → (link_request) → on_feedback → (on_tick 이 10 분 뒤 닫음).
+
+    policy(InterventionPolicy, numpy 필요)를 주면 결정 tick 에 decide() 를 불러 그 결과를 에피소드의 decision 으로
+    쓰고, 피드백·10 분 뒤 결과를 정책에 되돌려 준 뒤 policy_path 에 저장한다. 없으면 기록만(fallback).
+    """
 
     def __init__(self, cfg: dict[str, Any], path: str, *, boot_id: str, ingest_cfg: dict[str, Any],
-                 on_log: Callable[[str], None] | None = None):
+                 on_log: Callable[[str], None] | None = None, policy: Any = None, policy_path: str | None = None):
         self.cfg = cfg
         self.ingest_cfg = ingest_cfg
+        self.policy = policy
+        self.policy_path = policy_path
+        self.last_decision: Any = None          # 이번 tick 에 정책이 낸 Decision (없으면 None)
+        self.last_view: dict[str, Any] | None = None   # 화면용 요약(state/phase sensor_summary.personalize)
+        self._on_log = on_log
         self.offset = float(cfg.get("local_utc_offset_hours", 9))
         fcfg = cfg.get("features") or {}
         self.slump_labels = tuple(fcfg.get("slump_labels") or ("recline", "face_down", "chin_rest", "drowsy"))
@@ -193,6 +203,7 @@ class EpisodeRecorder:
                 fsm_action: str | None = None, decision: dict[str, Any] | None = None) -> str | None:
         """결정 tick 이면 에피소드를 열고 id 를 돌려준다. 기한이 지난 에피소드는 닫는다. 세션 시작·끝도 여기서."""
         self.last_episode_id = None
+        self.last_decision = None
         state, prev = _state_name(result.state), _state_name(prev_state)
         label, drowsy = self._observe_inputs(view, now)
         hour, _, _ = local_clock(now, self.offset)
@@ -228,14 +239,54 @@ class EpisodeRecorder:
             return None
         fsm = fsm_record(result, retry=retry)
         situation = situation_from_tick(frame, result, self._extras(view, now, label, drowsy), self.cfg)
+        if decision is None and self.policy is not None and fsm["cause"]:
+            try:
+                decision = self.policy.decide(situation, cause=fsm["cause"], gate=result.gate,
+                                              session_id=self.session_id, now=now)
+            except Exception as exc:  # 정책 오류가 허브를 멈추면 안 된다 — 기록만 남기고 FSM 기본 동작
+                self._log(f"[personalize] decide 실패, FSM 기본 동작: {exc}")
+                decision = None
+        if (decision is not None and getattr(decision, "delivered_gate", None) == "none"
+                and getattr(decision, "source", "") == "fallback"):
+            decision = None   # 후보 없음·세션 상한: FSM 기본 동작 그대로, 로그엔 fallback 로 남긴다
+        self.last_decision = decision if not isinstance(decision, dict) else None
         eid = self.logger.open_episode(
             session_id=self.session_id, situation=situation, fsm=fsm,
             decision=decision if decision is not None else fallback_decision(result.gate, fsm_action=fsm_action),
             ts=now)
-        self._episodes[eid] = {"cause": fsm["cause"], "gate": gate, "upright_seen": False}
+        delivered = self.last_decision.delivered_gate if self.last_decision is not None else gate
+        self._episodes[eid] = {"cause": fsm["cause"], "gate": delivered, "upright_seen": False}
         self.last_intervention_ts = now
         self.last_episode_id = eid
+        self.last_view = self._view(eid, self.logger._open[eid]["decision"], fsm, delivered)
         return eid
+
+    def _log(self, message: str) -> None:
+        if self._on_log:
+            self._on_log(message)
+
+    def _view(self, eid: str, decision: dict[str, Any], fsm: dict[str, Any], delivered: str) -> dict[str, Any]:
+        label = None
+        if self.policy is not None and decision.get("arm") in getattr(self.policy, "arms", {}):
+            label = self.policy.arms[decision["arm"]].label_ko
+        return {"episode_id": eid, "arm": decision.get("arm"), "arm_label": label, "source": decision.get("source"),
+                "explanation": decision.get("explanation"), "fsm_gate": fsm.get("gate"), "delivered_gate": delivered,
+                "policy_mode": decision.get("policy_mode"), "n_personal": decision.get("n_personal"),
+                "auto_threshold": decision.get("auto_threshold")}
+
+    def commands_for(self, decision: Any) -> list[dict[str, Any]] | None:
+        """정책이 고른 arm 의 기기 명령 spec(control.yaml actions 형식). 정책이 없거나 arm 이 없으면 None(= FSM 기본)."""
+        if decision is None or self.policy is None or not getattr(decision, "arm", None):
+            return None
+        spec = self.policy.arms.get(decision.arm)
+        return arm_commands(spec.device if spec else None)
+
+    def _save_policy(self) -> None:
+        if self.policy is not None and self.policy_path:
+            try:
+                self.policy.save(self.policy_path)
+            except OSError as exc:
+                self._log(f"[personalize] 정책 저장 실패: {exc}")
 
     def link_request(self, request_id: str, episode_id: str | None = None) -> None:
         """interaction/request 의 id 를 이번 tick 에 연 에피소드에 묶는다(피드백이 그 id 로 돌아온다)."""
@@ -253,7 +304,13 @@ class EpisodeRecorder:
             eid = self._by_request.get(request_id or "")
         if eid is None or eid not in self._episodes or verdict not in REWARD_ACCEPT:
             return None
+        if self.logger._open[eid].get("feedback") is not None:
+            return None   # 한 에피소드에 피드백은 한 번(늦게 온 중복·timeout 뒤 수락은 버린다)
         self.logger.feedback(eid, verdict, ts=ts, response_ms=response_ms, request_id=request_id)
+        d = self.logger.decision_of(eid)
+        if d is not None and self.policy is not None:
+            self.policy.feedback(d, verdict, now=ts)
+            self._save_policy()
         return eid
 
     # ── 닫기 ───────────────────────────────────────────────────
@@ -265,10 +322,18 @@ class EpisodeRecorder:
         if rec.get("feedback") is None and meta.get("gate") == "auto":
             rec["feedback"] = {"verdict": "auto_kept", "response_ms": None, "feedback_ts_ms": None, "request_id": None}
         verdict = (rec.get("feedback") or {}).get("verdict")
+        d = self.logger.decision_of(eid)
+        if d is not None and self.policy is not None:
+            if verdict == "auto_kept":
+                self.policy.feedback(d, "auto_kept", now=None)
+            self.policy.outcome(d, c_after, status=status)
+            self._save_policy()
         self.logger.close(
             eid, status=status, c_fatigue_after=c_after, reward_accept=REWARD_ACCEPT.get(verdict, 0.0),
             posture_recovered=bool(meta.get("upright_seen")) if meta.get("cause") == "posture" else None,
             next_state=next_state)
+        if self.last_view is not None and self.last_view.get("episode_id") == eid:
+            self.last_view = dict(self.last_view, closed=True, outcome=status)
         for rid, e in list(self._by_request.items()):
             if e == eid:
                 del self._by_request[rid]

@@ -130,6 +130,8 @@
   `python -m deskmate_hub run --broker …` 가 `--log-dir`(기본 `logs/`)에 `personalize-<boot_id>.jsonl` 을 만든다.
   PC 에서 돈다. **Pi 4 제한 Python 에는 numpy 가 없어** `personalize/` 가 numpy 없이 import 되게 해 두었지만(3층
   `InterventionPolicy` 만 `None`), 보드 bridge(`service_bridge`)에는 아직 안 붙였다.
+- **정책을 켜면(`enabled: true`, numpy 필요):** 같은 결정 tick 에 `InterventionPolicy.decide()` 가 돌아 `decision` 이 `source: bandit`(arm·점수·설명)으로
+  남고, 피드백은 `policy.feedback()`, 10 분 뒤 결과는 `policy.outcome()` 으로 되돌아간 뒤 `logs/profiles/<profile_id>/policy.json` 에 저장된다.
 - **누가 부르나:** `live.py` → `personalize/record.py` `EpisodeRecorder`. tick 마다 `on_tick()`:
   - `TickResult.actions` 의 `route:<cause>`(CAUSE_ANALYSIS → ACTION_*) 이고 게이트가 `none` 이 아니면 에피소드를 연다.
     정책이 꺼져 있으면 `decision` 은 `{source: "fallback", arm: null, delivered_gate: <FSM 게이트>, explanation: "정책 미적용 … FSM 기본 동작 <prompt_code>"}`.

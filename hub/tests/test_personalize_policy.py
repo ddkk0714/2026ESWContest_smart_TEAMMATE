@@ -100,8 +100,34 @@ def test_undo_raises_auto_threshold_and_downgrades_to_suggest():
     s2 = sit(ts=s.ts + 400, co2_ppm=1500, c_fatigue=0.78)
     d2 = p.decide(s2, cause="environment", gate="auto", session_id="s1", now=s2.ts)
     assert d2.arm == "air_fan_up"
-    assert d2.delivered_gate == "suggest"            # 0.78 < 0.80
-    assert "되돌리기 1회" in d2.explanation
+    assert d2.delivered_gate == "suggest"            # 0.78 < 0.80, 그리고 같은 세션에서 되돌린 arm
+    assert "지난번 되돌리셔서 이번엔 여쭙니다" in d2.explanation
+    # 다음 세션: 세션 규칙은 풀리고 개인 문턱(0.80)만 남는다 → 0.78 은 여전히 제안, 0.85 는 자동
+    s3 = sit(ts=s.ts + 9000, co2_ppm=1500, c_fatigue=0.78)
+    d3 = p.decide(s3, cause="environment", gate="auto", session_id="s2", now=s3.ts)
+    assert d3.delivered_gate == "suggest" and "되돌리기 1회" in d3.explanation
+    s4 = sit(ts=s.ts + 9400, co2_ppm=1500, c_fatigue=0.85)
+    d4 = p.decide(s4, cause="environment", gate="auto", session_id="s2", now=s4.ts)
+    assert d4.delivered_gate == "auto"
+
+
+def test_undo_in_session_blocks_auto_even_above_threshold():
+    """시연 규칙(gate.undo_blocks_auto_in_session): 되돌린 arm 은 그 세션에선 확신도가 아무리 높아도 묻는다."""
+    p = policy(3, greedy=True, only={"air_fan_up"})
+    s = sit(co2_ppm=1500, c_fatigue=0.95)
+    d1 = p.decide(s, cause="environment", gate="auto", session_id="s1", now=s.ts)
+    assert d1.delivered_gate == "auto"
+    p.feedback(d1, "undo", now=s.ts + 20)
+    s2 = sit(ts=s.ts + 400, co2_ppm=1500, c_fatigue=0.95)
+    d2 = p.decide(s2, cause="environment", gate="auto", session_id="s1", now=s2.ts)
+    assert d2.arm == "air_fan_up" and d2.delivered_gate == "suggest"
+    assert "지난번 되돌리셔서" in d2.explanation
+    # 규칙을 끄면 문턱(0.80)만 본다 → 0.95 는 자동
+    q = policy(3, greedy=True, only={"air_fan_up"}, gate={"undo_blocks_auto_in_session": False})
+    e1 = q.decide(s, cause="environment", gate="auto", session_id="s1", now=s.ts)
+    q.feedback(e1, "undo", now=s.ts + 20)
+    e2 = q.decide(s2, cause="environment", gate="auto", session_id="s1", now=s2.ts)
+    assert e2.delivered_gate == "auto"
 
 
 def test_undo_penalty_capped_and_decays():

@@ -248,3 +248,30 @@ def test_live_imports_without_numpy():
     out = subprocess.run([sys.executable, "-c", code], cwd=HUB_DIR, capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == "True"
+
+
+def test_arm_commands_translate_device_specs():
+    from deskmate_hub.personalize.adapter import arm_commands
+
+    assert arm_commands(None) == []
+    lamp = {"target_id": "desk_lamp", "color_temperature": 1, "brightness": 200,
+            "undo": {"color_temperature": 2, "brightness": 110}}
+    assert arm_commands(lamp) == [{"target_id": "desk_lamp", "operation": "set_brightness", "value": 200, "undo_value": 110}]
+    fan = {"target_id": "vent_fan", "operation": "set_power", "value": "on", "undo_value": "off"}
+    assert arm_commands(fan) == [dict(fan)]
+
+
+def test_dispatcher_uses_policy_specs_for_any_action_state():
+    from deskmate_hub.control import ControlDispatcher
+    from deskmate_hub.control.dispatcher import GateMode as G
+
+    sent = []
+    d = ControlDispatcher({"enabled": True, "actions": {"environment": [
+        {"target_id": "vent_fan", "operation": "set_power", "value": "on", "undo_value": "off"}]}},
+        publish_cmd=sent.append, clock=lambda: 0.0)
+    ep = d.on_enter_action("ACTION_BREAK", "cognitive", G.AUTO, 0.0,
+                           specs=[{"target_id": "desk_lamp", "operation": "set_brightness", "value": 200, "undo_value": 110}])
+    assert ep.executed and [(c["target_id"], c["value"]) for c in sent] == [("desk_lamp", 200)]
+    d.close_episode()
+    ep2 = d.on_enter_action("ACTION_BREAK", "cognitive", G.AUTO, 10.0)      # specs 없으면 ENV 외 상태는 명령 없음
+    assert ep2.outcome == "skipped"

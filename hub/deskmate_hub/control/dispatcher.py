@@ -89,11 +89,15 @@ class ControlDispatcher:
         self.history: list[Episode] = []
 
     # ---------------------------------------------------------------- FSM 훅
-    def on_enter_action(self, state: str, cause: str | None, gate: GateMode, now: float | None = None) -> Episode:
-        """ACTION_ENV 진입. 게이트에 따라 즉시 실행 / 사용자 대기 / 건너뜀."""
+    def on_enter_action(self, state: str, cause: str | None, gate: GateMode, now: float | None = None,
+                        *, specs: list[dict[str, Any]] | None = None) -> Episode:
+        """ACTION_ENV 진입. 게이트에 따라 즉시 실행 / 사용자 대기 / 건너뜀.
+
+        specs 를 주면 control.yaml `actions[cause]` 대신 그 명령 spec 목록을 쓴다(개인화 정책이 고른 arm 의 기기 값).
+        """
         now = self._clock() if now is None else now
         ep = Episode(state=state, cause=cause, gate=gate, started_ts=now)
-        ep.commands = self._plan(state, cause, gate, now)
+        ep.commands = self._plan(state, cause, gate, now, specs=specs)
         self.episode = ep
         if not ep.commands:
             ep.outcome = "skipped"
@@ -203,8 +207,10 @@ class ControlDispatcher:
                 "commands": [{"target": c.target_id, "op": c.operation, "value": c.value, "status": c.status} for c in ep.commands]}
 
     # ---------------------------------------------------------------- 내부
-    def _plan(self, state: str, cause: str | None, gate: GateMode, now: float) -> list[ControlCommand]:
-        specs = self.actions.get(cause or "", []) if state == "ACTION_ENV" else []
+    def _plan(self, state: str, cause: str | None, gate: GateMode, now: float,
+              *, specs: list[dict[str, Any]] | None = None) -> list[ControlCommand]:
+        if specs is None:
+            specs = self.actions.get(cause or "", []) if state == "ACTION_ENV" else []
         cmds: list[ControlCommand] = []
         for spec in specs:
             key = (spec["target_id"], spec["operation"])

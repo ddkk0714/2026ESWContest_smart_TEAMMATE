@@ -48,6 +48,7 @@ gate:
   undo_penalty_step: 0.05
   undo_penalty_decay: 0.01
   undo_penalty_max: 0.25
+  undo_blocks_auto_in_session: true   # 이 세션에서 되돌린 arm 은 세션이 끝날 때까지 자동 대신 묻는다 (시연: 되돌리기 한 번에 행동이 바뀜)
 
 sleep:
   fatigue_min: 0.70             # fsm thresholds.fatigue_confirm
