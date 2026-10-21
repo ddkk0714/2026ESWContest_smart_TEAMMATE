@@ -1,0 +1,12 @@
+{
+    "id": "com.atlas.app.posture_view",
+    "type": "flutter",
+    "name": "ToF Posture",
+    "description": "DESKMATE ToF posture view (reads Pi 4 deskmate_tofposture /api/state)",
+    "entry": "posture_view --bundle=./ --fullscreen -a com.atlas.app.posture_view",
+    "version": "0.1.0",
+    "required_permissions": {
+        "privileged": [],
+        "user_consent": []
+    }
+}
