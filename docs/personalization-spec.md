@@ -161,7 +161,7 @@ local_time ≥ profile.usual_bedtime
 
 ## 7. 날씨·계절 보정 (환경성 arm 의 전처리)
 
-**입력 경로(2026-10-21 결정)**: Pi 5 앱이 바깥 날씨를 받아 `deskmate/sensor/weather`(retain, QoS 0, 10~30 분)로 발행한다
+**입력 경로(2026-10-21 결정)**: Pi 5 앱이 바깥 날씨를 받아 `deskmate/sensor/weather`(retain, QoS 0, 30 분 + 시작 시 1회)로 발행한다
 ([`mqtt-topics.md`](mqtt-topics.md)). 허브는 `SensorCache.weather` 에 마지막 표본을 두고, `personalize/weather.py` 가
 `fetched_at` 기준 `stale_sec`(2 h) 안의 표본만 `Situation.weather` 로 바꾼다(`adapter.extras_from_cache`). FSM 입력이 아니다.
 토픽이 없거나 stale 이면 `weather = None` → 아래 규칙 중 **계절(월) 항만** 적용되고 바람·비 특징은 0 이다.

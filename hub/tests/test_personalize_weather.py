@@ -8,6 +8,7 @@ import numpy as np
 
 from deskmate_hub.ingest import SensorCache
 from deskmate_hub.ingest.mqtt_lines import MqttLineSource, route_mqtt_message
+from deskmate_hub.ingest.protocol import parse_sensor_message
 from deskmate_hub.personalize import (FEATURE_NAMES, InterventionPolicy, Situation, SituationExtras, extras_from_cache,
                                       load_personalize_config, vectorize, weather_from_sample)
 
@@ -53,6 +54,9 @@ def test_weather_topic_is_routed_and_becomes_situation_features():
     line_cache = SensorCache()
     src = MqttLineSource(line_cache)
     assert src.feed_line("MQTT\tdeskmate/sensor/weather\t" + weather_payload(fetched_at=NOW - 60).decode(), NOW) == "weather"
+    # 계약 밖 이름(한때 검토했던 deskmate/env/weather)은 받지 않는다 — sensor/# 아래 고정
+    assert parse_sensor_message("deskmate/env/weather", weather_payload(fetched_at=NOW - 60), NOW) is None
+    assert route_mqtt_message(SensorCache(), "deskmate/env/weather", weather_payload(fetched_at=NOW - 60), NOW) is None
 
 
 def test_stale_or_missing_weather_falls_back_to_season_only():
