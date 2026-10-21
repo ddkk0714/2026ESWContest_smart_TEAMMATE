@@ -41,7 +41,7 @@
 | `hour_local`, `weekday` | 0–23.99, 0(월)–6(일) | 지역시 |
 | `after_bedtime` | bool | 프로필 `usual_bedtime` 이후 |
 | `month`, `season` | 1–12, `spring/summer/autumn/winter` | 날짜만으로 |
-| `weather` | object/null | `{windy, rain, pm_bad, outdoor_temp_c, wind_ms, humidity_pct, condition, season, fetched_at, source}` — `deskmate/sensor/weather` 를 `personalize/weather.py` 가 정규화한 것. 미수신·stale(2 h) 이면 null |
+| `weather` | object/null | `{windy, rain, pm_bad, outdoor_temp_c, wind_ms, humidity_pct, condition, season, fetched_at, source}` — `deskmate/env/weather` 를 `personalize/weather.py` 가 정규화한 것. 미수신·stale(2 h) 이면 null |
 | `missing` | string[] | 비어 있던 키 목록 |
 
 ## 3. `fsm`

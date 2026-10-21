@@ -1,6 +1,6 @@
-"""날씨 토픽(`deskmate/sensor/weather`, Pi 5 앱 발행) → 상황 벡터의 날씨 항목.
+"""날씨 토픽(`deskmate/env/weather`, Pi 5 앱 발행, 30 분 retain) → 상황 벡터의 날씨 항목.
 
-docs/mqtt-topics.md `deskmate/sensor/weather`, docs/personalization-spec.md §7.
+docs/mqtt-topics.md `deskmate/env/weather`, docs/personalization-spec.md §7.
 stale(`weather.stale_sec`, 기본 2 h) 이면 None 을 돌려주고 상황 벡터는 계절(월)만으로 돈다.
 """
 from __future__ import annotations
@@ -9,7 +9,7 @@ from typing import Any
 
 from ..ingest.cache import Sample
 
-CONDITIONS = ("clear", "cloudy", "rain", "snow", "fog", "unknown")
+CONDITIONS = ("clear", "cloudy", "rain", "snow", "fog", "storm")   # 계약 enum (10-21 확정). 그 밖은 "unknown" 으로 둔다
 
 
 def normalize_weather(data: dict[str, Any], *, fetched_at: float | None, now: float,
@@ -24,7 +24,7 @@ def normalize_weather(data: dict[str, Any], *, fetched_at: float | None, now: fl
         humidity = data.get("humidity")
         condition = str(data.get("condition") or "unknown").lower()
         if condition not in CONDITIONS:
-            condition = "unknown"
+            condition = "unknown"          # 계약 밖 값은 비·눈 판정에서 제외되고 로그에만 남는다
         out = {
             "windy": wind is not None and float(wind) >= float(wcfg["windy_ms"]),
             "rain": condition in tuple(wcfg["rain_conditions"]),

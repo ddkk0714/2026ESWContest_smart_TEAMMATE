@@ -37,7 +37,7 @@ class SensorCache:
     tof_posture: Sample | None = None    # UART 0x04 자세 요약 (1 Hz)
     tof_grid: Sample | None = None       # UART 0x05 원본 8×8 센서 프레임 묶음(표본 하나, 5 Hz). 메모리 전용 — 발행·기록 금지
     tof_mlp: Sample | None = None        # posture/tof_mlp 가 격자마다 낸 자세 판정 (1 s 다수결)
-    weather: Sample | None = None        # deskmate/sensor/weather (Pi 5 앱, retain, 10~30 분). FSM 입력 아님 — personalize 만 읽는다
+    weather: Sample | None = None        # deskmate/env/weather (Pi 5 앱, retain, 30 분). FSM 입력 아님 — personalize 만 읽는다
     feedback: deque = field(default_factory=lambda: deque(maxlen=16))
     control_results: deque = field(default_factory=lambda: deque(maxlen=64))
     feedback_received: deque = field(default_factory=lambda: deque(maxlen=16))

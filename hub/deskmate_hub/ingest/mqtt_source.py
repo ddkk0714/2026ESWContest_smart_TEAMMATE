@@ -19,7 +19,7 @@ from .mqtt_lines import (
     TOPIC_SESSION_REPORT,
     route_mqtt_message,
 )
-from .protocol import TOPIC_FEEDBACK, TOPIC_HEALTH, TOPIC_REQUEST, TOPIC_SENSOR, TOPIC_STATE
+from .protocol import SUBSCRIPTIONS, TOPIC_HEALTH, TOPIC_REQUEST, TOPIC_STATE
 
 class MqttSource:
     """센서·피드백을 구독해 cache 에 넣고, 상태를 발행한다."""
@@ -81,7 +81,7 @@ class MqttSource:
             self._log(f"[mqtt] connect failed: {reason_code}")
             return
         self.connected = True
-        client.subscribe([(TOPIC_SENSOR, 0), (TOPIC_FEEDBACK, 1), (TOPIC_CONTROL_RESULT, 1)])
+        client.subscribe(list(SUBSCRIPTIONS))   # sensor/# · feedback/user · control/result · env/weather
         client.publish(TOPIC_HEALTH, json.dumps({"ts": round(time.time(), 3), "node": "hub", "status": "online"}),
                        qos=1, retain=True)
         self._log(f"[mqtt] connected {self.host}:{self.port}")
