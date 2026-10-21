@@ -1,0 +1,104 @@
+# 사용자 맞춤 개입 선택 정책(3층) 설정 — docs/personalization-spec.md
+# 임계값·prior·기기 값은 전부 여기. 코드에는 arm id 와 수식만 둔다.
+
+enabled: false              # true 면 live 에서 ACTION_* 진입 tick 마다 policy.decide 를 부른다 (기본 꺼짐)
+profile_id: default
+local_utc_offset_hours: 9   # 시각·요일 특징의 지역시 (KST)
+log_dir: logs               # logs/personalize-<boot_id>.jsonl, profiles/<profile_id>/{daily.jsonl,policy.json}
+
+features:
+  posture_window_min: 10        # 자세 분포 창
+  posture_hold_full_min: 30     # 지속 시간 정규화 상한
+  drowsy_count_full: 4          # 30 분 졸음 횟수 정규화 상한
+  co2_base_ppm: 400
+  co2_full_ppm: 2000            # (ppm-400)/(2000-400)
+  lux_dim_low: 100              # 이하 = 완전 어두움(1.0)
+  lux_dim_high: 400             # 이상 = 밝음(0.0)
+  temp_comfort_min: 20
+  temp_comfort_max: 26
+  temp_margin: 4
+  humidity_comfort_min: 40
+  humidity_comfort_max: 60
+  humidity_margin: 20
+  session_full_min: 240
+  since_last_full_min: 60
+  outdoor_temp_diff_full_c: 10
+  slump_labels: [recline, face_down, chin_rest, drowsy]
+
+bandit:
+  algorithm: thompson           # thompson | greedy(검증용: 평균만 사용)
+  prior_precision: 2.0          # λ — 클수록 전역 prior 를 오래 믿는다
+  noise_var: 0.25               # σ² — Thompson 샘플 분산
+  weight_accept: 0.5
+  weight_effect: 0.5
+  effect_window_min: 10
+  effect_full_drop: 0.30        # C_fatigue 가 이만큼 내려가면 효과 +1
+  max_per_session: 6
+  cooldown_sec: 300             # fsm timers.cmd_cooldown_sec 와 맞춤
+  quiet_hours: {start: 23, end: 7}   # 이 사이에는 sound/voice 채널 제외
+
+cold_start:
+  personal_min: 15              # 개인 피드백 이 건수부터 "개인 정책"
+  explore_scale_global: 1.0
+  explore_scale_personal: 0.5
+
+gate:
+  conf_auto: 0.75               # fsm gate.conf_auto 와 같은 값. 개인 문턱 = 이 값 + undo_penalty
+  undo_penalty_step: 0.05
+  undo_penalty_decay: 0.01
+  undo_penalty_max: 0.25
+
+sleep:
+  fatigue_min: 0.70             # fsm thresholds.fatigue_confirm
+  drowsy_window_min: 30
+  drowsy_min_count: 2
+  ineffective_min: 2            # 직전 개입 이만큼 연속 무효
+  default_bedtime: "23:30"      # 프로필이 없을 때
+
+weather:
+  ventilate_minutes_default: 15
+  ventilate_minutes_winter: 5
+  winter_months: [12, 1, 2]
+  windy_bias_ventilate: 0.3     # 바람 → 환기 prior 가산, 공기청정기 감산
+  windy_bias_air_fan: -0.3
+
+explain:
+  co2_high_ppm: 1000
+  slump_hold_notable_min: 5
+  session_long_min: 120
+
+# 개입 후보. causes 는 FSM cause 키. auto=false 면 FSM 게이트가 auto 여도 suggest 로 낸다.
+arms:
+  - {id: light_cool_bright, label_ko: 조명 밝고 차갑게, causes: [environment, cognitive], channel: lamp, auto: true,
+     device: {target_id: desk_lamp, color_temperature: 1, brightness: 200, undo: {color_temperature: 2, brightness: 110}}}
+  - {id: light_warm_dim, label_ko: 조명 따뜻하고 어둡게, causes: [cognitive], channel: lamp, auto: true,
+     device: {target_id: desk_lamp, color_temperature: 5, brightness: 60, undo: {color_temperature: 2, brightness: 110}}}
+  - {id: air_fan_up, label_ko: 공기청정기 풍량 올리기, causes: [environment], channel: air, auto: true,
+     device: {target_id: vent_fan, operation: set_power, value: "on", undo_value: "off"}}
+  - {id: ventilate_suggest, label_ko: 창문 환기, causes: [environment], channel: display, auto: false}
+  - {id: posture_card, label_ko: 자세 안내 카드, causes: [posture], channel: display, auto: true}
+  - {id: posture_voice, label_ko: 자세 음성 안내, causes: [posture], channel: voice, auto: true}
+  - {id: sound_cue, label_ko: 알림음, causes: [posture, cognitive], channel: sound, auto: true}
+  - {id: break_short, label_ko: 5분 휴식, causes: [cognitive], channel: display, auto: false}
+  - {id: break_long, label_ko: 긴 휴식, causes: [cognitive], channel: display, auto: false}
+  - {id: sleep_suggest, label_ko: 취침 권유, causes: [environment, posture, cognitive], channel: display, auto: false, rule_only: true}
+
+# 전역 prior θ⁰ (특징 이름 → 가중치, 적지 않은 특징은 0). 특징 이름은 personalize/features.py FEATURE_NAMES.
+prior:
+  light_cool_bright: {accept: {bias: 0.2, dark: 0.6, after_bedtime: -0.4}, effect: {bias: 0.1, dark: 0.6}}
+  light_warm_dim:    {accept: {bias: 0.1, after_bedtime: 0.4, hour_cos: 0.3}, effect: {bias: 0.1, after_bedtime: 0.3}}
+  air_fan_up:        {accept: {bias: 0.2, co2: 0.8}, effect: {bias: 0.1, co2: 0.8}}
+  ventilate_suggest: {accept: {bias: 0.0, co2: 0.5, windy: 0.5}, effect: {bias: 0.1, co2: 0.6, windy: 0.3}}
+  posture_card:      {accept: {bias: 0.3, slump_hold: 0.3}, effect: {bias: 0.2, slump_hold: 0.2}}
+  posture_voice:     {accept: {bias: 0.1, slump_hold: 0.3}, effect: {bias: 0.3, drowsy: 0.3}}
+  sound_cue:         {accept: {bias: 0.0, drowsy: 0.5}, effect: {bias: 0.2, drowsy: 0.4}}
+  break_short:       {accept: {bias: 0.3}, effect: {bias: 0.3}}
+  break_long:        {accept: {bias: -0.1, elapsed: 0.6, after_bedtime: 0.3}, effect: {bias: 0.2, elapsed: 0.5}}
+
+profile:
+  window_days: 30
+  slump_min_hold_min: 2
+  late_night_hour: 23
+  bedtime_sample_after_hour: 21
+  night_end_hour: 6             # 이 시각 전의 새벽은 전날 밤의 연장으로 본다 (취침 뒤 판정)
+  co2_sensitivity_percentile: 25
