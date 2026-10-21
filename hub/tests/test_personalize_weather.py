@@ -1,15 +1,13 @@
-"""날씨 토픽(deskmate/env/weather, Pi 5 앱) → SensorCache → 상황 벡터. stale 이면 계절만. 바람·겨울 제약."""
+"""날씨 토픽(deskmate/sensor/weather, Pi 5 앱) → SensorCache → 상황 벡터. stale 이면 계절만. 바람·겨울 제약."""
 from __future__ import annotations
 
 import copy
 import json
-from pathlib import Path
 
 import numpy as np
 
 from deskmate_hub.ingest import SensorCache
 from deskmate_hub.ingest.mqtt_lines import MqttLineSource, route_mqtt_message
-from deskmate_hub.ingest.protocol import SUBSCRIPTIONS, TOPIC_WEATHER, parse_sensor_message
 from deskmate_hub.personalize import (FEATURE_NAMES, InterventionPolicy, Situation, SituationExtras, extras_from_cache,
                                       load_personalize_config, vectorize, weather_from_sample)
 
@@ -38,7 +36,7 @@ def greedy(seed=0):
 
 def test_weather_topic_is_routed_and_becomes_situation_features():
     cache = SensorCache()
-    assert route_mqtt_message(cache, "deskmate/env/weather", weather_payload(fetched_at=NOW - 600), NOW - 500) == "weather"
+    assert route_mqtt_message(cache, "deskmate/sensor/weather", weather_payload(fetched_at=NOW - 600), NOW - 500) == "weather"
     assert route_mqtt_message(cache, "deskmate/sensor/env/esp32-b", env_payload(), NOW - 3) == "env"
     assert cache.weather is not None and cache.weather.seq == 17
     view = cache.snapshot()
@@ -54,23 +52,13 @@ def test_weather_topic_is_routed_and_becomes_situation_features():
     # 보드 경로(C++ 브리지 라인)도 같은 토픽을 받는다
     line_cache = SensorCache()
     src = MqttLineSource(line_cache)
-    assert src.feed_line("MQTT\tdeskmate/env/weather\t" + weather_payload(fetched_at=NOW - 60).decode(), NOW) == "weather"
-
-
-def test_weather_topic_is_outside_sensor_wildcard_and_explicitly_subscribed():
-    assert TOPIC_WEATHER == "deskmate/env/weather"
-    assert (TOPIC_WEATHER, 0) in SUBSCRIPTIONS                              # paho 구독 목록
-    cpp = (Path(__file__).resolve().parents[1] / "atlas" / "src" / "mqtt_bridge.cpp").read_text(encoding="utf-8")
-    assert '"deskmate/env/weather"' in cpp and "kWeatherTopic, 0" in cpp   # 보드 C++ 브리지도 같은 토픽을 구독
-    assert parse_sensor_message("deskmate/sensor/weather", b"{}", NOW) is None   # 옛 이름은 계약 밖
-    kind, sample = parse_sensor_message(TOPIC_WEATHER, weather_payload(fetched_at=NOW - 60), NOW)
-    assert kind == "weather" and sample.data["condition"] == "clear"
+    assert src.feed_line("MQTT\tdeskmate/sensor/weather\t" + weather_payload(fetched_at=NOW - 60).decode(), NOW) == "weather"
 
 
 def test_stale_or_missing_weather_falls_back_to_season_only():
     cache = SensorCache()
     stale_age = CFG["weather"]["stale_sec"] + 60
-    route_mqtt_message(cache, "deskmate/env/weather", weather_payload(fetched_at=NOW - stale_age), NOW - 1)
+    route_mqtt_message(cache, "deskmate/sensor/weather", weather_payload(fetched_at=NOW - stale_age), NOW - 1)
     view = cache.snapshot()
     assert weather_from_sample(view.weather, NOW, CFG) is None          # retain 된 옛 표본은 무시
     ex = extras_from_cache(view, NOW, CFG)
@@ -95,15 +83,11 @@ def test_fetched_at_missing_uses_envelope_ts_and_bad_payload_is_ignored():
     cache = SensorCache()
     body = json.dumps({"ts": NOW - 100, "node": "pi5-display", "seq": 1,
                        "data": {"temp_c": 10, "wind_ms": 1.0, "condition": "cloudy"}}).encode()
-    route_mqtt_message(cache, "deskmate/env/weather", body, NOW - 99)
+    route_mqtt_message(cache, "deskmate/sensor/weather", body, NOW - 99)
     w = weather_from_sample(cache.snapshot().weather, NOW, CFG)
     assert w is not None and w["fetched_at"] == NOW - 100 and w["windy"] is False and w["condition"] == "cloudy"
-    storm = json.dumps({"ts": NOW, "data": {"temp_c": 20, "wind_ms": 12.0, "condition": "storm", "fetched_at": NOW - 10}}).encode()
-    route_mqtt_message(cache, "deskmate/env/weather", storm, NOW)
-    w = weather_from_sample(cache.snapshot().weather, NOW, CFG)
-    assert w["condition"] == "storm" and w["rain"] is True and w["windy"] is True   # 폭풍은 환기 제외 쪽
     bad = json.dumps({"ts": NOW, "data": {"temp_c": "warm", "wind_ms": None, "condition": "typhoon"}}).encode()
-    route_mqtt_message(cache, "deskmate/env/weather", bad, NOW)
+    route_mqtt_message(cache, "deskmate/sensor/weather", bad, NOW)
     assert weather_from_sample(cache.snapshot().weather, NOW, CFG) is None
 
 

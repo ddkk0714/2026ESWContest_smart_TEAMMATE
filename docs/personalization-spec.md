@@ -59,7 +59,7 @@ SensorFrame ─► FSMEngine.tick ─► TickResult ──(route:<cause>)──�
 | 시간 | 요일 | 0–6 | 주말 0/1 | 〃 |
 | 시간 | 평소 취침 뒤 여부 | 0/1 | 그대로 | 프로필 `usual_bedtime` 비교 |
 | 날씨·계절 | 계절 | 월 | `sin·cos(2π·m/12)` | 날짜만으로 폴백 가능 |
-| 날씨·계절 | 바람·비 | 0/1, 0/1 | `wind_ms ≥ windy_ms`(4.0), `condition ∈ rain_conditions` | MQTT `deskmate/env/weather`(Pi 5 앱 발행, 10-21 결정). stale(2 h) 이면 0 |
+| 날씨·계절 | 바람·비 | 0/1, 0/1 | `wind_ms ≥ windy_ms`(4.0), `condition ∈ rain_conditions` | MQTT `deskmate/sensor/weather`(Pi 5 앱 발행, 10-21 결정). stale(2 h) 이면 0 |
 | 날씨·계절 | 실내외 온도차 | °C | `/10` clip [-1,1] | 〃 (`weather.temp_c` − 실내 `temp_c`) |
 
 벡터 길이는 상수 `FEATURE_NAMES` 가 정하고(`personalize/features.py`), 로그 `features` 는 원값, 밴딧 입력은 정규화 값이다.
@@ -161,7 +161,7 @@ local_time ≥ profile.usual_bedtime
 
 ## 7. 날씨·계절 보정 (환경성 arm 의 전처리)
 
-**입력 경로(2026-10-21 결정)**: Pi 5 앱이 바깥 날씨를 받아 `deskmate/env/weather`(retain, QoS 0, 30 분 + 시작 시 1회)로 발행한다
+**입력 경로(2026-10-21 결정)**: Pi 5 앱이 바깥 날씨를 받아 `deskmate/sensor/weather`(retain, QoS 0, 10~30 분)로 발행한다
 ([`mqtt-topics.md`](mqtt-topics.md)). 허브는 `SensorCache.weather` 에 마지막 표본을 두고, `personalize/weather.py` 가
 `fetched_at` 기준 `stale_sec`(2 h) 안의 표본만 `Situation.weather` 로 바꾼다(`adapter.extras_from_cache`). FSM 입력이 아니다.
 토픽이 없거나 stale 이면 `weather = None` → 아래 규칙 중 **계절(월) 항만** 적용되고 바람·비 특징은 0 이다.
@@ -213,7 +213,7 @@ local_time ≥ profile.usual_bedtime
 
 ## 11. 결정이 필요한 항목
 
-1. ~~날씨 입력 경로~~ — **해소(10-21)**: Pi 5 앱이 받아 `deskmate/env/weather` 로 넘긴다(§7). 앱 쪽 구현은 남음.
+1. ~~날씨 입력 경로~~ — **해소(10-21)**: Pi 5 앱이 받아 `deskmate/sensor/weather` 로 넘긴다(§7). 앱 쪽 구현은 남음.
 2. **Pi 4 제한 Python 의 numpy** — 보드 Python 에 numpy 가 없으면 `policy.py` 는 PC/개발 환경 전용이 된다. 보드 탑재가 필요하면
    `personalization/portable.py` 처럼 순수 Python 역행렬(차원 ≤ 32)로 옮기는 작업이 하나 더 필요하다.
 3. 개인화 로그·프로필·posterior 파일의 보존 기간과 삭제 등록(동의 철회 범위)은 기존 미결정 항목(DATA-DEC-006)과 함께 정한다.

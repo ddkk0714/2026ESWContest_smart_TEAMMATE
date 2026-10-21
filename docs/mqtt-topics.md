@@ -34,7 +34,7 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 | `deskmate/sensor/mmwave/<node>` | ESP32 | hub | 1Hz | SEN0623 재실·모션·호흡/심박 보조 특징 |
 | `deskmate/sensor/env/<node>` | ESP32 | hub | 0.2Hz | CO₂ · 온습도 · 조도 |
 | `deskmate/sensor/keystroke` | PC 수집기 | hub, display/PC 키스트로크 탭 | 1Hz | 키 입력 타이밍 특징 |
-| `deskmate/env/weather` | Pi 5 앱 | hub(personalize) | 30 분 + 시작 시 1회(retain, QoS 0) | 바깥 날씨·계절. FSM 입력이 아니라 개입 선택(환기 vs 공기청정기, 겨울 짧은 환기)에만 쓴다 |
+| `deskmate/sensor/weather` | Pi 5 앱 | hub(personalize) | 10~30 분(retain, QoS 0) | 바깥 날씨·계절. FSM 입력이 아니라 개입 선택(환기 vs 공기청정기, 겨울 짧은 환기)에만 쓴다 |
 | `deskmate/state/phase` | hub | display, control | 10 s 주기(retain) | 추론 결과 + 신뢰도. `python -m deskmate_hub run` 이 발행 |
 | `deskmate/display/message` | Node-RED/debug | display | 이벤트 | Pi 5 화면에 일회성 텍스트 표시 |
 | `deskmate/session/report` | hub | display | 10 s 주기 스냅샷(retain) + 세션 종료 시 | 화면용 세션 요약. 개별 행동 로그 없음 |
@@ -132,30 +132,30 @@ Pi 5의 **PC 키스트로크** 탭은 앱에 설정된 동일 MQTT 브로커에�
 최근 60개 집계 표본의 추이는 탭을 연 동안 메모리에만 유지하고, 미입력·수신 공백을
 타이밍 곡선으로 연결하지 않는다. 내장 데모는 실제 PC 미연결임을 명시한다.
 
-### `deskmate/env/weather` (2026-10-21 확정: 날씨는 Pi 5 앱이 받아 MQTT 로 허브에 넘긴다)
+### `deskmate/sensor/weather` (2026-10-21 결정: 날씨는 Pi 5 앱이 받아 MQTT 로 허브에 넘긴다)
 
-발행자 Pi 5 앱(`node: pi5-display`), **retain, QoS 0, 30 분 주기 + 앱 시작 시 1회 즉시**. 공통 envelope(`schema_version`·`ts`·`node`·`boot_id`·`seq`)
-안의 `data` 에 아래 필드를 넣는다. `deskmate/sensor/#` 밖이므로 hub 는 이 토픽을 **따로 구독**한다
-(PC paho `ingest/protocol.py` `SUBSCRIPTIONS`, 보드 C++ `hub/atlas/src/mqtt_bridge.cpp` `kWeatherTopic` — 보드는 IPK 재빌드 필요).
-허브 `SensorCache.weather` 에 마지막 표본만 머물고 FSM `SensorFrame` 에는 들어가지 않는다 — `personalize/`(개입 선택)만 읽는다
-([`personalization-spec.md`](personalization-spec.md) §7).
+발행자 Pi 5 앱(`node: pi5-display`), **retain, QoS 0, 10~30 분 주기**(앱이 외부 날씨를 새로 받을 때마다). 공통 envelope 를 쓴다.
+`deskmate/sensor/#` 아래라 hub 의 기존 구독(PC paho·보드 C++ 브리지 모두)이 그대로 받는다. 허브 `SensorCache.weather` 에 마지막 표본만
+머물고 FSM `SensorFrame` 에는 들어가지 않는다 — `personalize/`(개입 선택)만 읽는다([`personalization-spec.md`](personalization-spec.md) §7).
 
 ```json
-{"schema_version":"1.0","ts":1792561200.0,"node":"pi5-display","boot_id":"c41d9a02","seq":17,"data":{"temp_c":16.4,"humidity":58,"wind_ms":5.2,"condition":"clear","season":"autumn","fetched_at":1792560900,"source":"open-meteo"}}
+{
+  "schema_version": "1.0", "ts": 1792561200.0,
+  "node": "pi5-display", "boot_id": "c41d9a02", "seq": 17,
+  "data": {
+    "temp_c": 16.4,                 // 바깥 기온 °C
+    "humidity": 58,                 // 바깥 상대습도 %RH
+    "wind_ms": 5.2,                 // 풍속 m/s. hub 는 personalize.yaml weather.windy_ms(4.0) 이상을 "바람 붊"으로 본다
+    "condition": "clear",           // clear | cloudy | rain | snow | fog | unknown — 소수 enum, 그 밖은 unknown 으로 보낸다
+    "season": "autumn",             // spring | summer | autumn | winter (앱이 날짜로 계산). hub 는 자기 날짜를 우선한다
+    "fetched_at": 1792560900,       // 날씨를 외부에서 받은 Unix epoch s. 재발행해도 이 값은 바뀌지 않는다
+    "source": "kma-short-term"      // 출처 문자열(자유). 키·토큰·좌표는 넣지 않는다
+  }
+}
 ```
 
-| `data` 필드 | 타입·단위 | 정의 |
-|---|---|---|
-| `temp_c` | float, °C | 바깥 기온 |
-| `humidity` | int, % | 바깥 상대습도 |
-| `wind_ms` | float, m/s | 풍속. hub 는 `personalize.yaml` `weather.windy_ms`(4.0) 이상을 "바람 붊"으로 본다 |
-| `condition` | enum | `clear` · `cloudy` · `rain` · `snow` · `fog` · `storm`. hub 는 `rain`·`snow`·`storm` 이면 환기 후보를 뺀다. 그 밖 문자열은 `unknown` 으로 취급(로그만) |
-| `season` | enum | `spring` · `summer` · `autumn` · `winter` (앱이 날짜로 계산). hub 는 날씨가 stale 이면 자기 날짜로 다시 계산한다 |
-| `fetched_at` | int, epoch s | 날씨를 외부에서 받은 시각. **재발행해도 바꾸지 않는다** |
-| `source` | string | 출처(예 `"open-meteo"`). 키·토큰·좌표는 넣지 않는다 |
-
-- **stale 기준**: hub 는 `now − fetched_at > weather.stale_sec`(기본 **2 h**) 이거나 토픽이 없으면 날씨를 무시하고 **season 만**
-  (없으면 날짜로 계산) 쓴다. retain 된 옛 표본이 재시작 뒤 들어와도 같은 규칙으로 걸러진다. `fetched_at` 이 없으면 envelope `ts` 를 쓴다.
+- **stale 기준**: hub 는 `now − fetched_at > weather.stale_sec`(기본 **2 h**) 이면 표본을 무시하고 **계절(월)만으로** 동작한다.
+  retain 된 옛 표본이 재시작 뒤 들어와도 같은 규칙으로 걸러진다. `fetched_at` 이 없으면 envelope `ts` 를 쓴다.
 - 앱이 날씨를 못 받으면 발행하지 않는다(빈 값·추정값을 만들어 보내지 않는다). 선택 필드 `pm_bad: true`(미세먼지 나쁨)는 넣으면 환기 후보 제외에 쓴다.
 - 좌표·주소·API 키는 토픽에 싣지 않는다. 위치 설정은 앱 안에만 둔다.
 
@@ -363,7 +363,7 @@ retain으로 들어온 명령은 무시한다. 최근 128개 `command_id`의 처
 ## QoS · 보존
 
 - 센서 스트림: QoS 0 (유실 허용, 고빈도)
-- `env/weather` 는 QoS 0 + retain (주기가 길어 재시작 시 마지막 값을 바로 받는다. stale 판정은 hub 가 `fetched_at` 으로)
+- `sensor/weather` 는 QoS 0 + retain (주기가 길어 재시작 시 마지막 값을 바로 받는다. stale 판정은 hub 가 `fetched_at` 으로)
 - `state/phase` · `display/message` · `session/report` · `interaction/request` · `control/cmd` · `feedback/user`: QoS 1
 - `state/phase` 는 retain 을 켜서 디스플레이 재시작 시 즉시 현재 상태를 받는다
 - `display/message` 는 retain 을 끈다. 이전 문구가 재시작 뒤 다시 표시되거나 broker에 남지 않게 한다.

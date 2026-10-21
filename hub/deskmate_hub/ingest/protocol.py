@@ -12,25 +12,19 @@ TOPIC_REQUEST = "deskmate/interaction/request"
 TOPIC_HEALTH = "deskmate/health/hub"
 TOPIC_CONTROL_CMD = "deskmate/control/cmd"
 TOPIC_CONTROL_RESULT = "deskmate/control/result"
-TOPIC_WEATHER = "deskmate/env/weather"      # Pi 5 앱이 받은 바깥 날씨 (retain, 30 분). FSM 입력 아님 — personalize 전용
 
-# hub 가 구독하는 토픽·QoS. PC paho(MqttSource)와 보드 C++ 브리지(hub/atlas mqtt_bridge.cpp)가 같은 목록을 지킨다.
-SUBSCRIPTIONS = ((TOPIC_SENSOR, 0), (TOPIC_FEEDBACK, 1), (TOPIC_CONTROL_RESULT, 1), (TOPIC_WEATHER, 0))
-
-_KIND_BY_TOPIC = {"mmwave": "mmwave", "env": "env", "keystroke": "keystroke"}
+_KIND_BY_TOPIC = {"mmwave": "mmwave", "env": "env", "keystroke": "keystroke",
+                  "weather": "weather"}   # deskmate/sensor/weather — Pi 5 앱이 받은 바깥 날씨 (personalize 전용)
 
 
 def parse_sensor_message(topic: str, payload: bytes, received: float) -> tuple[str, Sample] | None:
-    """토픽·payload → (kind, Sample). 계약 밖이면 None. `deskmate/env/weather` 는 kind "weather"."""
-    if topic == TOPIC_WEATHER:
-        kind = "weather"
-    else:
-        parts = topic.split("/")
-        if len(parts) < 3 or parts[0] != "deskmate" or parts[1] != "sensor":
-            return None
-        kind = _KIND_BY_TOPIC.get(parts[2])
-        if kind is None:
-            return None
+    """토픽·payload → (kind, Sample). 계약 밖이면 None."""
+    parts = topic.split("/")
+    if len(parts) < 3 or parts[0] != "deskmate" or parts[1] != "sensor":
+        return None
+    kind = _KIND_BY_TOPIC.get(parts[2])
+    if kind is None:
+        return None
     try:
         body = json.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):

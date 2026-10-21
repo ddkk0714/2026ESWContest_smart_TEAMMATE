@@ -18,7 +18,6 @@ namespace {
 
 constexpr const char* kSensorTopic = "deskmate/sensor/#";
 constexpr const char* kFeedbackTopic = "deskmate/feedback/user";
-constexpr const char* kWeatherTopic = "deskmate/env/weather";   // Pi 5 앱 날씨 (retain). ingest/protocol.py SUBSCRIPTIONS 와 같게
 constexpr const char* kHealthTopic = "deskmate/health/hub";
 
 int environmentPort(const char* value, int fallback)
@@ -185,7 +184,6 @@ private:
         connected_ = true;
         api_.subscribe(client_, kSensorTopic, 0, nullptr);
         api_.subscribe(client_, kFeedbackTopic, 1, nullptr);
-        api_.subscribe(client_, kWeatherTopic, 0, nullptr);
         publish(kHealthTopic, healthPayload("online"), 1, true);
         std::cerr << "DESKMATE MQTT connected\n";
     }
