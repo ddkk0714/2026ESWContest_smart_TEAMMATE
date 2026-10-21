@@ -21,8 +21,7 @@ from .config import load_personalize_config
 from .features import DIM, FEATURE_INDEX, Situation, prior_vector, vectorize
 
 AXES = ("accept", "effect")
-VERDICTS = ("accept", "reject", "timeout", "undo", "auto_kept")
-REWARD_ACCEPT = {"accept": 1.0, "timeout": 0.0, "reject": -1.0, "undo": -2.0, "auto_kept": 0.0}
+from .rewards import REWARD_ACCEPT, VERDICTS, reward_effect  # noqa: F401 — 이전 import 경로 유지
 SLEEP_ARM = "sleep_suggest"
 
 
@@ -117,8 +116,6 @@ class Decision:
         }
 
 
-def reward_effect(c_before: float, c_after: float, full_drop: float) -> float:
-    return float(max(-1.0, min(1.0, (c_before - c_after) / full_drop)))
 
 
 class InterventionPolicy:

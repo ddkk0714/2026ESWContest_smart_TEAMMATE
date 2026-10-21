@@ -25,6 +25,12 @@ from .personalization import PersonalizationRuntime, load_personalization_config
 from .personalization.privacy import PersonalizationPrivacy, load_privacy_config
 from .personalization.ondevice import OnDeviceLearner, load_ondevice_config
 
+try:  # 개인화 로그 기록(personalize/record.py). 설정·패키지를 못 읽으면 기록만 빠지고 허브는 돈다.
+    from .personalize import EpisodeRecorder, load_personalize_config
+except ImportError:  # pragma: no cover
+    EpisodeRecorder = None  # type: ignore[assignment,misc]
+    load_personalize_config = None  # type: ignore[assignment]
+
 
 def frame_to_dict(frame: SensorFrame) -> dict[str, Any]:
     """replay.iter_frames 가 그대로 읽는 형식."""
@@ -50,6 +56,8 @@ class LiveHub:
         privacy_cfg: dict[str, Any] | None = None,
         ondevice_cfg: dict[str, Any] | None = None,
         personalization_backend_factory=None,
+        personalize_cfg: dict[str, Any] | None = None,
+        personalize_log_path: str | None = None,
         frame_log: TextIO | None = None,
         state_log: TextIO | None = None,
         out: TextIO = sys.stdout,
@@ -104,6 +112,16 @@ class LiveHub:
         )
         self._esm_seq = 0
         self._last_result = None
+        # 개인화 로그(personalization-log.md): personalize.yaml `record: true` 면 결정·피드백·10 분 뒤 결과를
+        # logs/personalize-<boot_id>.jsonl 에 한 줄씩 쓴다. 정책(enabled)은 별개 — 꺼져 있어도 기록은 쌓는다.
+        self.personalize_cfg = personalize_cfg if personalize_cfg is not None else (
+            load_personalize_config() if load_personalize_config is not None else {})
+        self.personalize_recorder: EpisodeRecorder | None = None
+        if EpisodeRecorder is not None and self.personalize_cfg.get("record"):
+            path = personalize_log_path or os.path.join(
+                self.personalize_cfg.get("log_dir") or "logs", f"personalize-{self.boot_id}.jsonl")
+            self.personalize_recorder = EpisodeRecorder(self.personalize_cfg, path, boot_id=self.boot_id,
+                                            ingest_cfg=self.ingest_cfg, on_log=lambda m: print(m, file=self.out))
         self.ondevice_cfg = ondevice_cfg if ondevice_cfg is not None else load_ondevice_config()
         self.ondevice = OnDeviceLearner(self.ondevice_cfg, self.privacy)
 
@@ -200,7 +218,15 @@ class LiveHub:
         envelope = state_envelope(result, boot_id=self.boot_id, seq=self.seq, ts=now, sensor_summary=summary)
         self.seq += 1
         self.publish(envelope)
+        if self.personalize_recorder is not None:
+            request_kind = self._REQUEST_STATES.get(result.state)
+            self.personalize_recorder.on_tick(
+                frame, result, prev_state, view, now, retry=bool(getattr(self.engine, "_retry", False)),
+                env_flags=summary.get("env_flags") or (), fsm_action=request_kind[1] if request_kind else None)
         self._maybe_request(result, prev_state, now)
+        if (self.personalize_recorder is not None and self.personalize_recorder.last_episode_id
+                and self.pending_request is not None):
+            self.personalize_recorder.link_request(self.pending_request["data"]["request_id"])
 
         if self.frame_log:
             self.frame_log.write(json.dumps(frame_to_dict(frame), ensure_ascii=False) + "\n"); self.frame_log.flush()
@@ -289,6 +315,9 @@ class LiveHub:
             kind = "auto_undo"
         else:
             kind = "feedback"
+        if self.personalize_recorder is not None and verdict != "correct":
+            self.personalize_recorder.on_feedback(verdict, ts=now, request_id=feedback.get("request_id") or None,
+                                      response_ms=response_ms, kind=kind)
         record = make_label(
             label_id=f"{self.boot_id}-esm{self._esm_seq}", ts=now, verdict=verdict,
             request_id=feedback.get("request_id") or None,
@@ -367,6 +396,8 @@ def run_live(broker: str, port: int, *, fsm_config: str | None, ingest_config: s
         if not hub.control_cfg.get("esm_log_path"):
             # 프레임·상태 로그와 같은 곳에 둔다(--log-dir). 기본 logs/ 는 gitignore.
             hub.esm_log_path = os.path.join(log_dir, f"esm-{hub.boot_id}.jsonl")
+        if hub.personalize_recorder is not None:
+            hub.personalize_recorder.path = os.path.join(log_dir, f"personalize-{hub.boot_id}.jsonl")
         print(f"deskmate hub live — broker {broker}:{port}, period {hub.period:.0f}s, logs {log_dir}/", file=sys.stderr)
         source.start()
         # 보드 bridge(service_bridge)와 같이 세션 리포트 스냅샷을 주기 발행한다(retain). 없으면 PC 경로에서
@@ -385,5 +416,7 @@ def run_live(broker: str, port: int, *, fsm_config: str | None, ingest_config: s
         except KeyboardInterrupt:
             print("\n[hub] stopping", file=sys.stderr)
         finally:
+            if hub.personalize_recorder is not None:
+                hub.personalize_recorder.close_all(time.time())
             source.stop()
     return 0

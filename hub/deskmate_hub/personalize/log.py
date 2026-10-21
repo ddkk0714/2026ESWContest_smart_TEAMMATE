@@ -8,10 +8,13 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Iterable
+from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from .features import Situation
-from .policy import Decision, reward_effect
+from .rewards import REWARD_ACCEPT, reward_effect
+
+if TYPE_CHECKING:
+    from .policy import Decision
 
 EPISODE_SCHEMA = "personalize_episode"
 SESSION_SCHEMA = "personalize_session"
@@ -34,7 +37,7 @@ def build_episode(*, episode_id: str, session_id: str, profile_id: str, ts: floa
         "ts_ms": int(ts * 1000), "local_time": local_iso(ts, utc_offset_hours),
         "features": situation.to_dict(),
         "fsm": dict(fsm),
-        "decision": decision.to_dict() if isinstance(decision, Decision) else dict(decision),
+        "decision": decision.to_dict() if hasattr(decision, "to_dict") else dict(decision),
         "feedback": feedback, "outcome": outcome,
     }
 
@@ -69,18 +72,19 @@ class PersonalizeLogger:
         self.offset = float(cfg.get("local_utc_offset_hours", 9))
         self._seq = 0
         self._open: dict[str, dict[str, Any]] = {}
-        self._decisions: dict[str, Decision] = {}
+        self._decisions: dict[str, "Decision"] = {}
 
     # ── 에피소드 ───────────────────────────────────────────────
     def open_episode(self, *, session_id: str, situation: Situation, fsm: dict[str, Any],
-                     decision: Decision, ts: float) -> str:
+                     decision: "Decision | dict[str, Any]", ts: float) -> str:
         self._seq += 1
         eid = f"{self.boot_id}-pe{self._seq}"
         self._open[eid] = build_episode(
             episode_id=eid, session_id=session_id, profile_id=self.profile_id, ts=ts,
             utc_offset_hours=self.offset, situation=situation, fsm=fsm, decision=decision,
             simulated=self.simulated, persona=self.persona)
-        self._decisions[eid] = decision
+        if not isinstance(decision, dict):
+            self._decisions[eid] = decision
         return eid
 
     def feedback(self, episode_id: str, verdict: str, *, ts: float, response_ms: int | None = None,
@@ -107,7 +111,7 @@ class PersonalizeLogger:
         self._write(rec)
         return rec
 
-    def decision_of(self, episode_id: str) -> Decision | None:
+    def decision_of(self, episode_id: str) -> "Decision | None":
         return self._decisions.get(episode_id)
 
     def due(self, now: float) -> list[str]:
@@ -115,10 +119,13 @@ class PersonalizeLogger:
         window = float(self.cfg["bandit"]["effect_window_min"]) * 60.0
         return [eid for eid, rec in self._open.items() if now - rec["ts_ms"] / 1000.0 >= window]
 
-    def flush(self, status: str = "missing") -> int:
+    def flush(self, status: str = "missing", *, next_state: str | None = None) -> int:
+        """열린 에피소드를 전부 닫는다(세션 종료·종료 시). 피드백이 있으면 그 수용도 보상은 살린다."""
         n = 0
         for eid in list(self._open):
-            self.close(eid, status=status)
+            fb = self._open[eid].get("feedback") or {}
+            self.close(eid, status=status, next_state=next_state,
+                       reward_accept=REWARD_ACCEPT.get(fb.get("verdict"), 0.0))
             n += 1
         return n
 

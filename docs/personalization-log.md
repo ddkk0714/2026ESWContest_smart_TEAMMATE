@@ -124,9 +124,23 @@
 {"schema_name":"personalize_session","schema_version":"1.0","simulated":false,"persona":null,"profile_id":"default","session_id":"s-20261021-1402","ts_ms":1792555320000,"local_time":"2026-10-21T14:02:00+09:00","start_hour_local":14.03,"end_hour_local":17.4,"length_min":202.0,"first_slump_min":48.5,"slump_count":3,"recovery_after_alert_min":[2.5],"break_interval_min":[55.0,70.0],"fatigue_by_hour":{"14":[22.1,348],"15":[31.8,360],"16":[29.0,360],"17":[9.6,144]},"co2_at_fatigue":[1310]}
 ```
 
-## 9. 지금부터 쌓을 때
+## 9. 지금부터 쌓을 때 (2026-10-21 연결됨 — 기록 전용 모드)
 
-- `live.py` 가 ACTION_* 진입 tick 에 `PersonalizeLogger.open_episode(...)`, 피드백에 `.feedback(...)`, 10 분 뒤 tick(`.due(now)`)에 `.close(...)`, 세션 끝에 `.session_summary(...)` 를 부르면 된다.
-  정책을 아직 켜지 않아도(`personalize.yaml` `enabled: false`) `decision.source: "fallback"`, `arm: null` 로 기록해 두면 나중에 오프라인 평가에 쓸 수 있다.
+- **켜는 법:** `personalize.yaml` `record: true`(기본). 정책 `enabled` 와 별개라 정책을 켜지 않아도 쌓인다.
+  `python -m deskmate_hub run --broker …` 가 `--log-dir`(기본 `logs/`)에 `personalize-<boot_id>.jsonl` 을 만든다.
+  PC 에서 돈다. **Pi 4 제한 Python 에는 numpy 가 없어** `personalize/` 가 numpy 없이 import 되게 해 두었지만(3층
+  `InterventionPolicy` 만 `None`), 보드 bridge(`service_bridge`)에는 아직 안 붙였다.
+- **누가 부르나:** `live.py` → `personalize/record.py` `EpisodeRecorder`. tick 마다 `on_tick()`:
+  - `TickResult.actions` 의 `route:<cause>`(CAUSE_ANALYSIS → ACTION_*) 이고 게이트가 `none` 이 아니면 에피소드를 연다.
+    정책이 꺼져 있으면 `decision` 은 `{source: "fallback", arm: null, delivered_gate: <FSM 게이트>, explanation: "정책 미적용 … FSM 기본 동작 <prompt_code>"}`.
+  - `interaction/request` 의 `request_id` 를 그 에피소드에 묶고, `feedback/user`(accept/reject/timeout, display 또는 hub 만료)를 `feedback` 에 넣는다.
+    자동 게이트는 되돌리기(`kind: auto_undo`)면 `undo`, 아무 피드백 없이 10 분이 지나면 `auto_kept`.
+  - `effect_window_min`(10) 이 지난 tick 에 `outcome.status: measured` 로 닫고(C_fatigue·next_state·자세성이면 upright 복귀 여부) 한 줄 쓴다.
+  - START 진입에 `session_id` 를 새로 주고(`<boot_id>-s<n>`), END/IDLE 진입에 열린 에피소드를 `session_ended` 로 닫은 뒤 §8 요약 한 줄을 쓴다.
+    프로세스 종료(Ctrl-C)는 열린 에피소드를 `missing` 으로 닫고 진행 중 세션 요약만 쓴다.
+- **프레임 밖 값은 recorder 가 모은다:** 자세 라벨은 ToF 0x03(`tof` 표본, MLP 판정 덮어쓰기 포함)에서 tick 마다 읽어
+  10 분 분포·지속·슬럼프 지속을, 졸음은 ToF `drowsy` 또는 mmWave `DROWSY` 의 거짓→참 전이를 30 분 창으로 센다.
+  ToF 가 없으면 `posture_dist` 는 `missing` 에 들어간다(지금 PC 시험이 그렇다). 환경 원값은 `env` 표본의 `*_valid` 가 참인 것만, 날씨는 `deskmate/sensor/weather`.
 - 합성 줄(`simulated: true`)과 실기 줄을 같은 파일에 섞지 않는다. 합성은 `logs/synth/` 아래.
 - 보존·삭제 범위는 `personalization-privacy-flow.md` 의 삭제 등록 목록에 이 파일을 넣는 것으로 결정한다(미결).
+- 시험: `hub/tests/test_personalize_record.py`(합성 MQTT 입력으로 피로→제안→수락/거절→10 분, 자리비움→세션 요약, numpy 없는 import).

@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import numpy as np
+if TYPE_CHECKING:  # numpy 는 vectorize/prior_vector 안에서만 import 한다 — 기록 전용 경로(log/record)는 numpy 없이 돈다(Pi 4)
+    import numpy as np
 
 POSTURE_LABELS: tuple[str, ...] = (
     "upright", "lean_forward", "recline", "face_down", "chin_rest",
@@ -110,7 +111,9 @@ def _comfort_deviation(value: float, lo: float, hi: float, margin: float) -> flo
     return 0.0
 
 
-def vectorize(sit: Situation, fcfg: dict[str, Any]) -> np.ndarray:
+def vectorize(sit: Situation, fcfg: dict[str, Any]) -> "np.ndarray":
+    import numpy as np
+
     """Situation → 길이 DIM 의 float 벡터. 결측은 0."""
     x = np.zeros(DIM, dtype=float)
     x[FEATURE_INDEX["bias"]] = 1.0
@@ -158,7 +161,9 @@ def vectorize(sit: Situation, fcfg: dict[str, Any]) -> np.ndarray:
     return x
 
 
-def prior_vector(spec: dict[str, float] | None) -> np.ndarray:
+def prior_vector(spec: dict[str, float] | None) -> "np.ndarray":
+    import numpy as np
+
     """YAML 의 {특징이름: 가중치} → 길이 DIM 벡터. 모르는 이름은 오류."""
     theta = np.zeros(DIM, dtype=float)
     for name, weight in (spec or {}).items():

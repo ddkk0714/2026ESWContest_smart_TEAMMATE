@@ -25,6 +25,7 @@
 | 1층 규칙 FSM | `SensorFrame`(10 s) | `TickResult(state, cause, gate, c_fatigue, …)` | 10 s | `inference/engine.py` (수정 없음) |
 | 2층 사용자 프로필 | 개인화 로그 JSONL | `DailyStats`(일 단위) → `ProfileSummary`(최근 N일 집계) | 세션 종료·하루 1회 | `personalize/profile.py` |
 | 3층 개입 선택 정책 | 상황 벡터 + cause + gate + 프로필 | 개입 후보 1개 + 전달 게이트 + 설명 한 줄 | ACTION_* 진입 tick | `personalize/policy.py` |
+| 기록(2층의 입력) | 결정 tick 의 상황·FSM 결과, 피드백, 10 분 뒤 C_fatigue | `personalize_episode`·`personalize_session` JSONL | tick | `personalize/record.py` ← `live.py` (10-21 연결, `record: true`. numpy 없음) |
 
 연결점은 `personalize/adapter.py` 하나다. `TickResult.actions` 에 `route:<cause>` 가 들어 있는 tick(= CAUSE_ANALYSIS 가
 ACTION_* 로 보낸 직후)이 **결정 시점**이다. 그 tick 의 `SensorFrame`/`TickResult` 와, 프레임이 싣지 않는 부가 정보
@@ -216,4 +217,6 @@ local_time ≥ profile.usual_bedtime
 1. ~~날씨 입력 경로~~ — **해소(10-21)**: Pi 5 앱이 받아 `deskmate/sensor/weather` 로 넘긴다(§7). 앱 쪽 구현은 남음.
 2. **Pi 4 제한 Python 의 numpy** — 보드 Python 에 numpy 가 없으면 `policy.py` 는 PC/개발 환경 전용이 된다. 보드 탑재가 필요하면
    `personalization/portable.py` 처럼 순수 Python 역행렬(차원 ≤ 32)로 옮기는 작업이 하나 더 필요하다.
+   (10-21) 기록 경로(`record.py`·`log.py`·`features.Situation`)는 numpy 없이 import 되게 분리했다 — `rewards.py` 로 보상을 떼고
+   `features.vectorize` 안에서만 numpy 를 부른다. 보드에서는 `personalize.InterventionPolicy` 가 `None` 이고 기록만 가능하다.
 3. 개인화 로그·프로필·posterior 파일의 보존 기간과 삭제 등록(동의 철회 범위)은 기존 미결정 항목(DATA-DEC-006)과 함께 정한다.
