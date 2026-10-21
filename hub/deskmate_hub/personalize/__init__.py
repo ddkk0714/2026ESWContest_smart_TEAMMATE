@@ -6,15 +6,17 @@
 
 `personalization/`(2단계 관찰 모델·개인 head)과는 별개 패키지다.
 """
-from .adapter import SituationExtras, fsm_record, is_decision_tick, situation_from_tick
+from .adapter import SituationExtras, extras_from_cache, fsm_record, is_decision_tick, situation_from_tick
 from .config import load_personalize_config
+from .weather import weather_from_sample
 from .features import FEATURE_NAMES, POSTURE_LABELS, Situation, vectorize
 from .log import PersonalizeLogger, read_records
 from .policy import Decision, InterventionPolicy
 from .profile import DailyStats, ProfileSummary, aggregate_daily, build_profile, summarize
 
 __all__ = [
-    "SituationExtras", "fsm_record", "is_decision_tick", "situation_from_tick",
+    "SituationExtras", "extras_from_cache", "fsm_record", "is_decision_tick", "situation_from_tick",
+    "weather_from_sample",
     "load_personalize_config",
     "FEATURE_NAMES", "POSTURE_LABELS", "Situation", "vectorize",
     "PersonalizeLogger", "read_records",

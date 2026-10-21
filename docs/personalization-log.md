@@ -41,7 +41,7 @@
 | `hour_local`, `weekday` | 0–23.99, 0(월)–6(일) | 지역시 |
 | `after_bedtime` | bool | 프로필 `usual_bedtime` 이후 |
 | `month`, `season` | 1–12, `spring/summer/autumn/winter` | 날짜만으로 |
-| `weather` | object/null | `{windy: bool, rain: bool, pm_bad: bool, outdoor_temp_c: float}` 미수신이면 null |
+| `weather` | object/null | `{windy, rain, pm_bad, outdoor_temp_c, wind_ms, humidity_pct, condition, season, fetched_at, source}` — `deskmate/sensor/weather` 를 `personalize/weather.py` 가 정규화한 것. 미수신·stale(2 h) 이면 null |
 | `missing` | string[] | 비어 있던 키 목록 |
 
 ## 3. `fsm`
@@ -69,6 +69,7 @@
 | `delivered_gate` | 실제 전달 게이트 `auto` / `suggest`. FSM 게이트보다 높을 수 없다 |
 | `auto_threshold` | 그 arm 의 개인 자동 문턱 (`conf_auto + undo_penalty`) |
 | `explanation` | 화면 한 줄 설명 |
+| `ventilate_minutes` | `ventilate_suggest` 일 때 권유 길이(분, 겨울 5·그 밖 15). 다른 arm 은 null |
 
 ## 5. `feedback`
 

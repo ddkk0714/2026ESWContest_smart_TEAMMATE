@@ -103,6 +103,7 @@ class Decision:
     ts: float
     c_fatigue_before: float
     x: np.ndarray = field(repr=False, default_factory=lambda: np.zeros(DIM))
+    ventilate_minutes: int | None = None     # arm == ventilate_suggest 일 때 권유 길이(겨울 짧게)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -112,6 +113,7 @@ class Decision:
             "delivered_gate": self.delivered_gate,
             "auto_threshold": None if self.auto_threshold is None else round(float(self.auto_threshold), 4),
             "explanation": self.explanation,
+            "ventilate_minutes": self.ventilate_minutes,
         }
 
 
@@ -199,9 +201,17 @@ class InterventionPolicy:
         if w.get("rain") or w.get("pm_bad"):
             return "weather"
         outdoor = w.get("outdoor_temp_c")
-        if outdoor is not None and sit.temp_c is not None and float(outdoor) > float(sit.temp_c) + 2.0:
+        margin = float(self.cfg["weather"].get("outdoor_hotter_margin_c", 2.0))
+        if outdoor is not None and sit.temp_c is not None and float(outdoor) > float(sit.temp_c) + margin:
             return "weather"
         return None
+
+    def ventilate_minutes(self, sit: Situation) -> int:
+        """환기 권유 길이. 겨울(weather.winter_months)은 짧게."""
+        w = self.cfg["weather"]
+        if sit.month in w["winter_months"]:
+            return int(w["ventilate_minutes_winter"])
+        return int(w["ventilate_minutes_default"])
 
     def _candidates(self, sit: Situation, cause: str, now: float) -> tuple[list[str], dict[str, str]]:
         cands, excluded = [], {}
@@ -293,7 +303,9 @@ class InterventionPolicy:
             self.last_exec[arm] = now
         return Decision(arm=arm, candidates=cands, excluded=excluded, source="bandit", scores=scores,
                         delivered_gate=delivered, auto_threshold=threshold,
-                        explanation=self._explain(sit, arm, delivered, gate_s, excluded), **base)
+                        explanation=self._explain(sit, arm, delivered, gate_s, excluded),
+                        ventilate_minutes=self.ventilate_minutes(sit) if arm == "ventilate_suggest" else None,
+                        **base)
 
     # ── 학습 ─────────────────────────────────────────────────
     def feedback(self, decision: Decision, verdict: str, *, now: float | None = None) -> float:
@@ -379,8 +391,9 @@ class InterventionPolicy:
             parts.append("평소 취침 시각 지남")
         if sit.weather and sit.weather.get("windy") and arm == "ventilate_suggest":
             parts.append("바람 불어 환기 먼저")
-        if arm == "ventilate_suggest" and sit.month in self.cfg["weather"]["winter_months"]:
-            parts.append(f"겨울이라 {self.cfg['weather']['ventilate_minutes_winter']}분만")
+        if arm == "ventilate_suggest":
+            minutes = self.ventilate_minutes(sit)
+            parts.append(f"겨울이라 {minutes}분만" if sit.month in self.cfg["weather"]["winter_months"] else f"환기 {minutes}분")
         st = self.stats[arm]
         answered = st["accept"] + st["reject"] + st["timeout"]
         if answered:

@@ -59,8 +59,8 @@ SensorFrame ─► FSMEngine.tick ─► TickResult ──(route:<cause>)──�
 | 시간 | 요일 | 0–6 | 주말 0/1 | 〃 |
 | 시간 | 평소 취침 뒤 여부 | 0/1 | 그대로 | 프로필 `usual_bedtime` 비교 |
 | 날씨·계절 | 계절 | 월 | `sin·cos(2π·m/12)` | 날짜만으로 폴백 가능 |
-| 날씨·계절 | 바람·비 | 0/1, 0/1 | 그대로 | 외부 날씨(없으면 0; 입력 경로는 §9 결정 필요) |
-| 날씨·계절 | 실내외 온도차 | °C | `/10` clip [-1,1] | 〃 |
+| 날씨·계절 | 바람·비 | 0/1, 0/1 | `wind_ms ≥ windy_ms`(4.0), `condition ∈ rain_conditions` | MQTT `deskmate/sensor/weather`(Pi 5 앱 발행, 10-21 결정). stale(2 h) 이면 0 |
+| 날씨·계절 | 실내외 온도차 | °C | `/10` clip [-1,1] | 〃 (`weather.temp_c` − 실내 `temp_c`) |
 
 벡터 길이는 상수 `FEATURE_NAMES` 가 정하고(`personalize/features.py`), 로그 `features` 는 원값, 밴딧 입력은 정규화 값이다.
 항목이 없으면(날씨 미수신 등) 0 으로 두되 `features.missing` 에 키를 적는다.
@@ -161,13 +161,18 @@ local_time ≥ profile.usual_bedtime
 
 ## 7. 날씨·계절 보정 (환경성 arm 의 전처리)
 
+**입력 경로(2026-10-21 결정)**: Pi 5 앱이 바깥 날씨를 받아 `deskmate/sensor/weather`(retain, QoS 0, 10~30 분)로 발행한다
+([`mqtt-topics.md`](mqtt-topics.md)). 허브는 `SensorCache.weather` 에 마지막 표본을 두고, `personalize/weather.py` 가
+`fetched_at` 기준 `stale_sec`(2 h) 안의 표본만 `Situation.weather` 로 바꾼다(`adapter.extras_from_cache`). FSM 입력이 아니다.
+토픽이 없거나 stale 이면 `weather = None` → 아래 규칙 중 **계절(월) 항만** 적용되고 바람·비 특징은 0 이다.
+
 밴딧 입력에 바람·비·계절이 들어가지만, 아래는 학습 전에 적용하는 고정 규칙이다(`personalize.yaml` `weather:`).
 
 - 바람 부는 날(`windy`) → `ventilate_suggest` prior bias `+`, `air_fan_up` `−` (선풍기보다 환기 먼저).
 - 비·미세먼지 나쁨(`rain`/`pm_bad`) → `ventilate_suggest` 후보 제외.
-- 겨울(12·1·2월) → `ventilate_suggest` 의 안내 문구에 "짧게(5분)" 를 붙이고 `ventilate_minutes_winter`(5) 를 쓴다.
-- 실외가 실내보다 더우면(여름 한낮) → `ventilate_suggest` 후보 제외.
-- 날씨를 못 받으면 계절(날짜)만으로 위 규칙 중 계절 항만 적용한다.
+- 겨울(12·1·2월) → `Decision.ventilate_minutes = ventilate_minutes_winter`(5), 그 밖은 `ventilate_minutes_default`(15). 설명에 "겨울이라 5분만".
+- 실외가 실내보다 `outdoor_hotter_margin_c`(2 °C) 이상 더우면(여름 한낮) → `ventilate_suggest` 후보 제외.
+- 날씨를 못 받으면(토픽 없음·stale) 계절(날짜)만으로 위 규칙 중 계절 항만 적용한다.
 
 ## 8. 콜드 스타트
 
@@ -208,7 +213,7 @@ local_time ≥ profile.usual_bedtime
 
 ## 11. 결정이 필요한 항목
 
-1. **날씨 입력 경로** — Pi 5 앱이 받아 MQTT 로 넘길지, ThinQ 를 거칠지, 수동 계절 설정만 둘지. 못 받아도 계절 항만으로 동작한다.
+1. ~~날씨 입력 경로~~ — **해소(10-21)**: Pi 5 앱이 받아 `deskmate/sensor/weather` 로 넘긴다(§7). 앱 쪽 구현은 남음.
 2. **Pi 4 제한 Python 의 numpy** — 보드 Python 에 numpy 가 없으면 `policy.py` 는 PC/개발 환경 전용이 된다. 보드 탑재가 필요하면
    `personalization/portable.py` 처럼 순수 Python 역행렬(차원 ≤ 32)로 옮기는 작업이 하나 더 필요하다.
 3. 개인화 로그·프로필·posterior 파일의 보존 기간과 삭제 등록(동의 철회 범위)은 기존 미결정 항목(DATA-DEC-006)과 함께 정한다.

@@ -55,7 +55,11 @@ sleep:
   ineffective_min: 2            # 직전 개입 이만큼 연속 무효
   default_bedtime: "23:30"      # 프로필이 없을 때
 
-weather:
+weather:                        # 입력 = deskmate/sensor/weather (Pi 5 앱 발행, 2026-10-21 결정)
+  stale_sec: 7200               # fetched_at 이 이보다 오래되면 무시하고 계절(월)만 쓴다
+  windy_ms: 4.0                 # 풍속(m/s) 이 이상이면 windy → 선풍기보다 환기 먼저
+  rain_conditions: [rain, snow] # 이 condition 이면 환기 후보 제외
+  outdoor_hotter_margin_c: 2.0  # 바깥이 실내보다 이만큼 더우면 환기 후보 제외
   ventilate_minutes_default: 15
   ventilate_minutes_winter: 5
   winter_months: [12, 1, 2]

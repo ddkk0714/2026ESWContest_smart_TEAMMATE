@@ -10,8 +10,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..inference.types import SensorFrame, TickResult
+from ..ingest.cache import CacheView
 from .features import Situation
 from .profile import ProfileSummary, is_after_bedtime
+from .weather import weather_from_sample
 
 
 @dataclass
@@ -30,6 +32,22 @@ class SituationExtras:
     session_started_ts: float | None = None
     last_intervention_ts: float | None = None
     weather: dict[str, Any] | None = None
+
+
+def extras_from_cache(view: CacheView, now: float, cfg: dict[str, Any], *, env_max_age: float = 30.0,
+                      base: SituationExtras | None = None) -> SituationExtras:
+    """SensorCache 스냅샷에서 환경 원값(유효 표시 true 만)과 날씨(stale 아니면)를 채운다.
+    자세 분포·세션 시각 등 cache 에 없는 값은 base 에서 그대로 가져온다."""
+    ex = base if base is not None else SituationExtras()
+    env = view.fresh("env", now, env_max_age)
+    if env is not None:
+        d = env.data
+        for key, valid in (("co2_ppm", "co2_valid"), ("temp_c", "temp_valid"),
+                           ("humidity_pct", "humidity_valid"), ("lux", "lux_valid")):
+            if d.get(valid) is True and d.get(key) is not None:
+                setattr(ex, key, float(d[key]))
+    ex.weather = weather_from_sample(getattr(view, "weather", None), now, cfg)
+    return ex
 
 
 def is_decision_tick(result: TickResult) -> bool:
