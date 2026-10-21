@@ -1,0 +1,197 @@
+/* DESKMATE display — 터치스크린용 다크 테마.
+
+   실기 타깃: Raspberry Pi 공식 7인치 DSI 터치스크린 = 800x480 (약 133ppi).
+   여기서 vmin 은 4.8px 뿐이라 순수 vmin 기반으로 짜면 글자가 8~9px 로 줄어 못 읽는다.
+   그래서 크기를 clamp(px 하한, vmin, px 상한) 토큰으로 고정하고 전부 토큰만 쓴다.
+   1024x600 등 더 큰 화면에서는 vmin 항이 이겨 자연히 커진다.
+
+   외부 폰트·CDN 을 쓰지 않는다 (Pi 가 오프라인일 수 있음). */
+
+:root{
+  --bg:#0c1014; --panel:#151b22; --panel2:#1b232c; --line:#26313d;
+  --fg:#e8eef5; --dim:#8899a8; --faint:#5b6b7a;
+  --accent:#4dd6a8; --warn:#f2b544; --bad:#ef6a5e; --info:#5aa9ff;
+
+  /* 800x480 → 11 / 12.5 / 15 / 20 / 32px */
+  --fs-xs: clamp(11px, 2.2vmin, 15px);   /* 하단 상태줄 · 범례 */
+  --fs-sm: clamp(12px, 2.6vmin, 17px);   /* 카드 라벨 · 칩 */
+  --fs-md: clamp(15px, 3.2vmin, 21px);   /* 탭 · 시계 · 배지 */
+  --fs-lg: clamp(19px, 4.2vmin, 28px);   /* 활동 상태 · 브랜드 */
+  --fs-xl: clamp(30px, 6.6vmin, 46px);   /* 카드 수치 */
+
+  --gap:  clamp(8px, 1.6vmin, 14px);
+  --pad:  clamp(10px, 2vmin, 18px);
+  --radius: clamp(8px, 1.4vmin, 14px);
+}
+
+*{box-sizing:border-box; margin:0; padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg); color:var(--fg);
+  font-family:"Noto Sans KR","Malgun Gothic",system-ui,sans-serif;
+  display:flex; flex-direction:column; overflow:hidden;
+  -webkit-user-select:none; user-select:none;
+  -webkit-tap-highlight-color:transparent;
+}
+.mono{font-family:"DejaVu Sans Mono",ui-monospace,Consolas,monospace}
+
+/* ---------- 상단 바 ---------- */
+.bar{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:calc(var(--gap) * .8) var(--pad);
+  border-bottom:1px solid var(--line); background:var(--panel);
+}
+.brand{font-size:var(--fs-lg); font-weight:800; letter-spacing:.04em}
+.brand span{
+  font-weight:500; color:var(--dim); margin-left:.5em; letter-spacing:0;
+  font-size:var(--fs-sm);
+}
+.right{display:flex; align-items:center; gap:var(--gap)}
+.clock{font-size:var(--fs-md); color:var(--dim); font-variant-numeric:tabular-nums}
+.pill{
+  font-size:var(--fs-xs); padding:.35em 1em; border-radius:99px;
+  border:1px solid var(--line); color:var(--dim); white-space:nowrap;
+}
+.pill-on{color:#062; background:var(--accent); border-color:var(--accent); font-weight:700}
+.pill-off{color:var(--bad); border-color:var(--bad)}
+.pill-demo{color:#221a00; background:var(--warn); border-color:var(--warn); font-weight:700}
+.pill-local{color:#00202f; background:var(--info); border-color:var(--info); font-weight:700}
+
+/* ---------- 탭 ---------- */
+.tabs{display:flex; gap:1px; background:var(--line)}
+.tab{
+  flex:1; border:0; background:var(--panel); color:var(--dim);
+  font:inherit; font-size:var(--fs-md); cursor:pointer;
+  min-height:52px;                      /* 손가락 터치 타깃 — 화면이 작아도 줄이지 않는다 */
+}
+.tab.is-on{background:var(--panel2); color:var(--fg); box-shadow:inset 0 -3px 0 var(--accent)}
+
+/* ---------- 뷰 ---------- */
+main{flex:1; min-height:0; position:relative}
+.view{
+  position:absolute; inset:0; display:none;
+  flex-direction:column; gap:var(--gap); padding:var(--gap) var(--pad);
+}
+.view.is-on{display:flex}
+
+/* ---------- 활동 상태 ---------- */
+.statusrow{display:flex; align-items:center; justify-content:space-between; gap:var(--gap)}
+.activity{display:flex; align-items:center; gap:var(--gap); min-width:0}
+.act-dot{
+  width:clamp(14px,3.4vmin,24px); height:clamp(14px,3.4vmin,24px);
+  border-radius:50%; flex:none; background:var(--faint);
+}
+.act-typing .act-dot{background:var(--accent); animation:pulse 1.6s ease-out infinite}
+.act-mouse  .act-dot{background:var(--info)}
+.act-idle   .act-dot{background:var(--faint)}
+.act-stale  .act-dot{background:var(--bad)}
+@keyframes pulse{
+  0%{box-shadow:0 0 0 0 rgba(77,214,168,.45)}
+  100%{box-shadow:0 0 0 14px rgba(77,214,168,0)}
+}
+.act-text{min-width:0}
+.act-text strong{display:block; font-size:var(--fs-lg); line-height:1.15}
+.act-text small{
+  display:block; font-size:var(--fs-xs); color:var(--dim);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+/* ---------- 보드 키보드 캡처 상태 줄 (?src=local) ---------- */
+.capbar{
+  display:flex; align-items:center; gap:calc(var(--gap) * .8); flex:none;
+  padding:calc(var(--pad) * .5) var(--pad);
+  border:1px solid var(--info); border-radius:var(--radius);
+  background:rgba(90,169,255,.10);   /* --info 10%. color-mix 는 보드 Chromium 버전을 못 믿는다 */
+  font-size:var(--fs-sm); line-height:1;
+}
+.capbar[hidden]{display:none}          /* flex 가 hidden 을 이기지 않도록 */
+.cap-dot{
+  width:.9em; height:.9em; border-radius:50%; flex:none;
+  background:var(--faint); transition:background .2s;
+}
+.cap-dot.beat{background:var(--info); animation:cap-beat .35s ease-out}
+@keyframes cap-beat{
+  from{transform:scale(2.1); box-shadow:0 0 0 0 var(--info)}
+  to  {transform:scale(1);   box-shadow:0 0 0 .9em transparent}
+}
+.cap-n{color:var(--info); font-variant-numeric:tabular-nums; font-weight:700}
+.cap-last{color:var(--dim)}
+/* 프라이버시 문구는 자리가 좁으면 먼저 접힌다. 지우지는 말 것 — 심사 설명 포인트다. */
+.cap-note{margin-left:auto; color:var(--faint); font-size:var(--fs-xs); text-align:right}
+
+.chips{display:flex; gap:calc(var(--gap) * .6); flex:none}
+.chip{
+  font-size:var(--fs-xs); padding:.45em 1em; border-radius:99px;
+  border:1px solid var(--line); color:var(--faint); white-space:nowrap;
+}
+.chip.on{color:var(--fg); border-color:var(--accent); background:rgba(77,214,168,.12)}
+
+/* ---------- 지표 카드 ---------- */
+.grid{
+  flex:1; min-height:0; display:grid; gap:var(--gap);
+  grid-template-columns:repeat(3,1fr); grid-template-rows:repeat(2,1fr);
+}
+.card{
+  background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+  padding:calc(var(--gap) * .7) calc(var(--pad) * .8);
+  display:flex; flex-direction:column; justify-content:center; min-width:0;
+}
+.card .k{
+  font-size:var(--fs-sm); color:var(--dim);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.card .k em{font-style:normal; color:var(--faint); font-size:var(--fs-xs); margin-left:.4em}
+.card .v{
+  font-size:var(--fs-xl); font-weight:700; line-height:1.1;
+  font-variant-numeric:tabular-nums; white-space:nowrap;
+}
+.card .v u{font-size:var(--fs-sm); text-decoration:none; color:var(--dim); margin-left:.25em}
+.card .s{font-size:var(--fs-xs); color:var(--faint)}
+.meter{
+  height:clamp(4px,.9vmin,8px); background:var(--panel2);
+  border-radius:99px; overflow:hidden; margin-top:.5em;
+}
+.meter i{display:block; height:100%; background:var(--accent); transition:width .35s ease}
+.meter i.warn{background:var(--warn)}
+.meter i.bad{background:var(--bad)}
+
+/* 수신이 끊기면 화면 전체를 흐리게 — 옛 값을 현재처럼 읽지 않도록 */
+body.stale .grid, body.stale .chartwrap{opacity:.38}
+
+/* ---------- 하단 ---------- */
+.foot{
+  display:flex; justify-content:space-between; gap:var(--gap); flex:none;
+  font-size:var(--fs-xs); color:var(--faint);
+  border-top:1px solid var(--line); padding-top:calc(var(--gap) * .5);
+}
+
+/* ---------- 추이 ---------- */
+.chartwrap{
+  flex:1; min-height:0; background:var(--panel); border:1px solid var(--line);
+  border-radius:var(--radius); padding:calc(var(--gap) * .6) calc(var(--pad) * .7);
+  display:flex; flex-direction:column; position:relative;
+}
+.chart-title{font-size:var(--fs-sm); color:var(--dim); flex:none}
+.chart-title em{font-style:normal; color:var(--faint); font-size:var(--fs-xs); margin-left:.4em}
+canvas{flex:1; min-height:0; width:100%}
+.legend{position:absolute; right:var(--pad); top:calc(var(--gap) * .6); display:flex; gap:var(--gap)}
+.lg{font-size:var(--fs-xs); color:var(--dim)}
+.lg::before{
+  content:""; display:inline-block; width:1.2em; height:.35em;
+  border-radius:99px; margin-right:.4em; vertical-align:middle;
+}
+.lg-a::before{background:var(--info)}
+.lg-b::before{background:var(--warn)}
+
+/* ---------- 원본 ---------- */
+.rawhead{font-size:var(--fs-sm); color:var(--dim); flex:none}
+.raw{
+  flex:1; min-height:0; overflow:auto; background:var(--panel);
+  border:1px solid var(--line); border-radius:var(--radius); padding:var(--pad);
+  font-size:var(--fs-sm); line-height:1.5; white-space:pre-wrap; word-break:break-all;
+  -webkit-user-select:text; user-select:text;
+}
+
+/* 세로로 긴 화면(회전 설치)에서는 카드 2열로 */
+@media (max-aspect-ratio:1/1){
+  .grid{grid-template-columns:repeat(2,1fr); grid-template-rows:repeat(3,1fr)}
+}
