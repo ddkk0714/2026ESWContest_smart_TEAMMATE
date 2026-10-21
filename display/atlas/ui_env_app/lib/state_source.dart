@@ -24,8 +24,9 @@ abstract interface class StateSource {
 
   /// [verdict] = accept | reject | correct | timeout (mqtt-topics.md `feedback/user`).
   /// correct 면 [correctedState](FSM 상태 이름), [responseMs] 는 카드를 띄운 뒤 응답까지 걸린 시간.
+  /// [note] 는 프리뷰 탭의 짧은 메모(선택, `data.note`). 키 값·원시 센서는 싣지 않는다.
   Future<void> feedback(String verdict,
-      {String? correctedState, int? responseMs});
+      {String? correctedState, int? responseMs, String? note});
   Future<void> sendTestFrame(TestSensorInput input,
       {required String command, int advanceSeconds = 30, String? event});
   void close();
@@ -63,6 +64,32 @@ class TestSensorInput {
         'signals': signals.map((key, value) => MapEntry(key, value.toJson())),
       };
 }
+
+/// `deskmate/feedback/user` 의 `data`. MQTT·HTTP 두 경로가 같은 모양을 쓰게 한곳에 둔다.
+///
+/// `note` 는 프리뷰 탭의 메모(선택). 비어 있으면 키를 넣지 않고, 길이는 [kFeedbackNoteMaxChars] 로
+/// 자른다 — 토픽 계약에 없던 필드라 짧은 문자열 하나로만 둔다.
+Map<String, Object> buildFeedbackData({
+  required String requestId,
+  required String verdict,
+  String? correctedState,
+  int? responseMs,
+  String? note,
+}) {
+  final trimmed = note?.trim() ?? '';
+  final clipped = trimmed.length > kFeedbackNoteMaxChars
+      ? trimmed.substring(0, kFeedbackNoteMaxChars)
+      : trimmed;
+  return {
+    'request_id': requestId,
+    'verdict': verdict,
+    if (correctedState != null) 'corrected_state': correctedState,
+    'response_ms': responseMs ?? 0,
+    if (clipped.isNotEmpty) 'note': clipped,
+  };
+}
+
+const kFeedbackNoteMaxChars = 200;
 
 class HttpStateSource implements StateSource {
   HttpStateSource(String hubUrl)
@@ -110,18 +137,19 @@ class HttpStateSource implements StateSource {
 
   @override
   Future<void> feedback(String verdict,
-      {String? correctedState, int? responseMs}) async {
+      {String? correctedState, int? responseMs, String? note}) async {
     // HTTP 미리보기 API 는 accept·reject·correct 만 받는다(개발용 경로). 무응답은
     // 보낼 곳이 없어 버린다 — 제품 경로(MQTT)에서만 기록된다.
     if (verdict == 'timeout') return;
     final request = await _client.postUrl(_base.resolve('/api/feedback'));
     request.headers.contentType = ContentType.json;
-    final payload = utf8.encode(jsonEncode({
-      'request_id': 'atlas-display',
-      'verdict': verdict,
-      if (correctedState != null) 'corrected_state': correctedState,
-      'response_ms': responseMs ?? 0,
-    }));
+    final payload = utf8.encode(jsonEncode(buildFeedbackData(
+      requestId: 'atlas-display',
+      verdict: verdict,
+      correctedState: correctedState,
+      responseMs: responseMs,
+      note: note,
+    )));
     // contentLength 를 안 정하면 Dart 는 chunked 로 보낸다. 허브의 preview_api 는
     // Content-Length 를 필수로 읽어서 없으면 400 invalid_feedback 으로 떨어진다.
     // 실기에서 '진행' 을 눌러도 hub 가 못 받던 원인이라 명시적으로 지정한다.
@@ -448,7 +476,7 @@ class MqttStateSource implements StateSource, PrivacySource {
 
   @override
   Future<void> feedback(String verdict,
-      {String? correctedState, int? responseMs}) async {
+      {String? correctedState, int? responseMs, String? note}) async {
     await _ensureConnected();
     final payload = jsonEncode({
       'schema_version': '1.0',
@@ -456,12 +484,13 @@ class MqttStateSource implements StateSource, PrivacySource {
       'node': 'display',
       'boot_id': _bootId,
       'seq': ++_sequence,
-      'data': {
-        'request_id': _pendingRequestId ?? 'atlas-display',
-        'verdict': verdict,
-        if (correctedState != null) 'corrected_state': correctedState,
-        'response_ms': responseMs ?? 0,
-      },
+      'data': buildFeedbackData(
+        requestId: _pendingRequestId ?? 'atlas-display',
+        verdict: verdict,
+        correctedState: correctedState,
+        responseMs: responseMs,
+        note: note,
+      ),
     });
     final builder = MqttClientPayloadBuilder()..addString(payload);
     _client.publishMessage(
@@ -677,7 +706,7 @@ class DemoStateSource implements StateSource {
 
   @override
   Future<void> feedback(String verdict,
-      {String? correctedState, int? responseMs}) async {}
+      {String? correctedState, int? responseMs, String? note}) async {}
 
   @override
   Future<void> sendTestFrame(TestSensorInput input,
