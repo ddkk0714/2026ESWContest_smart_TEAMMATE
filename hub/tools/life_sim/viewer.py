@@ -41,7 +41,7 @@ def run_viewer(run_dir: str, *, speed: float = 4.0, start_s: float = 0.0, loop: 
     tick_by_t = {int(round(tk["t"])): tk for tk in ticks}
     banners = []
     for e in events:
-        if e.get("kind") == "intervention" and not e.get("blocked_by_policy"):
+        if (e.get("kind") == "intervention" or "hub_kind" in e) and not e.get("blocked_by_policy"):   # 개입 레코드는 kind 가 개입 종류로 덮여 있다
             banners.append((e["t"], f"INTERVENTION {e['kind']} [{','.join(e.get('channels') or [])}]" + (f" arm={e['arm']}" if e.get("arm") else "")))
         elif e.get("kind") == "reaction":
             banners.append((e["t"], f"PERSON {e.get('what')}"))

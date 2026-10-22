@@ -91,7 +91,7 @@ def make_video(run_dir: str, out: str | None, *, speed: float = 10.0, fps: int =
     # 이벤트 → 초 단위 배너
     banners: list[tuple[float, str, str]] = []
     for e in events:
-        if e.get("kind") == "intervention" and not e.get("blocked_by_policy"):
+        if (e.get("kind") == "intervention" or "hub_kind" in e) and not e.get("blocked_by_policy"):   # 개입 레코드는 kind 가 개입 종류로 덮여 있다
             arm = f" arm={e['arm']}" if e.get("arm") else ""
             banners.append((e["t"], f"INTERVENTION {e['kind']} [{','.join(e.get('channels') or [])}]{arm}", "#d33"))
         elif e.get("kind") == "reaction":
