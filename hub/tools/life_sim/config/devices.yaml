@@ -1,0 +1,75 @@
+# 주변기기 mock·환경 물리·전달 채널 매핑 — 전부 모의 계수(실측 아님).
+
+# hub 액션 → 사람에게 닿는 전달 채널. hub 자체(origin/main)는 ACTION_POSTURE/ACTION_BREAK 에서 화면 알림/카드만 내고(dispatcher 는
+# ACTION_ENV 만 기기 명령을 만든다), 스피커 TTS·무드등 각성 조명은 life_sim 의 제안 매핑이다. 보고서에 그렇게 적는다.
+channels:
+  posture_auto:    [screen_notice, lamp_cool, tts]
+  posture_suggest: [screen_card]
+  posture_accept:  [screen_notice, lamp_cool, tts]
+  break_auto:      [screen_notice, tts]
+  break_suggest:   [screen_card]
+  break_accept:    [screen_notice, lamp_warm]
+  env_auto:        [hub_commands]          # control.yaml: vent_fan set_power on, desk_lamp set_brightness 70
+  env_suggest:     [screen_card]
+  env_accept:      []                      # 수락하면 hub 가 같은 명령을 발행한다(그 명령이 채널이 된다)
+  rest_forced:     [screen_notice, lamp_warm, tts]
+  rest_accepted:   [screen_notice, lamp_warm]
+  vent_suggest:    [screen_card]           # 환기 권유(창문) — hub 에 없는 life_sim 카드(날씨 규칙)
+  vent_accept:     [window_open]
+  bedtime_suggest: [screen_card, lamp_warm] # 취침 권유 — 정책 규칙(policy_simple.yaml bedtime)
+  bedtime_accept:  [screen_notice, lamp_off]
+  guard_wake_alert: [tts, lamp_cool]
+  guard_posture_nudge: [screen_notice]
+  guard_cool_down: []
+
+devices:
+  vent_fan:      {kind: bt_fan_esp32_l9110, levels: [0, 1, 2, 3], hub_on_level: 2, sms_contract: "0~3 = 끄기/약/중/강"}
+  air_purifier:  {kind: lg_thinq, levels: [0, 1, 2, 3], note: "읽기 전용 탐색(device_gateway); CO2 는 못 내린다"}
+  desk_lamp:     {kind: ilink_ble, cool_pct: 90, warm_pct: 35, bright_pct: 60}
+  speaker:       {kind: atlas_a2dp_tts, tts_api: "VoiceManager1.StartTTS", korean_verified: false}
+  screen:        {kind: pi5_atlas_card}
+
+environment:
+  outdoor_co2_ppm: 420
+  person_co2_ppm_per_s: 0.07        # 1인·작은 방 ≈ +250 ppm/h (가정)
+  leak_per_s: 0.00003               # 창문 닫힘 자연 환기
+  window_vent_per_s: 0.0025         # 창문 열림: 15 분에 바깥값으로 90 % 회복
+  forced_ramp_per_s: 0.002          # 각본 co2_to 강제 램프 속도
+  pm25_outdoor: 25
+  pm_gen_per_s: 0.002
+  purifier_per_s: {"0": 0.0, "1": 0.0008, "2": 0.0016, "3": 0.003}
+  room_temp_per_s: 0.0002
+  window_temp_per_s: 0.001
+  window_hum_per_s: 0.001
+  fan_felt_delta_c: {"0": 0.0, "1": -0.8, "2": -1.5, "3": -2.2}
+  lamp_lux_per_pct: 2.5             # desk_lamp 70 % → +175 lux
+
+weather_rules:
+  wind_vent_ms: 4.0                 # 바람 ≥ 4 m/s 면 환기 우선
+  exclude_conditions: [rain, snow]
+  exclude_if_outdoor_warmer_c: 2.0  # 바깥이 실내보다 2 ℃ 더우면 환기 제외
+  vent_minutes: {winter: 5, other: 15}
+  pm25_purifier: 35.0               # 환기 제외 + PM 높음 → 공기청정기, 아니면 선풍기
+
+# 0x03 규칙 특징 대역(ESP32 규칙 추정기의 단순 대역)
+rule_features:
+  min_person_mm: 150
+  max_person_mm: 1300
+  present_min_coverage: 0.06
+  motion_full_mm: 60.0
+  head_rows: 3
+  nod_mm: 40.0              # 머리 띠 평균 거리가 기준선에서 이만큼 벗어나면(양쪽) 끄덕임 후보 — 10-22 스모크의 MuJoCo 렌더로 맞춤
+  nod_rows: 0.5
+  nod_min_s: 0.3
+  nod_max_s: 40.0           # 이보다 오래 벗어나 있으면 끄덕임이 아니라 자세 변화 → 기준선 재설정
+  baseline_tau_s: 120.0
+  seed_after_s: 3.0         # 앉은 뒤 이만큼 지나서 기준선을 잡는다(빈 의자 기준선 방지)
+  window_s: 60.0
+  drowsy_nods: 2
+
+# GRU 자세 모델 실행 옵션
+posture_model:
+  vote_frames: 10          # 10 Hz × 1 s 다수결(tof_mlp 의 1 s 와 같은 뜻)
+  warmup_frames: 45        # 학습 평가와 같은 워밍업
+  reset_on_away_s: 60      # 이만큼 비어 있으면 은닉 상태 초기화(재착석)
+  reset_every_s: 900       # 학습 세션 길이(≤900 s) 밖의 장기 상태 표류를 막는다 — 시뮬 가정

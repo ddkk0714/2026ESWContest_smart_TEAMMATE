@@ -1,0 +1,26 @@
+# §B-3 하루 각본 ② 재택 개발자 (PC 컨텍스트, 긴 몰입, 선풍기 소음 싫어함, 자동 실행 선호). 날씨: 비 → 환기 제외 → 선풍기/공기청정기 선택.
+name: day_developer
+persona: developer
+seed: 202
+start_clock: "21:30"           # 평소 취침 00:30
+l8_params: v5
+env: {co2_ppm: 650, temp_c: 25.0, humidity_pct: 55, lux: 300, pm25: 40}
+weather: {temp_c: 22.0, humidity: 85, wind_ms: 1.0, condition: rain, season: summer}
+policy: {profile: none}
+segments:
+  - {kind: away, seconds: 10}
+  - {kind: upright, seconds: 330, typing: true}
+  - {kind: upright, seconds: 900, typing: true, keys: {idle_ratio: 0.12, flight_cv: 0.28, correction_rate: 0.03}, env: {co2_to: 1100}}
+  - {kind: turtle, seconds: 600, typing: true, keys: {idle_ratio: 0.25, flight_cv: 0.40, correction_rate: 0.05}, env: {co2_to: 1400}}
+  - {kind: drowsy, seconds: 1200, typing: false,
+     nods: {interval_s: [6, 14], amp_deg: [30, 50], micro_sleep_p: 0.5, hold_s: [5, 15], first_s: [20, 40]}}
+  - {kind: upright, seconds: 600, typing: true, keys: {idle_ratio: 0.3, flight_cv: 0.5, correction_rate: 0.08}, env: {co2_to: 1500}}
+  - {kind: chin_rest, seconds: 360, typing: false}
+  - {kind: recline, seconds: 240, typing: false}
+  - {kind: upright, seconds: 300, typing: true, keys: {idle_ratio: 0.45, flight_cv: 0.6, correction_rate: 0.11}}
+  - {kind: drowsy, seconds: 900, typing: false, nods: {interval_s: [4, 10], amp_deg: [35, 55], micro_sleep_p: 0.7, hold_s: [8, 20], first_s: [10, 25]}}
+  - {kind: upright, seconds: 240, typing: true, keys: {idle_ratio: 0.5, flight_cv: 0.6, correction_rate: 0.12}}
+  - {kind: drowsy, seconds: 900, typing: false, nods: {interval_s: [4, 10], amp_deg: [35, 55], micro_sleep_p: 0.7, hold_s: [8, 20], first_s: [10, 25]}}
+  - {kind: away, seconds: 660}
+  - {kind: upright, seconds: 240, typing: true}
+  - {kind: away, seconds: 30, no_return: true}

@@ -1,0 +1,20 @@
+# §A-① 첫 개입에 깬다. 과제 중 대학생, 오후 2시. 착석 → 바른 자세 타이핑 → 꾸벅 졸음 → 첫 자세 알림(자동: 화면+무드등+TTS)에 깸 → 복귀.
+name: a1_wake_first
+persona: student
+seed: 11
+start_clock: "14:00"
+l8_params: v5                # 센서 보정 real1019_v5 (opt_l8v5_c256 학습과 같은 파일)
+env: {co2_ppm: 900, temp_c: 24.5, humidity_pct: 45, lux: 380, pm25: 18}
+weather: {temp_c: 17.0, humidity: 50, wind_ms: 2.5, condition: clear, season: autumn}
+segments:
+  - {kind: away, seconds: 8}
+  - {kind: upright, seconds: 180, typing: true}                       # 보정 창(START 300 s) 안
+  - {kind: upright, seconds: 420, typing: true, keys: {idle_ratio: 0.25, flight_cv: 0.40, correction_rate: 0.06}}
+  - {kind: drowsy, seconds: 1500, typing: false,
+     nods: {interval_s: [6, 14], amp_deg: [30, 50], micro_sleep_p: 0.5, hold_s: [5, 15], first_s: [20, 40]}}
+  - {kind: upright, seconds: 300, typing: true}
+  - {kind: away, seconds: 30, no_return: true}
+reaction:
+  wake: {screen_notice: 0.6, lamp_cool: 0.6, tts: 0.95}     # 첫 묶음에 사실상 깬다
+  awake_s: [1200, 1500]
+  card: {posture_suggest: {accept: 0.9, reject: 0.0, none: 0.1}}

@@ -1,0 +1,22 @@
+# §A-③ 끝내 안 깬다 → 모든 원인 시도 → ESCALATE → REST(강제 휴식 권유).
+name: a3_never_wakes
+persona: student
+seed: 37
+start_clock: "16:00"
+l8_params: v5
+env: {co2_ppm: 1000, temp_c: 25.5, humidity_pct: 50, lux: 340, pm25: 24}
+weather: {temp_c: 20.0, humidity: 60, wind_ms: 1.0, condition: rain, season: autumn}
+segments:
+  - {kind: away, seconds: 8}
+  - {kind: upright, seconds: 180, typing: true}
+  - {kind: upright, seconds: 420, typing: true, keys: {idle_ratio: 0.35, flight_cv: 0.5, correction_rate: 0.1}}
+  - {kind: drowsy, seconds: 2700, typing: false,
+     nods: {interval_s: [4, 10], amp_deg: [35, 55], micro_sleep_p: 0.7, hold_s: [10, 25], first_s: [10, 25]}}
+  - {kind: away, seconds: 30, no_return: true}
+reaction:
+  wake: {screen_notice: 0.0, screen_card: 0.0, lamp_cool: 0.0, lamp_bright: 0.0, lamp_warm: 0.0, fan_on: 0.0, fan_high: 0.0,
+         tts: 0.0, window_open: 0.0}
+  escalation: {wake_gain: 0.0}
+  card: {posture_suggest: {accept: 0.0, reject: 0.0, none: 1.0}, env_suggest: {accept: 0.0, reject: 0.0, none: 1.0},
+         break_suggest: {accept: 0.0, reject: 0.0, none: 1.0}}
+  rest: {go_away_p: 0.0}

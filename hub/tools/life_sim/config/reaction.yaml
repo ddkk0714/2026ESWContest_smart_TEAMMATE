@@ -1,0 +1,70 @@
+# 사람 반응 모델 — 전부 설정값(측정값 아님). 기본 < personas.<이름> < 각본 reaction: 순으로 덮인다.
+defaults:
+  # 화면 카드(hub interaction/request)에 대한 응답 확률. 나머지는 무응답(none, 카드 만료).
+  card:
+    posture_suggest: {accept: 0.60, reject: 0.10, none: 0.30}
+    env_suggest:     {accept: 0.60, reject: 0.15, none: 0.25}
+    break_suggest:   {accept: 0.40, reject: 0.30, none: 0.30}
+    vent_suggest:    {accept: 0.55, reject: 0.15, none: 0.30}   # 환기(창문 열기) 권유 카드 — life_sim 계층
+    bedtime_suggest: {accept: 0.50, reject: 0.25, none: 0.25}   # 취침 권유 카드 — 정책 규칙, life_sim 계층
+  card_delay_s: [5, 60]
+  card_attention: {sleepy: 0.5}        # 졸고 있을 때 카드를 보고 답할 확률 배수
+  focus: {card_reject_add: 0.25}       # 몰입(FOCUS_*) 중이면 거절 확률 가산(방해)
+
+  # 졸고 있을 때 채널별로 깨어날 확률. 여러 채널이면 1-Π(1-p).
+  wake:
+    screen_notice: 0.30     # 화면 알림(자동 posture_alert 의 표시)
+    screen_card: 0.35
+    lamp_cool: 0.45         # 무드등 차갑고 밝게
+    lamp_bright: 0.40       # hub desk_lamp set_brightness 70
+    lamp_warm: 0.05
+    fan_on: 0.30
+    fan_high: 0.50
+    purifier: 0.00
+    tts: 0.85               # 스피커 TTS
+    window_open: 0.20
+  escalation: {wake_gain: 0.25}        # 같은 에피소드에서 n 번째 개입은 (1+gain·n) 배
+  wake_delay_s: [3, 25]
+  wake_transition_s: [0.6, 1.8]
+  awake_s: [300, 900]                  # 깬 뒤 다시 조는 데 걸리는 시간(각본 구간이 아직 drowsy 면 재발)
+  wake_typing: true
+
+  # 턱괴기·거북목·숙임 알림에 자세를 고칠 확률과 유지 시간
+  posture_fix:
+    screen_notice: 0.50
+    screen_card: 0.60
+    tts: 0.70
+    lamp_cool: 0.10
+  posture_fix_delay_s: [3, 30]
+  posture_hold_s: [240, 900]
+
+  # 자동 실행 뒤 되돌리기(request_id 없는 reject)
+  undo: {p: 0.05, delay_s: [5, 50], focus_disturb_add: 0.10}
+  noise_reject: {fan_high: 0.30}       # 강풍 소음 → 되돌리기 가산
+
+  # 휴식 권유를 받아 자리를 비우는 행동
+  rest: {go_away_p: 0.5, delay_s: [20, 90], away_s: [180, 420]}
+
+personas:
+  default: {}
+  student:        # 과제 중 대학생: 카드에 잘 답하지만 몰입 중 방해를 싫어함, TTS 에 잘 깸
+    card:
+      posture_suggest: {accept: 0.65, reject: 0.10, none: 0.25}
+      break_suggest:   {accept: 0.35, reject: 0.35, none: 0.30}
+    wake: {tts: 0.90, screen_notice: 0.35}
+    rest: {go_away_p: 0.6}
+  developer:      # 재택 개발자: 자동 실행 선호, 카드 무응답 많음, 선풍기 소음 거절
+    card:
+      posture_suggest: {accept: 0.45, reject: 0.10, none: 0.45}
+      env_suggest:     {accept: 0.50, reject: 0.20, none: 0.30}
+      break_suggest:   {accept: 0.30, reject: 0.30, none: 0.40}
+    noise_reject: {fan_high: 0.50}
+    focus: {card_reject_add: 0.35}
+    wake: {screen_notice: 0.20, tts: 0.80}
+  examinee:       # 필기 수험생: 키 입력 없음(비PC), 카드 수락률 높음, 휴식 권유는 거절 경향
+    card:
+      posture_suggest: {accept: 0.70, reject: 0.05, none: 0.25}
+      env_suggest:     {accept: 0.70, reject: 0.10, none: 0.20}
+      break_suggest:   {accept: 0.25, reject: 0.45, none: 0.30}
+    wake: {lamp_cool: 0.55, tts: 0.85}
+    rest: {go_away_p: 0.3}

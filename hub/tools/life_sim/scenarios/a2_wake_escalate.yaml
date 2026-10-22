@@ -1,0 +1,24 @@
+# §A-② 첫 개입은 무시 → 격상(다른 원인 재시도: 환경 제안 카드 → 수락 → 선풍기·조명) 에 깬다.
+name: a2_wake_escalate
+persona: student
+seed: 23
+start_clock: "15:00"
+l8_params: v5
+env: {co2_ppm: 950, temp_c: 25.0, humidity_pct: 48, lux: 360, pm25: 22}
+weather: {temp_c: 19.0, humidity: 55, wind_ms: 5.0, condition: cloudy, season: autumn}
+segments:
+  - {kind: away, seconds: 8}
+  - {kind: upright, seconds: 180, typing: true}
+  - {kind: upright, seconds: 480, typing: true, keys: {idle_ratio: 0.3, flight_cv: 0.45, correction_rate: 0.08}}
+  - {kind: drowsy, seconds: 1800, typing: false,
+     nods: {interval_s: [5, 12], amp_deg: [35, 55], micro_sleep_p: 0.6, hold_s: [8, 20], first_s: [15, 30]}}
+  - {kind: upright, seconds: 300, typing: true}
+  - {kind: away, seconds: 30, no_return: true}
+reaction:
+  wake: {screen_notice: 0.0, lamp_cool: 0.0, tts: 0.0, screen_card: 0.0,    # 첫 자세 알림 묶음은 전부 무시
+         fan_on: 0.7, lamp_bright: 0.6, fan_high: 0.8}                        # 환경 제어(선풍기·조명)에 깬다
+  escalation: {wake_gain: 0.0}
+  card: {env_suggest: {accept: 1.0, reject: 0.0, none: 0.0}, posture_suggest: {accept: 0.0, reject: 0.0, none: 1.0}}
+  card_attention: {sleepy: 1.0}
+  card_delay_s: [10, 30]
+  awake_s: [900, 1200]
