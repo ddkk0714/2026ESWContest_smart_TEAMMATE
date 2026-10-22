@@ -28,6 +28,17 @@ import numpy as np
 from . import tofsim_bridge
 
 TYPING_KINDS = {"upright", "turtle", "mouse_work", "elbows"}
+# 생활 각본용 팔 위치 — tofsim ARMS 표는 분류기 학습용으로 드문 자세(머리 뒤로 깍지 등)도 섞지만, 각본 재생에서는 책상 앞에서
+# 흔한 자세만 뽑는다(typing 이면 키보드, 아니면 무릎·팔짱·늘어뜨림). 각본 구간의 `arms:` 가 있으면 그것이 우선.
+NATURAL_ARMS = {
+    "upright": {"typing": ["typing"], "idle": ["lap", "crossed", "hanging", "typing"]},
+    "turtle": {"typing": ["typing"], "idle": ["mouse", "lap"]},
+    "lean_forward": {"typing": ["typing"], "idle": ["typing", "writing", "lap"]},
+    "drowsy": {"typing": ["typing", "lap"], "idle": ["lap", "crossed", "hanging", "typing"]},
+    "recline": {"typing": ["lap"], "idle": ["lap", "crossed", "hanging"]},
+    "armrest": {"typing": ["typing"], "idle": ["lap", "hanging", "crossed"]},
+    "look_aside": {"typing": ["typing"], "idle": ["lap", "crossed"]},
+}
 DEFAULT_KEYS = {  # kind → (idle_ratio, flight_cv, correction_rate): 피곤해질수록 idle·분산·정정이 는다
     "upright": (0.15, 0.30, 0.04), "turtle": (0.20, 0.35, 0.05), "mouse_work": (0.30, 0.30, 0.03),
     "elbows": (0.35, 0.45, 0.08), "lean_forward": (0.30, 0.40, 0.06),
@@ -101,8 +112,12 @@ class ScriptedPerson:
                 seg.leave = None
         else:
             pose = S._target_pose(kind, self.rng, self.limits)
+            typing_now = bool(spec.get("typing", kind in TYPING_KINDS))
             if spec.get("arms"):
                 pose.arms = str(spec["arms"])
+            elif kind in NATURAL_ARMS:
+                choices = NATURAL_ARMS[kind]["typing" if typing_now else "idle"]
+                pose.arms = str(self.rng.choice(choices))
             seg = S.Segment(kind, seconds, pose)
             if kind == "drowsy":
                 seg.nods = self._plan_nods(seconds, spec.get("nods") or {})
