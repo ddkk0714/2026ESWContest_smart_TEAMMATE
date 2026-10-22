@@ -13,6 +13,15 @@ freshness_sec:
   tof: 3              # ESP32 가 0x03 을 5 Hz 로 보낸다. 센서가 둘 다 죽으면 아무것도 안 보내 미가용이 된다
   tof_mlp: 3          # Pi 4 MLP 판정(원본 격자 0x05, 5 Hz). 이보다 낡으면 0x03 규칙 판정으로 돌아간다
 
+# 재실 판정(2026-10-23): mmWave(C1001) 가 사람이 있는지를 정하고, ToF 는 그 안에서 자세만 본다.
+#   source: mmwave  mmWave 표본이 신선하면 그 present 만 쓴다. mmWave 가 끊겼을 때만 ToF present 로 대신한다.
+#           either  둘 중 하나라도 보면 재실(10-22 까지의 동작)
+#   gate_posture: true 면 mmWave 가 '없음' 이라고 한 동안 ToF 자세(0x03·Pi 4 MLP)를 쓰지 않고, Pi 4 MLP 는
+#           기준선도 모으지 않는다 — 빈 의자·지나가는 사람을 자세로 읽지 않게.
+presence:
+  source: mmwave
+  gate_posture: true
+
 # MVP 지름길: 디스플레이 터치 대신 재실 상승엣지(IDLE 에서 present false→true)로 세션을 시작한다.
 auto_start_on_presence: true
 # MVP 지름길: 제어 모듈이 없으므로 ACTION_* 상태를 한 tick 뒤 실행 완료로 간주해 MONITOR 로 넘긴다.

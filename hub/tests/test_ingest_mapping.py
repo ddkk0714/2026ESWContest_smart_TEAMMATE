@@ -345,3 +345,40 @@ def test_live_hub_publishes_request_on_suggest_and_matches_feedback(cfg):
     view_before = hub.tracker.pending_feedback
     hub.tick_once(130.0)          # tick 안에서 build_frame 이 pending_feedback 을 소비한다(IDLE 상태라 무시)
     assert view_before is None and hub.pending_request is None
+
+
+# ── 재실: mmWave 가 정하고 ToF 는 그 안에서 자세만 (2026-10-23) ─────────────
+
+def test_mmwave_decides_presence_and_gates_tof_posture(cfg):
+    cache = SensorCache()
+    cache.put("mmwave", mm(100.0, present=False))
+    cache.put("tof", tof(100.0, present=True, posture="face_down"))     # 빈 의자에 걸린 가방을 ToF 가 사람으로 봄
+    f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.IDLE)
+    assert f.present is False and f.touch is False and not f.get("posture").available
+    out = sensor_summary(cache.snapshot(), 100.0, cfg)
+    assert out["present"] is False and out["presence_source"] == "mmwave"
+
+
+def test_mmwave_present_tof_supplies_posture(cfg):
+    cache = SensorCache()
+    cache.put("mmwave", mm(100.0, present=True, level=80))
+    cache.put("tof", tof(100.0, present=True, posture="face_down"))
+    f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.IDLE)
+    assert f.present and f.get("posture").delta == cfg["tof"]["posture_delta"]["face_down"]
+
+
+def test_tof_stands_in_only_when_mmwave_is_missing(cfg):
+    cache = SensorCache()
+    cache.put("tof", tof(100.0, present=True))
+    f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.IDLE)
+    assert f.present and f.get("posture").available
+    assert sensor_summary(cache.snapshot(), 100.0, cfg)["presence_source"] == "tof"
+
+
+def test_presence_either_keeps_old_or_rule(cfg):
+    either = dict(cfg, presence={"source": "either", "gate_posture": False})
+    cache = SensorCache()
+    cache.put("mmwave", mm(100.0, present=False))
+    cache.put("tof", tof(100.0, present=True, posture="upright"))
+    f = build_frame(cache.snapshot(), 100.0, either, SessionTracker(), fsm_state=State.IDLE)
+    assert f.present and f.get("posture").available

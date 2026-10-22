@@ -209,7 +209,7 @@ baseline은 절대 자세·타이핑 속도가 아닌 상대 변화를 만든다
 | 필드 | 타입 | 정의 |
 |---|---|---|
 | `now_s` | float, epoch s | tick 기준 시각. 현재 Python `now`. |
-| `present` | boolean | ToF 주·mmWave 보조 융합 재실. |
+| `present` | boolean | 재실. **mmWave(C1001) 가 정한다**(2026-10-23, ingest `presence.source: mmwave`): 신선한 mmWave 표본의 `present`, mmWave 가 끊겼을 때만 ToF `present` 로 대신한다. mmWave 가 '없음' 이면 ToF 자세(0x03·Pi 4 MLP)는 쓰지 않고 Pi 4 MLP 는 기준선도 모으지 않는다(`presence.gate_posture`). `either` 는 10-22 까지의 OR 규칙. |
 | `pc_ratio` | float, 0..1 | 15분 PC 활성 비율. |
 | `signals` | map | `keystroke`, `posture`, `respiration`, `environment`, `elapsed`. |
 | `touch_start` | boolean | 현재 Python `touch`. |

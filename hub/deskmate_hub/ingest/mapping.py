@@ -7,11 +7,11 @@ baseline 정규화(features/)가 들어오면 이 선형 매핑을 대체한다.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from ..features import BaselineStore
 from ..inference import SensorFrame, Signal, State
-from .cache import CacheView
+from .cache import CacheView, Sample
 
 
 def _clip(value: float) -> float:
@@ -127,6 +127,35 @@ def _tof_with_mlp(view: CacheView, tof_data: dict[str, Any], now: float, cfg: di
                 posture_confidence=float(mlp.data.get("posture_confidence") or 0.0), posture_source="mlp")
 
 
+def resolve_presence(mm: Sample | None, tof: Sample | None, cfg: dict[str, Any]) -> tuple[bool, str]:
+    """(재실, 근거). `presence.source: mmwave`(기본)면 신선한 mmWave 의 present 가 정하고, mmWave 가 끊겼을 때만
+    ToF present 로 대신한다. `either` 면 둘 중 하나라도 보면 재실. 근거는 mmwave | tof | either | none."""
+    source = str((cfg.get("presence") or {}).get("source", "mmwave"))
+    mm_present = bool(mm.data.get("present", False)) if mm else False
+    tof_present = bool(tof.data.get("present", False)) if tof else False
+    if source == "either":
+        return mm_present or tof_present, "either"
+    if mm is not None:
+        return mm_present, "mmwave"
+    if tof is not None:
+        return tof_present, "tof"
+    return False, "none"
+
+
+def mmwave_presence_hint(cache: Any, cfg: dict[str, Any]) -> Callable[[float], bool | None]:
+    """Pi 4 자세 모델 앞의 재실 게이트. now → 신선한 mmWave 의 present, 표본이 없거나 낡으면 None(게이트 안 함)."""
+    fresh = float(cfg["freshness_sec"]["mmwave"])
+    gate = bool((cfg.get("presence") or {}).get("gate_posture", True))
+
+    def hint(now: float) -> bool | None:
+        if not gate:
+            return None
+        mm = cache.snapshot().fresh("mmwave", now, fresh)
+        return None if mm is None else bool(mm.data.get("present", False))
+
+    return hint
+
+
 def pc_ratio(view: CacheView, now: float, window_sec: float) -> float:
     ticks = [t for t in view.keystroke_history if now - t.received <= window_sec]
     if not ticks:
@@ -151,14 +180,16 @@ def build_frame(
 
     mm_present = bool(mm.data.get("present", False)) if mm else False
     tof_present = bool(tof.data.get("present", False)) if tof else False
-    # 재실은 둘 중 하나라도 보면 참. ToF 가 자리비움(away)이고 mmWave 가 없으면 거짓.
-    present = mm_present or tof_present
+    present, _ = resolve_presence(mm, tof, cfg)
+    pcfg = cfg.get("presence") or {}
+    # mmWave 가 '없음' 이면 ToF 가 무엇을 보든 자세로 쓰지 않는다(빈 의자·지나가는 사람)
+    tof_gated = bool(pcfg.get("gate_posture", True)) and mm is not None and not present
     signals: dict[str, Signal] = {}
 
     # ---- posture: ToF tof_feature 가 신선하면 그것을, 아니면 mmWave 체동으로 대체 ----
     mcfg = cfg["mmwave"]
     tof_posture_used = False
-    if tof and tof_present:
+    if tof and tof_present and not tof_gated:
         signals["posture"] = _tof_posture_signal(_tof_with_mlp(view, tof.data, now, cfg), cfg["tof"])
         tof_posture_used = True
         tracker.still_since = None
@@ -274,7 +305,6 @@ def sensor_summary(view: CacheView, now: float, cfg: dict[str, Any],
     out: dict[str, Any] = {}
     tof = view.fresh("tof", now, fresh.get("tof", 3)) if "tof" in cfg else None
     if tof:
-        out["present"] = bool(tof.data.get("present", False))
         # 화면용 요약. 원본 zone 격자(UART 0x05)는 Pi 4 메모리에만 두고 여기 싣지 않는다(firmware README "원칙").
         data = _tof_with_mlp(view, tof.data, now, cfg)
         out["tof"] = {
@@ -285,8 +315,10 @@ def sensor_summary(view: CacheView, now: float, cfg: dict[str, Any],
             if k in data
         }
     mm = view.fresh("mmwave", now, fresh["mmwave"])
+    if mm or tof:
+        # 재실은 build_frame 과 같은 규칙(presence.source) — 화면 배지와 FSM 이 다른 말을 하지 않게
+        out["present"], out["presence_source"] = resolve_presence(mm, tof, cfg)
     if mm:
-        out["present"] = bool(out.get("present", False)) or bool(mm.data.get("present", False))
         out["mmwave"] = {
             k: mm.data[k]
             # 심박·호흡은 *_valid 와 짝으로 넘긴다. 락온이 풀린 구간의 값을 화면이 그대로

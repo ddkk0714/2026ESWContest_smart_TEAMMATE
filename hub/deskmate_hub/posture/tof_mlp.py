@@ -200,6 +200,16 @@ class _SensorState:
                 return None
         return o.model.forward(o.model.features(dist, status, self.baseline, o.accept_semi_valid))
 
+    def mark_absent(self, now: float) -> None:
+        """mmWave 가 '사람 없음' 이라고 한 프레임: 격자를 보지 않고 자리비움으로 센다(기준선을 모으지 않는다)."""
+        self.present = False
+        self._prev = None
+        self._window.clear()
+        if self._away_since is None:
+            self._away_since = now
+        elif self.baseline is not None and now - self._away_since >= self.o.away_reset_sec:
+            self.reset()
+
     def _is_still(self, cur: list[float | None]) -> bool:
         if self._prev is None:
             return True
@@ -252,8 +262,15 @@ class TofMlpPosture:
         self._votes.clear()
 
     # ---- 표본 하나(센서 프레임 묶음) ----
-    def update(self, sample: dict[str, Any], now: float) -> dict[str, Any]:
+    def update(self, sample: dict[str, Any], now: float, present: bool | None = None) -> dict[str, Any]:
+        """`present` 는 mmWave 재실 게이트(ingest `presence.gate_posture`). False 면 모델을 돌리지 않고 unknown,
+        None 이면(mmWave 없음·낡음) 격자만으로 판단한다."""
         self.frames += 1
+        if present is False:
+            for idx in (sample.get("sensors") or {}):
+                self.sensors.setdefault(int(idx), _SensorState(self)).mark_absent(now)
+            self._votes.clear()
+            return self._verdict(UNKNOWN, 0.0, present=False, raw=UNKNOWN, used=0, gated="mmwave_absent")
         w, h = int(sample.get("grid_width") or 0), int(sample.get("grid_height") or 0)
         frames: dict[int, dict[str, Any]] = sample.get("sensors") or {}
         if w * h != self.model.zones or not frames:
@@ -286,7 +303,7 @@ class TofMlpPosture:
                              used=len(probs))
 
     def _verdict(self, posture: str, confidence: float, *, present: bool, raw: str, used: int,
-                 error: str | None = None) -> dict[str, Any]:
+                 error: str | None = None, gated: str | None = None) -> dict[str, Any]:
         out: dict[str, Any] = {
             "posture": posture, "posture_confidence": round(float(confidence), 4), "present": bool(present),
             "baseline_ready": used > 0, "raw_posture": raw, "source": "mlp", "sensors_used": used,
@@ -294,6 +311,8 @@ class TofMlpPosture:
         }
         if error:
             out["error"] = error
+        if gated:
+            out["gated"] = gated
         return out
 
 

@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import json
 import math
+import time
 
 import pytest
 
-from deskmate_hub.ingest import SensorCache, load_ingest_config
+from deskmate_hub.ingest import Sample, SensorCache, load_ingest_config
 from deskmate_hub.ingest.uart_frame import TYPE_TOF_GRID, Frame, encode_frame, encode_tof_sensor_frames
 from deskmate_hub.ingest.uart_source import RawUartReader
 from deskmate_hub.posture.tof_mlp import (
@@ -187,3 +188,48 @@ def test_missing_or_disabled_weights_fall_back_to_rule(tmp_path):
     bad = tmp_path / "bad.json"
     bad.write_text(json.dumps({"format": "x"}), encoding="utf-8")
     assert load_posture_from_config({"mlp": {"weights": str(bad)}}, log=logs.append) is None
+
+
+def test_mmwave_absent_gates_model_and_baseline():
+    """mmWave 가 '없음' 이면 격자에 무엇이 보여도(빈 의자·지나가는 사람) 모델을 돌리지 않고 기준선도 모으지 않는다."""
+    p = posture()
+    for i in range(6):
+        v = p.update(sample(STILL), i * 0.2, False)
+        assert v["posture"] == "unknown" and not v["present"] and v["gated"] == "mmwave_absent"
+    assert p.sensors[0].baseline is None
+    for i in range(4):                             # mmWave 가 사람을 보면 그때부터 기준선을 모은다
+        v = p.update(sample(STILL), 2.0 + i * 0.2, True)
+    assert v["baseline_ready"] and v["posture"] == "upright" and "gated" not in v
+    p.away_reset_sec = 1.0                         # 오래 비면 기준선 폐기 — mmWave 부재로도 같은 규칙
+    p.update(sample(STILL), 3.0, False)
+    v = p.update(sample(STILL), 4.5, False)
+    assert p.sensors[0].baseline is None and not v["baseline_ready"]
+
+
+def test_uart_path_asks_mmwave_presence_before_posture():
+    """보드 경로: 0x05 표본이 완성될 때마다 mmWave 재실을 묻고, 없으면 모델·기준선을 건너뛴다. mmWave 가 없거나 낡으면 묻지 않는다."""
+    from deskmate_hub.ingest.mapping import mmwave_presence_hint
+
+    icfg = load_ingest_config()
+    cfg = icfg["tof"]
+    post = load_posture_from_config(dict(cfg, mlp=dict(cfg["mlp"], baseline_frames=5, vote_frames=5)))
+    cache = SensorCache()
+    reader = RawUartReader(cache, posture=post, presence=mmwave_presence_hint(cache, icfg))
+    dist = [1500 if r < 2 else 650 for r in range(8) for _ in range(8)]
+    status = [5] * 64
+
+    def feed(i):
+        for payload in encode_tof_sensor_frames({0: (dist, status), 1: (dist, status)}, frame_id=i, flags=2):
+            reader.feed_bytes(encode_frame(Frame(TYPE_TOF_GRID, 2 * i, i * 200, payload)))
+        return cache.snapshot().tof_mlp.data
+
+    now = time.time()                               # RawUartReader 는 수신 시각을 벽시계로 찍는다
+    cache.put("mmwave", Sample(received=now, ts=now, seq=None, data={"present": False}))
+    for i in range(8):                              # ToF 엔 사람 모양이 보여도 mmWave 가 없다고 하면 게이트
+        v = feed(i)
+    assert v["gated"] == "mmwave_absent" and v["posture"] == "unknown" and not v["present"]
+    assert all(s.baseline is None for s in post.sensors.values())
+    hint = mmwave_presence_hint(cache, icfg)
+    cache.put("mmwave", Sample(received=10.0, ts=10.0, seq=None, data={"present": True}))
+    assert hint(10.5) is True and hint(10.0 + icfg["freshness_sec"]["mmwave"] + 1) is None   # 낡으면 모름
+    assert mmwave_presence_hint(cache, dict(icfg, presence={"gate_posture": False}))(10.5) is None
