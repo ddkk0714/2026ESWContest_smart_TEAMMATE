@@ -27,7 +27,10 @@ SCENARIO_DEFAULTS: dict[str, Any] = {
     "weather": {"temp_c": 18.0, "humidity": 55, "wind_ms": 2.0, "condition": "clear", "season": "autumn",
                 "source": "sim"},
     "segments": [],
-    "reaction": {}, "devices": {}, "policy": {},
+    "reaction": {}, "devices": {},
+    # policy.engine: hub(= hub/deskmate_hub/personalize 컨텍스트 밴딧, 기본) | simple(life_sim 간이 정책, 대역) | none
+    # policy.profile: none | synth(A: 합성 30 일 학습) | global(B: 전역 prior)
+    "policy": {"engine": "hub", "profile": "none", "synth_persona": None, "days": 30},
     "notes": "",
 }
 

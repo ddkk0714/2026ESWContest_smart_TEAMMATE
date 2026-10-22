@@ -2,7 +2,7 @@
 name: day_examinee
 persona: examinee
 seed: 303
-start_clock: "20:30"           # 평소 취침 23:30
+start_clock: "21:30"           # 취침 23:30(기본) 뒤에 ⑥
 l8_params: v5
 env: {co2_ppm: 700, temp_c: 22.0, humidity_pct: 35, lux: 420, pm25: 15}
 weather: {temp_c: -2.0, humidity: 40, wind_ms: 3.0, condition: clear, season: winter}

@@ -18,6 +18,9 @@ from .harness import run_scenario
 
 
 def _checks(summary: dict[str, Any]) -> dict[str, Any]:
+    pz = summary.get("personalize") or {}
+    if pz.get("engine") == "hub" and pz.get("log"):
+        return _checks_hub(pz)
     log = summary.get("policy_log") or []
     out = {"undo_demote": None, "reject_block": None, "cooldown_or_cap_denials": 0, "auto_threshold_final": None}
     undos = [e for e in log if e.get("outcome") == "undo"]
@@ -60,6 +63,21 @@ def _agg(rs: list[dict[str, Any]]) -> dict[str, Any]:
     out["fsm"]["escalations"] = mean(lambda s: s["fsm"]["escalations"])
     out["interventions"] = [iv for s in rs for iv in s["interventions"]]
     out["policy_log"] = [e for s in rs for e in s["policy_log"]]
+    out["arms"] = sorted({a for s in rs for a in (s.get("arms") or [])})
+    out["asked_by_policy"] = mean(lambda s: s.get("asked_by_policy"))
+    pz0 = rs[0].get("personalize") or {}
+    if pz0.get("engine") == "hub" and pz0.get("log"):
+        rows_all = [r for s in rs for r in ((s.get("personalize") or {}).get("log") or {}).get("rows", [])]
+        by_arm: dict[str, int] = {}
+        verdicts: dict[str, int] = {}
+        excluded: dict[str, int] = {}
+        for r in rows_all:
+            by_arm[r.get("arm") or "fallback"] = by_arm.get(r.get("arm") or "fallback", 0) + 1
+            verdicts[r.get("verdict") or "none"] = verdicts.get(r.get("verdict") or "none", 0) + 1
+            for why in (r.get("excluded") or {}).values():
+                excluded[why] = excluded.get(why, 0) + 1
+        out["personalize"] = dict(pz0, log=dict(pz0["log"], rows=rows_all, episodes=len(rows_all), by_arm=by_arm, verdicts=verdicts,
+                                                 excluded=excluded), final=(rs[-1].get("personalize") or {}).get("final"))
     out["policy_profile"] = rs[0]["policy_profile"] + f" (x{len(rs)} seeds)"
     curves: dict[int, list[float]] = {}
     for s in rs:
@@ -68,6 +86,34 @@ def _agg(rs: list[dict[str, Any]]) -> dict[str, Any]:
     out["fsm"]["fatigue_curve_min"] = [[m, round(sum(v) / len(v), 3)] for m, v in sorted(curves.items())]
     out["seeds"] = [s["seed"] for s in rs]
     return out
+
+
+def _checks_hub(pz: dict[str, Any]) -> dict[str, Any]:
+    """personalize 패키지(hub 엔진) 로그로 검증: 되돌리기→자동 강등(personalize:ask), 거절 재제안 금지(excluded rejected_in_session),
+    쿨다운·세션 상한(excluded cooldown / source fallback), 자동 문턱 변화."""
+    lg = pz["log"]
+    rows = lg.get("rows") or []
+    undos = [r for r in rows if r.get("verdict") == "undo"]
+    asked_after_undo = 0
+    seen_undo = False
+    for r in rows:
+        if seen_undo and r.get("fsm_gate") == "auto" and r.get("delivered") == "suggest":
+            asked_after_undo += 1
+        if r.get("verdict") == "undo":
+            seen_undo = True
+    rejects = [r for r in rows if r.get("verdict") == "reject"]
+    excluded = lg.get("excluded") or {}
+    final = pz.get("final") or {}
+    return {
+        "engine": "hub", "episodes": lg.get("episodes"), "by_arm": lg.get("by_arm"), "verdicts": lg.get("verdicts"),
+        "undo_demote": {"undos": len(undos), "asked_after_undo": asked_after_undo, "ok": (len(undos) == 0) or asked_after_undo > 0},
+        "reject_block": {"rejects": len(rejects), "blocked_resuggest": excluded.get("rejected_in_session", 0)},
+        "cooldown_excluded": excluded.get("cooldown", 0), "quiet_hours_excluded": excluded.get("quiet_hours", 0),
+        "weather_excluded": excluded.get("weather", 0),
+        "fallback_cap": sum(1 for r in rows if r.get("source") == "fallback"),
+        "auto_threshold_final": final.get("auto_threshold"), "policy_mode": final.get("policy_mode"), "n_feedback": final.get("n_feedback"),
+        "whys": [r.get("explanation") for r in rows if r.get("explanation")][:8],
+    }
 
 
 def run_ab(scenario: dict[str, Any], *, out_dir: str, model_path: str | None, posture: str = "gru", backend: str | None = None,
@@ -90,7 +136,9 @@ def run_ab(scenario: dict[str, Any], *, out_dir: str, model_path: str | None, po
     rows = []
     for tag, s in results.items():
         rows.append({
-            "account": tag, "policy": s["policy_profile"], "interventions": s["n_interventions"], "blocked": s["n_blocked_by_policy"],
+            "account": tag, "policy": s["policy_profile"], "engine": s.get("policy_engine"), "arms": s.get("arms"),
+            "asked_by_policy": s.get("asked_by_policy"),
+            "interventions": s["n_interventions"], "blocked": s["n_blocked_by_policy"],
             "cards": s["cards"], "accepted": s["accepted"], "rejected": s["rejected"], "undos": s["undos"], "accept_rate": s["accept_rate"],
             "kinds": [iv["kind"] for iv in s["interventions"] if not iv["blocked"]],
             "first_intervention_s": s["timing"]["first_intervention_rel_s"], "wakes": len(s["wakes"]),
@@ -126,7 +174,7 @@ def format_compare(cmp: dict[str, Any]) -> str:
                  f"{','.join(r['vent']) or '-'} | {r['mean_c_fatigue']:.3f} | {r['max_c_fatigue']:.2f} | {r['fatigue_episodes']} | {r['escalations']} |")
     L += ["", f"시드 {cmp['seeds']}개: 수치는 평균, 깨어남·휴식·환기 목록은 시드 합.", "", "개입 종류·시점:"]
     for r in cmp["rows"]:
-        L.append(f"- {r['account']}: {', '.join(r['kinds']) or '-'}")
+        L.append(f"- {r['account']}: {', '.join(r['kinds']) or '-'}  | arms {r.get('arms')}  | 정책이 자동→제안 {r.get('asked_by_policy')}")
     L += ["", "검증 로그(되돌리기→자동 강등, 거절 재제안 금지, 쿨다운·상한):"]
     for r in cmp["rows"]:
         L.append(f"- {r['account']}: {json.dumps(r['checks'], ensure_ascii=False)}")

@@ -1,17 +1,20 @@
-"""폐루프 본체 — 각본 → 사람 → 두 센서 → 자세·졸음 모델 → hub(10 s tick) → (간이 개인화 정책) → 개입 → 기기·사람 반응 → 각본 변경.
+"""폐루프 본체 — 각본 → 사람 → 두 센서 → 자세·졸음 모델 → hub(10 s tick, personalize 정책 포함) → 개입 → 기기·사람 반응 → 각본 변경.
 
     res = run_scenario(load_scenario(path), out_dir="runs/lifesim", model_path="models/opt_l8v5_c256_best.pt")
 
 출력(out_dir/<persona>_<name>/)
     frames.jsonl        1 초마다: 정답 라벨·구간·모델 판정·0x03 특징·환경·기기·마지막 FSM 상태
-    ticks.jsonl         hub tick(10 s)마다: 상태·게이트·원인·C_fatigue·C_focus·actions·요청·명령
-    events.jsonl        개입(채널 포함)·정책 결정·사람 반응·피드백·기기 명령·각본 전환
+    ticks.jsonl         hub tick(10 s)마다: 상태·게이트·원인·C_fatigue·C_focus·actions·요청·명령·정책 결정
+    events.jsonl        개입(채널·arm·설명)·사람 반응·피드백·기기 명령·구간 전환
+    personalize.jsonl   hub 의 personalize 에피소드 로그(결정·피드백·10 분 뒤 결과) — policy.engine: hub 일 때
+    policy.json         계정 A 의 학습된 정책(합성 30 일) / B 는 없음(전역 prior)
     summary.json / .md  지표 표
-    hub.log             LiveHub 의 tick 로그
-    esm.jsonl           hub 가 남긴 ESM 라벨
+    hub.log, esm.jsonl
 
-정책 계층(policy.py)은 hub 밖에 있다: hub 의 게이트를 **낮추기만** 하고(자동→제안), 올리지 않는다. hub 자신은 그 사실을
-모른다(engine 미수정) — 실제 제품에서 같은 효과를 내려면 게이트 입력 전에 정책이 끼어야 한다(보고서 "바꿔야 할 것").
+정책 두 가지
+    hub    (기본) hub/deskmate_hub/personalize — LiveHub 안에서 결정 tick 마다 InterventionPolicy.decide: arm·전달 게이트(자동→제안만)·
+           기기 spec(조명·선풍기)·설명. 피드백·되돌리기·10 분 뒤 효과는 EpisodeRecorder 가 정책에 되돌린다. life_sim 은 arm → 채널만 잇는다.
+    simple life_sim 안의 간이 정책(policy.py) — personalize 패키지가 오기 전 대역. 비교·회귀용으로 남긴다.
 """
 from __future__ import annotations
 
@@ -33,6 +36,7 @@ from .scenario import fsm_config_path
 FOCUS_STATES = {"FOCUS_PC", "FOCUS_MIXED", "FOCUS_NPC"}
 SLEEPY = ("drowsy", "face_down")
 FIXABLE = ("chin_rest", "turtle", "lean_forward", "recline", "elbows")
+WEATHER_PERIOD_S = 1800.0
 
 
 class _TofsimSource:
@@ -83,15 +87,103 @@ class _Writer:
         self.fh.close()
 
 
-def _make_policy(scenario: dict[str, Any], seed: int) -> SimplePolicy | None:
+# ---------------------------------------------------------------- 정책 준비
+
+def _policy_engine(scenario: dict[str, Any]) -> tuple[str, str]:
+    pol = scenario.get("policy") or {}
+    engine = str(pol.get("engine", "hub"))
+    profile = str(pol.get("profile") or "none")
+    if profile == "A":
+        profile = "synth"
+    elif profile == "B":
+        profile = "global"
+    if engine == "hub":
+        try:
+            import deskmate_hub.personalize  # noqa: F401
+        except ImportError:
+            engine = "simple"
+    return engine, profile
+
+
+def _make_simple_policy(scenario: dict[str, Any], profile: str, seed: int) -> SimplePolicy | None:
     pcfg = scenario.get("policy_resolved") or {}
-    mode = str((scenario.get("policy") or {}).get("profile", "none"))
-    if not pcfg.get("enabled") or mode == "none":
+    if not pcfg.get("enabled") or profile == "none":
         return None
-    if mode in ("synth", "A"):
+    if profile == "synth":
         return SimplePolicy(pcfg, profile=synth_profile(scenario["persona"], seed=seed), seed=seed, name=f"A_synth30d_{scenario['persona']}")
     return SimplePolicy(pcfg, profile=None, seed=seed, name="B_global_default")
 
+
+def _setup_hub_policy(scenario: dict[str, Any], profile: str, run_dir: str, seed: int) -> tuple[dict | None, str | None, str | None, dict]:
+    """policy.engine: hub — personalize.yaml 을 켜고, 계정 A 면 합성 30 일 로그로 정책을 먼저 학습해 policy.json 에 둔다."""
+    if profile == "none":
+        return None, None, None, {"engine": "hub", "profile": "none"}
+    from deskmate_hub.personalize import InterventionPolicy, load_personalize_config
+    pol = scenario.get("policy") or {}
+    cfg = dict(load_personalize_config(), enabled=True, record=True, profile_id=f"{scenario['persona']}_{profile}", log_dir=run_dir)
+    if pol.get("algorithm"):
+        cfg["bandit"] = dict(cfg["bandit"], algorithm=str(pol["algorithm"]))
+    policy_path = os.path.join(run_dir, "policy.json")
+    log_path = os.path.join(run_dir, "personalize.jsonl")
+    for p in (policy_path, log_path):
+        if os.path.exists(p):
+            os.remove(p)
+    info: dict[str, Any] = {"engine": "hub", "profile": profile, "profile_id": cfg["profile_id"], "algorithm": cfg["bandit"].get("algorithm")}
+    if profile == "synth":
+        from deskmate_hub.personalize.synth import PERSONAS, SynthGenerator
+        pid = pol.get("synth_persona") or (scenario["devices_resolved"].get("synth_persona") or {}).get(scenario["persona"]) \
+            or (scenario["devices_resolved"].get("synth_persona") or {}).get("default", "afternoon_slumper")
+        days = int(pol.get("days", 30))
+        policy = InterventionPolicy(cfg, rng=np.random.default_rng(seed))
+        gen = SynthGenerator(PERSONAS[pid], seed=seed, days=days, cfg=cfg)
+        records = gen.generate(policy=policy)
+        policy.save(policy_path)
+        info.update(synth_persona=pid, synth_days=days, synth_records=len(records), n_feedback=policy.n_feedback,
+                    policy_mode=policy.policy_mode, auto_threshold={a: round(policy.auto_threshold(a), 3) for a in policy.arms},
+                    arm_stats={a: {k: (round(v, 3) if isinstance(v, float) else v) for k, v in st.items()
+                                   if k in ("n", "accept", "reject", "undo", "accept_rate", "effect_mean")}
+                               for a, st in policy.arm_stats().items()})
+    return cfg, policy_path, log_path, info
+
+
+def _parse_personalize_log(path: str | None) -> dict[str, Any]:
+    if not path or not os.path.exists(path):
+        return {}
+    from deskmate_hub.personalize import read_records
+    recs = read_records(path)
+    eps = [r for r in recs if r.get("schema_name") == "personalize_episode"]
+    sessions = [r for r in recs if r.get("schema_name") == "personalize_session"]
+    by_arm: dict[str, int] = {}
+    verdicts: dict[str, int] = {}
+    gates: dict[str, int] = {}
+    excluded: dict[str, int] = {}
+    asked = 0
+    rewards: list[float] = []
+    rows = []
+    for r in eps:
+        d, fb, oc, fsm = r.get("decision") or {}, r.get("feedback") or {}, r.get("outcome") or {}, r.get("fsm") or {}
+        arm = d.get("arm") or "fallback"
+        by_arm[arm] = by_arm.get(arm, 0) + 1
+        v = fb.get("verdict") or "none"
+        verdicts[v] = verdicts.get(v, 0) + 1
+        g = f"{fsm.get('gate')}→{d.get('delivered_gate')}"
+        gates[g] = gates.get(g, 0) + 1
+        if fsm.get("gate") == "auto" and d.get("delivered_gate") == "suggest":
+            asked += 1
+        for why in (d.get("excluded") or {}).values():
+            excluded[why] = excluded.get(why, 0) + 1
+        if oc.get("reward") is not None:
+            rewards.append(float(oc["reward"]))
+        rows.append({"t_ms": r.get("ts_ms"), "cause": fsm.get("cause"), "fsm_gate": fsm.get("gate"), "arm": d.get("arm"),
+                     "delivered": d.get("delivered_gate"), "source": d.get("source"), "verdict": fb.get("verdict"),
+                     "outcome": oc.get("status"), "reward": oc.get("reward"), "trend": oc.get("trend"),
+                     "excluded": d.get("excluded"), "explanation": d.get("explanation"), "mode": d.get("policy_mode")})
+    return {"episodes": len(eps), "sessions": len(sessions), "by_arm": by_arm, "verdicts": verdicts, "gates": gates,
+            "asked_by_policy": asked, "excluded": excluded, "mean_reward": round(sum(rewards) / len(rewards), 3) if rewards else None,
+            "rows": rows}
+
+
+# ---------------------------------------------------------------- 본체
 
 def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | None = None, posture: str = "gru",
                  source: Any = None, backend: str | None = None, tofsim_root: str | None = None,
@@ -105,24 +197,36 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
     seed = int(scenario["seed"])
     rnd = random.Random(seed + 7)
     started = time.time()
+    dev = scenario["devices_resolved"]
 
     src = source if source is not None else _TofsimSource(scenario, backend=backend or scenario["backend"], tofsim_root=tofsim_root)
-    rules = RuleFeatures((scenario["devices_resolved"].get("rule_features") or {}), fps=fps)
+    rules = RuleFeatures((dev.get("rule_features") or {}), fps=fps)
     _truth: dict[str, str] = {}
     if posture == "oracle" or (source is not None and model_path is None):
         model = OraclePosture(lambda: getattr(src, "last_label", None) or _truth.get("label", "upright"), seed=seed)
     else:
         from .posture_model import GruPosture
-        mcfg = scenario["devices_resolved"].get("posture_model") or {}
+        mcfg = dev.get("posture_model") or {}
         model = GruPosture(model_path, vote_frames=int(mcfg.get("vote_frames", 10)), warmup_frames=int(mcfg.get("warmup_frames", 45)),
                            reset_on_away_s=float(mcfg.get("reset_on_away_s", 60)), reset_every_s=mcfg.get("reset_every_s", 900))
+    engine, profile = _policy_engine(scenario)
+    pcfg, policy_path, plog_path, policy_info = (None, None, None, {"engine": engine, "profile": profile})
+    if engine == "hub":
+        pcfg, policy_path, plog_path, policy_info = _setup_hub_policy(scenario, profile, run_dir, seed)
     hub = HubBridge(posture_model=model, fsm_config=fsm_config_path(scenario["hub"].get("fsm_config")),
-                    esm_log_path=os.path.join(run_dir, "esm.jsonl"), t0=t0)
+                    esm_log_path=os.path.join(run_dir, "esm.jsonl"), t0=t0,
+                    personalize_cfg=pcfg, personalize_policy_path=policy_path, personalize_log_path=plog_path)
+    hub_policy = getattr(hub.hub, "personalize_policy", None)
+    if hub_policy is not None:
+        hub_policy.rng = np.random.default_rng(seed + 11)       # Thompson 샘플도 시드로 고정(재현)
+        policy_info["loaded_n_feedback"] = hub_policy.n_feedback
     period = float(scenario["hub"].get("tick_sec") or hub.period)
-    world = DeviceWorld(scenario["devices_resolved"], scenario["env"], scenario["weather"], t0)
-    channels_cfg = scenario["devices_resolved"].get("channels") or {}
+    world = DeviceWorld(dev, scenario["env"], scenario["weather"], t0)
+    channels_cfg = dev.get("channels") or {}
+    arm_channels = dev.get("arm_channels") or {}
+    arm_card_table = dev.get("arm_card_table") or {}
     reaction = ReactionModel(scenario["reaction_resolved"], channels_cfg, seed=seed + 3)
-    policy = _make_policy(scenario, seed)
+    simple = _make_simple_policy(scenario, profile, seed) if engine == "simple" else None
     card_expires = float(hub.fsm_cfg["timers"].get("focus_break_poll_sec", 180))
 
     w_frames, w_ticks, w_events = (_Writer(os.path.join(run_dir, f)) for f in ("frames.jsonl", "ticks.jsonl", "events.jsonl"))
@@ -135,10 +239,10 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
     event_rows: list[dict[str, Any]] = []
     seg_t0: dict[int, float] = {}
     env_sent = False
+    next_weather = t0
     counters = {"fatigue": 0, "escalate": 0, "bedtime_suggested": 0, "vent_cards": 0}
-    held_commands: dict[str, list[dict[str, Any]]] = {}       # 정책이 자동→제안으로 내린 env 명령 (카드 수락 시 적용)
-    open_decisions: dict[str, Any] = {}                       # 카드 하나(이벤트 kind)당 열린 정책 결정
-    cards_sim: list[dict[str, Any]] = []                      # life_sim 계층 카드(환기·취침) 기록
+    held_commands: dict[str, list[dict[str, Any]]] = {}       # simple: 정책이 자동→제안으로 내린 env 명령
+    open_decisions: dict[str, Any] = {}                       # simple: 카드 하나당 열린 정책 결정
 
     def emit(ev: dict[str, Any]) -> None:
         event_rows.append(ev)
@@ -158,23 +262,34 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
             if ch != "hub_commands":
                 world.apply_channel(ch, now, payload)
 
+    def arm_chans(arm: str | None, gate: str, fallback_kind: str) -> list[str]:
+        if arm and arm in arm_channels:
+            return list((arm_channels[arm] or {}).get(gate) or [])
+        return reaction.channels_for(fallback_kind)
+
+    # ---- simple 엔진 전용 도우미
     def schedule_policy_followups(d, ev_kind: str, now: float) -> None:
-        if policy is None or d is None or not d.allow:
+        if simple is None or d is None or not d.allow:
             return
         open_decisions[ev_kind] = d
-        pending.append(Reaction(now + float((policy.c.get("reward") or {}).get("effect_window_s", 600)), "policy_effect",
+        pending.append(Reaction(now + float((simple.c.get("reward") or {}).get("effect_window_s", 600)), "policy_effect",
                                 {"event": ev_kind, "c_fat_start": c_fat_now()}, source="policy"))
         if d.gate == "suggest":
             pending.append(Reaction(now + card_expires + 1.0, "policy_expire", {"event": ev_kind}, source="policy"))
 
     def policy_outcome(ev_kind: str, outcome: str, now: float) -> None:
-        if policy is None:
+        if simple is None:
             return
         d = open_decisions.get(ev_kind)
         if d is not None and d.outcome is None:
-            policy.outcome(d, outcome, now)
-            emit({"t": now, "kind": "policy_outcome", "event": ev_kind, "outcome": outcome, "reward": d.reward,
-                  "policy": policy.snapshot()})
+            simple.outcome(d, outcome, now)
+            emit({"t": now, "kind": "policy_outcome", "event": ev_kind, "outcome": outcome, "reward": d.reward, "policy": simple.snapshot()})
+
+    def maybe_go_rest(now: float, source: str) -> None:
+        rest = scenario["reaction_resolved"].get("rest") or {}
+        if reaction.rnd.random() < float(rest.get("go_away_p", 0.0)):
+            pending.append(Reaction(now + reaction._u(rest.get("delay_s"), (20.0, 90.0)), "go_rest",
+                                    {"seconds": reaction._u(rest.get("away_s"), (180.0, 420.0))}, source=source))
 
     # ---------------------------------------------------------------- 예약된 반응 실행
     def run_due(now: float) -> None:
@@ -184,8 +299,8 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
         for r in due:
             if r.kind == "policy_effect":
                 d = open_decisions.get(r.payload["event"])
-                if policy is not None and d is not None and d.effect is None:
-                    policy.effect(d, r.payload["c_fat_start"], c_fat_now(), now)
+                if simple is not None and d is not None and d.effect is None:
+                    simple.effect(d, r.payload["c_fat_start"], c_fat_now(), now)
                     emit({"t": now, "kind": "policy_effect", "event": r.payload["event"], "effect": d.effect, "reward": d.reward})
                 continue
             if r.kind == "policy_expire":
@@ -212,25 +327,31 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
                 p = r.payload
                 ev_kind = p.get("event") or ""
                 verdict = p["verdict"]
+                arm = p.get("arm")
                 sim_card = bool(p.get("sim_card"))
                 if not sim_card:
                     hub.feedback(verdict, now, request_id=p.get("request_id"), response_ms=p.get("response_ms"))
                 emit({"t": now, "kind": "feedback", **{k: v for k, v in p.items()}, "source": r.source})
                 if verdict == "accept":
-                    d_open = open_decisions.get(ev_kind)
-                    acc = (d_open.accept_channels if (d_open is not None and d_open.accept_channels)
-                           else reaction.channels_for(ev_kind.replace("_suggest", "_accept")))
-                    apply_channels(acc, now, {"minutes": world.vent_minutes()})
-                    pending.extend(reaction.deliver(acc, now + 1.0, person_kind=person_kind(), focus=in_focus(),
-                                                    origin=ev_kind + "/accept"))
+                    if engine == "hub":
+                        acc = arm_chans(arm, "accept", ev_kind.replace("_suggest", "_accept"))
+                    else:
+                        d_open = open_decisions.get(ev_kind)
+                        acc = (d_open.accept_channels if (d_open is not None and d_open.accept_channels)
+                               else reaction.channels_for(ev_kind.replace("_suggest", "_accept")))
+                    apply_channels(acc, now, {"minutes": p.get("minutes") or world.vent_minutes()})
+                    pending.extend(reaction.deliver([c for c in acc if c != "hub_commands"], now + 1.0,
+                                                    person_kind=person_kind(), focus=in_focus(), origin=ev_kind + "/accept"))
                     for cmd in held_commands.pop(ev_kind, []):
                         applied = world.apply_command(cmd, now)
                         emit({"t": now, "kind": "command", "held_until_accept": True,
                               **{k: cmd.get(k) for k in ("target_id", "operation", "value", "gate", "command_id")},
                               "channels": applied["channels"], "devices": world.snapshot()})
-                    if ev_kind == "bedtime_suggest":
+                    if ev_kind == "bedtime_suggest" or arm == "sleep_suggest":
                         rec = src.override("away", max(60.0, src.remaining_in_segment() + 1.0), name="bedtime", typing=False, resume=False)
-                        emit({"t": now, "kind": "reaction", "what": "goes_to_bed", "source": "bedtime_suggest", "override": rec})
+                        emit({"t": now, "kind": "reaction", "what": "goes_to_bed", "source": ev_kind, "override": rec})
+                    elif ev_kind == "break_suggest" or (arm or "").startswith("break_"):
+                        maybe_go_rest(now, ev_kind)
                     policy_outcome(ev_kind, "accept", now)
                 elif verdict == "reject":
                     if ev_kind in held_commands:
@@ -238,14 +359,14 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
                         hub.feedback("reject", now)            # hub 는 자동 실행했다고 알고 있으므로 되돌리기로 알린다
                     policy_outcome(ev_kind, "undo" if p.get("why") == "undo" else "reject", now)
                     if p.get("why") == "undo":
-                        emit({"t": now, "kind": "undo", "event": ev_kind})
+                        emit({"t": now, "kind": "undo", "event": ev_kind, "arm": arm})
             elif r.kind == "go_rest":
                 rec = src.override("away", r.payload["seconds"], name="rest", typing=False)
                 emit({"t": now, "kind": "reaction", "what": "go_rest", "source": r.source, "override": rec})
 
     # ---------------------------------------------------------------- hub tick 처리
     def sim_card(kind: str, now: float, *, why: str, extra: dict[str, Any] | None = None) -> None:
-        """hub 밖(life_sim 계층) 카드: 환기 권유·취침 권유. 사람 반응 모델이 hub 카드와 같은 확률 표로 답한다."""
+        """simple 엔진의 life_sim 계층 카드: 환기 권유·취침 권유. (hub 엔진은 personalize arm 이 같은 일을 한다.)"""
         ev = {"kind": kind, "state": last_tick["state"] if last_tick else None, "gate": "suggest", "cause": why,
               "request_id": None, "expires_in_s": card_expires, "c_fatigue": c_fat_now(), "sim_card": True, **(extra or {})}
         chans = reaction.channels_for(kind)
@@ -260,10 +381,9 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
                "reaction": reaction.history[-1] if reaction.history and reaction.history[-1]["t"] == now else None,
                "policy_why": why, "devices": world.snapshot()}
         interventions.append(rec)
-        cards_sim.append(rec)
         emit(rec)
-        if policy is not None:
-            d = policy.decide(ev, now, chans, drowsy_episodes=counters["fatigue"], failed_interventions=counters["escalate"])
+        if simple is not None:
+            d = simple.decide(ev, now, chans, drowsy_episodes=counters["fatigue"], failed_interventions=counters["escalate"])
             schedule_policy_followups(d, kind, now)
 
     def handle_tick(tk: dict[str, Any], now: float) -> None:
@@ -276,57 +396,62 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
         w_ticks.write(tk)
         hold_env = False
         for ev in tk["events"]:
-            chans = reaction.channels_for(ev["kind"])
+            arm = ev.get("arm")
             decision = None
             ev2 = dict(ev)
-            if policy is not None and ev["kind"] in GROUP_OF:
-                decision = policy.decide(ev, now, chans, drowsy_episodes=counters["fatigue"], failed_interventions=counters["escalate"])
-                emit({"t": now, "kind": "policy", "event": ev["kind"], "allow": decision.allow, "gate": decision.gate, "why": decision.why,
-                      "codes": decision.reason_codes, "channels": decision.channels})
-                if not decision.allow:
-                    rec = {"t": now, "kind": "intervention", **ev, "channels": [], "person_kind": person_kind(), "reaction": None,
-                           "policy_why": decision.why, "blocked_by_policy": True, "devices": world.snapshot()}
-                    interventions.append(rec)
-                    emit(rec)
-                    if ev["kind"].startswith("env_"):
-                        hold_env = True
-                        held_commands.pop(ev["kind"], None)
-                    continue
-                chans = decision.channels
-                if decision.gate == "suggest" and ev["gate"] == "auto":       # 정책이 자동 → 제안으로 내림(hub 밖 카드)
-                    ev2 = dict(ev, kind=ev["kind"].replace("_auto", "_suggest"), gate="suggest", request_id=None,
-                               expires_in_s=card_expires, policy_downgraded=True)
-                    chans = reaction.channels_for(ev2["kind"])
-                    if ev["kind"] == "env_auto":
-                        hold_env = True
-            if ev2["kind"].startswith("env_") and ev2["gate"] == "auto":
-                chans = [c for c in chans if c != "hub_commands"]
+            if engine == "hub":
+                chans = arm_chans(arm, ev["gate"], ev["kind"])
+                if ev["gate"] == "suggest" and arm in arm_card_table:
+                    ev2["kind"] = arm_card_table[arm]            # 카드 응답 확률 표(환기·취침·휴식)
+            else:
+                chans = reaction.channels_for(ev["kind"])
+                if simple is not None and ev["kind"] in GROUP_OF:
+                    decision = simple.decide(ev, now, chans, drowsy_episodes=counters["fatigue"], failed_interventions=counters["escalate"])
+                    emit({"t": now, "kind": "policy", "event": ev["kind"], "allow": decision.allow, "gate": decision.gate, "why": decision.why,
+                          "codes": decision.reason_codes, "channels": decision.channels})
+                    if not decision.allow:
+                        rec = {"t": now, "kind": "intervention", **ev, "channels": [], "person_kind": person_kind(), "reaction": None,
+                               "policy_why": decision.why, "blocked_by_policy": True, "devices": world.snapshot()}
+                        interventions.append(rec)
+                        emit(rec)
+                        if ev["kind"].startswith("env_"):
+                            hold_env = True
+                            held_commands.pop(ev["kind"], None)
+                        continue
+                    chans = decision.channels
+                    if decision.gate == "suggest" and ev["gate"] == "auto":
+                        ev2 = dict(ev, kind=ev["kind"].replace("_auto", "_suggest"), gate="suggest", request_id=None,
+                                   expires_in_s=card_expires, policy_downgraded=True)
+                        chans = reaction.channels_for(ev2["kind"])
+                        if ev["kind"] == "env_auto":
+                            hold_env = True
+            chans = [c for c in chans if c != "hub_commands"]
             apply_channels(chans, now)
             _, reactions = reaction.on_event(ev2, now, person_kind=person_kind(), focus=in_focus(), channels=chans)
             for rr in reactions:
                 if rr.kind == "feedback":
                     rr.payload.setdefault("event", ev["kind"])
+                    rr.payload["arm"] = arm
                     if ev2.get("policy_downgraded"):
                         rr.payload["sim_card"] = True
             pending.extend(reactions)
-            vent = None
-            if ev["kind"].startswith("env_"):
-                vent = world.ventilation_choice(world.env["co2_ppm"], world.env["pm25"])
+            vent = world.ventilation_choice(world.env["co2_ppm"], world.env["pm25"]) if ev["kind"].startswith("env_") else None
             rec = {"t": now, "kind": "intervention", **ev2, "hub_kind": ev["kind"], "channels": chans, "person_kind": person_kind(),
                    "reaction": reaction.history[-1] if reaction.history and reaction.history[-1]["t"] == now else None,
-                   "policy_why": decision.why if decision else None, "vent_choice": vent, "weather": world.publish_weather(),
-                   "devices": world.snapshot()}
+                   "policy_why": (decision.why if decision else None) if engine == "simple" else ev.get("explanation"),
+                   "vent_choice": vent, "weather": world.publish_weather(), "devices": world.snapshot()}
             interventions.append(rec)
             emit(rec)
-            schedule_policy_followups(decision, ev["kind"], now)
-            if vent is not None and vent["choice"] == "window":
-                counters["vent_cards"] += 1
-                sim_card("vent_suggest", now, why="co2_high+" + "+".join(vent["why"]), extra={"minutes": vent["minutes"]})
-            elif vent is not None and vent["choice"] == "air_purifier":
-                world.apply_channel("purifier", now, {"level": 2})
-                emit({"t": now, "kind": "command", "target_id": "air_purifier", "operation": "set_level", "value": 2, "gate": "sim_policy",
-                      "channels": ["purifier"], "why": vent["why"], "devices": world.snapshot()})
-        # hub 가 이번 tick 에 발행한 기기 명령 (ACTION_ENV auto, 또는 카드 수락 뒤 dispatch)
+            if engine == "simple":
+                schedule_policy_followups(decision, ev["kind"], now)
+                if vent is not None and vent["choice"] == "window":
+                    counters["vent_cards"] += 1
+                    sim_card("vent_suggest", now, why="co2_high+" + "+".join(vent["why"]), extra={"minutes": vent["minutes"]})
+                elif vent is not None and vent["choice"] == "air_purifier":
+                    world.apply_channel("purifier", now, {"level": 2})
+                    emit({"t": now, "kind": "command", "target_id": "air_purifier", "operation": "set_level", "value": 2, "gate": "sim_policy",
+                          "channels": ["purifier"], "why": vent["why"], "devices": world.snapshot()})
+        # hub 가 이번 tick 에 발행한 기기 명령 (ACTION_ENV auto, 정책 arm 의 조명/선풍기, 카드 수락 뒤 dispatch)
         cmd_channels: list[str] = []
         live_cmds: list[dict[str, Any]] = []
         for cmd in tk["commands"]:
@@ -343,15 +468,17 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
         if live_cmds:
             gate = live_cmds[0].get("gate")
             rs = reaction.on_commands(live_cmds, cmd_channels, now, person_kind=person_kind(), focus=in_focus(), gate=gate)
+            arm_now = (tk.get("personalize") or {}).get("arm")
             for rr in rs:
                 if rr.kind == "feedback":
                     rr.payload["event"] = "env_auto" if gate == "auto" else "env_suggest"
+                    rr.payload["arm"] = arm_now
             pending.extend(rs)
             if reaction.history and reaction.history[-1]["t"] == now:
                 emit({"t": now, "kind": "command_reaction", **reaction.history[-1]})
-        # 취침 권유(정책 규칙, life_sim 카드)
-        if policy is not None and counters["bedtime_suggested"] == 0 and tk["state"] not in ("IDLE", "END"):
-            due, why = policy.bedtime_due(now, tk["c_fatigue"], counters["fatigue"], counters["escalate"])
+        # simple 엔진: 취침 권유(정책 규칙, life_sim 카드). hub 엔진은 sleep_suggest arm 이 한다.
+        if simple is not None and counters["bedtime_suggested"] == 0 and tk["state"] not in ("IDLE", "END"):
+            due, why = simple.bedtime_due(now, tk["c_fatigue"], counters["fatigue"], counters["escalate"])
             if due:
                 counters["bedtime_suggested"] += 1
                 sim_card("bedtime_suggest", now, why=why)
@@ -394,6 +521,9 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
             if sec % 5 == 0 or not env_sent:
                 hub.feed_env(world.env_sample(), t)
                 env_sent = True
+            if t >= next_weather:
+                hub.feed_weather(dict(world.publish_weather(), fetched_at=int(t)), t)
+                next_weather = t + WEATHER_PERIOD_S
             run_due(t)
             if sec % int(period) == 0 and sec > 0:
                 _p3 = time.perf_counter()
@@ -425,12 +555,21 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
 
     t_end = t0 + float(getattr(src, "t", total))
     report = hub.report(t_end)
+    if hub.personalize is not None:
+        hub.personalize.close_all(t_end)
     for w in (w_frames, w_ticks, w_events):
         w.close()
     with open(os.path.join(run_dir, "hub.log"), "w", encoding="utf-8") as fh:
         fh.write(hub.hub_log())
-    summary = summarize(scenario, second_rows, tick_rows, event_rows, interventions, report, src, model, world, reaction, policy,
-                        elapsed=time.time() - started, run_dir=run_dir)
+    policy_info["log"] = _parse_personalize_log(plog_path)
+    if hub_policy is not None:
+        policy_info["final"] = {"n_feedback": hub_policy.n_feedback, "policy_mode": hub_policy.policy_mode,
+                                "auto_threshold": {a: round(hub_policy.auto_threshold(a), 3) for a in hub_policy.arms},
+                                "arm_stats": {a: {k: (round(v, 3) if isinstance(v, float) else v) for k, v in st.items()
+                                                  if k in ("n", "accept", "reject", "timeout", "undo", "auto_kept", "accept_rate", "effect_mean")}
+                                              for a, st in hub_policy.arm_stats().items()}}
+    summary = summarize(scenario, second_rows, tick_rows, event_rows, interventions, report, src, model, world, reaction, simple,
+                        policy_info, elapsed=time.time() - started, run_dir=run_dir)
     summary["profile_s"] = {k2: round(v2, 1) for k2, v2 in prof.items()}
     try:
         from .plots import plot_timeline
@@ -448,7 +587,8 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
 
 # ---------------------------------------------------------------- 요약
 
-def summarize(scenario, rows, ticks, events, interventions, report, src, model, world, reaction, policy, *, elapsed, run_dir) -> dict[str, Any]:
+def summarize(scenario, rows, ticks, events, interventions, report, src, model, world, reaction, simple, policy_info, *,
+              elapsed, run_dir) -> dict[str, Any]:
     t0 = scenario["t0"]
     labels = [r["label"] for r in rows]
     preds = [r["pred"] for r in rows]
@@ -485,6 +625,7 @@ def summarize(scenario, rows, ticks, events, interventions, report, src, model, 
     iv_table = [{"t_rel_s": round(iv["t"] - t0), "kind": iv["kind"], "hub_kind": iv.get("hub_kind", iv["kind"]), "gate": iv.get("gate"),
                  "cause": iv.get("cause"), "channels": iv.get("channels"), "person": iv.get("person_kind"),
                  "reaction": (iv.get("reaction") or {}).get("outcome"), "c_fatigue": iv.get("c_fatigue"),
+                 "arm": iv.get("arm"), "asked_by_policy": iv.get("asked_by_policy"),
                  "policy_why": iv.get("policy_why"), "blocked": bool(iv.get("blocked_by_policy")),
                  "vent_choice": (iv.get("vent_choice") or {}).get("choice")} for iv in interventions]
     feedbacks = [e for e in events if e.get("kind") == "feedback"]
@@ -497,9 +638,11 @@ def summarize(scenario, rows, ticks, events, interventions, report, src, model, 
     accepted = sum(1 for f in feedbacks if f.get("verdict") == "accept")
     rejected = sum(1 for f in feedbacks if f.get("verdict") == "reject" and f.get("why") != "undo")
     cards = sum(1 for iv in interventions if str(iv.get("gate")) == "suggest" and not iv.get("blocked_by_policy"))
+    asked = sum(1 for iv in interventions if iv.get("asked_by_policy"))
+    profile_name = policy_info.get("profile_id") or (simple.name if simple else None)
     return {
         "name": scenario["name"], "persona": scenario["persona"], "seed": scenario["seed"], "run_dir": run_dir,
-        "policy_profile": policy.name if policy else None, "simulated": True,
+        "policy_engine": policy_info.get("engine"), "policy_profile": profile_name, "simulated": True,
         "note": "시뮬레이션 결과 — 실측 증거가 아니다. 실측 10-19 녹화에서는 모든 모델의 drowsy 재현율이 0 이었다.",
         "duration_s": rows[-1]["sec"] + 1 if rows else 0, "wall_s": round(elapsed, 1),
         "scene": getattr(src, "meta", {}), "model": getattr(model, "info", {}),
@@ -516,29 +659,33 @@ def summarize(scenario, rows, ticks, events, interventions, report, src, model, 
                    "drowsy_to_intervention_s": None if first_drowsy is None or first_iv is None else round(first_iv - first_drowsy)},
         "interventions": iv_table, "n_interventions": sum(1 for iv in interventions if not iv.get("blocked_by_policy")),
         "n_blocked_by_policy": sum(1 for iv in interventions if iv.get("blocked_by_policy")),
-        "cards": cards, "accepted": accepted, "rejected": rejected, "undos": len(undos),
+        "cards": cards, "accepted": accepted, "rejected": rejected, "undos": len(undos), "asked_by_policy": asked,
         "accept_rate": round(accepted / cards, 3) if cards else None,
         "wakes": [{"t_rel_s": round(e["t"] - t0), "source": e.get("source")} for e in wakes],
         "wake_success": bool(wakes), "after_wake": after_wake,
         "rests": [{"t_rel_s": round(e["t"] - t0), "source": e.get("source"), "what": e.get("what")} for e in rests],
-        "bedtime_suggested": any(iv["kind"] == "bedtime_suggest" for iv in interventions),
+        "bedtime_suggested": any(iv["kind"] == "bedtime_suggest" or iv.get("arm") == "sleep_suggest" for iv in interventions),
         "vent_choices": [iv.get("vent_choice") for iv in interventions if iv.get("vent_choice")],
-        "feedbacks": [{"t_rel_s": round(e["t"] - t0), "verdict": e.get("verdict"), "event": e.get("event"), "why": e.get("why")}
-                      for e in feedbacks],
+        "arms": sorted({iv.get("arm") for iv in interventions if iv.get("arm")}),
+        "feedbacks": [{"t_rel_s": round(e["t"] - t0), "verdict": e.get("verdict"), "event": e.get("event"), "arm": e.get("arm"),
+                       "why": e.get("why")} for e in feedbacks],
         "commands": [{"t_rel_s": round(e["t"] - t0), "target": e.get("target_id"), "op": e.get("operation"),
                       "value": e.get("value"), "gate": e.get("gate")} for e in commands],
         "overrides": list(getattr(src, "overrides_applied", [])),
         "devices_final": world.snapshot(), "reaction_log": reaction.history,
-        "policy": policy.snapshot() if policy else None, "policy_log": policy.log if policy else [],
+        "policy": simple.snapshot() if simple else None, "policy_log": simple.log if simple else [],
+        "personalize": policy_info,
         "hub_report": {k: report.get(k) for k in ("duration_s", "focus_time_s", "fatigue_episodes", "interventions", "metrics",
                                                     "esm_labels") if k in report},
     }
 
 
 def format_summary(s: dict[str, Any]) -> str:
+    pz = s.get("personalize") or {}
     lines = [f"# {s['persona']} / {s['name']} — 시뮬레이션 요약", "",
              f"> {s['note']}", "",
-             f"- 길이 {s['duration_s']} s (벽시계 {s['wall_s']} s), 시드 {s['seed']}, FSM 설정 {s['fsm']['config']}, 정책 {s['policy_profile']}",
+             f"- 길이 {s['duration_s']} s (벽시계 {s['wall_s']} s), 시드 {s['seed']}, FSM 설정 {s['fsm']['config']}, "
+             f"정책 {s['policy_engine']}/{s['policy_profile']}",
              f"- 장면: {json.dumps(s['scene'], ensure_ascii=False)}",
              f"- 모델: {json.dumps({k: v for k, v in s['model'].items() if k != 'labels'}, ensure_ascii=False)}",
              f"- FSM 경로: {' → '.join(s['fsm']['states_seq'])}",
@@ -548,21 +695,29 @@ def format_summary(s: dict[str, Any]) -> str:
              f"0x03 drowsy 플래그 재현율 {s['posture']['drowsy_flag_recall_0x03']:.2f} / 오탐 {s['posture']['drowsy_flag_fp_0x03']:.2%}",
              f"- 첫 졸음(관측 가능) {s['timing']['first_drowsy_rel_s']} s → 첫 개입 {s['timing']['first_intervention_rel_s']} s "
              f"(지연 {s['timing']['drowsy_to_intervention_s']} s)",
-             f"- 개입 {s['n_interventions']}회(정책 보류 {s['n_blocked_by_policy']}), 카드 {s['cards']}장 수락 {s['accepted']} 거절 {s['rejected']} "
-             f"되돌리기 {s['undos']}, 수락률 {s['accept_rate']}",
+             f"- 개입 {s['n_interventions']}회(정책 보류 {s['n_blocked_by_policy']}, 정책이 자동→제안 {s['asked_by_policy']}), 카드 {s['cards']}장 "
+             f"수락 {s['accepted']} 거절 {s['rejected']} 되돌리기 {s['undos']}, 수락률 {s['accept_rate']}, arms {s['arms']}",
              f"- 깨어남 {len(s['wakes'])}회 {s['wakes']}, 휴식/취침 이탈 {len(s['rests'])}회 {s['rests']}, 취침 권유 {s['bedtime_suggested']}, "
              f"환기 선택 {[v['choice'] for v in s['vent_choices']]}",
              f"- 깬 뒤: {s['after_wake']}", "",
              "| 라벨 | 초 | 재현율 | 정밀도 |", "|---|---|---|---|"]
     for lab, v in s["posture"]["per_label"].items():
         lines.append(f"| {lab} | {v['n_sec']} | {v['recall']} | {v['precision']} |")
-    lines += ["", "| t(s) | 개입 | 게이트 | 원인 | 채널 | 사람 | 반응 | C_fat | 왜(정책) |", "|---|---|---|---|---|---|---|---|---|"]
+    lines += ["", "| t(s) | 개입 | 게이트 | 원인 | arm | 채널 | 사람 | 반응 | C_fat | 왜(정책) |", "|---|---|---|---|---|---|---|---|---|---|"]
     for iv in s["interventions"]:
-        lines.append(f"| {iv['t_rel_s']} | {iv['kind']}{' (보류)' if iv['blocked'] else ''} | {iv['gate']} | {iv['cause']} | "
-                     f"{','.join(iv['channels'] or [])} | {iv['person']} | {iv['reaction']} | {iv['c_fatigue']} | {iv['policy_why'] or ''} |")
+        lines.append(f"| {iv['t_rel_s']} | {iv['kind']}{' (보류)' if iv['blocked'] else ''}{' (정책이 물음)' if iv.get('asked_by_policy') else ''} | "
+                     f"{iv['gate']} | {iv['cause']} | {iv.get('arm') or ''} | {','.join(iv['channels'] or [])} | {iv['person']} | "
+                     f"{iv['reaction']} | {iv['c_fatigue']} | {iv['policy_why'] or ''} |")
     if s["commands"]:
         lines += ["", "기기 명령: " + "; ".join(f"{c['t_rel_s']}s {c['target']}.{c['op']}={c['value']}({c['gate']})" for c in s["commands"])]
+    if pz.get("log"):
+        lg = pz["log"]
+        lines += ["", f"personalize 로그: 에피소드 {lg['episodes']}, arm {json.dumps(lg['by_arm'], ensure_ascii=False)}, "
+                      f"응답 {json.dumps(lg['verdicts'], ensure_ascii=False)}, 게이트 {json.dumps(lg['gates'], ensure_ascii=False)}, "
+                      f"제외 {json.dumps(lg['excluded'], ensure_ascii=False)}, 평균 보상 {lg['mean_reward']}"]
+        if pz.get("final"):
+            lines.append(f"정책 최종: {json.dumps({k: v for k, v in pz['final'].items() if k != 'arm_stats'}, ensure_ascii=False)}")
     if s["policy"]:
-        lines += ["", f"정책 상태: {json.dumps(s['policy'], ensure_ascii=False)}"]
+        lines += ["", f"간이 정책 상태: {json.dumps(s['policy'], ensure_ascii=False)}"]
     lines += ["", f"상태 체류(s): {json.dumps(s['fsm']['durations_s'], ensure_ascii=False)}", ""]
     return "\n".join(lines)

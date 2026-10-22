@@ -80,6 +80,34 @@ def test_synthetic_never_wakes_reaches_rest(tmp_path):
     assert not res["wakes"]
 
 
+def test_hub_personalize_engine_ab_synthetic(tmp_path):
+    """policy.engine: hub — hub/deskmate_hub/personalize 의 밴딧이 LiveHub 안에서 arm·게이트를 고르고, A(합성 30 일)·B(전역) 가
+    personalize.jsonl 에 에피소드를 남긴다. 날씨 토픽이 캐시에 들어가고, A 는 개인 모드로 시작한다."""
+    pytest.importorskip("deskmate_hub.personalize")
+    from tools.life_sim.ab import run_ab
+    from tools.life_sim.synthetic import SyntheticPerson
+
+    segs = [{"kind": "away", "seconds": 6}, {"kind": "upright", "seconds": 320, "typing": True, "env": {"co2_to": 1300}},
+            {"kind": "drowsy", "seconds": 1500, "typing": False,
+             "nods": {"interval_s": [4, 8], "micro_sleep_p": 0.6, "hold_s": [4, 8], "first_s": 10}},
+            {"kind": "upright", "seconds": 300, "typing": True}]
+    sc = _scenario(segs, name="hub", seed=21)
+    sc["persona"] = "student"
+    sc["policy"] = {"engine": "hub", "profile": "none", "days": 5}
+    sc["weather"] = {"temp_c": 10.0, "humidity": 50, "wind_ms": 6.0, "condition": "clear", "season": "autumn", "source": "test"}
+    cmp = run_ab(sc, out_dir=str(tmp_path), model_path=None, posture="oracle", progress=False,
+                 source_factory=lambda s: SyntheticPerson(s["segments"], seed=s["seed"], fps=10.0))
+    a, b = cmp["rows"]
+    assert a["engine"] == "hub" and b["engine"] == "hub"
+    for tag in ("A", "B"):
+        d = os.path.join(str(tmp_path), f"student_hub_{tag}")
+        assert os.path.exists(os.path.join(d, "personalize.jsonl")), tag
+    assert os.path.exists(os.path.join(str(tmp_path), "student_hub_A", "policy.json"))
+    assert a["checks"]["n_feedback"] > b["checks"]["n_feedback"]          # A 는 합성 학습을 거쳤다
+    assert a["checks"]["episodes"] >= 1 and b["checks"]["episodes"] >= 1
+    assert any(k.startswith("posture_") for k in a["kinds"]), a["kinds"]
+
+
 def test_numpy_backend_short_script(tmp_path):
     from tools.life_sim import tofsim_bridge
     if tofsim_bridge.load() is None:

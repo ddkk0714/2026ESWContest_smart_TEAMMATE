@@ -4,7 +4,7 @@
 name: day_student
 persona: student
 seed: 101
-start_clock: "22:40"           # 취침 규칙(평소 취침 01:00)을 하루 끝에서 보려고 밤 시작으로 둔다; ③④⑤ 는 시각과 무관
+start_clock: "21:30"           # 취침 23:30(기본) 뒤에 ⑥ 이 오도록; 정숙 시간(23~07)엔 voice/sound arm 제외
 l8_params: v5
 env: {co2_ppm: 600, temp_c: 24.0, humidity_pct: 45, lux: 380, pm25: 18}
 weather: {temp_c: 15.0, humidity: 50, wind_ms: 5.0, condition: clear, season: autumn}

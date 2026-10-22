@@ -22,6 +22,7 @@ defaults:
     fan_high: 0.50
     purifier: 0.00
     tts: 0.85               # 스피커 TTS
+    sound: 0.60             # 알림음(personalize arm sound_cue)
     window_open: 0.20
   escalation: {wake_gain: 0.25}        # 같은 에피소드에서 n 번째 개입은 (1+gain·n) 배
   wake_delay_s: [3, 25]

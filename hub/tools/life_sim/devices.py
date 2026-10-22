@@ -118,10 +118,11 @@ class DeviceWorld:
             s.fan_level = max(0, min(3, int(value)))
             channels.append("fan_high" if s.fan_level >= 3 else "fan_on" if s.fan_level > 0 else "fan_off")
         elif target == "desk_lamp" and op == "set_brightness":
-            s.lamp_on = int(value) > 0
-            s.lamp_brightness = int(value)
+            pct = int(round(int(value) / 255.0 * 100)) if int(value) > 100 else int(value)   # iLink 0~255 도 받는다
+            s.lamp_on = pct > 0
+            s.lamp_brightness = pct
             s.lamp_mode = "hub" if s.lamp_on else "off"
-            channels.append("lamp_bright" if int(value) >= int(self.dev_cfg.get("desk_lamp", {}).get("bright_pct", 60)) else "lamp_dim")
+            channels.append("lamp_bright" if pct >= int(self.dev_cfg.get("desk_lamp", {}).get("bright_pct", 60)) else "lamp_dim")
         elif target == "desk_lamp" and op == "set_power":
             s.lamp_on = str(value).lower() == "on"
             channels.append("lamp_bright" if s.lamp_on else "lamp_off")
@@ -142,7 +143,7 @@ class DeviceWorld:
             s.lamp_on, s.lamp_mode, s.lamp_brightness = True, "warm", int(self.dev_cfg.get("desk_lamp", {}).get("warm_pct", 35))
         elif channel == "lamp_off":
             s.lamp_on, s.lamp_mode, s.lamp_brightness = False, "off", 0
-        elif channel == "tts":
+        elif channel in ("tts", "sound"):
             s.tts_count += 1
         elif channel == "screen_notice":
             s.notice_count += 1

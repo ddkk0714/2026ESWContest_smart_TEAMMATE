@@ -50,7 +50,9 @@ class _PostureHook:
 
 class HubBridge:
     def __init__(self, *, posture_model=None, fsm_config: str | None = None, ingest_cfg: dict | None = None,
-                 control_cfg: dict | None = None, esm_log_path: str | None = None, t0: float = 0.0, node: str = "sim"):
+                 control_cfg: dict | None = None, esm_log_path: str | None = None, t0: float = 0.0, node: str = "sim",
+                 personalize_cfg: dict | None = None, personalize_policy_path: str | None = None,
+                 personalize_log_path: str | None = None):
         self.cache = SensorCache()
         self.out = io.StringIO()
         fsm_cfg = load_config(fsm_config) if fsm_config else load_config()
@@ -59,7 +61,17 @@ class HubBridge:
         if esm_log_path:
             control["esm_log_path"] = esm_log_path
             os.makedirs(os.path.dirname(esm_log_path) or ".", exist_ok=True)
-        self.hub = LiveHub(self.cache, fsm_cfg=fsm_cfg, ingest_cfg=ingest, control_cfg=control, out=self.out)
+        kw: dict[str, Any] = {}
+        if personalize_cfg is not None:       # fork/feat/personalize-policy 의 LiveHub 만 받는다(없으면 기록 없이 돈다)
+            kw = {"personalize_cfg": personalize_cfg, "personalize_policy_path": personalize_policy_path,
+                  "personalize_log_path": personalize_log_path}
+        try:
+            self.hub = LiveHub(self.cache, fsm_cfg=fsm_cfg, ingest_cfg=ingest, control_cfg=control, out=self.out, **kw)
+        except TypeError:
+            if not kw:
+                raise
+            self.hub = LiveHub(self.cache, fsm_cfg=fsm_cfg, ingest_cfg=ingest, control_cfg=control, out=self.out)
+        self.personalize = getattr(self.hub, "personalize_recorder", None)
         self.fsm_cfg, self.ingest_cfg, self.control_cfg = fsm_cfg, ingest, control
         self.node = node
         self.period = float(self.hub.period)
@@ -146,6 +158,14 @@ class HubBridge:
         payload = json.dumps({"ts": round(t, 3), "node": "pc-collector", **data}).encode("utf-8")
         route_mqtt_message(self.cache, "deskmate/sensor/keystroke", payload, t)
 
+    def feed_weather(self, weather: dict[str, Any], t: float) -> None:
+        """deskmate/sensor/weather(retain, Pi 5 앱) 모사. personalize 만 읽는다(FSM 입력 아님)."""
+        self.seq["env"] += 1
+        data = {k: weather.get(k) for k in ("temp_c", "humidity", "wind_ms", "condition", "season", "fetched_at", "source")}
+        body = {"schema_version": "1.0", "ts": round(t, 3), "node": "pi5-display", "boot_id": self.boot_id,
+                "seq": self.seq["env"], "data": data}
+        route_mqtt_message(self.cache, "deskmate/sensor/weather", json.dumps(body).encode("utf-8"), t)
+
     def feedback(self, verdict: str, t: float, *, request_id: str | None = None, response_ms: int | None = None) -> None:
         fb: dict[str, Any] = {"verdict": verdict}
         if request_id:
@@ -176,14 +196,21 @@ class HubBridge:
             "tof": summary.get("tof"), "env_flags": summary.get("env_flags", []),
             "control": summary.get("control"), "requests": list(self._new_requests), "commands": list(self._new_commands),
             "pending_request": (self.hub.pending_request or {}).get("data", {}).get("request_id"),
+            "personalize": summary.get("personalize"),
+            "asked_by_policy": "personalize:ask" in (d.get("reasons") or []),
         }
         # 개입 이벤트: ACTION_* 에 새로 들어온 tick. auto 는 실행 후 알림(질문 없음), suggest 는 카드(request), none 은 로그만.
         events: list[dict[str, Any]] = []
         if info["entered"] and state in ACTION_STATES:
+            pv = info["personalize"] or {}
+            req = info["requests"][0] if info["requests"] else {}
             events.append({"kind": f"{ACTION_STATES[state]}_{info['gate']}", "state": state, "gate": info["gate"],
-                           "cause": info["cause"], "request_id": info["requests"][0]["request_id"] if info["requests"] else None,
-                           "expires_in_s": info["requests"][0]["expires_in_s"] if info["requests"] else None,
-                           "c_fatigue": info["c_fatigue"]})
+                           "cause": info["cause"], "request_id": req.get("request_id"),
+                           "expires_in_s": req.get("expires_in_s"), "c_fatigue": info["c_fatigue"],
+                           "arm": req.get("arm") or pv.get("arm"), "arm_label": req.get("arm_label") or pv.get("arm_label"),
+                           "explanation": req.get("explanation") or pv.get("explanation"),
+                           "fsm_gate": pv.get("fsm_gate"), "delivered_gate": pv.get("delivered_gate"),
+                           "asked_by_policy": info["asked_by_policy"], "episode_id": pv.get("episode_id")})
         if info["entered"] and state == "REST":
             events.append({"kind": "rest_forced" if "force_rest" in info["actions"] else "rest_accepted", "state": state,
                            "gate": info["gate"], "cause": info["cause"], "c_fatigue": info["c_fatigue"]})
