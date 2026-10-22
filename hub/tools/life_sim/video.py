@@ -27,13 +27,15 @@ def _load_jsonl(path: str) -> list[dict[str, Any]]:
         return [json.loads(l) for l in fh if l.strip()]
 
 
-def make_video(run_dir: str, out: str, *, speed: float = 10.0, fps: int = 20, width: int = 1280, height: int = 560,
+def make_video(run_dir: str, out: str | None, *, speed: float = 10.0, fps: int = 20, width: int = 1280, height: int = 560,
                tofsim_root: str | None = None, max_seconds: float | None = None, start_s: float = 0.0,
-               camera: dict[str, float] | None = None, progress: bool = True) -> dict[str, Any]:
+               camera: dict[str, float] | None = None, progress: bool = True, live: bool = False, loop: bool = False) -> dict[str, Any]:
+    """live=True 면 mp4 대신 창(TkAgg)에 같은 화면을 실시간(speed 배)으로 재생한다. 창을 닫으면 끝."""
+    import time
+
     import matplotlib
-    matplotlib.use("Agg")
+    matplotlib.use("TkAgg" if live else "Agg")
     import matplotlib.pyplot as plt
-    import imageio
     import mujoco
 
     from . import tofsim_bridge
@@ -164,15 +166,36 @@ def make_video(run_dir: str, out: str, *, speed: float = 10.0, fps: int = 20, wi
 
     step = max(1, int(round(speed / fps * float(scn.get("fps", 10)))))    # 재생 속도 = 실제 speed 배
     frames = [r for r in replay if r["t"] >= start_s and (max_seconds is None or r["t"] <= start_s + max_seconds)][::step]
-    writer = imageio.get_writer(out, fps=fps, codec="libx264", quality=7, macro_block_size=8)
+    writer = None
+    if not live:
+        import imageio
+        writer = imageio.get_writer(out, fps=fps, codec="libx264", quality=7, macro_block_size=8)
+    else:
+        plt.ion()
     fig = plt.figure(figsize=(width / 100, height / 100), dpi=100)
+    if live:
+        try:
+            fig.canvas.manager.set_window_title(f"life_sim — {os.path.basename(os.path.normpath(run_dir))} (simulation)")
+        except Exception:  # noqa: BLE001
+            pass
+        plt.show(block=False)
     gs = fig.add_gridspec(2, 3, width_ratios=[1.55, 0.6, 0.6], height_ratios=[1, 0.55], wspace=0.08, hspace=0.25)
     ax3d = fig.add_subplot(gs[:, 0])
     axg = [fig.add_subplot(gs[0, 1]), fig.add_subplot(gs[0, 2])]
     axt = fig.add_subplot(gs[1, 1:])
     last_tick = None
     n_done = 0
-    for rec in frames:
+    wall0 = time.time()
+    t_first = frames[0]["t"] if frames else 0.0
+    queue = list(frames)
+    while queue:
+        rec = queue.pop(0)
+        if live:
+            if not plt.fignum_exists(fig.number):
+                break
+            target = wall0 + (rec["t"] - t_first) / speed
+            if time.time() > target + 0.25 and queue:       # 렌더가 늦으면 프레임을 건너뛰어 배속을 지킨다
+                continue
         pose = frame_pose(rec)
         scene._desk.set_walker(tuple(rec["walker"]) if rec.get("walker") else None)
         scene._desk.set_pose(pose)
@@ -234,13 +257,20 @@ def make_video(run_dir: str, out: str, *, speed: float = 10.0, fps: int = 20, wi
                      family="monospace", transform=axt.transAxes)
         axt.text(1.0, 0.0, "simulation (not measured)  speed x%d" % int(speed), va="bottom", ha="right", fontsize=7, color="#777",
                  transform=axt.transAxes)
+        n_done += 1
+        if live:
+            fig.canvas.draw_idle()
+            plt.pause(max(0.001, target - time.time()))
+            if not queue and loop and plt.fignum_exists(fig.number):
+                queue, wall0, last_tick = list(frames), time.time(), None
+            continue
         fig.canvas.draw()
         buf = np.asarray(fig.canvas.buffer_rgba())[:, :, :3]
         h8, w8 = (buf.shape[0] // 8) * 8, (buf.shape[1] // 8) * 8
         writer.append_data(np.ascontiguousarray(buf[:h8, :w8]))
-        n_done += 1
         if progress and n_done % 200 == 0:
             print(f"[video] {n_done}/{len(frames)} frames", flush=True)
-    writer.close()
+    if writer is not None:
+        writer.close()
     plt.close(fig)
     return {"out": out, "frames": n_done, "speed": speed, "fps": fps, "scene": scene.meta, "smplx": scene.meta.get("smplx")}

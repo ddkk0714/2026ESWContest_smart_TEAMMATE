@@ -106,6 +106,15 @@ def cmd_video(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_play(args: argparse.Namespace) -> int:
+    from tools.life_sim.video import make_video
+    cam = {k: getattr(args, k) for k in ("azimuth", "elevation", "distance") if getattr(args, k) is not None}
+    res = make_video(args.run_dir, None, speed=args.speed, fps=args.fps, tofsim_root=args.tofsim, max_seconds=args.seconds,
+                     start_s=args.start, camera=cam, live=True, loop=not args.once)
+    print(f"[life_sim] play 끝: {res['frames']} frames")
+    return 0
+
+
 def cmd_viewer(args: argparse.Namespace) -> int:
     from tools.life_sim.viewer import run_viewer
     run_viewer(args.run_dir, speed=args.speed, start_s=args.start, loop=not args.once, tofsim_root=args.tofsim)
@@ -172,6 +181,18 @@ def main(argv: list[str] | None = None) -> int:
     rp = sub.add_parser("replot")
     rp.add_argument("run_dir", nargs="+")
     rp.set_defaults(fn=cmd_replot)
+    pl = sub.add_parser("play", help="video 와 같은 화면(3D+기기+센서 격자+상태)을 창에서 실시간 재생(PC)")
+    pl.add_argument("run_dir")
+    pl.add_argument("--speed", type=float, default=6.0)
+    pl.add_argument("--fps", type=int, default=10)
+    pl.add_argument("--start", type=float, default=0.0)
+    pl.add_argument("--seconds", type=float)
+    pl.add_argument("--once", action="store_true")
+    pl.add_argument("--tofsim")
+    pl.add_argument("--azimuth", type=float)
+    pl.add_argument("--elevation", type=float)
+    pl.add_argument("--distance", type=float)
+    pl.set_defaults(fn=cmd_play)
     vw = sub.add_parser("viewer", help="MuJoCo 뷰어 창에서 replay 를 실시간 재생(PC)")
     vw.add_argument("run_dir")
     vw.add_argument("--speed", type=float, default=4.0)
