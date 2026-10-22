@@ -3,7 +3,12 @@
 //   UART<TAB>{"type":5,"seq":S,"ts_ms":T,"payload_hex":"..."} 줄로 바꿔 127.0.0.1:9100 에 넣는다.
 //   펌웨어 0x05 payload(grid 배치)를 서비스 v1 배치로 변환한다 (pc/uart_relay_pc.py 와 같은 규칙).
 //   덤으로 HTTP :8772 에서 센서별 마지막 원본 프레임(거리 mm·상태 64칸)을 JSON 으로 준다 (GET /raw, CORS *).
-//   usage: uart_relay_board [dev=/dev/ttyAMA0] [host=127.0.0.1] [port=9100] [baud=115200] [http_port=8772]
+//   usage: uart_relay_board [dev=auto] [host=127.0.0.1] [port=9100] [baud=115200] [http_port=8772]
+//   dev=auto (10-22): ESP32 를 Pi 4 USB-A 에 직결한 경우 /dev/ttyUSB0~3·/dev/ttyACM0~3 중 있는 것을, 없으면 /dev/ttyAMA0 을 쓴다.
+//     CH340(1a86:7523) 은 ATLAS 커널에 드라이버가 없어 generic usb-serial 에 ID 를 붙여 ttyUSB 를 만들고(ch340.h),
+//     열 때마다 보드율·8N1 을 usbfs 로 칩에 직접 쓴다. 뽑았다 꽂으면 EOF → 다시 찾아 연다.
+#include "ch340.h"
+
 #include <arpa/inet.h>
 #include <cerrno>
 #include <chrono>
@@ -56,19 +61,46 @@ static speed_t baudConst(int b) {
     }
 }
 
+static bool exists(const char* p) { return ::access(p, F_OK) == 0; }
+
+// dev 가 "auto" 면 USB 시리얼 노드를 먼저, 없으면 ttyAMA0. CH340 이 꽂혀 있는데 tty 가 없으면 generic 드라이버에 붙여 본다.
+static std::string pickDevice(const std::string& dev) {
+    if (dev != "auto") return dev;
+    static const char* usb[] = {"/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2", "/dev/ttyUSB3",
+                                "/dev/ttyACM0", "/dev/ttyACM1", "/dev/ttyACM2", "/dev/ttyACM3"};
+    for (const char* p : usb) if (exists(p)) return p;
+    std::string sysdir;
+    if (ch340::findDevice(sysdir)) {
+        const int b = ch340::bindGeneric(sysdir);
+        if (b == 1) {
+            std::fprintf(stderr, "relay: CH340 at %s bound to generic usb-serial\n", sysdir.c_str());
+            for (int i = 0; i < 20; ++i) { usleep(100000); for (const char* p : usb) if (exists(p)) return p; }
+        } else if (b < 0) {
+            std::fprintf(stderr, "relay: CH340 at %s but generic new_id failed (%s)\n", sysdir.c_str(), std::strerror(errno));
+        }
+    }
+    return "/dev/ttyAMA0";
+}
+
 static int openTty(const char* dev, int baud) {
     const int fd = ::open(dev, O_RDONLY | O_NOCTTY);
     if (fd < 0) return -1;
+    // CH340 이면 칩에 보드율·8N1 을 직접 쓴다(generic 드라이버는 안 쓴다). UART·다른 칩이면 아무것도 안 한다.
+    char why[256];
+    if (ch340::configureTty(dev, static_cast<uint32_t>(baud), why, sizeof why)) std::fprintf(stderr, "relay: ch340 %s\n", why);
     termios t{};
     if (tcgetattr(fd, &t) == 0) {
-        cfmakeraw(&t);
+        cfmakeraw(&t);  // 에코·행 처리 금지 — 에코되면 프레임 바이트가 ESP32 로 되돌아간다
         cfsetispeed(&t, baudConst(baud));
         cfsetospeed(&t, baudConst(baud));
         t.c_cflag |= CLOCAL | CREAD;
         t.c_cflag &= ~CRTSCTS;
         t.c_cc[VMIN] = 1;
         t.c_cc[VTIME] = 0;
-        tcsetattr(fd, TCSANOW, &t);
+        if (tcsetattr(fd, TCSANOW, &t) != 0) std::fprintf(stderr, "relay: tcsetattr %s: %s\n", dev, std::strerror(errno));
+        termios chk{};
+        if (tcgetattr(fd, &chk) == 0 && (chk.c_lflag & (ECHO | ICANON)))
+            std::fprintf(stderr, "relay: WARNING %s still has ECHO/ICANON\n", dev);
     }
     return fd;
 }
@@ -229,7 +261,9 @@ static void serveHttp(int lfd, const LastFrame* lf, const char* dev, unsigned lo
 }
 
 int main(int argc, char** argv) {
-    const char* dev = argc > 1 ? argv[1] : "/dev/ttyAMA0";
+    const std::string dev_arg = argc > 1 ? argv[1] : "auto";
+    std::string dev_str = pickDevice(dev_arg);
+    const char* dev = dev_str.c_str();
     const char* host = argc > 2 ? argv[2] : "127.0.0.1";
     const int port = argc > 3 ? std::atoi(argv[3]) : 9100;
     const int baud = argc > 4 ? std::atoi(argv[4]) : 115200;
@@ -245,12 +279,16 @@ int main(int argc, char** argv) {
     LastFrame last[2];
     unsigned long frames = 0, t5 = 0, sent = 0, bad = 0, bytes = 0;
     auto last_report = std::chrono::steady_clock::now();
+    auto last_data = std::chrono::steady_clock::now();  // 마지막으로 바이트를 읽은 시각
     std::string line;
     line.reserve(512);
     uint8_t chunk[512];
     for (;;) {
         if (tty < 0) {
+            dev_str = pickDevice(dev_arg);  // 뽑았다 꽂으면 번호가 바뀔 수 있다
+            dev = dev_str.c_str();
             tty = openTty(dev, baud);
+            last_data = std::chrono::steady_clock::now();
             if (tty < 0) { std::fprintf(stderr, "relay: open %s failed: %s\n", dev, std::strerror(errno)); sleep(2); continue; }
             std::fprintf(stderr, "relay: reading %s @%d -> %s:%d\n", dev, baud, host, port);
         }
@@ -265,6 +303,11 @@ int main(int argc, char** argv) {
         if (!(pf[0].revents & (POLLIN | POLLHUP | POLLERR))) {
             const auto now = std::chrono::steady_clock::now();
             if (now - last_report >= std::chrono::seconds(10)) { last_report = now; std::fprintf(stderr, "relay: bytes=%lu frames=%lu type5=%lu sent=%lu bad=%lu (idle)\n", bytes, frames, t5, sent, bad); }
+            // USB 를 뽑았다 꽂으면 옛 fd 가 HUP 없이 조용해질 수 있다(10-22 실기). 10 s 동안 바이트가 없으면 닫고 다시 찾는다.
+            if (now - last_data >= std::chrono::seconds(10)) {
+                std::fprintf(stderr, "relay: no data for 10 s on %s, reopening\n", dev);
+                ::close(tty); tty = -1; last_data = now;
+            }
             continue;
         }
         const ssize_t n = ::read(tty, chunk, sizeof chunk);
@@ -274,6 +317,7 @@ int main(int argc, char** argv) {
             ::close(tty); tty = -1; sleep(1); continue;
         }
         bytes += static_cast<unsigned long>(n);
+        last_data = std::chrono::steady_clock::now();
         for (ssize_t i = 0; i < n; ++i) {
             const uint8_t b = chunk[i];
             if (b != 0) { if (enc.size() < 4096) enc.push_back(b); continue; }

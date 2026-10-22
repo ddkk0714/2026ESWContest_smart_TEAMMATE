@@ -169,3 +169,19 @@ POST /api/reset   모든 센서의 모델 상태(GRU)를 0 으로 — 장치를 
   PC 에서 `hub/atlas-tof/tools/package_bundle.py`(배포 스크립트·도구·펌웨어·소스·체크섬·zip).
 - 실행 파일: `source/hub-atlas-tof/tools/build_static_aarch64.sh` (Zig 0.13, `pip install ziglang`, Linux·WSL). 소스는 같은 폴더 `src/`(팀 레포 `hub/atlas-tof`).
 - 정식 서비스(IPK, D-Bus 활성화)로 올리는 길은 `hub/atlas-tof/README.md`. 같은 소스다.
+
+## 2026-10-22 ESP32 ↔ Pi 4 USB 직결 (GPIO UART2 대신)
+- 연결: ESP32 USB-C → Pi 4 USB-A. 전원도 Pi 4 USB 에서. 핫스팟 So 에서 Pi 5 = 172.20.10.10(바뀜), Pi 4 는 Pi 5 뒤 랜선(172.16.34.199, `ssh pi4-via-pi5`).
+- 막혔던 것: ATLAS 커널(6.12.25-v8)에 **ch341 드라이버가 없어** CH340(1a86:7523)이 꽂혀도 /dev/ttyUSB 가 안 생김(있는 건 cp210x·ftdi_sio·pl2303·generic·cdc_acm).
+- 푼 방법(보드에서 확인): ① `echo "1a86 7523" > /sys/bus/usb-serial/drivers/generic/new_id` → /dev/ttyUSB0 생김(재부팅 전까지 유지)
+  ② generic 드라이버는 칩에 보드율을 안 쓰므로 `/dev/bus/usb/BBB/DDD` 에 usbfs 제어 전송으로 115200·8N1 을 직접 씀(`relay/ch340.h`, ch341.c 와 같은 값.
+  WRITE_REG 0x9A 는 wValue=레지스터 쌍 0x1312/0x2518, wIndex=값 — 순서를 바꾸면 보드율이 안 바뀐다).
+- 올린 것(`/mnt/rawdata/deskmate_tof/`): `uart_relay_board`(장치 `auto`: ttyUSB0~3 → ttyACM0~3 → ttyAMA0, 열 때마다 CH340 이면 설정, 10 s 무데이터면 다시 열기,
+  옛 판은 `uart_relay_board.1017.bak`), `relay.sh`(기본 auto, USB 노드 getty 정리), `ch340cfg`(진단: `./ch340cfg auto 115200`).
+- 펌웨어: `firmware/esp32_sensor_node` 새 환경 **esp32dev_usb**(DESKMATE_USB_FRAMES=1, fw 0x0124). UART2 와 같은 COBS 프레임을 USB 로도 낸다.
+  USB 로는 JSON 진단·한 글자 명령이 없다(tools/sensor_monitor.py 는 esp32dev 로 구워야 함). 굽기: ESP32 를 PC 에 꽂고 `pio run -e esp32dev_usb -t upload --upload-port COMn`.
+  부팅 뒤 첫 프레임까지 ≈34 s(C1001 없으면 begin 대기 + ToF init). PC 에서 포트를 기본값으로 열면 DTR/RTS 때문에 다운로드 모드(`boot:0x1`)로 멈추니
+  pyserial 은 dtr=False·rts=False 로 열고 RTS 펄스로 리셋한다.
+- 결과: relay.log `ch340 version=0x31 baud=115200`, type5 증가, /health online_sensors 1(tcp:9100#s1 ≈5 Hz), /raw 격자. 센서 A(0)는 PC·Pi 4 전원 모두에서 미기동(mask=2) — 배선 확인 필요.
+- PC 뷰어: `pc/view.ps1`(ssh 터널 8771·8772 + http.server 8790 + 브라우저, `posture_view.html?base=&raw=`). 터널 없이 직접 닿으면 `-Direct <IP>`.
+- 주의: 팀 hub(deskmate_hub_service)는 /dev/serial0 만 읽고 지금 안 떠 있음. USB 경로에서 hub 에도 프레임을 주려면 중계기가 hub 로 복사해야 한다(미구현). 중계기와 hub 가 같은 tty 를 열면 바이트가 갈린다.

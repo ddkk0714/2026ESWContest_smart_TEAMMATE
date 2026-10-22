@@ -81,6 +81,10 @@ const COLOR = {upright:"#4cc38a", lean_forward:"#f5a524", recline:"#f5a524", fac
                drowsy:"#f06a6a", away:"#8a90a0", misplaced:"#8a90a0", forward_head:"#f06a6a", unknown:"#2a2f3a"};
 const hist = []; const HIST_N = 120;
 const $ = id => document.getElementById(id);
+// 주소를 URL 로 받는다: posture_view.html?base=http://127.0.0.1:8771&raw=http://127.0.0.1:8772 (ssh 터널로 볼 때, pc/view.ps1)
+{ const q = new URLSearchParams(location.search);
+  if (q.get("base")) $("base").value = q.get("base");
+  if (q.get("raw")) $("rawbase").value = q.get("raw"); }
 let fails = 0;
 async function tick() {
   const base = $("base").value.replace(/\/$/, "");
