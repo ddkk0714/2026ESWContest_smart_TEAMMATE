@@ -432,17 +432,17 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
     summary = summarize(scenario, second_rows, tick_rows, event_rows, interventions, report, src, model, world, reaction, policy,
                         elapsed=time.time() - started, run_dir=run_dir)
     summary["profile_s"] = {k2: round(v2, 1) for k2, v2 in prof.items()}
-    with open(os.path.join(run_dir, "summary.json"), "w", encoding="utf-8") as fh:
-        json.dump(_jsonable(summary), fh, ensure_ascii=False, indent=1)
-    with open(os.path.join(run_dir, "summary.md"), "w", encoding="utf-8") as fh:
-        fh.write(format_summary(summary))
     try:
         from .plots import plot_timeline
         plot_timeline(second_rows, tick_rows, event_rows, os.path.join(run_dir, "timeline.png"), title=name,
                       thresholds=hub.fsm_cfg["thresholds"])
         summary["plot"] = os.path.join(run_dir, "timeline.png")
     except Exception as exc:  # noqa: BLE001 — matplotlib 이 없으면 PNG 만 건너뛴다
-        summary["plot_error"] = str(exc)
+        summary["plot_error"] = f"{type(exc).__name__}: {exc}"
+    with open(os.path.join(run_dir, "summary.json"), "w", encoding="utf-8") as fh:
+        json.dump(_jsonable(summary), fh, ensure_ascii=False, indent=1)
+    with open(os.path.join(run_dir, "summary.md"), "w", encoding="utf-8") as fh:
+        fh.write(format_summary(summary))
     return summary
 
 

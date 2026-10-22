@@ -142,12 +142,12 @@ def plot_compare(cmp: dict[str, Any], results: dict[str, dict[str, Any]], path: 
     fig, axes = plt.subplots(2, 1, figsize=(13, 7), sharex=True, gridspec_kw={"height_ratios": [2, 1]})
     ax = axes[0]
     for tag, curve in cmp["curves"].items():
-        ax.plot([m for m, _ in curve], [v for _, v in curve], label=f"{tag} C_fatigue(분 평균)")
+        ax.plot([m for m, _ in curve], [v for _, v in curve], label=f"{tag} C_fatigue (per-minute mean)")
     ax.axhline(0.70, color="tab:red", ls=":", lw=0.8)
     ax.set_ylim(0, 1.02)
     ax.set_ylabel("C_fatigue")
     ax.legend(fontsize=8)
-    ax.set_title(f"{cmp['persona']} / {cmp['scenario']} — A vs B (시뮬레이션)", fontsize=11)
+    ax.set_title(f"{cmp['persona']} / {cmp['scenario']} — A vs B (simulation)", fontsize=11)
     ax = axes[1]
     for i, (tag, s) in enumerate(results.items()):
         seeds = s.get("seeds", [s["seed"]])
@@ -163,7 +163,7 @@ def plot_compare(cmp: dict[str, Any], results: dict[str, dict[str, Any]], path: 
     ax.set_yticks([0, 1])
     ax.set_yticklabels(["A", "B"])
     ax.set_ylim(-0.6, 1.8)
-    ax.set_xlabel("분 (▼ 자동, ● 제안, ★ 깨어남)")
+    ax.set_xlabel("minutes (v auto, o suggest, * wake)")
     fig.tight_layout()
     fig.savefig(path, dpi=110)
     plt.close(fig)

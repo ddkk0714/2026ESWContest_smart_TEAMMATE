@@ -79,6 +79,23 @@ def cmd_ab(args: argparse.Namespace) -> int:
     return rc
 
 
+def cmd_replot(args: argparse.Namespace) -> int:
+    """저장된 frames/ticks/events.jsonl 로 timeline.png 를 다시 그린다."""
+    from tools.life_sim.plots import plot_timeline
+    rc = 0
+    for d in [p for pat in args.run_dir for p in sorted(glob.glob(pat))]:
+        try:
+            load = lambda f: [json.loads(l) for l in open(os.path.join(d, f), encoding="utf-8")]  # noqa: E731
+            rows, ticks, events = load("frames.jsonl"), load("ticks.jsonl"), load("events.jsonl")
+            plot_timeline(rows, ticks, events, os.path.join(d, "timeline.png"), title=os.path.basename(d.rstrip("/\\")),
+                          thresholds={"fatigue_confirm": 0.70, "fatigue_focus_low": 0.40, "recovery_success": 0.30})
+            print(f"[life_sim] {d}/timeline.png")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[life_sim] replot {d}: 실패 — {type(exc).__name__}: {exc}", file=sys.stderr)
+            rc = 1
+    return rc
+
+
 def cmd_table(args: argparse.Namespace) -> int:
     paths = [p for pat in args.summary for p in sorted(glob.glob(pat))]
     rows = ["| 실행 | 길이 | FSM 경로 | 개입 | 깨어남 | 환기/명령 | 휴식 | 자세 acc | drowsy 재현(모델/0x03) |",
@@ -123,6 +140,9 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--seeds", type=int, default=1, help="시드 수(기본 시드부터 연속). A/B 는 같은 시드 집합을 쓴다")
     a.add_argument("--raise-errors", action="store_true")
     a.set_defaults(fn=cmd_ab)
+    rp = sub.add_parser("replot")
+    rp.add_argument("run_dir", nargs="+")
+    rp.set_defaults(fn=cmd_replot)
     t = sub.add_parser("table")
     t.add_argument("summary", nargs="+")
     t.set_defaults(fn=cmd_table)
