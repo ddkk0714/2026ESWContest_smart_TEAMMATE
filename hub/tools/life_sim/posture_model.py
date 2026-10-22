@@ -185,6 +185,7 @@ DEFAULT_RULE = {
     "nod_mm": 120.0,            # 머리 띠의 평균 거리가 기준선보다 이만큼 멀어지면(머리가 내려가 띠가 비면) 끄덕임 후보
     "nod_rows": 0.35,           # 또는 사람 zone 의 행 무게중심이 이만큼 내려가면
     "nod_min_s": 0.3, "nod_max_s": 40.0, "baseline_tau_s": 120.0, "seed_after_s": 3.0, "window_s": 60.0,
+    "noise_window_s": 60.0, "noise_k": 4.0,   # 문턱 = max(nod_mm, noise_k × 1.4826 × MAD(최근 비-끄덕임 잔차)) — 장면별 흔들림에 적응
     "drowsy_nods": 2,           # 60 s 창 안에 이만큼 끄덕이면 drowsy 플래그
 }
 
@@ -206,6 +207,9 @@ class RuleFeatures:
         self.debug: dict[str, Any] = {}
         self.present_since: float | None = None
         self.reseeds = 0
+        self._resid: deque[tuple[float, float, float]] = deque()   # (t, |Δhead_mm|, |Δrow|) 비-끄덕임 프레임
+        self.thr_mm = float(self.c["nod_mm"])
+        self.thr_rows = float(self.c["nod_rows"])
 
     def _person_mask(self, dist: np.ndarray, status: np.ndarray) -> np.ndarray:
         valid = np.isin(status, VALID_STATUS) & (dist >= 0)
@@ -258,7 +262,8 @@ class RuleFeatures:
             if self.top_base is None or self.row_base is None:
                 self.top_base, self.row_base = top, rc          # 앉은 뒤 조용해진 뒤에야 기준선을 잡는다
             # 머리가 떨어지면 센서 기하에 따라 띠 거리가 멀어지기도(윗행이 빔) 가까워지기도(머리가 아래 행으로 들어옴) 한다 → 양쪽
-            dip = abs(top - self.top_base) >= c["nod_mm"] or abs(rc - self.row_base) >= c["nod_rows"]
+            d_mm, d_row = abs(top - self.top_base), abs(rc - self.row_base)
+            dip = d_mm >= self.thr_mm or d_row >= self.thr_rows
             if dip:
                 if self.dip_since is None:
                     self.dip_since = now
@@ -275,11 +280,25 @@ class RuleFeatures:
                 a = 1.0 / (c["baseline_tau_s"] * self.fps)
                 self.top_base = (1 - a) * self.top_base + a * top
                 self.row_base = (1 - a) * self.row_base + a * rc
+                # 비-끄덕임 잔차로 장면 잡음을 재고 문턱을 올린다(타이핑 흔들림·호흡·자세 떨림이 큰 장면)
+                self._resid.append((now, d_mm, d_row))
+                while self._resid and now - self._resid[0][0] > c["noise_window_s"]:
+                    self._resid.popleft()
+                if len(self._resid) >= int(2 * self.fps):
+                    mm = sorted(v[1] for v in self._resid)
+                    rr = sorted(v[2] for v in self._resid)
+                    med_mm, med_rr = mm[len(mm) // 2], rr[len(rr) // 2]
+                    mad_mm = sorted(abs(v - med_mm) for v in mm)[len(mm) // 2]
+                    mad_rr = sorted(abs(v - med_rr) for v in rr)[len(rr) // 2]
+                    self.thr_mm = max(float(c["nod_mm"]), med_mm + c["noise_k"] * 1.4826 * mad_mm)
+                    self.thr_rows = max(float(c["nod_rows"]), med_rr + c["noise_k"] * 1.4826 * mad_rr)
         else:
             self.top_base, self.row_base, self.dip_since = None, None, None
+            self._resid.clear()
+            self.thr_mm, self.thr_rows = float(c["nod_mm"]), float(c["nod_rows"])
         self.debug = {"head_mm": None if top is None else round(top), "head_base_mm": None if self.top_base is None else round(self.top_base),
                       "row_c": None if rc is None else round(rc, 2), "row_base": None if self.row_base is None else round(self.row_base, 2),
-                      "dip": dip}
+                      "dip": dip, "thr_mm": round(self.thr_mm), "thr_rows": round(self.thr_rows, 2)}
         while self.nods and now - self.nods[0] > c["window_s"]:
             self.nods.popleft()
         n = len(self.nods)
