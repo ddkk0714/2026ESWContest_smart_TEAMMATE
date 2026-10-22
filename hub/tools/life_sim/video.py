@@ -99,6 +99,68 @@ def make_video(run_dir: str, out: str, *, speed: float = 10.0, fps: int = 20, wi
         elif e.get("kind") == "command":
             banners.append((e["t"], f"DEVICE {e.get('target_id')}.{e.get('operation')}={e.get('value')} ({e.get('gate')})", "#a60"))
     tick_by_t = {round(tk["t"]): tk for tk in ticks}
+    secs = _load_jsonl(os.path.join(run_dir, "frames.jsonl"))
+    dev_by_sec = {int(r["sec"]): r.get("devices") or {} for r in secs}
+    tts_flash: dict[int, bool] = {}
+    prev_tts = 0
+    for r in secs:
+        cur = int((r.get("devices") or {}).get("tts", 0))
+        if cur > prev_tts:
+            for k in range(int(r["sec"]), int(r["sec"]) + 4):
+                tts_flash[k] = True
+        prev_tts = cur
+    # 기기 geom 자리(장면 좌표, z-up; 사람은 +y 쪽에 앉고 벽은 y≈2.5): 무드등 = 책상 왼쪽 먼 모서리, 선풍기 = 오른쪽 모서리,
+    # 공기청정기 = 바닥 오른쪽, 창문 = 사람 뒤 벽. 전부 표시용 — 센서 광선과는 무관하다(렌더 장면에만 덧그린다).
+    desk_z = float(scene.cfg.room.desk_height)
+    desk_w = float(scene.cfg.room.desk_width) / 2
+    wall_y = float(scene.cfg.room.wall_z)
+    dev_pos = {"lamp": np.array([desk_w - 0.12, 0.12, desk_z + 0.22]), "fan": np.array([-(desk_w + 0.30), 0.75, 0.95]),
+               "purifier": np.array([-(desk_w + 0.45), 1.6, 0.30]), "window": np.array([1.0, wall_y - 0.06, 1.65]),
+               "speaker": np.array([0.0, 0.05, desk_z + 0.52])}
+    monitor_gid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "monitor")
+    monitor_rgba0 = np.array(m.geom_rgba[monitor_gid]) if monitor_gid >= 0 else None
+
+    def _geom(mjscene, gtype, size, pos, rgba, mat=None):
+        if mjscene.ngeom >= mjscene.maxgeom:
+            return None
+        g = mjscene.geoms[mjscene.ngeom]
+        mujoco.mjv_initGeom(g, gtype, np.asarray(size, dtype=float), np.asarray(pos, dtype=float),
+                            (np.eye(3) if mat is None else np.asarray(mat)).reshape(-1), np.asarray(rgba, dtype=np.float32))
+        mjscene.ngeom += 1
+        return g
+
+    def add_device_geoms(mjscene, dev: dict[str, Any], flash: bool) -> None:
+        lamp_mode, pct = str(dev.get("lamp", "off")), float(dev.get("lamp_pct", 0) or 0)
+        on = lamp_mode != "off" and pct > 0
+        colour = {"cool": (0.85, 0.92, 1.0), "warm": (1.0, 0.72, 0.35), "hub": (1.0, 0.95, 0.75)}.get(lamp_mode, (0.5, 0.5, 0.5))
+        _geom(mjscene, mujoco.mjtGeom.mjGEOM_CYLINDER, [0.025, 0.11, 0], dev_pos["lamp"] - [0, 0, 0.11], (0.25, 0.25, 0.28, 1))  # 스탠드
+        _geom(mjscene, mujoco.mjtGeom.mjGEOM_SPHERE, [0.05 + 0.04 * (pct / 100 if on else 0), 0, 0], dev_pos["lamp"],
+              (*colour, 1.0 if on else 0.6))
+        if on:    # 빛 번짐
+            _geom(mjscene, mujoco.mjtGeom.mjGEOM_SPHERE, [0.10 + 0.10 * pct / 100, 0, 0], dev_pos["lamp"], (*colour, 0.18))
+        lvl = int(dev.get("fan", 0) or 0)
+        rot = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], dtype=float)         # 축을 y(사람 쪽)로
+        fan_c = (0.2, 0.55, 1.0) if lvl > 0 else (0.45, 0.45, 0.5)
+        _geom(mjscene, mujoco.mjtGeom.mjGEOM_CYLINDER, [0.13, 0.015, 0], dev_pos["fan"], (*fan_c, 0.95), rot)
+        _geom(mjscene, mujoco.mjtGeom.mjGEOM_CYLINDER, [0.02, 0.45, 0], dev_pos["fan"] - [0, 0, 0.47], (0.3, 0.3, 0.33, 1))   # 스탠드
+        _geom(mjscene, mujoco.mjtGeom.mjGEOM_CYLINDER, [0.14, 0.01, 0], dev_pos["fan"] - [0, 0, 0.94], (0.3, 0.3, 0.33, 1))
+        for k in range(lvl):   # 바람: 레벨만큼 반투명 원판이 사람 쪽으로
+            _geom(mjscene, mujoco.mjtGeom.mjGEOM_CYLINDER, [0.13 + 0.06 * (k + 1), 0.004, 0], dev_pos["fan"] + [0, 0.12 * (k + 1), 0],
+                  (0.4, 0.7, 1.0, 0.16), rot)
+        plv = int(dev.get("purifier", 0) or 0)
+        _geom(mjscene, mujoco.mjtGeom.mjGEOM_BOX, [0.14, 0.14, 0.30], dev_pos["purifier"], ((0.75, 0.95, 0.8, 1) if plv > 0 else (0.7, 0.7, 0.72, 1)))
+        for k in range(plv):
+            _geom(mjscene, mujoco.mjtGeom.mjGEOM_SPHERE, [0.05 + 0.04 * k, 0, 0], dev_pos["purifier"] + [0, 0, 0.38 + 0.1 * k], (0.5, 0.9, 0.7, 0.2))
+        win_open = bool(dev.get("window", False))
+        _geom(mjscene, mujoco.mjtGeom.mjGEOM_BOX, [0.42, 0.01, 0.32], dev_pos["window"], (0.9, 0.9, 0.95, 1))      # 창틀
+        _geom(mjscene, mujoco.mjtGeom.mjGEOM_BOX, [0.38, 0.012, 0.28], dev_pos["window"] - [0, 0.005, 0],
+              (0.55, 0.8, 1.0, 0.35) if win_open else (0.35, 0.5, 0.7, 0.9))
+        if win_open:   # 열린 창: 사람 쪽으로 기운 창짝 + 바깥빛
+            _geom(mjscene, mujoco.mjtGeom.mjGEOM_BOX, [0.19, 0.012, 0.28], dev_pos["window"] + [-0.19, -0.18, 0], (0.6, 0.85, 1.0, 0.5),
+                  np.array([[0.8, -0.6, 0], [0.6, 0.8, 0], [0, 0, 1]]))
+        if flash:
+            _geom(mjscene, mujoco.mjtGeom.mjGEOM_SPHERE, [0.06, 0, 0], dev_pos["speaker"], (1.0, 0.3, 0.3, 0.9))
+            _geom(mjscene, mujoco.mjtGeom.mjGEOM_SPHERE, [0.14, 0, 0], dev_pos["speaker"], (1.0, 0.4, 0.3, 0.25))
 
     step = max(1, int(round(speed / fps * float(scn.get("fps", 10)))))    # 재생 속도 = 실제 speed 배
     frames = [r for r in replay if r["t"] >= start_s and (max_seconds is None or r["t"] <= start_s + max_seconds)][::step]
@@ -120,8 +182,14 @@ def make_video(run_dir: str, out: str, *, speed: float = 10.0, fps: int = 20, wi
             lookat_fixed = lookat_fixed + np.array([0.0, 0.0, -0.25])
         cam.lookat[:] = lookat_fixed
         cam.distance, cam.azimuth, cam.elevation = cfg_cam["distance"], cfg_cam["azimuth"], cfg_cam["elevation"]
+        sec_i = int(rec["t"])
+        dev = dev_by_sec.get(sec_i) or {}
+        card_on = int(dev.get("cards", 0) or 0) > int((dev_by_sec.get(sec_i - 30) or {}).get("cards", 0) or 0)
+        if monitor_gid >= 0 and monitor_rgba0 is not None:
+            m.geom_rgba[monitor_gid] = [0.95, 0.75, 0.2, 1.0] if card_on else monitor_rgba0
         renderer.update_scene(d, cam)
         add_sensor_markers(renderer.scene)
+        add_device_geoms(renderer.scene, dev, bool(tts_flash.get(sec_i)))
         img = renderer.render()
         t_abs = t0 + rec["t"]
         tk = tick_by_t.get(int(round(t_abs)) - int(round(t_abs)) % 10) or last_tick
@@ -144,14 +212,25 @@ def make_video(run_dir: str, out: str, *, speed: float = 10.0, fps: int = 20, wi
         c_fat = tk["c_fatigue"] if tk else 0.0
         c_foc = tk["c_focus"] if tk else 0.0
         lines = [f"model: {pred}" + (f" ({conf:.2f})" if isinstance(conf, (int, float)) else "") +
-                 f"    0x03 drowsy flag: {'ON' if rec.get('drowsy_flag') else 'off'}",
-                 f"FSM: {state}    C_fatigue {c_fat:.2f}   C_focus {c_foc:.2f}" + (f"   gate {tk.get('gate')}" if tk and tk.get("gate") not in (None, "none") else "")]
+                 f"   0x03 flag {'ON' if rec.get('drowsy_flag') else 'off'}   C_fat {c_fat:.2f}  C_foc {c_foc:.2f}"]
+        chips = [("FAN %d" % int(dev.get("fan", 0) or 0), "#36c" if int(dev.get("fan", 0) or 0) else "#aaa"),
+                 ("LAMP %s" % (dev.get("lamp", "off") if dev.get("lamp", "off") == "off" else f"{dev.get('lamp')} {int(dev.get('lamp_pct', 0) or 0)}%"),
+                  "#e90" if dev.get("lamp", "off") != "off" else "#aaa"),
+                 ("PUR %d" % int(dev.get("purifier", 0) or 0), "#2a8" if int(dev.get("purifier", 0) or 0) else "#aaa"),
+                 ("WIN %s" % ("open" if dev.get("window") else "shut"), "#39c" if dev.get("window") else "#aaa"),
+                 ("TTS %d" % int(dev.get("tts", 0) or 0), "#d33" if tts_flash.get(sec_i) else "#aaa"),
+                 ("CARD" if card_on else "no card", "#c90" if card_on else "#aaa")]
+        x = 0.0
+        for txt, col in chips:
+            axt.text(x, 0.74, txt, va="center", ha="left", fontsize=7.5, color="white", weight="bold", family="monospace",
+                     transform=axt.transAxes, bbox=dict(boxstyle="round,pad=0.22", fc=col, ec="none"))
+            x += 0.022 * len(txt) + 0.05
         recent = [b for b in banners if 0 <= t_abs - b[0] <= 45.0][-3:]
         axt.text(0.0, 0.95, "\n".join(lines), va="top", ha="left", fontsize=10, family="monospace", transform=axt.transAxes)
-        axt.add_patch(plt.Rectangle((0.0, 0.52), 1.0, 0.1, transform=axt.transAxes, color=STATE_COLORS.get(state, "#888"), alpha=0.9))
-        axt.text(0.01, 0.57, state, va="center", ha="left", fontsize=11, color="white", weight="bold", transform=axt.transAxes)
+        axt.add_patch(plt.Rectangle((0.0, 0.56), 1.0, 0.1, transform=axt.transAxes, color=STATE_COLORS.get(state, "#888"), alpha=0.9))
+        axt.text(0.01, 0.61, state, va="center", ha="left", fontsize=11, color="white", weight="bold", transform=axt.transAxes)
         for j, (bt, text, color) in enumerate(recent):
-            axt.text(0.0, 0.42 - 0.14 * j, f"+{t_abs - bt:4.0f}s  {text}", va="top", ha="left", fontsize=8.5, color=color,
+            axt.text(0.0, 0.47 - 0.14 * j, f"+{t_abs - bt:4.0f}s  {text}", va="top", ha="left", fontsize=8.5, color=color,
                      family="monospace", transform=axt.transAxes)
         axt.text(1.0, 0.0, "simulation (not measured)  speed x%d" % int(speed), va="bottom", ha="right", fontsize=7, color="#777",
                  transform=axt.transAxes)
