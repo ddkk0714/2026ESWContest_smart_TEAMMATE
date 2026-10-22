@@ -36,7 +36,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         label = args.label or (f"{sc['persona']}_{sc['name']}" + (f"_s{args.seed}" if args.seed is not None else ""))
         try:
             res = run_scenario(sc, out_dir=args.out, model_path=args.model, posture=args.posture, source=src,
-                               backend=args.backend, tofsim_root=args.tofsim, label=label)
+                               backend=args.backend, tofsim_root=args.tofsim, label=label, replay=bool(args.replay))
         except Exception as exc:  # noqa: BLE001
             print(f"[life_sim] {path}: 실패 — {exc}", file=sys.stderr)
             if args.raise_errors:
@@ -96,6 +96,16 @@ def cmd_replot(args: argparse.Namespace) -> int:
     return rc
 
 
+def cmd_video(args: argparse.Namespace) -> int:
+    from tools.life_sim.video import make_video
+    out = args.out or os.path.join(args.run_dir, "video.mp4")
+    cam = {k: getattr(args, k) for k in ("azimuth", "elevation", "distance") if getattr(args, k) is not None}
+    res = make_video(args.run_dir, out, speed=args.speed, fps=args.fps, tofsim_root=args.tofsim, max_seconds=args.seconds,
+                     start_s=args.start, camera=cam)
+    print(f"[life_sim] {res['out']}: {res['frames']} frames, x{res['speed']:.0f}, smplx={res.get('smplx')}")
+    return 0
+
+
 def cmd_table(args: argparse.Namespace) -> int:
     paths = [p for pat in args.summary for p in sorted(glob.glob(pat))]
     rows = ["| 실행 | 길이 | FSM 경로 | 개입 | 깨어남 | 환기/명령 | 휴식 | 자세 acc | drowsy 재현(모델/0x03) |",
@@ -126,8 +136,21 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--fsm-config")
     r.add_argument("--seed", type=int)
     r.add_argument("--label")
+    r.add_argument("--replay", action="store_true", help="프레임마다 Pose·격자·판정을 replay.jsonl 로(video 명령용, 실행당 ~20 MB)")
     r.add_argument("--raise-errors", action="store_true")
     r.set_defaults(fn=cmd_run)
+    v = sub.add_parser("video", help="replay.jsonl 로 MuJoCo 3D + 센서 격자 + 상태 영상(mp4)")
+    v.add_argument("run_dir")
+    v.add_argument("--out", help="mp4 경로(기본 <run_dir>/video.mp4)")
+    v.add_argument("--speed", type=float, default=10.0, help="재생 배속(기본 10: 1 시간 각본 → 6 분)")
+    v.add_argument("--fps", type=int, default=20)
+    v.add_argument("--start", type=float, default=0.0, help="각본 시작 기준 몇 초부터")
+    v.add_argument("--seconds", type=float, help="몇 초 분량만")
+    v.add_argument("--tofsim")
+    v.add_argument("--azimuth", type=float)
+    v.add_argument("--elevation", type=float)
+    v.add_argument("--distance", type=float)
+    v.set_defaults(fn=cmd_video)
     a = sub.add_parser("ab")
     a.add_argument("scenario", nargs="+")
     a.add_argument("--out", default="runs/lifesim")

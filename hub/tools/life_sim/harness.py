@@ -187,11 +187,14 @@ def _parse_personalize_log(path: str | None) -> dict[str, Any]:
 
 def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | None = None, posture: str = "gru",
                  source: Any = None, backend: str | None = None, tofsim_root: str | None = None,
-                 progress: bool = True, label: str | None = None) -> dict[str, Any]:
-    """각본 하나를 끝까지 돌린다. posture: gru(torch 체크포인트) | oracle(정답 라벨). source: 사람 소스를 직접 줄 때(시험)."""
+                 progress: bool = True, label: str | None = None, replay: bool = False) -> dict[str, Any]:
+    """각본 하나를 끝까지 돌린다. posture: gru(torch 체크포인트) | oracle(정답 라벨). source: 사람 소스를 직접 줄 때(시험).
+    replay=True 면 프레임마다 Pose·두 센서 격자·판정을 replay.jsonl 에 남긴다(video 명령이 3D 로 다시 렌더한다)."""
     name = label or f"{scenario['persona']}_{scenario['name']}"
     run_dir = os.path.join(out_dir, name)
     os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "scenario.json"), "w", encoding="utf-8") as fh:
+        json.dump(_jsonable({k: v for k, v in scenario.items() if not k.endswith("_resolved")}), fh, ensure_ascii=False, indent=1)
     fps = float(scenario["fps"])
     t0 = float(scenario["t0"])
     seed = int(scenario["seed"])
@@ -230,6 +233,8 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
     card_expires = float(hub.fsm_cfg["timers"].get("focus_break_poll_sec", 180))
 
     w_frames, w_ticks, w_events = (_Writer(os.path.join(run_dir, f)) for f in ("frames.jsonl", "ticks.jsonl", "events.jsonl"))
+    w_replay = _Writer(os.path.join(run_dir, "replay.jsonl")) if replay else None
+    from dataclasses import asdict as _asdict, is_dataclass as _is_dc
     pending: list[Reaction] = []
     last_tick: dict[str, Any] | None = None
     last_verdict: dict[str, Any] | None = None
@@ -512,6 +517,16 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
         prof["model"] += _p2 - _p1
         if v is not None:
             last_verdict = v
+        if w_replay is not None:
+            pose = info.pose if _is_dc(info.pose) else None
+            w_replay.write({"t": round(info.t, 2), "kind": info.kind, "label": info.label, "flags": info.flags,
+                            "pose": None if pose is None else {k2: (float(v2) if isinstance(v2, (int, float, np.floating)) else v2)
+                                                                for k2, v2 in _asdict(pose).items()},
+                            "walker": None if info.walker is None else [float(info.walker[0]), float(info.walker[1])],
+                            "dist": [np.asarray(frames[i][0]).reshape(-1).astype(int).tolist() for i in sorted(frames)],
+                            "status": [np.asarray(frames[i][1]).reshape(-1).astype(int).tolist() for i in sorted(frames)],
+                            "pred": (last_verdict or {}).get("posture"), "conf": (last_verdict or {}).get("posture_confidence"),
+                            "drowsy_flag": bool(feats["drowsy"]), "nods": feats["nods_in_window"]})
         if k % int(fps) == 0:
             sec = int(round(info.t))
             seg_len = max(1e-6, src.current.seconds if not src.done else 1.0)
@@ -557,7 +572,7 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
     report = hub.report(t_end)
     if hub.personalize is not None:
         hub.personalize.close_all(t_end)
-    for w in (w_frames, w_ticks, w_events):
+    for w in (w_frames, w_ticks, w_events) + ((w_replay,) if w_replay is not None else ()):
         w.close()
     with open(os.path.join(run_dir, "hub.log"), "w", encoding="utf-8") as fh:
         fh.write(hub.hub_log())
