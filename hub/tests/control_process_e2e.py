@@ -28,6 +28,54 @@ from test_mqtt_reconnect import BrokerThread, _free_port, _wait
 ROOT = Path(__file__).resolve().parents[2]
 SELF = Path(__file__).resolve()
 CONTAINER = 'deskmate-atlas-atlas-dev-1'
+# Harness-only observations on its private loopback broker. No product topic,
+# payload, clock or policy is changed. A readiness message never authorizes control.
+READY_TOPIC = 'deskmate/test/process-e2e/readiness'
+CLIENT_READY_TOPIC = 'deskmate/test/process-e2e/client-ready'
+
+
+def readiness(hub, now):
+    request = hub.pending_request
+    ep = hub.control.episode
+    expiry = request['ts'] + request['data']['expires_in_s'] if request else None
+    plan = request['data'].get('control_plan', {}).get('commands', []) if request else []
+    actual = [(c.command_id, c.target_id, c.operation, c.value) for c in ep.commands] if ep else []
+    planned = [(c.get('command_id'), c.get('target'), c.get('op'), c.get('value')) for c in plan]
+    active = bool(request and ep and ep.awaiting_user and not ep.executed
+                  and hub.engine.state.value == 'ACTION_ENV'
+                  and ep.gate.value == 'suggest' and expiry > now and planned == actual)
+    return {'wall': now, 'monotonic': time.monotonic(), 'pid': os.getpid(),
+            'request_id': request['data']['request_id'] if request else None,
+            'expires_at': expiry, 'boot_id': hub.boot_id,
+            'command_ids': [c.command_id for c in ep.commands] if ep else [],
+            'command_statuses': [c.status for c in ep.commands] if ep else [],
+            'fsm_state': hub.engine.state.value, 'outcome': ep.outcome if ep else None,
+            'gate': ep.gate.value if ep else None, 'awaiting_user': bool(ep and ep.awaiting_user),
+            'eligible': bool(active and ep.commands and all(
+                hub.environment_policy.can_dispatch(c, now) for c in ep.commands)),
+            'held_sec': {name: now - since for name, since in hub.environment_policy._since.items()}}
+
+
+class TickAudit:
+    def __init__(self, hub):
+        self.wall = hub.environment_policy._now
+        self.since = dict(hub.environment_policy._since)
+        self.eligible = None
+        self.resets = 0
+
+    def observe(self, hub, now):
+        status = readiness(hub, now)
+        reset = any(hub.environment_policy._since.get(name) != since
+                    for name, since in self.since.items())
+        if reset:
+            self.resets += 1
+        status['reset_generation'] = self.resets
+        if reset or status['eligible'] != self.eligible:
+            print(json.dumps({'event': 'e2e_evidence_reset' if reset else 'e2e_readiness',
+                'previous_wall': self.wall, 'wall_backstep': self.wall is not None and now < self.wall,
+                **status}), flush=True)
+        self.wall, self.since, self.eligible = now, dict(hub.environment_policy._since), status['eligible']
+        return status
 
 
 def write_snapshot(path: Path, data):
@@ -121,10 +169,14 @@ def hub_child(port: int, snapshot: Path):
         stage_ready = True
         proposal = copy.deepcopy(hub.pending_request)
         completed_state = None
+        audit = TickAudit(hub)
         while not stop.is_set():
-            current = sensor_tick(hub, registry, states, time.time(), low_light=True)
+            now = time.time()  # Never clamp, offset or replace the real wall clock.
+            current = sensor_tick(hub, registry, states, now, low_light=True)
+            status = audit.observe(hub, now)
             if hub.pending_request:
                 source.publish_request(hub.pending_request)
+            source._client.publish(READY_TOPIC, json.dumps(status), qos=1, retain=False)
             control = current['data']['sensor_summary']['control']
             episode = control.get('last_episode')
             if (completed_state is None and current['data']['fsm_state'] == 'MONITOR' and episode
@@ -132,6 +184,7 @@ def hub_child(port: int, snapshot: Path):
                 completed_state = copy.deepcopy(current)
             write_snapshot(snapshot, {'pid': os.getpid(), 'state': current, 'proposal': proposal,
                                       'completed_state': completed_state, 'commands': commands,
+                                      'readiness': status,
                                       'mode': 'mock', 'synthetic_sensors': True})
             stop.wait(.1)
     finally:
@@ -178,38 +231,51 @@ class FlutterClient:
         from control_flutter_live_scenario import BRIDGE
         if not app.startswith('/tmp/'):
             raise ValueError('Flutter must run from a temporary copy')
-        self.pipe = self.socket = self.process = self.log = self.thread = None
+        self.process = self.log = None
+        self.connections = []
         self.errors = []
         try:
-            self.pipe = subprocess.Popen(['docker', 'exec', '-i', CONTAINER, 'python3', '-u', '-c', BRIDGE],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            bridge_port = json.loads(self.pipe.stdout.readline())['port']
-            self.socket = socket.create_connection(('127.0.0.1', port), timeout=5)
-            self.socket.settimeout(None)
-            def forward():
-                selector = selectors.DefaultSelector()
-                selector.register(self.socket, selectors.EVENT_READ)
-                selector.register(self.pipe.stdout, selectors.EVENT_READ)
-                try:
-                    while True:
-                        for key, _ in selector.select(1):
-                            if key.fileobj is self.socket:
-                                chunk = self.socket.recv(65536)
-                                if not chunk: return
-                                self.pipe.stdin.write(chunk); self.pipe.stdin.flush()
-                            else:
-                                chunk = os.read(self.pipe.stdout.fileno(), 65536)
-                                if not chunk: return
-                                self.socket.sendall(chunk)
-                except (OSError, ValueError):
-                    pass
-                finally:
-                    selector.close()
-            self.thread = threading.Thread(target=forward, daemon=True); self.thread.start()
+            ports = []
+            # The existing byte bridge carries exactly one MQTT connection.
+            # Give the observation-only test client its own loopback pipe;
+            # never multiplex MQTT streams or change the product StateSource.
+            for _ in range(2):
+                pipe = subprocess.Popen(['docker', 'exec', '-i', CONTAINER, 'python3', '-u', '-c', BRIDGE],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                connection = [pipe, None, None]
+                self.connections.append(connection)
+                ports.append(json.loads(pipe.stdout.readline())['port'])
+                sock = socket.create_connection(('127.0.0.1', port), timeout=5)
+                sock.settimeout(None)
+                connection[1] = sock
+                def forward(pipe=pipe, sock=sock):
+                    selector = selectors.DefaultSelector()
+                    selector.register(sock, selectors.EVENT_READ)
+                    selector.register(pipe.stdout, selectors.EVENT_READ)
+                    try:
+                        while True:
+                            for key, _ in selector.select(1):
+                                if key.fileobj is sock:
+                                    chunk = sock.recv(65536)
+                                    if not chunk: return
+                                    pipe.stdin.write(chunk); pipe.stdin.flush()
+                                else:
+                                    chunk = os.read(pipe.stdout.fileno(), 65536)
+                                    if not chunk: return
+                                    sock.sendall(chunk)
+                    except (OSError, ValueError):
+                        pass
+                    finally:
+                        selector.close()
+                thread = threading.Thread(target=forward, daemon=True)
+                connection[2] = thread
+                thread.start()
             self.log = (directory / 'flutter.log').open('w')
             self.process = subprocess.Popen(['docker', 'exec', '-w', app, CONTAINER, 'flutter', 'test',
                 'test/control_live_mqtt.dart', '--reporter', 'expanded',
-                f'--dart-define=DESKMATE_MOCK_BRIDGE_PORT={bridge_port}'], stdout=self.log, stderr=subprocess.STDOUT)
+                '--dart-define=DESKMATE_PROCESS_READINESS=true',
+                f'--dart-define=DESKMATE_MOCK_BRIDGE_PORT={ports[0]}',
+                f'--dart-define=DESKMATE_READINESS_BRIDGE_PORT={ports[1]}'], stdout=self.log, stderr=subprocess.STDOUT)
         except BaseException:
             self.close()
             raise
@@ -218,13 +284,13 @@ class FlutterClient:
             self.process.terminate()
             try: self.process.wait(8)
             except subprocess.TimeoutExpired: self.process.kill(); self.process.wait(5)
-        if self.socket:
-            try: self.socket.shutdown(socket.SHUT_RDWR)
-            except OSError: pass
-            self.socket.close()
-        if self.pipe:
-            self.pipe.terminate(); self.pipe.wait(5)
-        if self.thread: self.thread.join(3)
+        for pipe, sock, thread in reversed(self.connections):
+            if sock:
+                try: sock.shutdown(socket.SHUT_RDWR)
+                except OSError: pass
+                sock.close()
+            pipe.terminate(); pipe.wait(5)
+            if thread: thread.join(3)
         if self.log: self.log.close()
 
 
@@ -245,21 +311,38 @@ def run_scenario(directory: Path, flutter_app: str | None = None):
         assert subscribed.wait(5)
         gateway = children.start('gateway', 'gateway', '--port', port, '--journal', journal, '--audit', audit)
         assert _wait(lambda: 'mock_gateway_subscribed' in (directory / 'gateway.log').read_text(), 10)
+        if flutter_app:
+            # Start Flutter before creating a time-limited proposal. It reports
+            # both subscriptions ready, not an inferred compilation delay.
+            frontend = FlutterClient(port, flutter_app, directory)
+            assert _wait(lambda: any(topic == CLIENT_READY_TOPIC for topic, _ in received)
+                         or frontend.process.poll() is not None, 60), 'Flutter readiness timed out'
+            assert frontend.process.poll() is None, (directory / 'flutter.log').read_text()
         hub = children.start('hub', 'hub', '--port', port, '--snapshot', snapshot)
         assert _wait(snapshot.exists, 10), (directory / 'hub.log').read_text()
         initial = json.loads(snapshot.read_text())
         proposal = initial['proposal']; planned = proposal['data']['control_plan']['commands'][0]
         if flutter_app:
-            frontend = FlutterClient(port, flutter_app, directory)
-            assert _wait(lambda: frontend.process.poll() is not None, 60), 'Flutter process timed out'
+            assert _wait(lambda: frontend.process.poll() is not None, 90), 'Flutter process timed out'
             assert frontend.process.returncode == 0, (directory / 'flutter.log').read_text()
         else:
             # Explicit headless replacement for the Flutter interaction only.
+            assert _wait(lambda: json.loads(snapshot.read_text())['readiness']['eligible'], 60), 'Hub not eligible'
+            proposal = json.loads(snapshot.read_text())['proposal']
             observer.publish('deskmate/feedback/user', json.dumps({'schema_version': '1.0', 'node': 'mock-display',
                 'data': {'request_id': proposal['data']['request_id'], 'verdict': 'accept'}}), qos=1).wait_for_publish(3)
         def finished():
             return json.loads(snapshot.read_text()).get('completed_state') is not None
         assert _wait(finished, 10), (directory / 'hub.log').read_text()
+        def monitor_received():
+            return any(topic == 'deskmate/state/phase' and item['data']['fsm_state'] == 'MONITOR'
+                       and item['data']['sensor_summary']['control'].get('last_episode')
+                       and item['data']['sensor_summary']['control']['last_episode']['commands'][0]['command_id'] == planned['command_id']
+                       and item['data']['sensor_summary']['control']['last_episode']['commands'][0]['status'] == 'succeeded'
+                       for topic, item in list(received))
+        # A local snapshot is not evidence that the observer received MQTT.
+        # Wait for the actual message instead of racing its callback thread.
+        assert _wait(monitor_received, 10), 'confirmed MONITOR not received over MQTT'
         final = json.loads(snapshot.read_text())
         assert hub.pid != gateway.pid and hub.poll() is None and gateway.poll() is None
         cmds = [item['data'] for topic, item in received if topic == CMD_TOPIC]
@@ -290,6 +373,7 @@ def run_scenario(directory: Path, flutter_app: str | None = None):
             'state_confirmed': True, 'fsm_state': final['completed_state']['data']['fsm_state'],
             'current_fsm_state': final['state']['data']['fsm_state'],
             'target': planned['target'], 'value': planned['value'],
+            'clock_resets': final['readiness']['reset_generation'],
             'synthetic_sensors': True, 'test_only_adapter_audit': True}
         write_snapshot(directory / 'result.json', summary)
         return summary
