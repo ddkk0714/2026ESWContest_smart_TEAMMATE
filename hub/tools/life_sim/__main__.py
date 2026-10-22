@@ -106,6 +106,12 @@ def cmd_video(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_viewer(args: argparse.Namespace) -> int:
+    from tools.life_sim.viewer import run_viewer
+    run_viewer(args.run_dir, speed=args.speed, start_s=args.start, loop=not args.once, tofsim_root=args.tofsim)
+    return 0
+
+
 def cmd_table(args: argparse.Namespace) -> int:
     paths = [p for pat in args.summary for p in sorted(glob.glob(pat))]
     rows = ["| 실행 | 길이 | FSM 경로 | 개입 | 깨어남 | 환기/명령 | 휴식 | 자세 acc | drowsy 재현(모델/0x03) |",
@@ -166,6 +172,13 @@ def main(argv: list[str] | None = None) -> int:
     rp = sub.add_parser("replot")
     rp.add_argument("run_dir", nargs="+")
     rp.set_defaults(fn=cmd_replot)
+    vw = sub.add_parser("viewer", help="MuJoCo 뷰어 창에서 replay 를 실시간 재생(PC)")
+    vw.add_argument("run_dir")
+    vw.add_argument("--speed", type=float, default=4.0)
+    vw.add_argument("--start", type=float, default=0.0)
+    vw.add_argument("--once", action="store_true")
+    vw.add_argument("--tofsim")
+    vw.set_defaults(fn=cmd_viewer)
     t = sub.add_parser("table")
     t.add_argument("summary", nargs="+")
     t.set_defaults(fn=cmd_table)
