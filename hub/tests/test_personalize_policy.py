@@ -52,7 +52,7 @@ def test_personas_diverge_on_environment():
     _, owl = train("night_owl")
     _, fresh = train("fresh_air")
     assert top(owl, "environment") == "light_cool_bright"
-    assert top(fresh, "environment") in ("air_fan_up", "ventilate_suggest")
+    assert top(fresh, "environment") in ("fan_on", "ventilate_suggest")
 
 
 def test_personas_diverge_on_cognitive():
@@ -82,24 +82,24 @@ def test_explanation_mentions_mode_and_count():
     p, _ = train("fresh_air")
     t = 1_800_000_000.0                                # 합성 30일(2026년) 뒤 시각 — 쿨다운과 겹치지 않게
     d = p.decide(sit(ts=t, co2_ppm=1300), cause="environment", gate="auto", session_id="demo", now=t)
-    assert d.arm in ("air_fan_up", "ventilate_suggest", "light_cool_bright")
+    assert d.arm in ("fan_on", "ventilate_suggest", "light_cool_bright")
     assert "개인 정책" in d.explanation and "피드백" in d.explanation
     assert "CO₂ 1300 ppm" in d.explanation
 
 
 # ── 되돌리기 뒤 자동 실행 문턱이 오른다 ───────────────────────
 def test_undo_raises_auto_threshold_and_downgrades_to_suggest():
-    p = policy(1, greedy=True, only={"air_fan_up"})
-    before = p.auto_threshold("air_fan_up")
+    p = policy(1, greedy=True, only={"fan_on"})
+    before = p.auto_threshold("fan_on")
     assert before == pytest.approx(CFG["gate"]["conf_auto"])
     s = sit(co2_ppm=1500, c_fatigue=0.78)
     d1 = p.decide(s, cause="environment", gate="auto", session_id="s1", now=s.ts)
-    assert d1.arm == "air_fan_up" and d1.delivered_gate == "auto"
+    assert d1.arm == "fan_on" and d1.delivered_gate == "auto"
     p.feedback(d1, "undo", now=s.ts + 20)
-    assert p.auto_threshold("air_fan_up") == pytest.approx(before + CFG["gate"]["undo_penalty_step"])
+    assert p.auto_threshold("fan_on") == pytest.approx(before + CFG["gate"]["undo_penalty_step"])
     s2 = sit(ts=s.ts + 400, co2_ppm=1500, c_fatigue=0.78)
     d2 = p.decide(s2, cause="environment", gate="auto", session_id="s1", now=s2.ts)
-    assert d2.arm == "air_fan_up"
+    assert d2.arm == "fan_on"
     assert d2.delivered_gate == "suggest"            # 0.78 < 0.80, 그리고 같은 세션에서 되돌린 arm
     assert "지난번 되돌리셔서 이번엔 여쭙니다" in d2.explanation
     # 다음 세션: 세션 규칙은 풀리고 개인 문턱(0.80)만 남는다 → 0.78 은 여전히 제안, 0.85 는 자동
@@ -113,17 +113,17 @@ def test_undo_raises_auto_threshold_and_downgrades_to_suggest():
 
 def test_undo_in_session_blocks_auto_even_above_threshold():
     """시연 규칙(gate.undo_blocks_auto_in_session): 되돌린 arm 은 그 세션에선 확신도가 아무리 높아도 묻는다."""
-    p = policy(3, greedy=True, only={"air_fan_up"})
+    p = policy(3, greedy=True, only={"fan_on"})
     s = sit(co2_ppm=1500, c_fatigue=0.95)
     d1 = p.decide(s, cause="environment", gate="auto", session_id="s1", now=s.ts)
     assert d1.delivered_gate == "auto"
     p.feedback(d1, "undo", now=s.ts + 20)
     s2 = sit(ts=s.ts + 400, co2_ppm=1500, c_fatigue=0.95)
     d2 = p.decide(s2, cause="environment", gate="auto", session_id="s1", now=s2.ts)
-    assert d2.arm == "air_fan_up" and d2.delivered_gate == "suggest"
+    assert d2.arm == "fan_on" and d2.delivered_gate == "suggest"
     assert "지난번 되돌리셔서" in d2.explanation
     # 규칙을 끄면 문턱(0.80)만 본다 → 0.95 는 자동
-    q = policy(3, greedy=True, only={"air_fan_up"}, gate={"undo_blocks_auto_in_session": False})
+    q = policy(3, greedy=True, only={"fan_on"}, gate={"undo_blocks_auto_in_session": False})
     e1 = q.decide(s, cause="environment", gate="auto", session_id="s1", now=s.ts)
     q.feedback(e1, "undo", now=s.ts + 20)
     e2 = q.decide(s2, cause="environment", gate="auto", session_id="s1", now=s2.ts)
@@ -131,18 +131,18 @@ def test_undo_in_session_blocks_auto_even_above_threshold():
 
 
 def test_undo_penalty_capped_and_decays():
-    p = policy(2, greedy=True, only={"air_fan_up"})
+    p = policy(2, greedy=True, only={"fan_on"})
     s = sit(co2_ppm=1500, c_fatigue=0.95)
     for i in range(10):
         d = p.decide(sit(ts=s.ts + i * 400, co2_ppm=1500, c_fatigue=0.95), cause="environment", gate="auto",
                      session_id=f"s{i}", now=s.ts + i * 400)     # 세션당 개입 상한에 걸리지 않게 세션을 바꾼다
-        assert d.arm == "air_fan_up"
+        assert d.arm == "fan_on"
         p.feedback(d, "undo")
-    assert p.auto_threshold("air_fan_up") == pytest.approx(CFG["gate"]["conf_auto"] + CFG["gate"]["undo_penalty_max"])
+    assert p.auto_threshold("fan_on") == pytest.approx(CFG["gate"]["conf_auto"] + CFG["gate"]["undo_penalty_max"])
     d = p.decide(sit(ts=s.ts + 5000, co2_ppm=1500, c_fatigue=0.95), cause="environment", gate="auto",
                  session_id="s2", now=s.ts + 5000)
     p.feedback(d, "auto_kept")
-    assert p.auto_threshold("air_fan_up") < CFG["gate"]["conf_auto"] + CFG["gate"]["undo_penalty_max"]
+    assert p.auto_threshold("fan_on") < CFG["gate"]["conf_auto"] + CFG["gate"]["undo_penalty_max"]
 
 
 # ── 거절 재제안 금지 · 쿨다운 · 게이트 상한 ───────────────────
@@ -150,29 +150,29 @@ def test_rejected_arm_not_proposed_again_in_session():
     p = policy(3, greedy=True)
     s = sit(co2_ppm=1500)
     d1 = p.decide(s, cause="environment", gate="suggest", session_id="s1", now=s.ts)
-    assert d1.arm == "air_fan_up"
+    assert d1.arm == "fan_on"
     p.feedback(d1, "reject")
     for i in range(1, 4):
         d = p.decide(sit(ts=s.ts + i * 400, co2_ppm=1500), cause="environment", gate="suggest",
                      session_id="s1", now=s.ts + i * 400)
-        assert d.arm != "air_fan_up"
-        assert d.excluded.get("air_fan_up") == "rejected_in_session"
+        assert d.arm != "fan_on"
+        assert d.excluded.get("fan_on") == "rejected_in_session"
     d = p.decide(sit(ts=s.ts + 9000, co2_ppm=1500), cause="environment", gate="suggest", session_id="s2", now=s.ts + 9000)
-    assert "air_fan_up" not in d.excluded              # 새 세션이면 다시 후보
+    assert "fan_on" not in d.excluded              # 새 세션이면 다시 후보
 
 
 def test_cooldown_excludes_recently_executed_arm():
     p = policy(4, greedy=True)
     s = sit(co2_ppm=1500, c_fatigue=0.9)
     d1 = p.decide(s, cause="environment", gate="auto", session_id="s1", now=s.ts)
-    assert d1.arm == "air_fan_up" and d1.delivered_gate == "auto"
+    assert d1.arm == "fan_on" and d1.delivered_gate == "auto"
     p.feedback(d1, "auto_kept")
     d2 = p.decide(sit(ts=s.ts + 100, co2_ppm=1500, c_fatigue=0.9), cause="environment", gate="auto",
                   session_id="s1", now=s.ts + 100)
-    assert d2.excluded.get("air_fan_up") == "cooldown" and d2.arm != "air_fan_up"
+    assert d2.excluded.get("fan_on") == "cooldown" and d2.arm != "fan_on"
     d3 = p.decide(sit(ts=s.ts + 400, co2_ppm=1500, c_fatigue=0.9), cause="environment", gate="auto",
                   session_id="s1", now=s.ts + 400)
-    assert "air_fan_up" not in d3.excluded
+    assert "fan_on" not in d3.excluded
 
 
 def test_gate_is_a_ceiling_never_escalates():
@@ -190,7 +190,7 @@ def test_gate_is_a_ceiling_never_escalates():
 
 def test_arms_stay_inside_fsm_cause_group():
     p = policy(6)
-    for cause, allowed in (("environment", {"light_cool_bright", "air_fan_up", "ventilate_suggest"}),
+    for cause, allowed in (("environment", {"light_cool_bright", "fan_on", "air_fan_up", "ventilate_suggest"}),
                            ("posture", {"posture_card", "posture_voice", "sound_cue"}),
                            ("cognitive", {"light_cool_bright", "light_warm_dim", "sound_cue", "break_short", "break_long"})):
         for i in range(10):
@@ -242,7 +242,7 @@ def test_policy_roundtrip_and_corrupt_file_falls_back(tmp_path):
     p.save(str(path))
     q = InterventionPolicy.load(str(path), CFG, rng=np.random.default_rng(0))
     assert q.n_personal == p.n_personal and q.policy_mode == "personal"
-    assert q.auto_threshold("air_fan_up") == pytest.approx(p.auto_threshold("air_fan_up"))
+    assert q.auto_threshold("fan_on") == pytest.approx(p.auto_threshold("fan_on"))
     np.testing.assert_allclose(q.models["break_long"]["accept"].mean(), p.models["break_long"]["accept"].mean())
     path.write_text("{broken", encoding="utf-8")
     fresh = InterventionPolicy.load(str(path), CFG)

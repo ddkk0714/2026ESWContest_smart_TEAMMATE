@@ -25,6 +25,9 @@ from .rewards import REWARD_ACCEPT, VERDICTS, reward_effect  # noqa: F401 — �
 SLEEP_ARM = "sleep_suggest"
 
 
+SEASON_KO = {"spring": "봄", "summer": "여름", "autumn": "가을", "winter": "겨울"}
+
+
 def _gate_value(gate: Any) -> str:
     return getattr(gate, "value", gate)
 
@@ -102,7 +105,7 @@ class Decision:
     ts: float
     c_fatigue_before: float
     x: np.ndarray = field(repr=False, default_factory=lambda: np.zeros(DIM))
-    ventilate_minutes: int | None = None     # arm == ventilate_suggest 일 때 권유 길이(겨울 짧게)
+    ventilate_minutes: int | None = None     # arm == ventilate_suggest 일 때 권유 길이(날씨가 정한다)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -205,12 +208,46 @@ class InterventionPolicy:
             return "weather"
         return None
 
+    def ventilation_plan(self, sit: Situation) -> tuple[int, list[str]]:
+        """창문 환기 권유 길이(분)와 그 이유. 날씨가 정한다(personalize.yaml `ventilation`, 2026-10-23):
+        계절 기본값 × 바람(세면 짧게·잔잔하면 길게) × 실내외 온도 차(크면 짧게) × 바깥 습도(높으면 짧게), 상·하한.
+        날씨가 없거나 낡으면(sit.weather None) 계절(달)만 쓴다."""
+        v = self.cfg["ventilation"]
+        w = sit.weather or {}
+        season = str(w.get("season") or "")
+        if season not in v["base_minutes"]:
+            season = sit.season
+        minutes = float(v["base_minutes"][season])
+        reasons = [SEASON_KO.get(season, season)]
+        wind = w.get("wind_ms")
+        if w.get("windy"):
+            minutes *= float(v["windy_factor"])
+            reasons.append(f"바람 {float(wind):.0f} m/s" if wind is not None else "바람")
+        elif wind is not None and float(wind) <= float(v["calm_ms"]):
+            minutes *= float(v["calm_factor"])
+            reasons.append("바람 잔잔")
+        outdoor = w.get("outdoor_temp_c")
+        if outdoor is not None and sit.temp_c is not None:
+            gap = abs(float(outdoor) - float(sit.temp_c))
+            if gap >= float(v["temp_gap_c"]):
+                minutes *= float(v["temp_gap_factor"])
+                reasons.append(f"바깥 {float(outdoor):.0f} °C(실내와 {gap:.0f} °C 차)")
+        humid = w.get("humidity_pct")
+        if humid is not None and float(humid) >= float(v["humid_outdoor_pct"]):
+            minutes *= float(v["humid_factor"])
+            reasons.append(f"바깥 습도 {float(humid):.0f} %")
+        minutes = max(float(v["min_minutes"]), min(float(v["max_minutes"]), minutes))
+        return int(round(minutes)), reasons
+
     def ventilate_minutes(self, sit: Situation) -> int:
-        """환기 권유 길이. 겨울(weather.winter_months)은 짧게."""
-        w = self.cfg["weather"]
-        if sit.month in w["winter_months"]:
-            return int(w["ventilate_minutes_winter"])
-        return int(w["ventilate_minutes_default"])
+        """환기 권유 길이(분). 화면 카드·Pi 5 앱이 이 값으로 "N 분만 열어 주세요" 를 띄운다."""
+        return self.ventilation_plan(sit)[0]
+
+    def _purifier_not_needed(self, sit: Situation) -> bool:
+        """공기청정기는 CO₂ 를 못 내린다 — 바깥 공기 때문에 창문을 못 열 때(`purifier.when_weather`: 비·미세먼지)만 후보.
+        날씨를 모르면 뺀다. 평소 PM 운전은 공기청정기 자체 auto 모드가 맡는다."""
+        w = sit.weather or {}
+        return not any(w.get(k) for k in (self.cfg.get("purifier") or {}).get("when_weather", ("rain", "pm_bad")))
 
     def _candidates(self, sit: Situation, cause: str, now: float) -> tuple[list[str], dict[str, str]]:
         cands, excluded = [], {}
@@ -227,6 +264,8 @@ class InterventionPolicy:
                 excluded[arm.id] = "quiet_hours"
             elif arm.id == "ventilate_suggest" and self._weather_excludes_ventilate(sit):
                 excluded[arm.id] = "weather"
+            elif arm.channel == "air" and self._purifier_not_needed(sit):
+                excluded[arm.id] = "outdoor_air_ok"
             else:
                 cands.append(arm.id)
         return cands, excluded
@@ -254,13 +293,9 @@ class InterventionPolicy:
             model = self.models[arm][axis]
             theta = model.mean() if b.get("algorithm") == "greedy" else model.sample(self.rng, scale)
             total += float(w) * float(theta @ x)
-        # 날씨 고정 보정 (spec §7)
+        # 날씨 고정 보정 (spec §7): 바람 불면 선풍기·공기청정기보다 환기 먼저
         if x[FEATURE_INDEX["windy"]] > 0.5:
-            wcfg = self.cfg["weather"]
-            if arm == "ventilate_suggest":
-                total += float(wcfg["windy_bias_ventilate"])
-            elif arm == "air_fan_up":
-                total += float(wcfg["windy_bias_air_fan"])
+            total += float((self.cfg["weather"].get("windy_bias") or {}).get(arm, 0.0))
         return total
 
     def decide(self, sit: Situation, *, cause: str, gate: Any, session_id: str, now: float | None = None) -> Decision:
@@ -395,8 +430,8 @@ class InterventionPolicy:
         if sit.weather and sit.weather.get("windy") and arm == "ventilate_suggest":
             parts.append("바람 불어 환기 먼저")
         if arm == "ventilate_suggest":
-            minutes = self.ventilate_minutes(sit)
-            parts.append(f"겨울이라 {minutes}분만" if sit.month in self.cfg["weather"]["winter_months"] else f"환기 {minutes}분")
+            minutes, why = self.ventilation_plan(sit)
+            parts.append(f"환기 {minutes}분({' · '.join(why)})")
         st = self.stats[arm]
         answered = st["accept"] + st["reject"] + st["timeout"]
         if answered:

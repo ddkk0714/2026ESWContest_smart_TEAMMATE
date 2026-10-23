@@ -47,11 +47,11 @@ def test_profiles_differ_between_personas():
 
 def test_arm_stats_reflect_persona_acceptance():
     fresh = build_profile(records_for("fresh_air"), CFG)
-    air = fresh.arm_stats.get("air_fan_up")
+    air = fresh.arm_stats.get("fan_on")
     assert air and air["n"] >= 5
     owl = build_profile(records_for("night_owl"), CFG)
     assert owl.arm_stats["break_short"]["accept_rate"] > owl.arm_stats["break_long"]["accept_rate"]
-    assert owl.arm_stats["air_fan_up"]["undo_rate"] is None or owl.arm_stats["air_fan_up"]["undo_rate"] > 0.4
+    assert owl.arm_stats["fan_on"]["undo_rate"] is None or owl.arm_stats["fan_on"]["undo_rate"] > 0.4
 
 
 def test_daily_jsonl_roundtrip_and_incremental_merge(tmp_path):

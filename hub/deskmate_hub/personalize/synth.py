@@ -57,11 +57,11 @@ PERSONAS: dict[str, Persona] = {
         cause_weights={"environment": 0.25, "posture": 0.25, "cognitive": 0.5},
         co2_base=650, co2_rise_per_hour=120, co2_fatigue_ppm=1400, lux=90, temp_c=23.0,
         slump_prob=0.35, first_slump_min=(70, 15),
-        accept={"light_cool_bright": 0.85, "air_fan_up": 0.5, "ventilate_suggest": 0.2,
+        accept={"light_cool_bright": 0.85, "fan_on": 0.5, "air_fan_up": 0.3, "ventilate_suggest": 0.2,
                 "break_short": 0.8, "break_long": 0.15, "light_warm_dim": 0.3, "sound_cue": 0.2,
                 "posture_card": 0.7, "posture_voice": 0.1, SLEEP_ARM: 0.6},
-        undo={"air_fan_up": 0.7, "light_cool_bright": 0.05, "posture_card": 0.05, "posture_voice": 0.6, "sound_cue": 0.5},
-        effect={"light_cool_bright": 0.5, "air_fan_up": 0.2, "ventilate_suggest": 0.2, "break_short": 0.4,
+        undo={"fan_on": 0.7, "air_fan_up": 0.6, "light_cool_bright": 0.05, "posture_card": 0.05, "posture_voice": 0.6, "sound_cue": 0.5},
+        effect={"light_cool_bright": 0.5, "fan_on": 0.2, "air_fan_up": 0.1, "ventilate_suggest": 0.2, "break_short": 0.4,
                 "break_long": 0.3, "light_warm_dim": 0.1, "sound_cue": 0.1, "posture_card": 0.4, "posture_voice": 0.3},
         late_bias={"break_long": 0.1, SLEEP_ARM: 0.2},
     ),
@@ -71,11 +71,11 @@ PERSONAS: dict[str, Persona] = {
         fatigue_events_per_hour=1.8, cause_weights={"environment": 0.2, "posture": 0.5, "cognitive": 0.3},
         co2_base=750, co2_rise_per_hour=200, co2_fatigue_ppm=1150, lux=350, temp_c=25.0,
         slump_prob=0.7, first_slump_min=(30, 10),
-        accept={"light_cool_bright": 0.4, "air_fan_up": 0.6, "ventilate_suggest": 0.5,
+        accept={"light_cool_bright": 0.4, "fan_on": 0.6, "air_fan_up": 0.4, "ventilate_suggest": 0.5,
                 "break_short": 0.4, "break_long": 0.8, "light_warm_dim": 0.2, "sound_cue": 0.3,
                 "posture_card": 0.45, "posture_voice": 0.85, SLEEP_ARM: 0.5},
-        undo={"air_fan_up": 0.1, "light_cool_bright": 0.3, "posture_card": 0.2, "posture_voice": 0.05, "sound_cue": 0.3},
-        effect={"light_cool_bright": 0.2, "air_fan_up": 0.4, "ventilate_suggest": 0.5, "break_short": 0.2,
+        undo={"fan_on": 0.1, "air_fan_up": 0.1, "light_cool_bright": 0.3, "posture_card": 0.2, "posture_voice": 0.05, "sound_cue": 0.3},
+        effect={"light_cool_bright": 0.2, "fan_on": 0.4, "air_fan_up": 0.1, "ventilate_suggest": 0.5, "break_short": 0.2,
                 "break_long": 0.6, "light_warm_dim": 0.1, "sound_cue": 0.15, "posture_card": 0.3, "posture_voice": 0.6},
         recovery_after_alert_min=(2.0, 0.8),
     ),
@@ -85,11 +85,11 @@ PERSONAS: dict[str, Persona] = {
         cause_weights={"environment": 0.55, "posture": 0.2, "cognitive": 0.25},
         co2_base=600, co2_rise_per_hour=220, co2_fatigue_ppm=900, lux=420, temp_c=24.0,
         slump_prob=0.3, first_slump_min=(55, 15),
-        accept={"light_cool_bright": 0.3, "air_fan_up": 0.85, "ventilate_suggest": 0.9,
+        accept={"light_cool_bright": 0.3, "fan_on": 0.55, "air_fan_up": 0.6, "ventilate_suggest": 0.9,
                 "break_short": 0.6, "break_long": 0.4, "light_warm_dim": 0.2, "sound_cue": 0.2,
                 "posture_card": 0.6, "posture_voice": 0.4, SLEEP_ARM: 0.5},
-        undo={"air_fan_up": 0.05, "light_cool_bright": 0.5, "posture_card": 0.1, "posture_voice": 0.3, "sound_cue": 0.4},
-        effect={"light_cool_bright": 0.1, "air_fan_up": 0.6, "ventilate_suggest": 0.7, "break_short": 0.4,
+        undo={"fan_on": 0.2, "air_fan_up": 0.1, "light_cool_bright": 0.5, "posture_card": 0.1, "posture_voice": 0.3, "sound_cue": 0.4},
+        effect={"light_cool_bright": 0.1, "fan_on": 0.4, "air_fan_up": 0.2, "ventilate_suggest": 0.7, "break_short": 0.4,
                 "break_long": 0.4, "light_warm_dim": 0.1, "sound_cue": 0.1, "posture_card": 0.4, "posture_voice": 0.3},
         recovery_after_alert_min=(3.5, 1.0),
     ),
@@ -99,7 +99,7 @@ PERSONAS: dict[str, Persona] = {
 def default_rule(cause: str, sit: Situation, cfg: dict[str, Any]) -> str:
     if cause == "environment":
         if sit.co2_ppm is not None and sit.co2_ppm >= float(cfg["explain"]["co2_high_ppm"]):
-            return "air_fan_up"
+            return "fan_on"
         return "light_cool_bright"
     if cause == "posture":
         return "posture_card"

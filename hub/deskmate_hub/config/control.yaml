@@ -11,6 +11,9 @@ undo_window_sec: 60      # 자동 실행 뒤 한 tick 이 지나도 이 시간 �
 cooldown_sec: 300        # 같은 target 에 같은 operation 을 다시 보내기까지 최소 간격 (fsm timers.cmd_cooldown_sec 와 맞춤)
 irreversible_operations: [set_power_off, power_cycle]   # 사용자 확인 없이는 실행하지 않는 동작
 
+# 제어 대상(target_id): vent_fan(보조 환기팬·선풍기, set_power on|off) · desk_lamp(iLink 무드등, set_brightness 0~255)
+#   · air_purifier(LG ThinQ 공기청정기, set_mode off|auto|low|mid|high — 2026-10-23. auto = 공기청정기 자체 PM 자동 운전,
+#     high = 3단계 고정. CO₂ 를 못 내리므로 ACTION_ENV 기본 명령에는 넣지 않고 개인화 arm air_fan_up 만 쓴다).
 # ACTION_ENV 진입 시 원인(cause)별로 내보낼 명령. 가역 동작만 둔다. undo_value 는 자동 실행 후 사용자가 거절했을 때 되돌리는 값.
 actions:
   environment:

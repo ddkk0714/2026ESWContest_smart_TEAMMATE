@@ -90,7 +90,8 @@ SensorFrame ─► FSMEngine.tick ─► TickResult ──(route:<cause>)──�
 |---|---|---|---|---|---|---|
 | `light_cool_bright` | environment, cognitive | iLink 무드등 | 색온도 6000 K(n=1)·밝기 ↑ (각성) | ○ | ○ | `control.yaml` desk_lamp |
 | `light_warm_dim` | cognitive | iLink 무드등 | 색온도 3000 K(n=5)·밝기 ↓ (휴식 유도) | ○ | ○ | 휴식 카드와 함께 |
-| `air_fan_up` | environment | LG ThinQ 공기청정기 | 풍량 ↑ | ○ | ○ | ThinQ 연동 예정, 지금은 `vent_fan` 플러그 |
+| `fan_on` | environment | 보조 환기팬·선풍기 `vent_fan` | 켜기 | ○ | ○ | CO₂·더위. 바람 불면 창문 환기보다 뒤 (§7) |
+| `air_fan_up` | environment | LG ThinQ 공기청정기 `air_purifier` | `set_mode high`(되돌리기 `auto`) | ○ | ○ | CO₂ 는 못 내린다 → 비·미세먼지로 창문을 못 열 때만 후보(`purifier.when_weather`). 평소 PM 운전은 공기청정기 자체 auto |
 | `ventilate_suggest` | environment | 화면(+음성) | 창문 환기 권유 | — | ✕ | 바람 불면 선풍기보다 먼저, 겨울·비는 짧게/보류 (§7) |
 | `posture_card` | posture | 화면 | 자세 안내 카드 | — | ○(알림) | 기존 `posture_alert` |
 | `posture_voice` | posture | 스피커 TTS | 자세 안내 음성 | — | ○(알림) | ATLAS VoiceManager1, 한국어 지원 확인 필요 |
@@ -180,9 +181,12 @@ local_time ≥ profile.usual_bedtime
 
 밴딧 입력에 바람·비·계절이 들어가지만, 아래는 학습 전에 적용하는 고정 규칙이다(`personalize.yaml` `weather:`).
 
-- 바람 부는 날(`windy`) → `ventilate_suggest` prior bias `+`, `air_fan_up` `−` (선풍기보다 환기 먼저).
-- 비·미세먼지 나쁨(`rain`/`pm_bad`) → `ventilate_suggest` 후보 제외.
-- 겨울(12·1·2월) → `Decision.ventilate_minutes = ventilate_minutes_winter`(5), 그 밖은 `ventilate_minutes_default`(15). 설명에 "겨울이라 5분만".
+- 바람 부는 날(`windy`) → `weather.windy_bias`: `ventilate_suggest` `+0.3`, `fan_on` `−0.3` (선풍기보다 환기 먼저).
+- 비·미세먼지 나쁨(`rain`/`pm_bad`) → `ventilate_suggest` 후보 제외, 대신 `air_fan_up`(공기청정기)이 후보가 된다.
+- **창문 환기 길이는 날씨가 정한다**(2026-10-23, `personalize.yaml ventilation:`, `policy.ventilation_plan`): 계절 기본값
+  (봄 15·여름 10·가을 15·겨울 5 분; 계절은 날씨 토픽 `season`, 없으면 달) × 바람(`windy` 0.7, 풍속 ≤ 1 m/s 잔잔 1.3)
+  × 실내외 온도 차(≥ 12 °C 면 0.6) × 바깥 습도(≥ 85 % 면 0.7), 3~20 분으로 자른다. `Decision.ventilate_minutes` 와
+  `interaction/request data.ventilate_minutes` 로 나가고, 설명에 이유가 붙는다(예 "환기 3분(겨울 · 바람 6 m/s · 바깥 -2 °C(실내와 26 °C 차))").
 - 실외가 실내보다 `outdoor_hotter_margin_c`(2 °C) 이상 더우면(여름 한낮) → `ventilate_suggest` 후보 제외.
 - 날씨를 못 받으면(토픽 없음·stale) 계절(날짜)만으로 위 규칙 중 계절 항만 적용한다.
 

@@ -69,7 +69,7 @@
 | `delivered_gate` | 실제 전달 게이트 `auto` / `suggest`. FSM 게이트보다 높을 수 없다 |
 | `auto_threshold` | 그 arm 의 개인 자동 문턱 (`conf_auto + undo_penalty`) |
 | `explanation` | 화면 한 줄 설명 |
-| `ventilate_minutes` | `ventilate_suggest` 일 때 권유 길이(분, 겨울 5·그 밖 15). 다른 arm 은 null |
+| `ventilate_minutes` | `ventilate_suggest` 일 때 권유 길이(분, 날씨가 정함 — spec §7, 3~20). 다른 arm 은 null |
 
 ## 5. `feedback`
 

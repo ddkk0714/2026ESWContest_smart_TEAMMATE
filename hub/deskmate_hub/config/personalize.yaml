@@ -62,11 +62,24 @@ weather:                        # 입력 = deskmate/sensor/weather (Pi 5 앱 발
   windy_ms: 4.0                 # 풍속(m/s) 이 이상이면 windy → 선풍기보다 환기 먼저
   rain_conditions: [rain, snow] # 이 condition 이면 환기 후보 제외
   outdoor_hotter_margin_c: 2.0  # 바깥이 실내보다 이만큼 더우면 환기 후보 제외
-  ventilate_minutes_default: 15
-  ventilate_minutes_winter: 5
-  winter_months: [12, 1, 2]
-  windy_bias_ventilate: 0.3     # 바람 → 환기 prior 가산, 공기청정기 감산
-  windy_bias_air_fan: -0.3
+  windy_bias:                   # 바람 불면 선풍기보다 창문 환기 먼저 (arm → prior 가산)
+    ventilate_suggest: 0.3
+    fan_on: -0.3
+
+ventilation:                    # 창문 환기 권유 길이(분) — 날씨가 정한다(2026-10-23). 날씨가 없거나 낡으면 계절(달)만
+  base_minutes: {spring: 15, summer: 10, autumn: 15, winter: 5}   # 계절 = 날씨 토픽 season, 없으면 달
+  windy_factor: 0.7             # 바람(weather.windy_ms 이상)이면 공기가 빨리 바뀐다 → 짧게
+  calm_ms: 1.0                  # 풍속이 이 이하면 잘 안 바뀐다 → 길게
+  calm_factor: 1.3
+  temp_gap_c: 12                # 실내외 온도 차가 이 이상이면(한겨울·한여름) 짧게
+  temp_gap_factor: 0.6
+  humid_outdoor_pct: 85         # 바깥 습도가 이 이상이면 짧게
+  humid_factor: 0.7
+  min_minutes: 3
+  max_minutes: 20
+
+purifier:                       # LG ThinQ 공기청정기(air_purifier). CO₂ 는 못 내린다 — 평소 PM 운전은 공기청정기 자체 auto 모드
+  when_weather: [rain, pm_bad]  # 바깥 공기 때문에 창문을 못 열 때만 air_fan_up(풍량 high) 후보. 날씨를 모르면 후보 아님
 
 explain:
   co2_high_ppm: 1000
@@ -80,6 +93,8 @@ arms:
   - {id: light_warm_dim, label_ko: 조명 따뜻하고 어둡게, causes: [cognitive], channel: lamp, auto: true,
      device: {target_id: desk_lamp, color_temperature: 5, brightness: 60, undo: {color_temperature: 2, brightness: 110}}}
   - {id: air_fan_up, label_ko: 공기청정기 풍량 올리기, causes: [environment], channel: air, auto: true,
+     device: {target_id: air_purifier, operation: set_mode, value: high, undo_value: auto}}
+  - {id: fan_on, label_ko: 환기팬(선풍기) 켜기, causes: [environment], channel: fan, auto: true,
      device: {target_id: vent_fan, operation: set_power, value: "on", undo_value: "off"}}
   - {id: ventilate_suggest, label_ko: 창문 환기, causes: [environment], channel: display, auto: false}
   - {id: posture_card, label_ko: 자세 안내 카드, causes: [posture], channel: display, auto: true}
@@ -93,7 +108,8 @@ arms:
 prior:
   light_cool_bright: {accept: {bias: 0.2, dark: 0.6, after_bedtime: -0.4}, effect: {bias: 0.1, dark: 0.6}}
   light_warm_dim:    {accept: {bias: 0.1, after_bedtime: 0.4, hour_cos: 0.3}, effect: {bias: 0.1, after_bedtime: 0.3}}
-  air_fan_up:        {accept: {bias: 0.2, co2: 0.8}, effect: {bias: 0.1, co2: 0.8}}
+  fan_on:            {accept: {bias: 0.2, co2: 0.8, temp_dev: 0.3}, effect: {bias: 0.1, co2: 0.8, temp_dev: 0.3}}
+  air_fan_up:        {accept: {bias: 0.1, rain: 0.3}, effect: {bias: 0.1}}
   ventilate_suggest: {accept: {bias: 0.0, co2: 0.5, windy: 0.5}, effect: {bias: 0.1, co2: 0.6, windy: 0.3}}
   posture_card:      {accept: {bias: 0.3, slump_hold: 0.3}, effect: {bias: 0.2, slump_hold: 0.2}}
   posture_voice:     {accept: {bias: 0.1, slump_hold: 0.3}, effect: {bias: 0.3, drowsy: 0.3}}

@@ -80,7 +80,7 @@ def test_stale_or_missing_weather_falls_back_to_season_only():
                  cause="environment", gate="suggest", session_id="s")
     assert "weather" not in d.excluded.values()
     if d.arm == "ventilate_suggest":
-        assert d.ventilate_minutes == CFG["weather"]["ventilate_minutes_winter"]
+        assert d.ventilate_minutes == CFG["ventilation"]["base_minutes"]["winter"]
 
 
 def test_fetched_at_missing_uses_envelope_ts_and_bad_payload_is_ignored():
@@ -101,24 +101,26 @@ def base_sit(month, **kw):
                      humidity_pct=50, c_fatigue=0.8, session_elapsed_min=60, **kw)
 
 
-def test_windy_prefers_ventilation_over_air_fan():
+def test_windy_prefers_ventilation_over_fan():
     calm = {"windy": False, "rain": False, "pm_bad": False, "outdoor_temp_c": 16.0}
     windy = {**calm, "windy": True}
     p = greedy()
     d_calm = p.decide(base_sit(10, weather=calm), cause="environment", gate="suggest", session_id="a")
     d_windy = p.decide(base_sit(10, weather=windy), cause="environment", gate="suggest", session_id="b")
-    assert d_calm.arm == "air_fan_up"
+    assert d_calm.arm == "fan_on"
     assert d_windy.arm == "ventilate_suggest" and "바람 불어 환기 먼저" in d_windy.explanation
-    assert d_windy.ventilate_minutes == CFG["weather"]["ventilate_minutes_default"]
+    v = CFG["ventilation"]                         # 가을 15 분 × 바람 → 짧게
+    assert d_windy.ventilate_minutes == round(v["base_minutes"]["autumn"] * v["windy_factor"])
     assert d_windy.scores["ventilate_suggest"] > d_calm.scores["ventilate_suggest"]
-    assert d_windy.scores["air_fan_up"] < d_calm.scores["air_fan_up"]
+    assert d_windy.scores["fan_on"] < d_calm.scores["fan_on"]
 
 
 def test_rain_and_hot_outside_exclude_ventilation_and_winter_shortens_it():
     p = greedy()
-    rain = {"windy": False, "rain": True, "pm_bad": False, "outdoor_temp_c": 16.0}   # 바람 없이 비 → 환기 제외, 공기청정기
+    rain = {"windy": False, "rain": True, "pm_bad": False, "outdoor_temp_c": 16.0}   # 바람 없이 비 → 창문 대신 팬·공기청정기
     d = p.decide(base_sit(10, weather=rain), cause="environment", gate="suggest", session_id="r")
-    assert d.excluded.get("ventilate_suggest") == "weather" and d.arm == "air_fan_up"
+    assert d.excluded.get("ventilate_suggest") == "weather" and d.arm in ("fan_on", "air_fan_up")
+    assert "air_fan_up" in d.candidates                     # 창문을 못 여니 공기청정기도 후보
     hot = {"windy": True, "rain": False, "pm_bad": False, "outdoor_temp_c": 33.0}
     d = p.decide(base_sit(7, weather=hot), cause="environment", gate="suggest", session_id="h")
     assert d.excluded.get("ventilate_suggest") == "weather"
@@ -127,5 +129,44 @@ def test_rain_and_hot_outside_exclude_ventilation_and_winter_shortens_it():
     assert d.excluded.get("ventilate_suggest") == "weather"
     winter = {"windy": True, "rain": False, "pm_bad": False, "outdoor_temp_c": -2.0}
     d = p.decide(base_sit(1, weather=winter), cause="environment", gate="suggest", session_id="w")
-    assert d.arm == "ventilate_suggest" and d.ventilate_minutes == CFG["weather"]["ventilate_minutes_winter"]
-    assert "겨울이라 5분만" in d.explanation and d.to_dict()["ventilate_minutes"] == 5
+    v = CFG["ventilation"]                         # 겨울 5 분 × 바람 × 실내외 26 °C 차 → 하한
+    assert d.arm == "ventilate_suggest" and d.ventilate_minutes == v["min_minutes"]
+    assert "겨울" in d.explanation and "실내와 26 °C 차" in d.explanation and d.to_dict()["ventilate_minutes"] == v["min_minutes"]
+
+
+def plan(month=10, *, temp=24.0, **w):
+    return greedy().ventilation_plan(Situation(ts=NOW, hour_local=15.7, weekday=2, month=month, temp_c=temp,
+                                               weather=w or None))
+
+
+def test_weather_sets_window_ventilation_minutes():
+    v = CFG["ventilation"]
+    assert plan(10)[0] == v["base_minutes"]["autumn"]                      # 날씨 없음 → 계절(달)만
+    assert plan(10, season="summer")[0] == v["base_minutes"]["summer"]     # 날씨 토픽 season 이 달보다 우선
+    calm, why = plan(10, wind_ms=0.5, outdoor_temp_c=18.0)
+    assert calm == round(v["base_minutes"]["autumn"] * v["calm_factor"]) and "바람 잔잔" in why
+    windy = plan(10, windy=True, wind_ms=6.0, outdoor_temp_c=18.0)[0]
+    assert windy < v["base_minutes"]["autumn"] < calm                      # 바람 세면 짧게, 잔잔하면 길게
+    hot = plan(7, outdoor_temp_c=35.0, temp=22.0)
+    assert hot[0] == round(v["base_minutes"]["summer"] * v["temp_gap_factor"]) and "바깥 35 °C(실내와 13 °C 차)" in hot[1]
+    humid = plan(6, outdoor_temp_c=24.0, humidity_pct=90.0)
+    assert humid[0] == round(v["base_minutes"]["summer"] * v["humid_factor"])
+    worst = plan(1, windy=True, wind_ms=9.0, outdoor_temp_c=-10.0, humidity_pct=90.0)[0]
+    assert worst == v["min_minutes"]                                       # 하한
+    assert plan(4, wind_ms=0.0, season="spring")[0] <= v["max_minutes"]
+
+
+def test_purifier_only_when_outdoor_air_keeps_windows_shut():
+    """공기청정기는 CO₂ 를 못 내린다 — CO₂ 높음만으로는 후보가 아니고, 비·미세먼지로 창문을 못 열 때만 후보."""
+    from deskmate_hub.personalize.adapter import arm_commands
+    p = greedy()
+    clear = {"windy": False, "rain": False, "pm_bad": False, "outdoor_temp_c": 16.0}
+    for w in (None, clear):
+        d = p.decide(base_sit(10, weather=w), cause="environment", gate="suggest", session_id="c")
+        assert d.excluded.get("air_fan_up") == "outdoor_air_ok" and d.arm != "air_fan_up"
+    d = p.decide(base_sit(3, weather={**clear, "pm_bad": True}), cause="environment", gate="suggest", session_id="p")
+    assert "air_fan_up" in d.candidates and d.excluded.get("ventilate_suggest") == "weather"
+    arms = {a["id"]: a for a in CFG["arms"]}
+    assert arm_commands(arms["air_fan_up"]["device"]) == [
+        {"target_id": "air_purifier", "operation": "set_mode", "value": "high", "undo_value": "auto"}]
+    assert arm_commands(arms["fan_on"]["device"])[0]["target_id"] == "vent_fan"

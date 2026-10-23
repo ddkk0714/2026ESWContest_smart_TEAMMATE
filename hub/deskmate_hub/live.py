@@ -405,6 +405,8 @@ class LiveHub:
             self.pending_request["data"]["explanation"] = view.get("explanation")
             self.pending_request["data"]["arm"] = view.get("arm")
             self.pending_request["data"]["arm_label"] = view.get("arm_label")
+            if view.get("ventilate_minutes") is not None:       # 창문 환기 카드: "N 분만 열어 주세요"(날씨가 정한 길이)
+                self.pending_request["data"]["ventilate_minutes"] = view["ventilate_minutes"]
         self.seq += 1
         self.publish_request(self.pending_request)
 

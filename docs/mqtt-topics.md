@@ -285,9 +285,10 @@ hub 는 현재 질문의 `request_id`(또는 `request_id` 생략·`atlas-display
 
 **개인화 정책이 켜져 있으면(`personalize.yaml enabled: true`, 2026-10-21)** `data` 에 세 필드가 더 실린다 — `explanation`(왜 이 개입인지 한 줄,
 예 `"조도 80 lx 어두움 · 졸음 2회 · 지난번 조명 밝고 차갑게 되돌리셔서 이번엔 여쭙니다 · 기본 정책 · 피드백 1건"`), `arm`(개입 id, `personalization-spec.md` §4),
-`arm_label`(한국어 이름). 화면은 카드에 `explanation` 을 그대로 보여 준다. 정책이 FSM 의 자동 게이트를 제안으로 낮춘 경우 `evidence` 에 `personalize:ask` 가 들어 있다.
+`arm_label`(한국어 이름). 창문 환기(`arm: ventilate_suggest`)면 `ventilate_minutes`(날씨가 정한 권유 길이, 분, 2026-10-23)도 실린다 —
+화면은 "N 분만 열어 주세요" 로 쓴다. 화면은 카드에 `explanation` 을 그대로 보여 준다. 정책이 FSM 의 자동 게이트를 제안으로 낮춘 경우 `evidence` 에 `personalize:ask` 가 들어 있다.
 같은 내용이 `state/phase` 의 `data.sensor_summary.personalize` 에도 실린다(`{episode_id, arm, arm_label, source, explanation, fsm_gate, delivered_gate,
-policy_mode, n_personal, auto_threshold}`; 에피소드가 닫히면 `closed: true, outcome`) — 자동 실행 알림이 "왜" 를 보여 줄 때 쓴다.
+policy_mode, n_personal, auto_threshold, ventilate_minutes}`; 에피소드가 닫히면 `closed: true, outcome`) — 자동 실행 알림이 "왜" 를 보여 줄 때 쓴다.
 
 ### `deskmate/control/cmd`
 
@@ -301,6 +302,7 @@ ACTION_ENV 진입 시 원인별 명령 목록, 게이트 auto 면 즉시 · sugg
   "data": {
     "command_id": "9f3c1a2b7d4e",          // 멱등 키. result 가 이 값으로 돌아온다
     "target_id": "vent_fan",               // vent_fan | desk_lamp | air_purifier | plug_1 (control.yaml)
+                                           // air_purifier: set_mode off|auto|low|mid|high (auto = 자체 PM 자동, high = 3단계)
     "operation": "set_power", "value": "on",
     "origin_state": "ACTION_ENV", "cause": "environment",
     "gate": "auto",                        // auto | suggest(수락 후) | undo(자동 실행 뒤 거절 시 되돌리기)

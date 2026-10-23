@@ -272,7 +272,7 @@ class EpisodeRecorder:
         return {"episode_id": eid, "arm": decision.get("arm"), "arm_label": label, "source": decision.get("source"),
                 "explanation": decision.get("explanation"), "fsm_gate": fsm.get("gate"), "delivered_gate": delivered,
                 "policy_mode": decision.get("policy_mode"), "n_personal": decision.get("n_personal"),
-                "auto_threshold": decision.get("auto_threshold")}
+                "auto_threshold": decision.get("auto_threshold"), "ventilate_minutes": decision.get("ventilate_minutes")}
 
     def commands_for(self, decision: Any) -> list[dict[str, Any]] | None:
         """정책이 고른 arm 의 기기 명령 spec(control.yaml actions 형식). 정책이 없거나 arm 이 없으면 None(= FSM 기본)."""
