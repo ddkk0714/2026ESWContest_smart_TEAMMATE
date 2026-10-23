@@ -1,5 +1,6 @@
 import 'bluetooth_service.dart';
 import 'display_state.dart';
+import 'fan_control.dart';
 import 'music_playback.dart';
 
 const ilinkServiceUuid = '0000a032-0000-1000-8000-00805f9b34fb';
@@ -150,10 +151,14 @@ class FeedbackCoordinator {
     required this.music,
     required this.lamp,
     required this.bluetooth,
+    this.fan,
   });
   final MusicPlayback music;
   final IlinkLampFeedback lamp;
   final AtlasBluetoothService bluetooth;
+
+  /// `vent_fan` 실물(블루투스 선풍기). 고르지 않았으면 vent_fan 명령에 대답하지 않는다.
+  final BleFanControl? fan;
   String? _speakerAddress;
   String? get speakerAddress => _speakerAddress;
   bool _enabled = false;
@@ -262,14 +267,19 @@ class FeedbackCoordinator {
 
   /// Hub already applied its gate and received acceptance before publishing.
   /// Cache in-flight results too, so QoS 1 duplicates never actuate twice.
+  /// A vent_fan command is left unanswered while no fan is selected, so another
+  /// adapter (tools/ble_fan.py bridge) can own it instead.
   Future<Map<String, dynamic>?> handleControlCommand(
       Map<String, dynamic> command) async {
-    if (command['target_id'] != 'desk_lamp') return null;
+    final target = command['target_id'];
+    final isFan = target == 'vent_fan' && (fan?.configured ?? false);
+    if (target != 'desk_lamp' && !isFan) return null;
     final id = command['command_id'];
     if (id is! String || id.isEmpty) return null;
     final cached = _commandResults[id];
     if (cached != null) return cached;
-    final result = _executeLampCommand(command);
+    final result =
+        isFan ? _executeFanCommand(command) : _executeLampCommand(command);
     _commandResults[id] = result;
     if (_commandResults.length > 128) {
       _commandResults.remove(_commandResults.keys.first);
@@ -277,31 +287,40 @@ class FeedbackCoordinator {
     return result;
   }
 
-  Future<Map<String, dynamic>> _executeLampCommand(
-      Map<String, dynamic> command) async {
-    Map<String, dynamic> result(String status, [String? error]) {
-      lastControlError = error;
-      return {
-        'command_id': command['command_id'],
-        'status': status,
-        if (status == 'succeeded') 'actual_value': command['value'],
-        if (error != null) 'error_code': error,
-        'completed_ts_ms': DateTime.now().millisecondsSinceEpoch,
-      };
-    }
+  Map<String, dynamic> _result(Map<String, dynamic> command, String status,
+      {Object? actual, String? error}) {
+    lastControlError = error;
+    return {
+      'command_id': command['command_id'],
+      'status': status,
+      if (status == 'succeeded' || actual != null) 'actual_value': actual,
+      if (error != null) 'error_code': error,
+      'completed_ts_ms': DateTime.now().millisecondsSinceEpoch,
+    };
+  }
 
-    if (!enabled) return result('failed', 'feedback_disabled');
+  /// Checks every target shares: the feedback switch, gate, confirmation, expiry.
+  String? _rejection(Map<String, dynamic> command) {
+    if (!enabled) return 'feedback_disabled';
     final expires = command['expires_ts_ms'];
     if (expires is! num ||
         !expires.isFinite ||
         !['auto', 'suggest', 'undo'].contains(command['gate']) ||
         command['requires_confirmation'] != false) {
-      return result('failed', 'invalid_command');
+      return 'invalid_command';
     }
-    if (expires <= DateTime.now().millisecondsSinceEpoch) {
-      return result('failed', 'expired');
+    if (expires <= DateTime.now().millisecondsSinceEpoch) return 'expired';
+    return null;
+  }
+
+  Future<Map<String, dynamic>> _executeLampCommand(
+      Map<String, dynamic> command) async {
+    final rejected = _rejection(command);
+    if (rejected != null) return _result(command, 'failed', error: rejected);
+    final expires = command['expires_ts_ms'] as num;
+    if (!lamp.configured) {
+      return _result(command, 'failed', error: 'lamp_not_configured');
     }
-    if (!lamp.configured) return result('failed', 'lamp_not_configured');
     final value = command['value'];
     final List<List<int>> frames;
     if (command['operation'] == 'set_brightness' &&
@@ -318,12 +337,11 @@ class FeedbackCoordinator {
         ilinkFrame([0x01, 0x08, 0x05, value == 'on' ? 1 : 0])
       ];
     } else {
-      return result('failed', 'unsupported_operation_or_value');
+      return _result(command, 'failed', error: 'unsupported_operation_or_value');
     }
     if (!await lamp.writeFrames(frames, expiresTsMs: expires)) {
-      return result(
-          'failed',
-          expires <= DateTime.now().millisecondsSinceEpoch
+      return _result(command, 'failed',
+          error: expires <= DateTime.now().millisecondsSinceEpoch
               ? 'expired'
               : 'bluetooth_write_failed');
     }
@@ -335,6 +353,35 @@ class FeedbackCoordinator {
         lastAudioError = error;
       }
     }
-    return result('succeeded');
+    return _result(command, 'succeeded', actual: value);
+  }
+
+  /// set_power on|off · set_level 0~3 · set_speed 0~100 · set_mode normal|natural · set_timer 초.
+  Future<Map<String, dynamic>> _executeFanCommand(
+      Map<String, dynamic> command) async {
+    final rejected = _rejection(command);
+    if (rejected != null) return _result(command, 'failed', error: rejected);
+    final expires = command['expires_ts_ms'] as num;
+    final operation = command['operation'];
+    final value = command['value'];
+    final frame = fanFrame(operation, value);
+    if (frame == null) {
+      return _result(command, 'failed', error: 'unsupported_operation_or_value');
+    }
+    final sent = await fan!.send(frame, expiresTsMs: expires);
+    if (!sent.written) {
+      return _result(command, 'failed',
+          error: expires <= DateTime.now().millisecondsSinceEpoch
+              ? 'expired'
+              : 'bluetooth_write_failed');
+    }
+    final state = sent.state;
+    // 상태를 못 읽었으면 램프처럼 쓰기 완료를 성공으로 본다.
+    if (state == null) return _result(command, 'succeeded', actual: value);
+    if (!state.matches(operation, value)) {
+      return _result(command, 'failed',
+          actual: state.actualFor(operation), error: 'state_mismatch');
+    }
+    return _result(command, 'succeeded', actual: state.actualFor(operation));
   }
 }

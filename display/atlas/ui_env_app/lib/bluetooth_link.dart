@@ -1,4 +1,4 @@
-/// 블루투스 스피커·램프를 기억하고, 앱을 켤 때 검색 없이 다시 붙인다.
+/// 블루투스 스피커·램프·선풍기를 기억하고, 앱을 켤 때 검색 없이 다시 붙인다.
 ///
 /// 지금까지는 켤 때마다 검색(8초) → 스피커 선택 → 램프 선택을 다시 해야 했다.
 /// 시연 중 앱을 다시 켜야 하는 일이 생기면 그 절차가 통째로 반복된다. 여기서
@@ -65,27 +65,34 @@ class BluetoothLinkManager extends ChangeNotifier {
 
   SavedBluetoothDevice? _speaker;
   SavedBluetoothDevice? _lamp;
+  SavedBluetoothDevice? _fan;
   _Phase _speakerPhase = _Phase.idle;
   _Phase _lampPhase = _Phase.idle;
+  _Phase _fanPhase = _Phase.idle;
   DateTime? _speakerOkAt;
   String? _speakerError;
   String? _lampError;
+  String? _fanError;
   bool _disposed = false;
 
   SavedBluetoothDevice? get savedSpeaker => _speaker;
   SavedBluetoothDevice? get savedLamp => _lamp;
+  SavedBluetoothDevice? get savedFan => _fan;
   bool get speakerBusy => _speakerPhase == _Phase.connecting;
   bool get lampBusy => _lampPhase == _Phase.connecting;
+  bool get fanBusy => _fanPhase == _Phase.connecting;
 
   /// 앱 시작 때 부른다. 저장된 기기가 있으면 검색 없이 붙는다. 던지지 않는다.
   Future<void> restore() async {
     final saved = settings.load();
     _speaker = saved.speaker;
     _lamp = saved.lamp;
+    _fan = saved.fan;
     _notify();
     await Future.wait([
       if (_speaker != null) reconnectSpeaker(),
       if (_lamp != null) reconnectLamp(),
+      if (_fan != null) reconnectFan(),
     ]);
   }
 
@@ -126,6 +133,23 @@ class BluetoothLinkManager extends ChangeNotifier {
     return ok;
   }
 
+  /// 저장된 선풍기에 GATT 연결을 미리 맺는다. 고른 순간부터 앱이 vent_fan 명령을 맡는다 —
+  /// 연결이 실패해도 명령이 오면 그때 다시 붙는다.
+  Future<bool> reconnectFan() async {
+    final saved = _fan;
+    final fan = feedback.fan;
+    if (saved == null || fan == null || fanBusy) return false;
+    fan.select(saved.address);
+    _fanPhase = _Phase.connecting;
+    _fanError = null;
+    _notify();
+    final ok = await fan.connect();
+    _fanPhase = ok ? _Phase.connected : _Phase.failed;
+    _fanError = ok ? null : '${fan.lastError ?? '선풍기에 연결하지 못했습니다'}';
+    _notify();
+    return ok;
+  }
+
   /// 검색 결과의 스피커에 붙고, 성공하면 저장한다.
   Future<void> connectSpeaker(BluetoothDeviceInfo device) async {
     _speakerPhase = _Phase.connecting;
@@ -154,6 +178,13 @@ class BluetoothLinkManager extends ChangeNotifier {
     return reconnectLamp();
   }
 
+  /// 검색 결과의 DESKMATE-FAN 을 선풍기로 고르고 저장한 뒤 연결을 미리 맺는다.
+  Future<bool> selectFan(BluetoothDeviceInfo device) async {
+    _fan = _saved(device);
+    _persist();
+    return reconnectFan();
+  }
+
   /// 일체형의 스피커와 램프를 한 번에. 스피커가 실패하면 램프는 시도하지 않는다 —
   /// 한쪽만 붙은 어중간한 상태보다 원인을 보고 다시 누르는 편이 낫다.
   Future<bool> connectPair(
@@ -172,6 +203,11 @@ class BluetoothLinkManager extends ChangeNotifier {
       _lamp = null;
       _lampPhase = _Phase.idle;
       _lampError = null;
+    } else if (id == LinkId.fan) {
+      _fan = null;
+      _fanPhase = _Phase.idle;
+      _fanError = null;
+      feedback.fan?.forget();
     }
     _persist();
     _notify();
@@ -239,6 +275,40 @@ class BluetoothLinkManager extends ChangeNotifier {
         id: LinkId.lamp, health: LinkHealth.checking, detail: lamp.name);
   }
 
+  /// 램프와 같다: 연결 뒤에는 마지막 명령의 결과(lastError·lastOkAt)를 본다.
+  LinkStatus get fanStatus {
+    final saved = _fan;
+    final fan = feedback.fan;
+    if (saved == null || fan == null) {
+      return const LinkStatus(
+          id: LinkId.fan,
+          health: LinkHealth.unconfigured,
+          cause: LinkCause.notConfigured);
+    }
+    if (_fanPhase == _Phase.connecting) {
+      return LinkStatus(
+          id: LinkId.fan, health: LinkHealth.checking, detail: saved.name);
+    }
+    final error = fan.lastError;
+    if (error != null || (_fanPhase == _Phase.failed && !fan.connected)) {
+      return LinkStatus(
+          id: LinkId.fan,
+          health: LinkHealth.down,
+          cause: LinkCause.disconnected,
+          lastSeen: fan.lastOkAt,
+          detail: '${error ?? _fanError}');
+    }
+    if (fan.connected || fan.lastOkAt != null) {
+      return LinkStatus(
+          id: LinkId.fan,
+          health: LinkHealth.ok,
+          lastSeen: fan.lastOkAt,
+          detail: fan.lastState?.summary ?? saved.name);
+    }
+    return LinkStatus(
+        id: LinkId.fan, health: LinkHealth.checking, detail: saved.name);
+  }
+
   SavedBluetoothDevice _saved(BluetoothDeviceInfo device) =>
       SavedBluetoothDevice(
           address: normalizeBluetoothAddress(device.address) ?? device.address,
@@ -254,6 +324,9 @@ class BluetoothLinkManager extends ChangeNotifier {
     next = _lamp == null
         ? next.copyWith(clearLamp: true)
         : next.copyWith(lamp: _lamp);
+    next = _fan == null
+        ? next.copyWith(clearFan: true)
+        : next.copyWith(fan: _fan);
     settings.save(next);
   }
 

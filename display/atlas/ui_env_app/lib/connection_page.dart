@@ -34,6 +34,7 @@ LinkSnapshot assembleLinkSnapshot({
   LinkStatus? posture,
   LinkStatus? speaker,
   LinkStatus? lamp,
+  LinkStatus? fan,
   LinkRules rules = const LinkRules(),
 }) {
   final list = <LinkStatus>[];
@@ -108,6 +109,11 @@ LinkSnapshot assembleLinkSnapshot({
           id: LinkId.lamp,
           health: LinkHealth.unconfigured,
           cause: LinkCause.notConfigured));
+  list.add(fan ??
+      const LinkStatus(
+          id: LinkId.fan,
+          health: LinkHealth.unconfigured,
+          cause: LinkCause.notConfigured));
   return LinkSnapshot(list);
 }
 
@@ -171,7 +177,7 @@ String? linkActionLabel(LinkId id) => switch (id) {
       LinkId.environment =>
         '다시 연결',
       LinkId.posture => '다시 찾기',
-      LinkId.speaker || LinkId.lamp => '기기 설정',
+      LinkId.speaker || LinkId.lamp || LinkId.fan => '기기 설정',
       LinkId.keystroke => null,
     };
 

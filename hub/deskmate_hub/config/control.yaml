@@ -14,6 +14,8 @@ irreversible_operations: [set_power_off, power_cycle]   # 사용자 확인 없�
 # ACTION_ENV 진입 시 원인(cause)별로 내보낼 명령. 가역 동작만 둔다. undo_value 는 자동 실행 후 사용자가 거절했을 때 되돌리는 값.
 actions:
   environment:
-    # vent_fan 실물 = Pico 2 W 블루투스 선풍기(firmware/pico2w_ble_fan), PC 의 tools/ble_fan.py bridge 가 실행
+    # vent_fan 실물 = Pico 2 W 블루투스 선풍기(firmware/pico2w_ble_fan). Pi 5 앱이 블루투스 탭에서 고른 선풍기에 실행한다.
+    # 받는 operation: set_power on|off · set_level 0~3(풍량) · set_speed 0~100 · set_mode normal|natural · set_timer 초.
+    # 풍량으로 켜려면 예: {target_id: vent_fan, operation: set_level, value: 3, undo_value: 0}
     - {target_id: vent_fan, operation: set_power, value: "on", undo_value: "off"}
     - {target_id: desk_lamp, operation: set_brightness, value: 70, undo_value: 40}

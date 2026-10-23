@@ -125,12 +125,28 @@ PC 주소(`http://<PC IP>:8000`)를 넣는다.
 **상태 — 8바이트:** `[버전=1, 전원 0/1, 속도 %, 단계 0~3, 모드 0/1, 방향 0/1, 남은 타이머 초 LE 2바이트]`.
 명령·버튼·타이머 만료 때마다 알림이 나간다. 꺼져 있어도 속도는 다음 `on` 을 위해 남아 있다.
 
-## DESKMATE 연동 (선택)
+## Pi 4 명령으로 켜고 풍량 바꾸기
 
-선풍기는 혼자 쓰는 것이 우선이다. hub 의 환경 개입 대상 `vent_fan`(`config/control.yaml`)으로도 쓸 수 있게 PC 어댑터를 같이 넣어 뒀다 —
-`python tools/ble_fan.py bridge --broker <Pi 4 IP>` 가 `deskmate/control/cmd` 의 `vent_fan` 명령(`set_power`·`set_speed`·`set_level`·
-`set_mode`·`set_timer`)을 블루투스로 실행하고 `deskmate/control/result` 로 답한다. 계약·거절 조건은 `docs/mqtt-topics.md`.
-Pi 5 앱이 직접 선풍기에 붙는 연동은 아직 없다.
+```
+Pi 4 hub ── MQTT control/cmd (vent_fan) ──▶ Pi 5 앱 ── 블루투스 GATT ──▶ 선풍기
+         ◀── MQTT control/result ──────────          ◀── 상태 읽기 ──────
+```
+
+hub 의 환경 개입 대상 `vent_fan`(`config/control.yaml`)이 이 선풍기다. Pi 5 앱이 램프와 같은 Atlas 블루투스 경로로 명령을 쓴다.
+
+1. Pi 5 앱 → 블루투스 탭 → **기기 검색** → `DESKMATE-FAN` 의 **선풍기 선택**. 저장돼서 앱을 다시 켜도 검색 없이 붙는다.
+2. 같은 화면의 **상태 기반 피드백 스위치를 켠다**(꺼져 있으면 허브 명령을 `feedback_disabled` 로 거절한다).
+   **선풍기 1단/3단/끄기 테스트** 버튼으로 블루투스 쓰기를 먼저 확인한다.
+3. 허브 없이 경로만 확인: 노트북에서 `python tools/send_control.py --broker <Pi 4 IP> vent_fan set_level 3` → `✓ succeeded actual=3`.
+4. 허브가 보내는 명령은 `config/control.yaml` 의 `actions.environment` 에 적힌 대로다. 지금 기본은 `set_power on`(되돌리기 `off`)이고,
+   풍량으로 켜려면 `{target_id: vent_fan, operation: set_level, value: 3, undo_value: 0}` 처럼 바꾼다(코드 변경 없음).
+
+받는 operation: `set_power` on|off · `set_level` 0~3 · `set_speed` 0~100 · `set_mode` normal|natural · `set_timer` 초.
+앱은 쓴 뒤 상태 특성을 다시 읽어 `actual_value` 로 돌려준다. Atlas 의 읽기(`ReadCharacteristicValues`)는 아직 실기 미확인이라,
+읽기가 안 되면 램프처럼 쓰기 완료를 성공으로 본다. 계약·거절 조건은 `docs/mqtt-topics.md`.
+
+Pi 5 없이 노트북으로 대신할 때는 `python tools/ble_fan.py bridge --broker <Pi 4 IP>` — Pi 5 앱과 **같이 띄우지 않는다**
+(블루투스 연결이 하나뿐). Pi 5 앱이 선풍기에 붙어 있는 동안에는 휴대폰 리모컨도 못 붙는다. 본체 버튼은 언제나 된다.
 
 ## 빌드
 
