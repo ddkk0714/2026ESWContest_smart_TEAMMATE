@@ -233,6 +233,12 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
     reaction = ReactionModel(scenario["reaction_resolved"], channels_cfg, seed=seed + 3)
     fat = FatigueModel(scenario["reaction_resolved"].get("fatigue") or {}, seed=seed, t0=t0)   # 잠재 피로(기본 꺼짐)
     absent_since: float | None = None
+    # 2단계 학습용 로그(ml/training/build_dataset.py --logs --truth): hub tick 마다 SensorFrame·state·정답 한 줄씩, 줄 수가 같다
+    truth_log = None
+    if fat.enabled or scenario["hub"].get("logs"):
+        hub.hub.frame_log = open(os.path.join(run_dir, "frames-hub.jsonl"), "w", encoding="utf-8")
+        hub.hub.state_log = open(os.path.join(run_dir, "state-hub.jsonl"), "w", encoding="utf-8")
+        truth_log = open(os.path.join(run_dir, "truth-hub.jsonl"), "w", encoding="utf-8")
     simple = _make_simple_policy(scenario, profile, seed) if engine == "simple" else None
     card_expires = float(hub.fsm_cfg["timers"].get("focus_break_poll_sec", 180))
 
@@ -587,7 +593,8 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
                 if vreq is not None:
                     counters["vent_cards"] += 1
                     sim_card("vent_suggest", t, why="+".join(vreq["why"]), extra={"minutes": vreq["minutes"], "rule": "co2_rule"})
-            if sec % int(period) == 0 and sec > 0:
+            ticked = sec % int(period) == 0 and sec > 0
+            if ticked:
                 _p3 = time.perf_counter()
                 tk = hub.tick(t)
                 last_tick = tk
@@ -614,6 +621,9 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
                 absent_since = None if truth_present else (absent_since if absent_since is not None else t)
                 row["fatigue_F"], row["fatigue_S"] = round(fat.F, 3), round(fat.S, 3)
                 row["truth_class"] = fat.truth(kind=person_kind(), absent_s=None if absent_since is None else t - absent_since)
+            if truth_log is not None and ticked:
+                truth_log.write(json.dumps({"now": t, "truth": row.get("truth_class"), "F": row.get("fatigue_F"),
+                                            "S": row.get("fatigue_S"), "segment": info.kind}) + "\n")
             second_rows.append(row)
             w_frames.write(row)
             if progress and time.time() >= next_report:
@@ -629,6 +639,10 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
         hub.personalize.close_all(t_end)
     for w in (w_frames, w_ticks, w_events) + ((w_replay,) if w_replay is not None else ()):
         w.close()
+    if truth_log is not None:
+        for fh in (hub.hub.frame_log, hub.hub.state_log, truth_log):
+            fh.close()
+        hub.hub.frame_log = hub.hub.state_log = None
     with open(os.path.join(run_dir, "hub.log"), "w", encoding="utf-8") as fh:
         fh.write(hub.hub_log())
     policy_info["log"] = _parse_personalize_log(plog_path)

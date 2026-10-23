@@ -100,6 +100,23 @@ def test_truth_classes_and_seed_reproducible():
     assert FatigueModel(cfg, seed=9, t0=T0).params() != FatigueModel(cfg, seed=10, t0=T0).params()
 
 
+def test_daygen_days_are_free_living_and_reproducible(tmp_path):
+    from tools.life_sim.daygen import make_day, write_days
+    a, b = make_day(11), make_day(11)
+    assert a == b and make_day(12) != a
+    kinds = {g["kind"] for g in a["segments"]}
+    assert not kinds & {"drowsy", "face_down", "turtle", "chin_rest"}       # 졸음·자세 무너짐은 피로 모델이 만든다
+    assert all("co2_to" not in (g.get("env") or {}) for g in a["segments"])
+    assert a["reaction"]["fatigue"]["enabled"] and a["devices"]["room"]["randomize"]
+    desk = sum(g["seconds"] for g in a["segments"] if g["kind"] != "away")
+    assert 2.0 * 3600 - 60 <= desk <= 3.5 * 3600 + 60
+    index = write_days(list(range(1, 41)), str(tmp_path))
+    assert len({d["date"] for d in index}) == 40 and len({d["season"] for d in index}) == 4
+    from tools.life_sim.scenario import load_scenario
+    sc = load_scenario(index[0]["path"])
+    assert sc["reaction_resolved"]["fatigue"]["enabled"] is True
+
+
 def test_harness_emits_truth_rows_and_fatigue_summary(tmp_path):
     from tools.life_sim.harness import run_scenario
     from tools.life_sim.scenario import SCENARIO_DEFAULTS, deep_merge, load_defaults, resolve_reaction, start_epoch
@@ -120,3 +137,9 @@ def test_harness_emits_truth_rows_and_fatigue_summary(tmp_path):
     import os
     rows = [json.loads(line) for line in open(os.path.join(res["run_dir"], "frames.jsonl"), encoding="utf-8")]
     assert {"fatigue_F", "fatigue_S", "truth_class"} <= set(rows[100])
+    # 2단계 학습 로그: hub tick 마다 frames·state·truth 가 한 줄씩(ml/training/build_dataset.py --logs --truth 가 읽는 꼴)
+    lines = {n: open(os.path.join(res["run_dir"], f"{n}-hub.jsonl"), encoding="utf-8").read().splitlines()
+             for n in ("frames", "state", "truth")}
+    assert len(lines["frames"]) == len(lines["state"]) == len(lines["truth"]) > 100
+    first = json.loads(lines["truth"][0])
+    assert first["truth"] in ("focus", "fatigue", "rest", "idle") and abs(first["now"] - json.loads(lines["frames"][0])["now"]) < 1e-6

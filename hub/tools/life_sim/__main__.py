@@ -139,6 +139,18 @@ def cmd_viewer(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_daygen(args: argparse.Namespace) -> int:
+    from tools.life_sim.daygen import write_days
+    seeds: list[int] = []
+    for part in args.seeds.split(","):
+        lo, _, hi = part.partition("-")
+        seeds.extend(range(int(lo), int(hi or lo) + 1))
+    index = write_days(seeds, args.out, desk_hours=(args.desk_min_h, args.desk_max_h), vent_rule_p=args.vent_rule_p)
+    by = lambda k: {v: sum(1 for d in index if d[k] == v) for v in sorted({d[k] for d in index}, key=str)}  # noqa: E731
+    print(f"[life_sim] daygen {len(index)} 각본 → {args.out}  페르소나 {by('persona')} 계절 {by('season')} 환기규칙 {by('vent_rule')}")
+    return 0
+
+
 def cmd_table(args: argparse.Namespace) -> int:
     paths = [p for pat in args.summary for p in sorted(glob.glob(pat))]
     rows = ["| 실행 | 길이 | FSM 경로 | 개입 | 깨어남 | 환기/명령 | 휴식 | 자세 acc | drowsy 재현(모델/0x03) |",
@@ -232,6 +244,13 @@ def main(argv: list[str] | None = None) -> int:
     t = sub.add_parser("table")
     t.add_argument("summary", nargs="+")
     t.set_defaults(fn=cmd_table)
+    dg = sub.add_parser("daygen", help="자유 생활 하루 각본(잠재 피로 켬) — 2단계 피로 모델 학습 데이터용")
+    dg.add_argument("--seeds", required=True, help="예: 1-120 또는 1,5,9-12")
+    dg.add_argument("--out", required=True)
+    dg.add_argument("--desk-min-h", type=float, default=2.0)
+    dg.add_argument("--desk-max-h", type=float, default=3.5)
+    dg.add_argument("--vent-rule-p", type=float, default=0.5, help="CO₂ 환기 규칙을 켤 하루의 비율")
+    dg.set_defaults(fn=cmd_daygen)
     args = ap.parse_args(argv)
     if args.cmd in ("run", "ab") and args.posture == "gru" and not args.model:
         args.posture = "oracle"
