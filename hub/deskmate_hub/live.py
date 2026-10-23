@@ -118,8 +118,8 @@ class LiveHub:
         # logs/personalize-<boot_id>.jsonl 에 한 줄씩 쓴다. 정책(enabled)은 별개 — 꺼져 있어도 기록은 쌓는다.
         self.personalize_cfg = personalize_cfg if personalize_cfg is not None else (
             load_personalize_config() if load_personalize_config is not None else {})
-        # `enabled: true` 면 3층 정책(InterventionPolicy, numpy)도 켜서 결정 tick 에 arm·전달 게이트를 고르고
-        # profiles/<profile_id>/policy.json 에 학습 상태를 저장한다. numpy 가 없으면(Pi 4) 기록만 남긴다.
+        # `enabled: true` 면 3층 정책(InterventionPolicy, 순수 Python — Pi 4 에서도 돈다)도 켜서 결정 tick 에
+        # arm·전달 게이트를 고르고 profiles/<profile_id>/policy.json 에 학습 상태를 저장한다.
         self.personalize_recorder: EpisodeRecorder | None = None
         self.personalize_policy = None
         if EpisodeRecorder is not None and (self.personalize_cfg.get("record") or self.personalize_cfg.get("enabled")):
@@ -128,7 +128,7 @@ class LiveHub:
             policy_path = None
             if self.personalize_cfg.get("enabled"):
                 if InterventionPolicy is None:
-                    print("[personalize] enabled 지만 numpy 가 없어 정책 없이 기록만 한다", file=self.out)
+                    print("[personalize] enabled 지만 정책 모듈을 못 불러 기록만 한다", file=self.out)
                 else:
                     policy_path = personalize_policy_path or os.path.join(
                         log_dir, "profiles", str(self.personalize_cfg.get("profile_id", "default")), "policy.json")

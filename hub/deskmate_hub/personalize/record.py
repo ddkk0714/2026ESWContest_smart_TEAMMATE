@@ -1,4 +1,4 @@
-"""기록 전용 연결 — live 가 tick 마다 부르면 개인화 로그(personalization-log.md)를 쌓는다. numpy 없음.
+"""기록 연결 — live 가 tick 마다 부르면 개인화 로그(personalization-log.md)를 쌓는다. 순수 Python(Pi 4).
 
 정책(`enabled: false`)을 켜지 않아도 `record: true` 면 결정 tick(`route:<cause>`)마다 에피소드를 열고
 (`decision.source: "fallback"`, `arm: null`), 피드백·10 분 뒤 결과를 채워 한 줄로 쓰고, 세션이 끝나면
@@ -103,7 +103,7 @@ def fallback_decision(gate: Any, *, fsm_action: str | None) -> dict[str, Any]:
 class EpisodeRecorder:
     """LiveHub 가 소유. on_tick → (link_request) → on_feedback → (on_tick 이 10 분 뒤 닫음).
 
-    policy(InterventionPolicy, numpy 필요)를 주면 결정 tick 에 decide() 를 불러 그 결과를 에피소드의 decision 으로
+    policy(InterventionPolicy)를 주면 결정 tick 에 decide() 를 불러 그 결과를 에피소드의 decision 으로
     쓰고, 피드백·10 분 뒤 결과를 정책에 되돌려 준 뒤 policy_path 에 저장한다. 없으면 기록만(fallback).
     """
 

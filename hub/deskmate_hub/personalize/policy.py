@@ -1,4 +1,5 @@
-"""3층 개입 선택 정책 — 컨텍스트 밴딧(arm 별 베이지안 선형 회귀 + Thompson 샘플링). numpy 만 쓴다.
+"""3층 개입 선택 정책 — 컨텍스트 밴딧(arm 별 베이지안 선형 회귀 + Thompson 샘플링). 순수 Python(linalg.py) —
+Pi 4 제한 Python(numpy·_random 없음)에서도 돈다(2026-10-23, 그 전에는 numpy 전용이라 보드에서 꺼져 있었다).
 
 docs/personalization-spec.md §5–§8. FSM(1층)의 cause·gate 를 받아 그 cause 그룹 안의 arm 하나와
 전달 게이트(FSM 게이트를 넘지 않음)·설명 한 줄을 돌려준다. engine 은 건드리지 않는다.
@@ -15,10 +16,10 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
-import numpy as np
-
 from .config import load_personalize_config
 from .features import DIM, FEATURE_INDEX, Situation, prior_vector, vectorize
+from .linalg import (PurePRNG, Vec, add_outer, axpy, cholesky, dot, eye, inverse, matvec, standard_normals,
+                     symmetrize, zeros)
 
 AXES = ("accept", "effect")
 from .rewards import REWARD_ACCEPT, VERDICTS, reward_effect  # noqa: F401 — 이전 import 경로 유지
@@ -44,46 +45,52 @@ class ArmSpec:
 
 
 class BayesLinReg:
-    """A = λI + Σxxᵀ, b = λθ⁰ + Σrx. 사후 평균 μ = A⁻¹b, Thompson 샘플 ~ N(μ, σ²·scale·A⁻¹)."""
+    """A = λI + Σxxᵀ, b = λθ⁰ + Σrx. 사후 평균 μ = A⁻¹b, Thompson 샘플 ~ N(μ, σ²·scale·A⁻¹).
 
-    def __init__(self, theta0: np.ndarray, lam: float, noise_var: float):
-        self.theta0 = theta0.astype(float)
+    샘플은 numpy `multivariate_normal(method="cholesky")` 와 같은 방식(μ + √(σ²·scale)·L z, L Lᵀ = A⁻¹)이라
+    같은 난수열이면 numpy 판과 같은 값이 나온다. A⁻¹ 과 그 숄레스키는 update 때만 다시 구한다."""
+
+    def __init__(self, theta0: Any, lam: float, noise_var: float):
+        self.theta0 = [float(v) for v in theta0]
         self.lam = float(lam)
         self.noise_var = float(noise_var)
-        self.A = np.eye(DIM) * self.lam
-        self.b = self.lam * self.theta0
+        self.A = eye(DIM, self.lam)
+        self.b = [self.lam * v for v in self.theta0]
         self.n = 0
-        self._inv: np.ndarray | None = None
+        self._inv: list[list[float]] | None = None
+        self._chol: list[list[float]] | None = None
 
-    def _cov(self) -> np.ndarray:
+    def _cov(self) -> list[list[float]]:
         if self._inv is None:
-            self._inv = np.linalg.inv(self.A)
+            self._inv = inverse(self.A)
         return self._inv
 
-    def mean(self) -> np.ndarray:
-        return self._cov() @ self.b
+    def mean(self) -> Vec:
+        return matvec(self._cov(), self.b)
 
-    def sample(self, rng: np.random.Generator, scale: float) -> np.ndarray:
-        cov = self.noise_var * scale * self._cov()
-        cov = 0.5 * (cov + cov.T)
-        return rng.multivariate_normal(self.mean(), cov, method="cholesky")
+    def sample(self, rng: Any, scale: float) -> Vec:
+        if self._chol is None:
+            self._chol = cholesky(symmetrize(self._cov()))
+        s = (self.noise_var * scale) ** 0.5
+        z = standard_normals(rng, DIM)
+        return [m + s * dot(row[: i + 1], z[: i + 1]) for i, (m, row) in enumerate(zip(self.mean(), self._chol))]
 
-    def update(self, x: np.ndarray, r: float) -> None:
-        self.A += np.outer(x, x)
-        self.b += float(r) * x
+    def update(self, x: Any, r: float) -> None:
+        add_outer(self.A, x)
+        axpy(self.b, float(r), x)
         self.n += 1
-        self._inv = None
+        self._inv = self._chol = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"A": self.A.tolist(), "b": self.b.tolist(), "n": self.n}
+        return {"A": [list(row) for row in self.A], "b": list(self.b), "n": self.n}
 
     def load(self, data: dict[str, Any]) -> None:
-        A = np.array(data["A"], dtype=float)
-        b = np.array(data["b"], dtype=float)
-        if A.shape != (DIM, DIM) or b.shape != (DIM,):
+        A = [[float(v) for v in row] for row in data["A"]]
+        b = [float(v) for v in data["b"]]
+        if len(A) != DIM or any(len(row) != DIM for row in A) or len(b) != DIM:
             raise ValueError("posterior 차원이 FEATURE_NAMES 와 다르다")
         self.A, self.b, self.n = A, b, int(data.get("n", 0))
-        self._inv = None
+        self._inv = self._chol = None
 
 
 @dataclass
@@ -104,7 +111,7 @@ class Decision:
     fsm_gate: str
     ts: float
     c_fatigue_before: float
-    x: np.ndarray = field(repr=False, default_factory=lambda: np.zeros(DIM))
+    x: Vec = field(repr=False, default_factory=lambda: zeros(DIM))
     ventilate_minutes: int | None = None     # arm == ventilate_suggest 일 때 권유 길이(날씨가 정한다)
 
     def to_dict(self) -> dict[str, Any]:
@@ -122,10 +129,10 @@ class Decision:
 
 
 class InterventionPolicy:
-    def __init__(self, cfg: dict[str, Any] | None = None, *, rng: np.random.Generator | None = None,
+    def __init__(self, cfg: dict[str, Any] | None = None, *, rng: Any = None,
                  profile: Any = None):
         self.cfg = cfg if cfg is not None else load_personalize_config()
-        self.rng = rng if rng is not None else np.random.default_rng()
+        self.rng = rng if rng is not None else PurePRNG()   # numpy Generator 도 받는다(standard_normal)
         self.profile = profile          # ProfileSummary | None — 설명 문구·취침 규칙 보조
         self.arms: dict[str, ArmSpec] = {}
         for spec in self.cfg["arms"]:
@@ -284,7 +291,7 @@ class InterventionPolicy:
                 and sit.drowsy_count_30min >= int(s["drowsy_min_count"])
                 and self._ineffective_tail() >= int(s["ineffective_min"]) and not self._sleep_done)
 
-    def _score(self, arm: str, x: np.ndarray) -> float:
+    def _score(self, arm: str, x: Vec) -> float:
         b = self.cfg["bandit"]
         cs = self.cfg["cold_start"]
         scale = float(cs["explore_scale_personal"] if self.policy_mode == "personal" else cs["explore_scale_global"])
@@ -292,7 +299,7 @@ class InterventionPolicy:
         for axis, w in (("accept", b["weight_accept"]), ("effect", b["weight_effect"])):
             model = self.models[arm][axis]
             theta = model.mean() if b.get("algorithm") == "greedy" else model.sample(self.rng, scale)
-            total += float(w) * float(theta @ x)
+            total += float(w) * dot(theta, x)
         # 날씨 고정 보정 (spec §7): 바람 불면 선풍기·공기청정기보다 환기 먼저
         if x[FEATURE_INDEX["windy"]] > 0.5:
             total += float((self.cfg["weather"].get("windy_bias") or {}).get(arm, 0.0))

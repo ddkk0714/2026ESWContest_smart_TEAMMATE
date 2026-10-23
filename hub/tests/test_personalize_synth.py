@@ -46,7 +46,7 @@ def test_feature_vector_matches_names():
                   co2_ppm=1200, lux=50, temp_c=30, humidity_pct=50, weather={"windy": True, "outdoor_temp_c": 35})
     x = vectorize(s, CFG["features"])
     named = dict(zip(FEATURE_NAMES, x))
-    assert x.shape == (len(FEATURE_NAMES),) and named["bias"] == 1.0
+    assert len(x) == len(FEATURE_NAMES) and named["bias"] == 1.0
     assert named["posture_upright"] == 0.5 and named["posture_recline"] == 0.5
     assert named["co2"] == (1200 - 400) / 1600 and named["dark"] == 1.0 and named["temp_dev"] == 1.0
     assert named["windy"] == 1.0 and named["outdoor_temp_diff"] == 0.5 and named["weekend"] == 0.0

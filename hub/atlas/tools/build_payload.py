@@ -101,6 +101,13 @@ def main() -> None:
                     "deskmate_hub/config/personalization.json",
                     json.dumps(personalization_config, ensure_ascii=False, separators=(",", ":")),
                 )
+            # 개입 선택 정책(personalize/, 2026-10-23 순수 Python) — 이 JSON 이 없으면 보드는 YAML 을 못 읽어 개인화가 꺼진다
+            personalize_yaml = args.config.with_name("personalize.yaml")
+            if personalize_yaml.exists():
+                with personalize_yaml.open(encoding="utf-8") as source:
+                    personalize_config = yaml.safe_load(source)
+                archive.writestr("deskmate_hub/config/personalize.json",
+                                 json.dumps(personalize_config, ensure_ascii=False, separators=(",", ":")))
             privacy_yaml = args.config.with_name("privacy.yaml")
             if privacy_yaml.exists():
                 with privacy_yaml.open(encoding="utf-8") as source:

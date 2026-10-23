@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import json
 import os
-import statistics
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable
+
+from ..mathutil import median
 
 EPISODE_SCHEMA = "personalize_episode"
 SESSION_SCHEMA = "personalize_session"
@@ -20,7 +21,7 @@ SESSION_SCHEMA = "personalize_session"
 
 def _median(values: list[float]) -> float | None:
     vals = [float(v) for v in values if v is not None]
-    return statistics.median(vals) if vals else None
+    return median(vals) if vals else None
 
 
 def _percentile(values: list[float], pct: float) -> float | None:

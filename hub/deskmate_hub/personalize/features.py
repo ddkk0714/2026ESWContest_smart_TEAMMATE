@@ -7,10 +7,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:  # numpy 는 vectorize/prior_vector 안에서만 import 한다 — 기록 전용 경로(log/record)는 numpy 없이 돈다(Pi 4)
-    import numpy as np
 
 POSTURE_LABELS: tuple[str, ...] = (
     "upright", "lean_forward", "recline", "face_down", "chin_rest",
@@ -111,11 +109,9 @@ def _comfort_deviation(value: float, lo: float, hi: float, margin: float) -> flo
     return 0.0
 
 
-def vectorize(sit: Situation, fcfg: dict[str, Any]) -> "np.ndarray":
-    import numpy as np
-
-    """Situation → 길이 DIM 의 float 벡터. 결측은 0."""
-    x = np.zeros(DIM, dtype=float)
+def vectorize(sit: Situation, fcfg: dict[str, Any]) -> list[float]:
+    """Situation → 길이 DIM 의 float 목록(순수 Python — 보드에 numpy 없음). 결측은 0."""
+    x = [0.0] * DIM
     x[FEATURE_INDEX["bias"]] = 1.0
     total = sum(sit.posture_dist.values()) or 1.0
     for label in POSTURE_LABELS:
@@ -161,11 +157,9 @@ def vectorize(sit: Situation, fcfg: dict[str, Any]) -> "np.ndarray":
     return x
 
 
-def prior_vector(spec: dict[str, float] | None) -> "np.ndarray":
-    import numpy as np
-
-    """YAML 의 {특징이름: 가중치} → 길이 DIM 벡터. 모르는 이름은 오류."""
-    theta = np.zeros(DIM, dtype=float)
+def prior_vector(spec: dict[str, float] | None) -> list[float]:
+    """YAML 의 {특징이름: 가중치} → 길이 DIM 목록. 모르는 이름은 오류."""
+    theta = [0.0] * DIM
     for name, weight in (spec or {}).items():
         if name not in FEATURE_INDEX:
             raise KeyError(f"prior 에 모르는 특징 이름: {name}")

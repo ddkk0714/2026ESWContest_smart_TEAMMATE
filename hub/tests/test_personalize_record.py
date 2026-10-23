@@ -241,13 +241,13 @@ def test_auto_episode_without_feedback_closes_as_auto_kept(tmp_path):
 
 
 def test_live_imports_without_numpy():
-    """Pi 4 제한 Python 에는 numpy 가 없다 — 기록 전용 경로(live → personalize.record) 는 numpy 없이 import 돼야 한다."""
+    """Pi 4 제한 Python 에는 numpy 가 없다 — 정책까지(2026-10-23 순수 Python 이식) numpy 없이 import 돼야 한다."""
     code = ("import sys; sys.modules['numpy'] = None; "
             "import deskmate_hub.live, deskmate_hub.personalize.record; "
             "import deskmate_hub.personalize as p; print(p.InterventionPolicy is None)")
     out = subprocess.run([sys.executable, "-c", code], cwd=HUB_DIR, capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
-    assert out.stdout.strip() == "True"
+    assert out.stdout.strip() == "False"            # 정책이 보드에서도 있다
 
 
 def test_arm_commands_translate_device_specs():

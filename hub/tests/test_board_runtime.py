@@ -29,6 +29,8 @@ BOARD_MODULES = (
     "deskmate_hub.personalization.portable",
     "deskmate_hub.personalization.ondevice",
     "deskmate_hub.personalization.self_check",
+    "deskmate_hub.personalize",                    # 개입 선택 정책도 보드에서 돈다(2026-10-23 순수 Python 이식)
+    "deskmate_hub.personalize.policy",
 )
 
 
@@ -84,3 +86,31 @@ def test_portable_fingerprint_without_hashlib_sha256():
     result = subprocess.run([sys.executable, "-c", code], cwd=HUB, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr[-2000:]
     assert result.stdout.strip() == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+
+
+def test_personalize_policy_decides_and_learns_without_numpy_or_random():
+    """보드 조건(numpy·_random 없음)에서 정책이 결정·피드백·저장·불러오기까지 돈다."""
+    code = textwrap.dedent(f"""
+        import sys, json, tempfile, os
+        for name in {MISSING_ON_BOARD!r} + ("numpy", "statistics"):
+            sys.modules[name] = None
+        sys.modules.pop("random", None)
+        from deskmate_hub.personalize import InterventionPolicy, Situation, load_personalize_config
+        cfg = load_personalize_config()
+        p = InterventionPolicy(cfg)
+        s = Situation(ts=1e6, hour_local=15.5, weekday=2, month=10, co2_ppm=1400, temp_c=24.0, lux=300,
+                      c_fatigue=0.8, session_elapsed_min=90,
+                      weather={{"windy": True, "rain": False, "pm_bad": False, "outdoor_temp_c": 10.0, "wind_ms": 6.0}})
+        d = p.decide(s, cause="environment", gate="suggest", session_id="s1")
+        assert d.arm in ("fan_on", "ventilate_suggest", "light_cool_bright"), d.arm
+        p.feedback(d, "accept")
+        p.outcome(d, c_fatigue_after=0.5)
+        path = os.path.join(os.path.dirname(os.path.abspath("x")), "board_policy_test.json")
+        p.save(path)
+        q = InterventionPolicy.load(path, cfg)
+        os.remove(path)
+        assert q.n_feedback == p.n_feedback
+        print("ok", d.arm, d.ventilate_minutes)
+    """)
+    result = subprocess.run([sys.executable, "-c", code], cwd=HUB, capture_output=True, text=True)
+    assert result.returncode == 0 and "ok" in result.stdout, result.stderr[-2000:]
