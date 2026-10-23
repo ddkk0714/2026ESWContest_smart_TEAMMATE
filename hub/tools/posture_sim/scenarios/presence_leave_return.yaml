@@ -1,0 +1,29 @@
+# 재실 ① 나갔다 들어오기 (대학생, PC). (자세판정 시뮬에선 hub IDLE 대신 "부재 판정까지·복귀 뒤 재실까지" 를 본다) 짧은 자리비움(40 s·4 분)은 세션 유지, 12 분·15 분은 IDLE(absent_idle_sec 600) → 복귀 시 새 세션.
+#  중간에 가만히 조는 구간·엎드림(움직임 거의 없음)은 계속 재실이어야 한다(mmWave 는 호흡을 본다).
+#  where: room = 원룸 안 다른 곳(C1001 은 11 m 를 봐서 먼 거리로 계속 재실), out = 방 밖. 같은 각본을 hub 재실 판정 두 방식으로:
+#  --presence mmwave(mmWave 우선 + 거리 desk_max_cm 로 책상 재실) vs --presence any(둘 중 하나, 이전 동작).
+#  볼 것: summary.presence.away_episodes(IDLE 까지 몇 초, 복귀 뒤 START 까지 몇 초), 헛재실·놓침 초, 자리비움 중 개입 수.
+name: presence_leave_return
+persona: student
+seed: 601
+start_clock: "14:00"
+l8_params: v5
+env: {co2_ppm: 600, temp_c: 23.0, humidity_pct: 45, pm25: 15}
+weather: {temp_c: 17.0, humidity: 50, wind_ms: 2.0, condition: clear, season: autumn, pm25: 15}
+policy: {profile: none}
+segments:
+  - {kind: away, seconds: 10}
+  - {kind: upright, seconds: 600, typing: true}
+  - {kind: away, seconds: 40, where: room}         # 물 마시기(원룸 주방 — 레이더에 먼 거리로 잡힘)
+  - {kind: upright, seconds: 300, typing: true}
+  - {kind: away, seconds: 240, where: out}         # 화장실(방 밖)
+  - {kind: mouse_work, seconds: 300, typing: true}
+  - {kind: away, seconds: 720, where: room}        # 방 안 식탁에서 식사 — 10 분 넘음 → IDLE 이어야 한다(레이더는 계속 재실)
+  - {kind: upright, seconds: 480, typing: true}
+  - {kind: drowsy, seconds: 300, typing: false,
+     nods: {interval_s: [8, 16], amp_deg: [25, 40], micro_sleep_p: 0.4, hold_s: [5, 12], first_s: [20, 40]}}
+  - {kind: face_down, seconds: 300, typing: false}  # 엎드려 잠 — 움직임 거의 없음, 그래도 재실
+  - {kind: upright, seconds: 240, typing: true}
+  - {kind: away, seconds: 900, where: out}         # 외출 15 분 → IDLE
+  - {kind: upright, seconds: 300, typing: true}
+  - {kind: away, seconds: 30, no_return: true}
