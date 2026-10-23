@@ -297,7 +297,9 @@ FSM 을 MONITOR 로 보낸다. `state/phase.sensor_summary.control` 에 진행 �
 Pi 5 앱은 `desk_lamp`의 `set_brightness`(iLink 원시 밝기 정수 **0~255**, 퍼센트 아님)와
 `set_power`(`on`/`off`)를 실행하고 `display-control` 노드의 결과를 QoS 1·retain 없음으로
 돌려준다. 기존 설정의 밝기 70은 약 27%, 되돌림 40은 약 16%다. 다른 대상은 해당 어댑터가
-처리하며, 앱이 환기팬 등의 성공 응답을 대신 만들지 않는다.
+처리하며, 앱이 환기팬 등의 성공 응답을 대신 만들지 않는다. `vent_fan` 은 Pico 2 W 블루투스 선풍기
+(`firmware/pico2w_ble_fan/`)이고 PC 에서 `python tools/ble_fan.py bridge --broker <ip>` 가 같은 문(확인 필요·gate·만료·retain·중복)으로
+실행해 `ble-fan` 노드 결과를 돌려준다. `set_power` 외에 `set_speed`(0~100)·`set_level`(0~3)·`set_mode`(normal|natural)·`set_timer`(초)도 받는다.
 
 앱의 자동 피드백 스위치가 꺼졌거나 램프가 미설정·실패·만료이면 `failed`와 `error_code`를
 응답한다. `requires_confirmation=true` 명령과 지원하지 않는 동작은 실행하지 않는다.
