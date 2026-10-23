@@ -42,7 +42,7 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 | `deskmate/control/cmd` | hub | control 어댑터, Pi 5 앱(조명) | 이벤트, QoS 1, retain 없음 | 기기 제어 명령 (`control_command`, data-spec §10) |
 | `deskmate/control/result` | control 어댑터, Pi 5 앱(조명) | hub | 이벤트, QoS 1 | 명령 결과 (`control_result`). hub 는 `command_id` 로 매칭 |
 | `deskmate/feedback/user` | display | hub | 이벤트 | 사용자 수락 · 정정 |
-| `deskmate/fatigue/label` | Pi 5 피로 기록 앱(`display/atlas/fatigue_app`) | PC `tools/fatigue_logger.py` | 이벤트, QoS 1 | 피로 데이터 수집: 작업 시작·끝, 15분 KSS 응답. FSM 입력 아님 ([fatigue-dataset.md](fatigue-dataset.md)) |
+| `deskmate/fatigue/label` | Pi 5 피로 기록 앱(`display/atlas/fatigue_app`) | PC `tools/fatigue_logger.py`, hub | 이벤트, QoS 1 | 피로 데이터 수집: 작업 시작·끝, 15분 KSS 응답. hub 는 피로 점수 문맥·프로필 보정에만 씀, FSM 입력 아님 ([fatigue-dataset.md](fatigue-dataset.md)) |
 | `deskmate/health/<node>` | 전 장치 | hub | LWT/retain | `{ts,node,status:online|offline,reconnects}`. hub 는 `deskmate/health/hub` |
 
 ## 페이로드 예시
@@ -425,7 +425,9 @@ ondevice.yaml이 활성화된 경우에만 `state/phase.data.sensor_summary.onde
 
 ## 피로 데이터 수집 (2026-10-20)
 
-`deskmate/fatigue/label` 은 Pi 5 피로 기록 앱(`com.atlas.app.deskmate_fatigue`)이 보내는 학습 라벨이다. hub FSM 은 구독하지 않는다.
+`deskmate/fatigue/label` 은 Pi 5 피로 기록 앱(`com.atlas.app.deskmate_fatigue`)이 보내는 학습 라벨이다. hub FSM 입력은 아니다 —
+hub 는 이 토픽을 구독해 피로 점수의 세션 문맥과 프로필 보정에만 쓰고, 점수는 `state/phase.data.sensor_summary.fatigue`
+(`{kss, kss_personal, window_s, n_ticks, model_id, valid, ts}`, 1분마다 갱신, 모델이 없으면 생략)로 낸다([fatigue-dataset.md](fatigue-dataset.md) §6).
 QoS 1, retain 없음. 연결이 끊긴 동안의 기록은 앱이 순서대로 쌓아 두었다가 다시 보낸다(중복은 기록기가 거른다).
 
 ```json
