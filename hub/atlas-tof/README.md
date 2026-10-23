@@ -162,4 +162,5 @@ TOFPOSTURE_EXIT_ON_EOF=1 build/deskmate_tofposture
 | `tools/deploy-pi4.ps1` / `deploy-pi4.sh` | A 경로: PC → 보드 복사·자가 시험·시작 |
 | `tools/pi4-tof-activate.sh` | B 경로: 재부팅·재설치 뒤 계정·D-Bus·USB 권한·env 정리 + 기동 |
 | `tools/push-model.sh` | B 경로: export 폴더의 `posture_net.bin` 을 보드에 |
+| `pc/tof_wall_noise.py` | 벽 잡음 측정. 안내 진행(`session`: 벽 45/60/70 cm 각 5분 → 빈 자리 → 가만히 → 평소 작업, 소리·Enter), 중계기 `/raw` 원본 녹화 → 칸별 σ·느린 성분·끄덕임 대역·필터 비교, 거리별 시뮬 `L8Params` 맞춤, 벽 vs 사람 비교. `--pi5` 로 ssh 터널 자동. 절차 [`docs/WALL_NOISE_TEST.md`](docs/WALL_NOISE_TEST.md) |
 | `files/` | ARC 패키징(serviceinfo, .apptype, D-Bus conf/service) |
