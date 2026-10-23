@@ -23,8 +23,8 @@ def run_viewer(run_dir: str, *, speed: float = 4.0, start_s: float = 0.0, loop: 
     import mujoco
     import mujoco.viewer
 
-    from . import tofsim_bridge
-    from .scene import build_scene
+    from tools.posture_sim import tofsim_bridge
+    from tools.posture_sim.scene import build_scene
 
     if tofsim_root:
         os.environ["TOFSIM_ROOT"] = tofsim_root

@@ -51,8 +51,11 @@ def load_yaml(path: str) -> dict[str, Any]:
 
 
 def load_defaults() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """reaction · devices · policy 기본값. devices 에는 자세판정 시뮬의 센서 설정(tools/posture_sim/config/sensors.yaml:
+    presence · mmwave · rule_features · posture_model)이 먼저 깔리고 life_sim devices.yaml 이 그 위에 덮인다."""
+    from tools.posture_sim.scenario import load_sensors
     reaction = load_yaml(os.path.join(CONFIG_DIR, "reaction.yaml"))
-    devices = load_yaml(os.path.join(CONFIG_DIR, "devices.yaml"))
+    devices = deep_merge(load_sensors(), load_yaml(os.path.join(CONFIG_DIR, "devices.yaml")))
     policy = load_yaml(os.path.join(CONFIG_DIR, "policy_simple.yaml")) if os.path.exists(
         os.path.join(CONFIG_DIR, "policy_simple.yaml")) else {}
     return reaction, devices, policy
@@ -71,7 +74,7 @@ def load_scenario(path: str) -> dict[str, Any]:
         sc["name"] = os.path.splitext(os.path.basename(path))[0]
     reaction_cfg, devices_cfg, policy_cfg = load_defaults()
     sc["reaction_resolved"] = resolve_reaction(reaction_cfg, sc["persona"], raw.get("reaction"))
-    sc["devices_resolved"] = deep_merge(devices_cfg, raw.get("devices"))
+    sc["devices_resolved"] = deep_merge(deep_merge(devices_cfg, raw.get("sensors")), raw.get("devices"))
     sc["policy_resolved"] = deep_merge(policy_cfg, raw.get("policy"))
     sc["path"] = os.path.abspath(path)
     sc["t0"] = start_epoch(sc["date"], sc["start_clock"])

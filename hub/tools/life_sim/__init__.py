@@ -6,14 +6,13 @@
     python -m tools.life_sim run hub/tools/life_sim/scenarios/a1_wake_first.yaml --out runs/lifesim --model <ckpt.pt>
 
 구성
-    scenario.py       각본·반응·기기 설정 로딩(yaml, 깊은 병합)
-    tofsim_bridge.py  dataset/tof_sim_v5 (UBAI 사본) 를 찾아 import
-    scene.py          CAD04 두 센서 장면(MuJoCo / numpy 백엔드) 렌더
-    person.py         각본대로 움직이는 사람 + "개입이 오면 각본이 바뀌는" 동적 전환
-    posture_model.py  GRU(torch) 자세·졸음 모델(센서별 추론 → log-softmax 융합), 0x03 규칙 특징 대역, 시험용 오라클
+    (자세판정 단계 — 사람·장면·ToF·mmWave C1001·자세 모델·책상 재실 — 은 tools/posture_sim, 브랜치 feat/posture-sim)
+    scenario.py       각본·반응·기기 설정 로딩(yaml, 깊은 병합; 센서 기본값은 posture_sim/config/sensors.yaml)
     hub_bridge.py     LiveHub 를 UART 0x05/0x03 + MQTT env/keystroke 경로 그대로 먹이는 어댑터
     reaction.py       사람 반응 모델(개입 종류×페르소나별 깨어남·수락·무시·거절·되돌리기)
     devices.py        주변기기 mock(선풍기·공기청정기·무드등·스피커 TTS·화면 카드) + 실내 환경·날씨
+    room.py           방 물리(CO₂·온도·절대습도·조도), env_sensors.py SCD41·DHT22·BH1750 → UART 0x10
+    purifier.py       공기청정기 PM2.5 타이밍 규칙(= ThinQ auto 모드 모사)
     harness.py        폐루프 본체, JSONL·요약 출력
     plots.py          PNG 타임라인
 """

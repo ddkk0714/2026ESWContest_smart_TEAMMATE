@@ -18,18 +18,23 @@ python -m tools.life_sim table runs/lifesim/*/summary.json
 pytest tests/test_life_sim.py                                           # 합성 2 + numpy 백엔드 1(tofsim 있을 때)
 ```
 
-UBAI: `~/tof-sim-v5-lifesim/` (sim = `~/tof-sim-v5-opt` 코드 사본 = cad04 + l8 패치, models/ = opt_l8v5_c256 best·cad04 best,
-pylib/ = pyyaml·matplotlib·pytest, repo/ = 이 레포의 hub/·tools/). `sbatch --partition=gpu6 run_lifesim.sh run <각본>`,
-`CMD=ab SEEDS=3 sbatch run_lifesim.sh <각본>`. 결과는 `runs/lifesim/<persona>_<name>[_A|_B][_sN]/`.
+UBAI: 자세판정 시뮬의 키트를 같이 쓴다(`tools/posture_sim/ubai/`, CMD=life_sim).
+```bash
+bash hub/tools/posture_sim/ubai/push.sh v7                                  # PC, 레포 루트에서 → ~/tof-sim-v5-lifesim/repo_v7
+ssh ubai 'cd ~/tof-sim-v5-lifesim && ARGS="--presence mmwave" bash repo_v7/hub/tools/posture_sim/ubai/submit.sh v7 life_sim "1 2" tools/life_sim/scenarios/pm_cooking_evening.yaml'
+```
+시드마다 작업 하나(병렬). 결과는 `runs/life_sim_v7/<persona>_<name>[_pres-…][_sN]/`. 영상은 `--replay` 로 돌린 뒤 PC 에서 `video`.
+
+**브랜치 구조**: `feat/posture-sim`(자세판정 시뮬: 사람·장면·ToF·mmWave C1001·자세 모델·책상 재실·평가, main 위) →
+`feat/life-sim`(이 패키지: hub FSM·개인화·기기·환경·공기청정기·사람 반응, posture-sim 위 + personalize). 센서 설정 기본값은
+`tools/posture_sim/config/sensors.yaml` 이고 이 패키지의 `config/devices.yaml` 이 그 위에 덮인다.
 
 ## 구성과 데이터 경로
 
 | 파일 | 역할 |
 |---|---|
 | `scenario.py`, `scenarios/*.yaml` | 각본(구간 목록·환경·날씨·반응/기기/정책 덮어쓰기). 기본값은 `config/*.yaml`, 깊은 병합 |
-| `scene.py` | tofsim `sample_session(placement="desk")` 으로 책상·사람·CAD04 기기 배치를 뽑고(분류기가 읽을 수 있는 배치만), 두 센서를 따로 렌더 |
-| `person.py` | 각본대로 움직이는 사람. tofsim 헬퍼(`_target_pose`·끄덕임·`_lerp_pose`·`_away_frame`) 재사용. `override()` 로 개입 반응(깨어남·자세 복귀·휴식) 시 각본을 자른다 |
-| `posture_model.py` | `GruPosture`: PostureNet 체크포인트, 센서별 은닉 상태, log-softmax 융합, 1 s 다수결. `RuleFeatures`: ESP32 0x03 규칙 특징 대역(재실·motion·끄덕임→drowsy 플래그). `OraclePosture`: 시험용 |
+| (posture_sim) | 사람(`person.py`, `override()` 로 개입 반응 시 각본을 자른다)·장면·두 ToF·mmWave C1001·GRU/0x03/오라클·책상 재실 — `tools/posture_sim` |
 | `hub_bridge.py` | LiveHub 를 실기 경로로 먹인다: 0x05 격자 → `encode_tof_sensor_frames` → `ingest_frame`(TofGridAssembler, posture 훅=모델) → `cache.tof_grid/tof_mlp`; 0x03 → `encode_payload` → `cache.tof`; env/keystroke → `route_mqtt_message`; 피드백 → `cache.put_feedback`; 제어 → ControlDispatcher+MockPlug(명령을 밖으로도 넘김) |
 | `reaction.py`, `config/reaction.yaml` | 사람 반응: 카드 수락/무응답/거절, 채널별 깨어남 확률(1−Π(1−p)), 자세 복귀, 되돌리기, 휴식 이탈. 페르소나별 덮어쓰기 |
 | `devices.py`, `config/devices.yaml` | 기기 mock(선풍기 0~3·공기청정기·무드등 cool/warm·스피커 TTS·화면 카드·창문) + 실내 환경 1차 물리(CO₂·PM·온도·조도) + 날씨 규칙(바람≥4 m/s 환기 우선, 비·눈·바깥이 2 ℃ 더우면 환기 제외, 겨울 5분/그 외 15분) + hub 액션→채널 매핑 |

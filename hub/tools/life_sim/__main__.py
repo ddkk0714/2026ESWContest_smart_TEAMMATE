@@ -35,7 +35,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             sc["devices_resolved"].setdefault("room", {})["randomize"] = True
         src = None
         if args.synthetic:
-            from tools.life_sim.synthetic import SyntheticPerson
+            from tools.posture_sim.synthetic import SyntheticPerson
             src = SyntheticPerson(sc["segments"], seed=sc["seed"], fps=float(sc["fps"]))
         label = args.label or (f"{sc['persona']}_{sc['name']}" + ("_rr" if args.room_random else "")
                                + (f"_pres-{args.presence}" if args.presence else "")
@@ -67,7 +67,7 @@ def cmd_ab(args: argparse.Namespace) -> int:
             sc["seed"] = int(args.seed)
         factory = None
         if args.synthetic:
-            from tools.life_sim.synthetic import SyntheticPerson
+            from tools.posture_sim.synthetic import SyntheticPerson
             factory = lambda s: SyntheticPerson(s["segments"], seed=s["seed"], fps=float(s["fps"]))  # noqa: E731
         try:
             cmp = run_ab(sc, out_dir=args.out, model_path=args.model, posture=args.posture, backend=args.backend,

@@ -29,9 +29,10 @@ import numpy as np
 from .devices import DeviceWorld
 from .hub_bridge import HubBridge
 from .policy import GROUP_OF, SimplePolicy, synth_profile
-from .posture_model import OraclePosture, RuleFeatures
+from tools.posture_sim.mmwave import MmwaveSensor, presence_decision
+from tools.posture_sim.posture_model import OraclePosture, RuleFeatures
+from tools.posture_sim.source import TofsimSource, where_now as _where_now
 from .env_sensors import EnvSensors
-from .mmwave import MmwaveSensor, presence_decision
 from .purifier import PurifierController, purifier_metrics
 from .reaction import Reaction, ReactionModel
 from .scenario import fsm_config_path
@@ -40,29 +41,6 @@ FOCUS_STATES = {"FOCUS_PC", "FOCUS_MIXED", "FOCUS_NPC"}
 SLEEPY = ("drowsy", "face_down")
 FIXABLE = ("chin_rest", "turtle", "lean_forward", "recline", "elbows")
 WEATHER_PERIOD_S = 1800.0
-
-
-class _TofsimSource:
-    """ScriptedPerson + Scene 을 하네스가 쓰는 한 인터페이스로."""
-
-    def __init__(self, scenario: dict[str, Any], *, backend: str, tofsim_root: str | None):
-        from . import tofsim_bridge
-        from .person import ScriptedPerson
-        from .scene import build_scene
-        if tofsim_bridge.load(tofsim_root) is None:
-            raise RuntimeError("tofsim 을 찾지 못했다 (TOFSIM_ROOT 또는 --tofsim)")
-        self.scene = build_scene(int(scenario["seed"]), backend=backend, placement=scenario["placement"],
-                                 clutter=int(scenario["clutter"]), scene=scenario["scene"],
-                                 require_ok=bool(scenario["require_ok_placement"]), l8_params=scenario.get("l8_params"))
-        self.person = ScriptedPerson(scenario["segments"], seed=int(scenario["seed"]) + 1, fps=float(scenario["fps"]))
-        self.person.bind(self.scene.cfg)
-        self.meta = dict(self.scene.meta)
-
-    def __getattr__(self, name):           # step/override/current/done/total_seconds/overrides_applied/t
-        return getattr(self.person, name)
-
-    def render(self, info):
-        return self.scene.render(info.pose, info.walker)
 
 
 def _jsonable(x: Any) -> Any:
@@ -205,13 +183,13 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
     started = time.time()
     dev = scenario["devices_resolved"]
 
-    src = source if source is not None else _TofsimSource(scenario, backend=backend or scenario["backend"], tofsim_root=tofsim_root)
+    src = source if source is not None else TofsimSource(scenario, backend=backend or scenario["backend"], tofsim_root=tofsim_root)
     rules = RuleFeatures((dev.get("rule_features") or {}), fps=fps)
     _truth: dict[str, str] = {}
     if posture == "oracle" or (source is not None and model_path is None):
         model = OraclePosture(lambda: getattr(src, "last_label", None) or _truth.get("label", "upright"), seed=seed)
     else:
-        from .posture_model import GruPosture
+        from tools.posture_sim.posture_model import GruPosture
         mcfg = dev.get("posture_model") or {}
         model = GruPosture(model_path, vote_frames=int(mcfg.get("vote_frames", 10)), warmup_frames=int(mcfg.get("warmup_frames", 45)),
                            reset_on_away_s=float(mcfg.get("reset_on_away_s", 60)), reset_every_s=mcfg.get("reset_every_s", 900))
@@ -269,15 +247,7 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
 
     def where_now() -> str:
         """desk | room(방 안 다른 곳 — 침대·주방) | out. 각본 구간의 where, 없으면 취침=room, 그 밖은 각본 away_where(기본 out)."""
-        if person_kind() != "away":
-            return "desk"
-        if src.done:
-            return str(scenario.get("away_where", "out"))
-        cur = src.current
-        w = (getattr(cur, "spec", None) or {}).get("where")
-        if w is None:
-            w = "room" if getattr(cur, "override", None) == "bedtime" else str(scenario.get("away_where", "out"))
-        return str(w)
+        return _where_now(src, default=str(scenario.get("away_where", "out")))
 
     def in_focus() -> bool:
         return bool(last_tick and last_tick["state"] in FOCUS_STATES)

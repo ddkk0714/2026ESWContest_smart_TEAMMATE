@@ -34,7 +34,7 @@ def _scenario(segments, *, reaction=None, name="t", seed=5):
 
 def test_synthetic_closed_loop_wakes_and_recovers(tmp_path):
     from tools.life_sim.harness import run_scenario
-    from tools.life_sim.synthetic import SyntheticPerson
+    from tools.posture_sim.synthetic import SyntheticPerson
 
     sc = _scenario(SEGMENTS, reaction={"wake": {"screen_notice": 1.0, "lamp_cool": 1.0, "tts": 1.0},
                                        "wake_delay_s": [5, 10], "awake_s": [1200, 1200]})
@@ -59,7 +59,7 @@ def test_synthetic_closed_loop_wakes_and_recovers(tmp_path):
 
 def test_synthetic_never_wakes_reaches_rest(tmp_path):
     from tools.life_sim.harness import run_scenario
-    from tools.life_sim.synthetic import SyntheticPerson
+    from tools.posture_sim.synthetic import SyntheticPerson
 
     segs = [{"kind": "away", "seconds": 6}, {"kind": "upright", "seconds": 320, "typing": True},
             {"kind": "drowsy", "seconds": 2400, "typing": False,
@@ -85,7 +85,7 @@ def test_hub_personalize_engine_ab_synthetic(tmp_path):
     personalize.jsonl 에 에피소드를 남긴다. 날씨 토픽이 캐시에 들어가고, A 는 개인 모드로 시작한다."""
     pytest.importorskip("deskmate_hub.personalize")
     from tools.life_sim.ab import run_ab
-    from tools.life_sim.synthetic import SyntheticPerson
+    from tools.posture_sim.synthetic import SyntheticPerson
 
     segs = [{"kind": "away", "seconds": 6}, {"kind": "upright", "seconds": 320, "typing": True, "env": {"co2_to": 1300}},
             {"kind": "drowsy", "seconds": 1500, "typing": False,
@@ -109,7 +109,7 @@ def test_hub_personalize_engine_ab_synthetic(tmp_path):
 
 
 def test_numpy_backend_short_script(tmp_path):
-    from tools.life_sim import tofsim_bridge
+    from tools.posture_sim import tofsim_bridge
     if tofsim_bridge.load() is None:
         pytest.skip("tofsim 없음 (TOFSIM_ROOT 를 dataset/tof_sim_v5 사본으로)")
     from tools.life_sim.harness import run_scenario

@@ -110,21 +110,8 @@ env_sensors:
   dht22:  {period_s: 2, tau_t_s: 20, tau_rh_s: 8, noise_c: 0.1, noise_rh: 0.5, bias_c: 0.3, bias_rh: 2.0, fail_p: 0.02}
   bh1750: {period_s: 1, tau_s: 0.5, noise_pct: 1.0, gain_sd: 0.07}                               # ±20 %
 
-# mmWave(C1001) 대역(mmwave.py) — 재실 판정 우선 센서. 1 Hz, UART 0x20 으로 hub 에 들어간다. 전부 가정값.
-mmwave:
-  enabled: true
-  enter_delay_s: 2.0        # 앉은 뒤 present 켜지기까지
-  leave_hold_s: 15.0        # 떠난 뒤 present 유지(무인 판정 지연)
-  dropout_p: 0.0005         # 재실 중 1 초마다 짧게 놓칠 확률
-  dropout_s: [2, 6]
-  active_level: 25          # bodyMove 가 이보다 크면 motion_state=active
-  resp_lost_when_active_p: 0.5
-  resp_bpm: {awake: [12, 18], drowsy: [9, 13]}
-  distance_cm: [65, 95]
-  warmup_s: 60              # DrowsyDetector 워밍업
-  drowsy_lock_s: 180        # 졸음이 이만큼 이어지면 DROWSY 를 낼 수 있다
-  drowsy_episode_p: 0.6     # 졸음 에피소드마다 DROWSY 를 잡을 확률(실측 없음 — 보수적으로)
-  nod_spike_p: 0.08
+# mmWave(C1001)·0x03 규칙 특징·GRU 자세 모델·책상 재실 규칙은 자세판정 시뮬의 tools/posture_sim/config/sensors.yaml 에 있다
+# (scenario.load_defaults 가 먼저 깐다 — 각본의 sensors: 또는 devices: 로 덮는다).
 
 # 공기청정기 타이밍 규칙(purifier.py) — FSM 밖, PM2.5 만 본다. 전부 가정값. 등급: 좋음 ≤15 · 보통 16~35 · 나쁨 36~75 · 매우나쁨 76+
 purifier_control:
@@ -146,28 +133,3 @@ purifier_control:
   quiet_max_level: 2        # 정숙 시간·몰입 중 상한(강풍 소음)
   bypass_pm: 76             # 매우나쁨이면 상한 무시
   away_boost_after_s: 300   # 자리를 이만큼 비우면 한 단계 더
-
-# 0x03 규칙 특징 대역(ESP32 규칙 추정기의 단순 대역)
-rule_features:
-  min_person_mm: 150
-  max_person_mm: 1300
-  present_min_coverage: 0.06
-  motion_full_mm: 60.0
-  head_rows: 3
-  nod_mm: 40.0              # 머리 띠 평균 거리가 기준선에서 이만큼 벗어나면(양쪽) 끄덕임 후보 — 10-22 스모크의 MuJoCo 렌더로 맞춤
-  nod_rows: 0.5
-  nod_min_s: 0.3
-  nod_max_s: 40.0           # 이보다 오래 벗어나 있으면 끄덕임이 아니라 자세 변화 → 기준선 재설정
-  baseline_tau_s: 120.0
-  seed_after_s: 3.0         # 앉은 뒤 이만큼 지나서 기준선을 잡는다(빈 의자 기준선 방지)
-  noise_window_s: 60.0      # 비-끄덕임 잔차 창
-  noise_k: 4.0              # 문턱 = max(nod_mm, 중앙값 + k·1.4826·MAD) — 장면별 흔들림(타이핑·호흡)에 적응
-  window_s: 60.0
-  drowsy_nods: 2
-
-# GRU 자세 모델 실행 옵션
-posture_model:
-  vote_frames: 10          # 10 Hz × 1 s 다수결(tof_mlp 의 1 s 와 같은 뜻)
-  warmup_frames: 45        # 학습 평가와 같은 워밍업
-  reset_on_away_s: 60      # 이만큼 비어 있으면 은닉 상태 초기화(재착석)
-  reset_every_s: 900       # 학습 세션 길이(≤900 s) 밖의 장기 상태 표류를 막는다 — 시뮬 가정

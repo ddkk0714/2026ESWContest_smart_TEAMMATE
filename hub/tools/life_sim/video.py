@@ -38,8 +38,8 @@ def make_video(run_dir: str, out: str | None, *, speed: float = 10.0, fps: int =
     import matplotlib.pyplot as plt
     import mujoco
 
-    from . import tofsim_bridge
-    from .scene import build_scene
+    from tools.posture_sim import tofsim_bridge
+    from tools.posture_sim.scene import build_scene
 
     if tofsim_root:
         os.environ["TOFSIM_ROOT"] = tofsim_root
