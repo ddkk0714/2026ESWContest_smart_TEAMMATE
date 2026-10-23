@@ -43,6 +43,8 @@ class SensorCache:
     control_results: deque = field(default_factory=lambda: deque(maxlen=64))
     feedback_received: deque = field(default_factory=lambda: deque(maxlen=16))
     control_received: deque = field(default_factory=lambda: deque(maxlen=64))
+    fatigue_labels: deque = field(default_factory=lambda: deque(maxlen=64))   # deskmate/fatigue/label data (QoS 1)
+    fatigue_received: deque = field(default_factory=lambda: deque(maxlen=64))
     keystroke_history: deque = field(default_factory=lambda: deque(maxlen=1800))
     seq_gaps: dict[str, int] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -79,6 +81,18 @@ class SensorCache:
 
     def pop_control_results(self) -> list[dict[str, Any]]:
         return [payload for payload, _ in self.pop_control_result_events()]
+
+    def put_fatigue_label(self, payload: dict[str, Any], *, received: float | None = None) -> None:
+        with self._lock:
+            self.fatigue_labels.append(payload)
+            self.fatigue_received.append(received)
+
+    def pop_fatigue_label_events(self) -> list[tuple[dict[str, Any], float | None]]:
+        with self._lock:
+            items = list(zip(self.fatigue_labels, self.fatigue_received))
+            self.fatigue_labels.clear()
+            self.fatigue_received.clear()
+            return items
 
     # ---- 읽기 (프레임 빌더) ----
     def snapshot(self) -> "CacheView":

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .cache import SensorCache
-from .protocol import TOPIC_FEEDBACK, parse_sensor_message
+from .protocol import TOPIC_FATIGUE_LABEL, TOPIC_FEEDBACK, parse_sensor_message
 
 TOPIC_CONTROL_CMD = "deskmate/control/cmd"
 TOPIC_CONTROL_RESULT = "deskmate/control/result"
@@ -23,10 +23,10 @@ LINE_PREFIX = "MQTT\t"
 
 
 def route_mqtt_message(cache: SensorCache, topic: str, payload: bytes, now: float | None = None) -> str | None:
-    """토픽별로 cache 에 반영하고 종류("mmwave"/"env"/"keystroke"/"feedback"/"control_result")를 돌려준다.
-    계약 밖이면 None."""
+    """토픽별로 cache 에 반영하고 종류("mmwave"/"env"/"keystroke"/"feedback"/"control_result"/"fatigue_label")를
+    돌려준다. 계약 밖이면 None."""
     now = time.time() if now is None else now
-    if topic in (TOPIC_FEEDBACK, TOPIC_CONTROL_RESULT):
+    if topic in (TOPIC_FEEDBACK, TOPIC_CONTROL_RESULT, TOPIC_FATIGUE_LABEL):
         try:
             body = json.loads(payload.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -37,6 +37,9 @@ def route_mqtt_message(cache: SensorCache, topic: str, payload: bytes, now: floa
         if topic == TOPIC_FEEDBACK:
             cache.put_feedback(data, received=now)
             return "feedback"
+        if topic == TOPIC_FATIGUE_LABEL:
+            cache.put_fatigue_label(data, received=now)
+            return "fatigue_label"
         put_control_result = getattr(cache, "put_control_result", None)
         if put_control_result is None:
             return None

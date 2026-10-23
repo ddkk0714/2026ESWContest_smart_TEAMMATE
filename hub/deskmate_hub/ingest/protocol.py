@@ -12,6 +12,7 @@ TOPIC_REQUEST = "deskmate/interaction/request"
 TOPIC_HEALTH = "deskmate/health/hub"
 TOPIC_CONTROL_CMD = "deskmate/control/cmd"
 TOPIC_CONTROL_RESULT = "deskmate/control/result"
+TOPIC_FATIGUE_LABEL = "deskmate/fatigue/label"   # Pi 5 피로 기록 앱 KSS 응답 — 피로 점수(fatigue/live.py) 전용, FSM 입력 아님
 
 _KIND_BY_TOPIC = {"mmwave": "mmwave", "env": "env", "keystroke": "keystroke",
                   "weather": "weather"}   # deskmate/sensor/weather — Pi 5 앱이 받은 바깥 날씨 (personalize 전용)

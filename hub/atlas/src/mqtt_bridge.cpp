@@ -18,6 +18,8 @@ namespace {
 
 constexpr const char* kSensorTopic = "deskmate/sensor/#";
 constexpr const char* kFeedbackTopic = "deskmate/feedback/user";
+// Pi 5 피로 기록 앱의 KSS 응답(docs/fatigue-dataset.md) — hub 는 피로 점수 문맥·프로필 보정에만 쓴다(FSM 입력 아님)
+constexpr const char* kFatigueLabelTopic = "deskmate/fatigue/label";
 constexpr const char* kHealthTopic = "deskmate/health/hub";
 
 int environmentPort(const char* value, int fallback)
@@ -184,6 +186,7 @@ private:
         connected_ = true;
         api_.subscribe(client_, kSensorTopic, 0, nullptr);
         api_.subscribe(client_, kFeedbackTopic, 1, nullptr);
+        api_.subscribe(client_, kFatigueLabelTopic, 1, nullptr);
         publish(kHealthTopic, healthPayload("online"), 1, true);
         std::cerr << "DESKMATE MQTT connected\n";
     }
