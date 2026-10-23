@@ -436,6 +436,13 @@ def run_live(broker: str, port: int, *, fsm_config: str | None, ingest_config: s
             hub.personalize_recorder.path = os.path.join(log_dir, f"personalize-{hub.boot_id}.jsonl")
         print(f"deskmate hub live — broker {broker}:{port}, period {hub.period:.0f}s, logs {log_dir}/", file=sys.stderr)
         source.start()
+        # 별도 자세 서비스(deskmate_tofposture) 판정을 1 s 마다 받아 온다(ingest.yaml tof.posture_source: service, PC 경로)
+        from .ingest.tof_service import TofServicePoller, should_poll
+        service_poller = None
+        if should_poll(hub.ingest_cfg.get("tof"), os.environ):
+            service_poller = TofServicePoller(cache, hub.ingest_cfg.get("tof"),
+                                              on_log=lambda m: print(m, file=sys.stderr))
+            service_poller.start()
         # 보드 bridge(service_bridge)와 같이 세션 리포트 스냅샷을 주기 발행한다(retain). 없으면 PC 경로에서
         # 화면의 리포트 탭이 비고 정량 지표(metrics)도 못 본다 — 10-01 실기에서 발견.
         report_period = float(os.environ.get("DESKMATE_REPORT_PERIOD_SEC", "10"))
@@ -454,5 +461,7 @@ def run_live(broker: str, port: int, *, fsm_config: str | None, ingest_config: s
         finally:
             if hub.personalize_recorder is not None:
                 hub.personalize_recorder.close_all(time.time())
+            if service_poller is not None:
+                service_poller.stop()
             source.stop()
     return 0

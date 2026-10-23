@@ -20,6 +20,7 @@ BOARD_MODULES = (
     "deskmate_hub.live",
     "deskmate_hub.ingest.mqtt_lines",
     "deskmate_hub.ingest.uart_source",
+    "deskmate_hub.ingest.tof_service",             # 자세 서비스 판정 수신(urllib 은 폴러 함수 안에서만 import)
     "deskmate_hub.esm",
     "deskmate_hub.features.baseline",
     "deskmate_hub.control.dispatcher",

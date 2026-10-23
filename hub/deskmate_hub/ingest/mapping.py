@@ -110,14 +110,63 @@ def _tof_posture_signal(data: dict[str, Any], cfg: dict[str, Any]) -> Signal:
     return Signal(phi=_clip(phi), delta=_clip(delta), available=True)
 
 
-def _tof_with_mlp(view: CacheView, tof_data: dict[str, Any], now: float, cfg: dict[str, Any]) -> dict[str, Any]:
-    """0x03 규칙 특징 위에 Pi 4 MLP 판정(tof_mlp, 2026-10-17)의 posture·confidence 를 덮어쓴다.
+def _service_sample(view: CacheView, now: float, cfg: dict[str, Any]) -> Sample | None:
+    """`tof.posture_source: service` 일 때 쓸 만한 별도 자세 서비스(deskmate_tofposture, GRU) 판정. 없거나 낡았거나
+    valid 가 아니거나 살아 있는 센서가 `tof.service.min_online_sensors` 보다 적으면 None(→ fallback)."""
+    tcfg = cfg.get("tof") or {}
+    if str(tcfg.get("posture_source", "mlp")) != "service":
+        return None
+    fresh = cfg["freshness_sec"]
+    svc = view.fresh("tof_service", now, fresh.get("tof_service", fresh.get("tof", 3)))
+    if svc is None or not svc.data.get("valid", False):
+        return None
+    scfg = (tcfg.get("service") or {})
+    if int(svc.data.get("online_sensors") or 0) < int(scfg.get("min_online_sensors", 1)):
+        return None
+    return svc
 
-    `tof.posture_source: mlp`(기본)이고 tof_mlp 표본이 신선하며 기준선이 잡혀 있을 때만. 아니면 규칙 판정 그대로
-    (가중치 파일이 없어도 허브는 돈다). drowsy·nod_rate 는 모델 밖이라 언제나 규칙 값이다.
+
+def _tof_sample(view: CacheView, now: float, cfg: dict[str, Any]) -> Sample | None:
+    """posture 의 바탕이 되는 ToF 표본. 0x03 규칙 특징이 신선하면 그것, 없고 자세 서비스 판정만 신선하면 그 판정으로
+    0x03 모양을 만든다(ESP32 가 0x05 만 보내거나 0x03 이 끊겨도 서비스 자세는 FSM 에 닿게)."""
+    fresh = cfg["freshness_sec"]
+    tof = view.fresh("tof", now, fresh.get("tof", 3))
+    if tof is not None:
+        return tof
+    svc = _service_sample(view, now, cfg)
+    if svc is None:
+        return None
+    d = svc.data
+    return Sample(received=svc.received, ts=svc.ts, seq=None, data={
+        "present": bool(d.get("present", False)), "posture": d.get("posture", "unknown"),
+        "posture_confidence": float(d.get("posture_confidence") or 0.0), "posture_source": "service",
+        "drowsy": bool(d.get("drowsy", False)), "baseline_ready": True, "sensors_ok": int(d.get("online_sensors") or 0),
+        "from_service": True,
+    })
+
+
+def _tof_with_model(view: CacheView, tof_data: dict[str, Any], now: float, cfg: dict[str, Any]) -> dict[str, Any]:
+    """0x03 규칙 특징 위에 Pi 4 자세 모델 판정의 posture·confidence 를 덮어쓴다.
+
+    `tof.posture_source`:
+      service — 별도 서비스 deskmate_tofposture(GRU, /api/state → `tof_service` 표본, 2026-10-23). 표본이 신선하고
+                valid 이고 센서가 살아 있을 때. 라벨이 drowsy 면 `drowsy` 도 켠다(졸음 증거는 posture_delta 1.0 과 0x03
+                플래그 자리 둘 다). 쓸 수 없으면 `tof.service.fallback`(mlp 기본 | rule)로 내려간다.
+      mlp     — hub 안 순수 Python MLP(tof_mlp, 10-17). 표본이 신선하며 기준선이 잡혀 있을 때만.
+      rule    — ESP32 0x03 규칙 판정 그대로.
+    motion_score·nod_rate 는 모델 밖이라 언제나 규칙 값이다.
     """
     tcfg = cfg.get("tof") or {}
-    if str(tcfg.get("posture_source", "mlp")) != "mlp":
+    source = str(tcfg.get("posture_source", "mlp"))
+    if source == "service":
+        svc = _service_sample(view, now, cfg)
+        if svc is not None and svc.data.get("posture") not in (None, "unknown"):
+            return dict(tof_data, posture=str(svc.data["posture"]),
+                        posture_confidence=float(svc.data.get("posture_confidence") or 0.0),
+                        drowsy=bool(tof_data.get("drowsy")) or bool(svc.data.get("drowsy")),
+                        misplaced=bool(svc.data.get("misplaced", False)), posture_source="service")
+        source = str((tcfg.get("service") or {}).get("fallback", "mlp"))
+    if source != "mlp":
         return dict(tof_data, posture_source="rule")
     fresh = cfg["freshness_sec"]
     mlp = view.fresh("tof_mlp", now, fresh.get("tof_mlp", fresh.get("tof", 3)))
@@ -125,6 +174,9 @@ def _tof_with_mlp(view: CacheView, tof_data: dict[str, Any], now: float, cfg: di
         return dict(tof_data, posture_source="rule")
     return dict(tof_data, posture=str(mlp.data["posture"]),
                 posture_confidence=float(mlp.data.get("posture_confidence") or 0.0), posture_source="mlp")
+
+
+_tof_with_mlp = _tof_with_model     # 10-17 이름(테스트·외부 참조 호환)
 
 
 def _usable_mmwave(mm: Sample | None) -> Sample | None:
@@ -205,7 +257,7 @@ def build_frame(
     mm = view.fresh("mmwave", now, fresh["mmwave"])
     env = view.fresh("env", now, fresh["env"])
     ks = view.fresh("keystroke", now, fresh["keystroke"])
-    tof = view.fresh("tof", now, fresh.get("tof", 3)) if "tof" in cfg else None
+    tof = _tof_sample(view, now, cfg) if "tof" in cfg else None
 
     mm_present = bool(mm.data.get("present", False)) if mm else False
     tof_present = bool(tof.data.get("present", False)) if tof else False
@@ -219,7 +271,7 @@ def build_frame(
     mcfg = cfg["mmwave"]
     tof_posture_used = False
     if tof and tof_present and not tof_gated:
-        signals["posture"] = _tof_posture_signal(_tof_with_mlp(view, tof.data, now, cfg), cfg["tof"])
+        signals["posture"] = _tof_posture_signal(_tof_with_model(view, tof.data, now, cfg), cfg["tof"])
         tof_posture_used = True
         tracker.still_since = None
     if mm and mm_present and present:       # 책상이 비면 mmWave 체동·호흡 대체 신호도 쓰지 않는다(침대에서 자는 사람)
@@ -332,17 +384,28 @@ def sensor_summary(view: CacheView, now: float, cfg: dict[str, Any],
     """state/phase 의 sensor_summary — 화면 표시용 특징 요약. 없는 필드는 생략한다."""
     fresh = cfg["freshness_sec"]
     out: dict[str, Any] = {}
-    tof = view.fresh("tof", now, fresh.get("tof", 3)) if "tof" in cfg else None
+    tof = _tof_sample(view, now, cfg) if "tof" in cfg else None
     if tof:
         # 화면용 요약. 원본 zone 격자(UART 0x05)는 Pi 4 메모리에만 두고 여기 싣지 않는다(firmware README "원칙").
-        data = _tof_with_mlp(view, tof.data, now, cfg)
+        data = _tof_with_model(view, tof.data, now, cfg)
         out["tof"] = {
             k: data[k]
             for k in ("posture", "posture_confidence", "posture_source", "motion_score", "head_delta_mm",
-                      "nod_rate_hz", "drowsy", "nods_in_window", "baseline_ready", "grid_width", "grid_height",
-                      "coverage_ratio", "sensors_ok")
+                      "nod_rate_hz", "drowsy", "misplaced", "nods_in_window", "baseline_ready", "grid_width",
+                      "grid_height", "coverage_ratio", "sensors_ok")
             if k in data
         }
+    svc = view.fresh("tof_service", now, fresh.get("tof_service", fresh.get("tof", 3))) if "tof" in cfg else None
+    if svc:
+        # 별도 자세 서비스(GRU) 의 최근 판정 — posture_source 가 service 가 아니어도 화면·실기 로그용으로 보여 준다
+        out["tof_service"] = {
+            k: svc.data[k]
+            for k in ("posture", "posture_confidence", "valid", "present", "misplaced", "online_sensors", "since_ms",
+                      "presence_source")
+            if k in svc.data
+        }
+        if isinstance(svc.data.get("model"), dict) and svc.data["model"].get("file"):
+            out["tof_service"]["model"] = str(svc.data["model"]["file"]).rsplit("/", 1)[-1]
     mm = view.fresh("mmwave", now, fresh["mmwave"])
     if mm or tof:
         # 재실은 build_frame 과 같은 규칙(presence.source) — 화면 배지와 FSM 이 다른 말을 하지 않게
