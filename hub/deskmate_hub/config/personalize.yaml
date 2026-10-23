@@ -1,7 +1,7 @@
 # 사용자 맞춤 개입 선택 정책(3층) 설정 — docs/personalization-spec.md
 # 임계값·prior·기기 값은 전부 여기. 코드에는 arm id 와 수식만 둔다.
 
-enabled: false              # true 면 live 에서 ACTION_* 진입 tick 마다 policy.decide 를 부른다 (기본 꺼짐)
+enabled: true               # Pi 4 배포판(feat/pi4-hub-1023): ACTION_* 진입 tick 마다 policy.decide — 순수 Python 이라 보드에서 돈다
 record: true                # 정책이 꺼져 있어도 결정 tick 마다 에피소드(decision.source fallback)·세션 요약을 JSONL 로 기록
 profile_id: default
 local_utc_offset_hours: 9   # 시각·요일 특징의 지역시 (KST)

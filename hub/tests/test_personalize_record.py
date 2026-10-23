@@ -21,6 +21,8 @@ HUB_DIR = Path(__file__).resolve().parents[1]
 
 
 def _hub(tmp_path, **kw):
+    # 이 파일은 기록 전용 경로를 본다 — Pi 4 배포판은 정책을 켜 두므로(enabled: true) 여기서 끈다
+    kw.setdefault("personalize_cfg", dict(load_personalize_config(), enabled=False))
     cache = SensorCache()
     states, requests = [], []
     hub = LiveHub(cache, publish=states.append, publish_request=requests.append,
@@ -67,13 +69,13 @@ def _drive_to_suggest(hub, cache, period):
 def test_record_flag_default_on_and_recorder_present(tmp_path):
     hub, *_ = _hub(tmp_path)
     assert load_personalize_config()["record"] is True
-    assert load_personalize_config()["enabled"] is False
+    assert load_personalize_config()["enabled"] is True            # Pi 4 배포판(feat/pi4-hub-1023)은 정책을 켠다
     assert isinstance(hub.personalize_recorder, EpisodeRecorder)
     assert hub.personalize_recorder.path == str(tmp_path / "personalize.jsonl")
 
 
 def test_record_off_means_no_recorder(tmp_path):
-    cfg = dict(load_personalize_config(), record=False)
+    cfg = dict(load_personalize_config(), record=False, enabled=False)
     hub, *_ = _hub(tmp_path, personalize_cfg=cfg)
     assert hub.personalize_recorder is None
 
