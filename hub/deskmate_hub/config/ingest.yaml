@@ -19,8 +19,10 @@ freshness_sec:
 #   desk_max_cm: C1001 은 최대 11 m·100°×100° 를 봐서 원룸이면 침대·주방의 사람도 present 다. mmWave distance_cm 가
 #           이 이하일 때만 '책상 재실', 더 멀면 '방엔 있지만 책상 빔' = 부재(엎드려 ToF 가 놓쳐도 가까우면 재실).
 #           distance_cm 가 없으면 ToF 에 맡긴다. 130 은 가정값 — 실제 설치에서 재서 바꾼다.
-#           (10-23 시뮬레이션 v6, MuJoCo+GRU 시드 1·2: 책상 재실 정확도 OR 0.68~0.83 · mmWave 만 0.78~0.93 · 게이트 0.988~0.997,
-#            방 안 식사 12분·주방 25분에 OR 은 IDLE 못 감, 게이트는 600 s 에 IDLE)
+#           근거(10-23 life_sim, MuJoCo+GRU 시뮬 — 실측 아님): 책상 재실 정확도 OR(10-22 까지) 0.59~0.83 · mmWave 만 0.78~0.93 ·
+#           거리 게이트 0.98~0.99. 방 안 식사 12분·주방 25분: OR·게이트 없는 mmWave 는 IDLE 못 감, 게이트는 600 s 에 IDLE·
+#           복귀 0 s 에 START. 외출 15분: 게이트 620 s IDLE·복귀 10 s. gate_posture 로 자세 정확도 0.61→0.99(시드 2),
+#           misplaced 오탐 8.1 %→0.5 %. 남은 과제: 시드 1 배치에서 GRU 가 upright→forward_head 로 오분류.
 #   gate_posture: true 면 책상이 빈 동안 ToF 자세(0x03·Pi 4 MLP)와 mmWave 체동·호흡 대체 신호를 쓰지 않고, Pi 4 MLP 는
 #           기준선도 모으지 않는다 — 빈 의자·지나가는 사람을 자세로 읽지 않게.
 presence:
@@ -115,7 +117,8 @@ tof:
     still_mm: 15                   # 프레임 간 평균 변화가 이 이하면 조용한 프레임
     baseline_frames: 50            # 5 Hz × 10 s 가 쌓이면 zone 별 중앙값을 기준선으로
     baseline_max_moving_frac: 0.2  # 그 창에 움직인 프레임이 이 비율 넘게 섞이면 더 기다린다
-    away_reset_sec: 300            # 이만큼 비어 있으면 기준선 폐기(다른 사람·재착석)
+    away_reset_sec: 300            # 격자만 보고 이만큼 비어 있으면 기준선 폐기(다른 사람·재착석)
+    reset_on_away_s: 60            # mmWave 가 '책상 빔' 이라고 이만큼 이어지면 기준선 폐기(presence.gate_posture)
     vote_frames: 5                 # 5 Hz × 1 s 다수결(학습 평가와 같은 1 s)
 
 mmwave:

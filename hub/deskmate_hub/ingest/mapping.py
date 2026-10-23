@@ -127,6 +127,11 @@ def _tof_with_mlp(view: CacheView, tof_data: dict[str, Any], now: float, cfg: di
                 posture_confidence=float(mlp.data.get("posture_confidence") or 0.0), posture_source="mlp")
 
 
+def _usable_mmwave(mm: Sample | None) -> Sample | None:
+    """C1001 표본이 `valid: false`(락온 전·통신 오류)면 없는 것으로 본다 — 재실은 ToF 가 대신한다."""
+    return mm if mm is not None and mm.data.get("valid", True) is not False else None
+
+
 def _mmwave_at_desk(mm: Sample, pcfg: dict[str, Any]) -> bool | None:
     """mmWave 표본 하나 → 책상에 사람이 있는가. present=false 면 False, 거리 게이트(`presence.desk_max_cm`) 안이면
     True, 밖이면 False(방엔 있지만 책상은 빔 — C1001 은 11 m 를 봐서 원룸의 침대·주방도 잡는다). 게이트가 없으면 present
@@ -152,6 +157,7 @@ def resolve_presence(mm: Sample | None, tof: Sample | None, cfg: dict[str, Any])
     tof_present = bool(tof.data.get("present", False)) if tof else False
     if str(pcfg.get("source", "mmwave")) == "either":
         return mm_present or tof_present, "either"
+    mm = _usable_mmwave(mm)
     if mm is not None:
         at_desk = _mmwave_at_desk(mm, pcfg)
         if at_desk is not None:
@@ -173,7 +179,7 @@ def mmwave_presence_hint(cache: Any, cfg: dict[str, Any]) -> Callable[[float], b
     def hint(now: float) -> bool | None:
         if not gate:
             return None
-        mm = cache.snapshot().fresh("mmwave", now, fresh)
+        mm = _usable_mmwave(cache.snapshot().fresh("mmwave", now, fresh))
         return None if mm is None else _mmwave_at_desk(mm, pcfg)
 
     return hint
@@ -206,7 +212,7 @@ def build_frame(
     present, _ = resolve_presence(mm, tof, cfg)
     pcfg = cfg.get("presence") or {}
     # mmWave 가 책상에 사람이 없다고 하면 ToF 가 무엇을 보든 자세로 쓰지 않는다(빈 의자·지나가는 사람·방 안 다른 자리)
-    tof_gated = bool(pcfg.get("gate_posture", True)) and mm is not None and not present
+    tof_gated = bool(pcfg.get("gate_posture", True)) and _usable_mmwave(mm) is not None and not present
     signals: dict[str, Signal] = {}
 
     # ---- posture: ToF tof_feature 가 신선하면 그것을, 아니면 mmWave 체동으로 대체 ----
