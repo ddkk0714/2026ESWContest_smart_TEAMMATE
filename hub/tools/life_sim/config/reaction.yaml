@@ -46,6 +46,24 @@ defaults:
   # 휴식 권유를 받아 자리를 비우는 행동
   rest: {go_away_p: 0.5, delay_s: [20, 90], away_s: [180, 420]}
 
+  # 잠재 피로(fatigue.py) — 켜면 졸음·자세 무너짐·키 입력 저하가 각본이 아니라 피로 F 에서 생긴다. [lo, hi] 는 사람마다 뽑는 범위.
+  fatigue:
+    enabled: false
+    f0: [0.10, 0.30]                 # 세션 시작 피로(밤이면 +0.15)
+    task_half_h: [0.9, 1.8]          # 책상 작업만으로 피로 0 → 0.5 까지(시간)
+    rest_half_min: [10, 20]          # 자리를 비우면 피로가 절반이 되는 시간(분)
+    co2: {from_ppm: 800, per_1000ppm: [0.4, 0.9]}          # 작업 피로 속도 가산 = (CO₂ − 800)/1000 × 이 값
+    circadian: {dip_hours: [13, 16], dip_gain: [0.3, 0.7], night_from_h: 23.0, night_gain: [0.8, 1.6]}
+    posture_gain: 0.2                # 턱괴기·거북목·숙임·기댐 중 가산
+    dim: {below_lux: 200, gain: 0.3}
+    hot: {above_c: 27.0, gain: 0.3}  # 체감 온도(선풍기 반영)
+    alert: {wake_boost: [0.35, 0.6], self_wake_boost: [0.1, 0.25], tau_min: [6, 12], startle_drop: 0.05}
+    drowsy: {s50: [0.58, 0.72], width: 0.05, max_rate_per_min: 0.5, typing_factor: 0.5, episode_mean_min: [3, 8], face_down_p: 0.25}
+    slump: {s_from: 0.35, max_rate_per_min: 0.15, seconds: [60, 240], kinds: [turtle, chin_rest, lean_forward]}
+    keys_gain: [0.35, 0.35, 0.08]    # idle_ratio·flight_cv·correction_rate 에 S × 이 값
+    truth_threshold: 0.6             # 정답 fatigue = S ≥ 이 값(또는 졸음·엎드림)
+    idle_after_s: 600                # 정답: 책상을 이만큼 비우면 rest → idle(hub absent_idle_sec 와 같은 뜻)
+
 personas:
   default: {}
   student:        # 과제 중 대학생: 카드에 잘 답하지만 몰입 중 방해를 싫어함, TTS 에 잘 깸
@@ -69,3 +87,4 @@ personas:
       break_suggest:   {accept: 0.25, reject: 0.45, none: 0.30}
     wake: {lamp_cool: 0.55, tts: 0.85}
     rest: {go_away_p: 0.3}
+    fatigue: {f0: [0.20, 0.40], task_half_h: [0.8, 1.5]}     # 수면 부족·긴 공부: 시작 피로↑, 빨리 지침

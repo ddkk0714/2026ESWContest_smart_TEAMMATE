@@ -34,6 +34,7 @@ from tools.posture_sim.mmwave import MmwaveSensor, presence_decision
 from tools.posture_sim.posture_model import OraclePosture, RuleFeatures
 from tools.posture_sim.source import TofsimSource, where_now as _where_now
 from .env_sensors import EnvSensors
+from .fatigue import FatigueModel
 from .purifier import PurifierController, purifier_metrics
 from .ventilation import VentRule, vent_metrics
 from .reaction import Reaction, ReactionModel
@@ -230,6 +231,8 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
     arm_channels = dev.get("arm_channels") or {}
     arm_card_table = dev.get("arm_card_table") or {}
     reaction = ReactionModel(scenario["reaction_resolved"], channels_cfg, seed=seed + 3)
+    fat = FatigueModel(scenario["reaction_resolved"].get("fatigue") or {}, seed=seed, t0=t0)   # 잠재 피로(기본 꺼짐)
+    absent_since: float | None = None
     simple = _make_simple_policy(scenario, profile, seed) if engine == "simple" else None
     card_expires = float(hub.fsm_cfg["timers"].get("focus_break_poll_sec", 180))
 
@@ -323,9 +326,12 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
                 continue
             if r.kind == "wake":
                 if person_kind() in SLEEPY:
+                    # 잠재 피로가 만든 졸음이면 깬 뒤 남은 졸음을 잇지 않는다(다시 조는 건 피로 모델이 정한다)
+                    fat_episode = fat.enabled and str(src.current.override or "").startswith("fatigue_")
                     rec = src.override("upright", r.payload["awake_s"], transition_s=r.payload["transition_s"], name="wake",
-                                       typing=bool(scenario["reaction_resolved"].get("wake_typing", True)))
+                                       typing=bool(scenario["reaction_resolved"].get("wake_typing", True)), resume=not fat_episode)
                     reaction.wakes += 1
+                    fat.on_wake(now, source=r.source)
                     emit({"t": now, "kind": "reaction", "what": "wake", "source": r.source, "override": rec})
                 else:
                     emit({"t": now, "kind": "reaction", "what": "wake_moot(already_awake)", "source": r.source})
@@ -547,7 +553,16 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
                 hub.feed_mmwave(mm, t)
             present_dec, present_src = presence_decision(mm, bool(feats["present"]), desk_max_cm=float(ingest_cfg.get("desk_max_cm", 130)),
                                                          priority=str(ingest_cfg.get("presence_priority", "mmwave")))   # hub 와 같은 규칙
-            hub.feed_keystroke(info.typing, info.keys, t, rnd)
+            keys = info.keys
+            if fat.enabled:                                                    # 잠재 피로: 1 초 굴리고, 졸음·자세 무너짐·키 입력
+                snap = world.snapshot()
+                fat.step(t, kind=person_kind(), co2=world.env["co2_ppm"], lux=float(snap["lux"]), felt_c=float(snap["felt"]))
+                for ov in fat.decide(t, kind=person_kind(), typing=bool(info.typing)):
+                    rec = src.override(ov["kind"], ov["seconds"], transition_s=ov["transition_s"], name=ov["name"],
+                                       typing=ov["typing"], spec=ov.get("spec"))
+                    emit({"t": t, "kind": "reaction", "what": ov["name"], "source": "fatigue", "S": round(fat.S, 3), "override": rec})
+                keys = fat.keys(info.keys)
+            hub.feed_keystroke(info.typing, keys, t, rnd)
             if sec % int(dev.get("env_sensors", {}).get("uart_period_s", 5)) == 0 or not env_sent:
                 hub.feed_env_uart(env_meas, t)                                 # ESP32 → UART 0x10 (0.2 Hz)
                 env_sent = True
@@ -595,6 +610,10 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
                 "state": last_tick["state"] if last_tick else "IDLE",
                 "c_fatigue": last_tick["c_fatigue"] if last_tick else 0.0, "c_focus": last_tick["c_focus"] if last_tick else 0.0,
             }
+            if fat.enabled:
+                absent_since = None if truth_present else (absent_since if absent_since is not None else t)
+                row["fatigue_F"], row["fatigue_S"] = round(fat.F, 3), round(fat.S, 3)
+                row["truth_class"] = fat.truth(kind=person_kind(), absent_s=None if absent_since is None else t - absent_since)
             second_rows.append(row)
             w_frames.write(row)
             if progress and time.time() >= next_report:
@@ -624,6 +643,7 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
     summary["profile_s"] = {k2: round(v2, 1) for k2, v2 in prof.items()}
     summary["env_sensors"] = envs.error_stats()
     summary["scene_room"] = world.room_drawn or None
+    summary["fatigue"] = fat.summary(second_rows) if fat.enabled else None
     vcfg = dev.get("vent_control") or {}
     summary["vent_rule"] = vent_metrics(second_rows, vent_rule.log, [e for e in event_rows if e.get("kind") == "feedback"],
                                         on_ppm=float(vcfg.get("on_ppm", 1000))) if vent_rule.enabled else None
