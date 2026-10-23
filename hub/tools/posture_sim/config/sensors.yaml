@@ -1,0 +1,53 @@
+# 자세판정 시뮬 센서 설정 — 전부 가정값(실측 아님). 각본의 `sensors:` 블록이 깊은 병합으로 덮는다.
+
+# 책상 재실 판정 — hub ingest 계약을 따른다(노트북 feat/mmwave-presence: presence.source: mmwave · gate_posture).
+#   mmwave: mmWave 가 신선·유효하면 먼저 본다. 부재 → 부재. 재실이면 distance_cm ≤ desk_max_cm 일 때 책상 재실
+#           (C1001 은 11 m·100°×100° 라 원룸의 침대·주방 사람도 잡는다). 거리 없으면 ToF, mmWave 끊기면 ToF.
+#   any:    둘 중 하나라도 보면 재실(이전 hub 동작, 비교용).
+presence:
+  priority: mmwave
+  desk_max_cm: 130
+  gate_posture: true        # 책상 부재면 자세 모델에 present=False 를 넘긴다(TofMlpPosture.update(sample, now, present))
+
+# mmWave(C1001) 대역(mmwave.py). 1 Hz, UART 0x20.
+mmwave:
+  enabled: true
+  enter_delay_s: 2.0        # 앉은 뒤 present 켜지기까지
+  leave_hold_s: 15.0        # 떠난 뒤 present 유지(무인 판정 지연)
+  dropout_p: 0.0005         # 재실 중 1 초마다 짧게 놓칠 확률
+  dropout_s: [2, 6]
+  active_level: 25          # bodyMove 가 이보다 크면 motion_state=active
+  resp_lost_when_active_p: 0.5
+  resp_bpm: {awake: [12, 18], drowsy: [9, 13]}
+  distance_cm: [65, 95]     # 책상 앞
+  room_distance_cm: [200, 450]   # 자리비움 where: room(같은 방 침대·주방)
+  room_motion_level: [5, 40]
+  warmup_s: 60              # DrowsyDetector 워밍업
+  drowsy_lock_s: 180        # 졸음이 이만큼 이어지면 DROWSY 를 낼 수 있다
+  drowsy_episode_p: 0.6     # 졸음 에피소드마다 DROWSY 를 잡을 확률(실측 없음 — 보수적으로)
+  nod_spike_p: 0.08
+
+# 0x03 규칙 특징 대역(ESP32 규칙 추정기의 단순 대역)
+rule_features:
+  min_person_mm: 150
+  max_person_mm: 1300
+  present_min_coverage: 0.06
+  motion_full_mm: 60.0
+  head_rows: 3
+  nod_mm: 40.0              # 머리 띠 평균 거리가 기준선에서 이만큼 벗어나면(양쪽) 끄덕임 후보 — 10-22 MuJoCo 렌더로 맞춤
+  nod_rows: 0.5
+  nod_min_s: 0.3
+  nod_max_s: 40.0           # 이보다 오래 벗어나 있으면 끄덕임이 아니라 자세 변화 → 기준선 재설정
+  baseline_tau_s: 120.0
+  seed_after_s: 3.0         # 앉은 뒤 이만큼 지나서 기준선을 잡는다(빈 의자 기준선 방지)
+  noise_window_s: 60.0      # 비-끄덕임 잔차 창
+  noise_k: 4.0              # 문턱 = max(nod_mm, 중앙값 + k·1.4826·MAD) — 장면별 흔들림(타이핑·호흡)에 적응
+  window_s: 60.0
+  drowsy_nods: 2
+
+# GRU 자세 모델 실행 옵션
+posture_model:
+  vote_frames: 10          # 10 Hz × 1 s 다수결(tof_mlp 의 1 s 와 같은 뜻)
+  warmup_frames: 45        # 학습 평가와 같은 워밍업
+  reset_on_away_s: 60      # 이만큼 비어 있으면 은닉 상태 초기화(재착석)
+  reset_every_s: 900       # 학습 세션 길이(≤900 s) 밖의 장기 상태 표류를 막는다 — 시뮬 가정
