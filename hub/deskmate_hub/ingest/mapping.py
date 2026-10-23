@@ -70,9 +70,13 @@ class SessionTracker:
     pending_feedback: str | None = None     # accept | reject
     last_state: State = State.IDLE
     baseline: BaselineStore | None = None   # normalization: baseline 일 때만
+    elapsed_reset_on_rest: bool = False     # ingest.yaml elapsed.reset_on_rest: 휴식(REST)을 마치면 경과 시간을 그때부터 다시 잰다
 
     def observe_state(self, state: State, now: float) -> None:
         if state is State.START and self.session_started is None:
+            self.session_started = now
+        if (self.elapsed_reset_on_rest and self.last_state is State.REST and state is not State.REST
+                and self.session_started is not None):
             self.session_started = now
         if state in (State.IDLE, State.END):
             self.session_started = None

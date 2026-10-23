@@ -119,6 +119,25 @@ def test_intervention_success_recovers():
     assert e.tick(frame(t + 120, sig=calm)).state is State.FOCUS_PC  # 회복 승인
 
 
+def test_monitor_window_waits_before_judging():
+    from deskmate_hub.inference.config import load_config
+    cfg = load_config()
+    cfg["timers"]["monitor_window_sec"] = 120
+    e = FSMEngine(cfg)
+    t = drive_to_focus(e)
+    sig = {"posture": {"delta": 0.9}, "elapsed": {"delta": 0.9}, "keystroke": {"delta": 0.9}}
+    t = confirm_fatigue(e, t, sig)
+    e.tick(frame(t, sig=sig))                              # →CAUSE_ANALYSIS
+    e.tick(frame(t + 30, sig=sig))                         # →ACTION_*
+    e.tick(frame(t + 60, sig=sig, action_done=True))      # →MONITOR
+    assert e.state is State.MONITOR
+    # 창 안에서는 개입 직후 피로가 그대로여도 ESCALATE 로 가지 않는다
+    assert e.tick(frame(t + 90, sig=sig)).state is State.MONITOR
+    calm = {"posture": {"delta": 0.1}, "elapsed": {"delta": 0.1}, "keystroke": {"delta": 0.1}}
+    assert e.tick(frame(t + 150, sig=calm)).state is State.MONITOR      # 90 s < 120 s
+    assert e.tick(frame(t + 190, sig=calm)).state is State.RECOVERY     # 창이 지난 뒤 판정
+
+
 def test_intervention_failure_escalates_and_forces_rest():
     e = FSMEngine()
     t = drive_to_focus(e)

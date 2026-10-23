@@ -44,6 +44,7 @@ timers:
   focus_break_poll_sec: 180      # 집중 재유도 관찰(3분)
   rest_min_sec: 300              # REST 최소 유지 후 회복 판정(≥300s)
   cmd_cooldown_sec: 300          # 동일 제어 명령 재발행 쿨다운
+  monitor_window_sec: 0          # MONITOR 판정 전 대기(0 = 다음 tick 에 바로 = 지금 동작). life_sim 10-23: 120 이면 격상·강제 휴식 반복이 준다
 
 # 개입 라우팅 그룹 (dominant = argmax(wᵢ·δᵢ))
 routing:

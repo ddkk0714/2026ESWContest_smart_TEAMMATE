@@ -68,7 +68,8 @@ class LiveHub:
         self.fsm_cfg = fsm_cfg or load_config()
         self.ingest_cfg = ingest_cfg or load_ingest_config()
         self.engine = FSMEngine(self.fsm_cfg)
-        self.tracker = SessionTracker()
+        self.tracker = SessionTracker(
+            elapsed_reset_on_rest=bool((self.ingest_cfg.get("elapsed") or {}).get("reset_on_rest", False)))
         self.privacy_cfg = privacy_cfg if privacy_cfg is not None else load_privacy_config()
         self._personalization_factory = personalization_backend_factory
         self.privacy = PersonalizationPrivacy(
