@@ -201,13 +201,14 @@ class _SensorState:
         return o.model.forward(o.model.features(dist, status, self.baseline, o.accept_semi_valid))
 
     def mark_absent(self, now: float) -> None:
-        """mmWave 가 '사람 없음' 이라고 한 프레임: 격자를 보지 않고 자리비움으로 센다(기준선을 모으지 않는다)."""
+        """mmWave 가 '책상 빔' 이라고 한 프레임: 격자를 보지 않고 자리비움으로 센다(기준선을 모으지 않는다).
+        `reset_on_away_s` 넘게 이어지면 기준선을 버린다 — 격자만 볼 때의 away_reset_sec 보다 짧다(mmWave 가 확실히 비었다고 했으니)."""
         self.present = False
         self._prev = None
         self._window.clear()
         if self._away_since is None:
             self._away_since = now
-        elif self.baseline is not None and now - self._away_since >= self.o.away_reset_sec:
+        elif self.baseline is not None and now - self._away_since >= self.o.reset_on_away_s:
             self.reset()
 
     def _is_still(self, cur: list[float | None]) -> bool:
@@ -246,6 +247,7 @@ class TofMlpPosture:
         self.baseline_frames = max(1, int(c.get("baseline_frames", 50)))
         self.baseline_max_moving_frac = float(c.get("baseline_max_moving_frac", 0.2))
         self.away_reset_sec = float(c.get("away_reset_sec", 300))
+        self.reset_on_away_s = float(c.get("reset_on_away_s", 60))
         self.vote_frames = max(1, int(c.get("vote_frames", 5)))
         self.sensors: dict[int, _SensorState] = {}
         self._votes: deque[tuple[int, float]] = deque(maxlen=self.vote_frames)
@@ -263,14 +265,16 @@ class TofMlpPosture:
 
     # ---- 표본 하나(센서 프레임 묶음) ----
     def update(self, sample: dict[str, Any], now: float, present: bool | None = None) -> dict[str, Any]:
-        """`present` 는 mmWave 재실 게이트(ingest `presence.gate_posture`). False 면 모델을 돌리지 않고 unknown,
+        """`present` 는 mmWave 책상 재실 게이트(ingest `presence.gate_posture`). False 면 모델을 돌리지 않고 away,
         None 이면(mmWave 없음·낡음) 격자만으로 판단한다."""
         self.frames += 1
         if present is False:
             for idx in (sample.get("sensors") or {}):
                 self.sensors.setdefault(int(idx), _SensorState(self)).mark_absent(now)
             self._votes.clear()
-            return self._verdict(UNKNOWN, 0.0, present=False, raw=UNKNOWN, used=0, gated="mmwave_absent")
+            away = "away" if "away" in self.model.classes else UNKNOWN
+            return self._verdict(away, 1.0 if away != UNKNOWN else 0.0, present=False, raw=away, used=0,
+                                 gated="mmwave_absent")
         w, h = int(sample.get("grid_width") or 0), int(sample.get("grid_height") or 0)
         frames: dict[int, dict[str, Any]] = sample.get("sensors") or {}
         if w * h != self.model.zones or not frames:

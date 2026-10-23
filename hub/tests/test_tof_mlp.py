@@ -200,9 +200,12 @@ def test_mmwave_absent_gates_model_and_baseline():
     for i in range(4):                             # mmWave 가 사람을 보면 그때부터 기준선을 모은다
         v = p.update(sample(STILL), 2.0 + i * 0.2, True)
     assert v["baseline_ready"] and v["posture"] == "upright" and "gated" not in v
-    p.away_reset_sec = 1.0                         # 오래 비면 기준선 폐기 — mmWave 부재로도 같은 규칙
+    # mmWave 가 책상 빔이라고 reset_on_away_s(60 s) 넘게 이어지면 기준선 폐기 — 격자만 볼 때의 away_reset_sec(300)보다 짧다
+    assert p.reset_on_away_s == 60.0 and p.away_reset_sec == 300.0
     p.update(sample(STILL), 3.0, False)
-    v = p.update(sample(STILL), 4.5, False)
+    p.update(sample(STILL), 62.0, False)
+    assert p.sensors[0].baseline is not None       # 59 s — 아직
+    v = p.update(sample(STILL), 63.5, False)
     assert p.sensors[0].baseline is None and not v["baseline_ready"]
 
 
@@ -227,7 +230,7 @@ def test_uart_path_asks_mmwave_presence_before_posture():
     cache.put("mmwave", Sample(received=now, ts=now, seq=None, data={"present": False}))
     for i in range(8):                              # ToF 엔 사람 모양이 보여도 mmWave 가 없다고 하면 게이트
         v = feed(i)
-    assert v["gated"] == "mmwave_absent" and v["posture"] == "unknown" and not v["present"]
+    assert v["gated"] == "mmwave_absent" and v["posture"] == "away" and not v["present"]   # 모델에 away 가 있으면 away
     assert all(s.baseline is None for s in post.sensors.values())
     hint = mmwave_presence_hint(cache, icfg)
     cache.put("mmwave", Sample(received=10.0, ts=10.0, seq=None, data={"present": True, "distance_cm": 60}))
