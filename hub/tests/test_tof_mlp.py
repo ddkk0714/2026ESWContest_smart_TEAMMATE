@@ -230,6 +230,10 @@ def test_uart_path_asks_mmwave_presence_before_posture():
     assert v["gated"] == "mmwave_absent" and v["posture"] == "unknown" and not v["present"]
     assert all(s.baseline is None for s in post.sensors.values())
     hint = mmwave_presence_hint(cache, icfg)
-    cache.put("mmwave", Sample(received=10.0, ts=10.0, seq=None, data={"present": True}))
+    cache.put("mmwave", Sample(received=10.0, ts=10.0, seq=None, data={"present": True, "distance_cm": 60}))
     assert hint(10.5) is True and hint(10.0 + icfg["freshness_sec"]["mmwave"] + 1) is None   # 낡으면 모름
+    cache.put("mmwave", Sample(received=11.0, ts=11.0, seq=None, data={"present": True, "distance_cm": 320}))
+    assert hint(11.5) is False                       # 방 안 다른 자리(침대·주방) → 책상 빔 → 게이트
+    cache.put("mmwave", Sample(received=12.0, ts=12.0, seq=None, data={"present": True}))
+    assert hint(12.5) is None                        # 거리 없음 → 격자에 맡긴다
     assert mmwave_presence_hint(cache, dict(icfg, presence={"gate_posture": False}))(10.5) is None

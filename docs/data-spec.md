@@ -209,7 +209,7 @@ baseline은 절대 자세·타이핑 속도가 아닌 상대 변화를 만든다
 | 필드 | 타입 | 정의 |
 |---|---|---|
 | `now_s` | float, epoch s | tick 기준 시각. 현재 Python `now`. |
-| `present` | boolean | 재실. **mmWave(C1001) 가 정한다**(2026-10-23, ingest `presence.source: mmwave`): 신선한 mmWave 표본의 `present`, mmWave 가 끊겼을 때만 ToF `present` 로 대신한다. mmWave 가 '없음' 이면 ToF 자세(0x03·Pi 4 MLP)는 쓰지 않고 Pi 4 MLP 는 기준선도 모으지 않는다(`presence.gate_posture`). `either` 는 10-22 까지의 OR 규칙. |
+| `present` | boolean | 재실. **mmWave(C1001) 가 정한다**(2026-10-23, ingest `presence.source: mmwave`): 신선한 mmWave 표본이 `present` 이고 `distance_cm` ≤ `presence.desk_max_cm`(130, 가정값)일 때만 책상 재실 — 더 멀면 '방엔 있지만 책상 빔' 이라 부재(C1001 은 원룸의 침대·주방도 잡는다). 거리가 없거나 mmWave 가 끊겼을 때만 ToF `present` 로 대신한다. 책상이 비면 ToF 자세(0x03·Pi 4 MLP)와 mmWave 체동·호흡 대체 신호를 쓰지 않고 Pi 4 MLP 는 기준선도 모으지 않는다(`presence.gate_posture`). `either` 는 10-22 까지의 OR 규칙. |
 | `pc_ratio` | float, 0..1 | 15분 PC 활성 비율. |
 | `signals` | map | `keystroke`, `posture`, `respiration`, `environment`, `elapsed`. |
 | `touch_start` | boolean | 현재 Python `touch`. |

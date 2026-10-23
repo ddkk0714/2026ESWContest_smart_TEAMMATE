@@ -20,10 +20,10 @@ def cfg():
     return load_ingest_config()
 
 
-def mm(now, *, present=True, level=5, drowsy="AWAKE", resp_valid=True, seq=None):
+def mm(now, *, present=True, level=5, drowsy="AWAKE", resp_valid=True, seq=None, dist=55):
     return Sample(received=now, ts=now, seq=seq, data={
         "present": present, "motion_state": "still" if level <= 10 else "active",
-        "motion_level": level, "distance_cm": 55, "resp_bpm": 15, "resp_valid": resp_valid,
+        "motion_level": level, "distance_cm": dist, "resp_bpm": 15, "resp_valid": resp_valid,
         "heart_bpm": None, "heart_valid": False, "drowsy_state": drowsy, "valid": True,
     })
 
@@ -382,3 +382,33 @@ def test_presence_either_keeps_old_or_rule(cfg):
     cache.put("tof", tof(100.0, present=True, posture="upright"))
     f = build_frame(cache.snapshot(), 100.0, either, SessionTracker(), fsm_state=State.IDLE)
     assert f.present and f.get("posture").available
+
+
+def test_mmwave_far_away_is_in_room_but_not_at_desk(cfg):
+    """원룸: C1001 이 침대·주방의 사람(3 m)도 present 로 본다 → 거리 게이트로 책상 부재. ToF 가 빈 의자를 사람으로 봐도."""
+    cache = SensorCache()
+    cache.put("mmwave", mm(100.0, present=True, level=3, dist=320, resp_valid=False))
+    cache.put("tof", tof(100.0, present=True, posture="upright"))
+    f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.FOCUS_PC)
+    assert f.present is False
+    assert not f.get("posture").available and not f.get("respiration").available   # 대체 신호도 안 씀
+    out = sensor_summary(cache.snapshot(), 100.0, cfg)
+    assert out["present"] is False and out["in_room"] is True and out["presence_source"] == "mmwave_room"
+
+
+def test_mmwave_near_keeps_presence_when_tof_misses_face_down(cfg):
+    cache = SensorCache()
+    cache.put("mmwave", mm(100.0, present=True, dist=45))
+    cache.put("tof", tof(100.0, present=False, posture="away"))      # 엎드려 ToF 시야에서 빠짐
+    f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.FOCUS_PC)
+    assert f.present is True and f.get("posture").available          # mmWave 체동 대체로 자세 신호 유지
+
+
+def test_mmwave_without_distance_defers_to_tof(cfg):
+    cache = SensorCache()
+    cache.put("mmwave", mm(100.0, present=True, dist=None))
+    cache.put("tof", tof(100.0, present=False, posture="away"))
+    f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.FOCUS_PC)
+    assert f.present is False and sensor_summary(cache.snapshot(), 100.0, cfg)["presence_source"] == "tof"
+    cache.put("tof", tof(100.0, present=True))
+    assert build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.FOCUS_PC).present is True

@@ -16,10 +16,16 @@ freshness_sec:
 # 재실 판정(2026-10-23): mmWave(C1001) 가 사람이 있는지를 정하고, ToF 는 그 안에서 자세만 본다.
 #   source: mmwave  mmWave 표본이 신선하면 그 present 만 쓴다. mmWave 가 끊겼을 때만 ToF present 로 대신한다.
 #           either  둘 중 하나라도 보면 재실(10-22 까지의 동작)
-#   gate_posture: true 면 mmWave 가 '없음' 이라고 한 동안 ToF 자세(0x03·Pi 4 MLP)를 쓰지 않고, Pi 4 MLP 는
+#   desk_max_cm: C1001 은 최대 11 m·100°×100° 를 봐서 원룸이면 침대·주방의 사람도 present 다. mmWave distance_cm 가
+#           이 이하일 때만 '책상 재실', 더 멀면 '방엔 있지만 책상 빔' = 부재(엎드려 ToF 가 놓쳐도 가까우면 재실).
+#           distance_cm 가 없으면 ToF 에 맡긴다. 130 은 가정값 — 실제 설치에서 재서 바꾼다.
+#           (10-23 시뮬레이션 v6, MuJoCo+GRU 시드 1·2: 책상 재실 정확도 OR 0.68~0.83 · mmWave 만 0.78~0.93 · 게이트 0.988~0.997,
+#            방 안 식사 12분·주방 25분에 OR 은 IDLE 못 감, 게이트는 600 s 에 IDLE)
+#   gate_posture: true 면 책상이 빈 동안 ToF 자세(0x03·Pi 4 MLP)와 mmWave 체동·호흡 대체 신호를 쓰지 않고, Pi 4 MLP 는
 #           기준선도 모으지 않는다 — 빈 의자·지나가는 사람을 자세로 읽지 않게.
 presence:
   source: mmwave
+  desk_max_cm: 130
   gate_posture: true
 
 # MVP 지름길: 디스플레이 터치 대신 재실 상승엣지(IDLE 에서 present false→true)로 세션을 시작한다.

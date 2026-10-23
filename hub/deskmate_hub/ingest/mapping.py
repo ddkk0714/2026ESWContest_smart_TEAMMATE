@@ -127,31 +127,54 @@ def _tof_with_mlp(view: CacheView, tof_data: dict[str, Any], now: float, cfg: di
                 posture_confidence=float(mlp.data.get("posture_confidence") or 0.0), posture_source="mlp")
 
 
+def _mmwave_at_desk(mm: Sample, pcfg: dict[str, Any]) -> bool | None:
+    """mmWave 표본 하나 → 책상에 사람이 있는가. present=false 면 False, 거리 게이트(`presence.desk_max_cm`) 안이면
+    True, 밖이면 False(방엔 있지만 책상은 빔 — C1001 은 11 m 를 봐서 원룸의 침대·주방도 잡는다). 게이트가 없으면 present
+    그대로, 거리가 비어 있으면 None(모름 — ToF 에 맡긴다)."""
+    if not bool(mm.data.get("present", False)):
+        return False
+    desk_max = pcfg.get("desk_max_cm")
+    if desk_max is None:
+        return True
+    dist = mm.data.get("distance_cm")
+    if dist is None:
+        return None
+    return float(dist) <= float(desk_max)
+
+
 def resolve_presence(mm: Sample | None, tof: Sample | None, cfg: dict[str, Any]) -> tuple[bool, str]:
-    """(재실, 근거). `presence.source: mmwave`(기본)면 신선한 mmWave 의 present 가 정하고, mmWave 가 끊겼을 때만
-    ToF present 로 대신한다. `either` 면 둘 중 하나라도 보면 재실. 근거는 mmwave | tof | either | none."""
-    source = str((cfg.get("presence") or {}).get("source", "mmwave"))
+    """(책상 재실, 근거). `presence.source: mmwave`(기본)면 신선한 mmWave 가 정한다 — 없음 → 부재, 있음 + 거리 ≤
+    desk_max_cm → 재실(엎드려 ToF 가 놓쳐도), 있음 + 더 멀다 → 부재(ToF 가 빈 의자를 사람으로 봐도). 거리가 없거나
+    mmWave 가 끊겼을 때만 ToF present 로 대신한다. `either` 면 둘 중 하나라도 보면 재실(10-22 까지).
+    근거: mmwave | mmwave_room(방엔 있음·책상 빔) | tof | either | none."""
+    pcfg = cfg.get("presence") or {}
     mm_present = bool(mm.data.get("present", False)) if mm else False
     tof_present = bool(tof.data.get("present", False)) if tof else False
-    if source == "either":
+    if str(pcfg.get("source", "mmwave")) == "either":
         return mm_present or tof_present, "either"
     if mm is not None:
-        return mm_present, "mmwave"
+        at_desk = _mmwave_at_desk(mm, pcfg)
+        if at_desk is not None:
+            return at_desk, "mmwave_room" if mm_present and not at_desk else "mmwave"
     if tof is not None:
         return tof_present, "tof"
+    if mm is not None:                      # 거리 없음 + ToF 없음 → mmWave present 그대로
+        return mm_present, "mmwave"
     return False, "none"
 
 
 def mmwave_presence_hint(cache: Any, cfg: dict[str, Any]) -> Callable[[float], bool | None]:
-    """Pi 4 자세 모델 앞의 재실 게이트. now → 신선한 mmWave 의 present, 표본이 없거나 낡으면 None(게이트 안 함)."""
+    """Pi 4 자세 모델 앞의 재실 게이트. now → mmWave 가 본 책상 재실(거리 게이트 포함), 표본이 없거나 낡았거나 거리가
+    비어 있으면 None(게이트 안 함 — 격자로 판단)."""
     fresh = float(cfg["freshness_sec"]["mmwave"])
-    gate = bool((cfg.get("presence") or {}).get("gate_posture", True))
+    pcfg = cfg.get("presence") or {}
+    gate = bool(pcfg.get("gate_posture", True))
 
     def hint(now: float) -> bool | None:
         if not gate:
             return None
         mm = cache.snapshot().fresh("mmwave", now, fresh)
-        return None if mm is None else bool(mm.data.get("present", False))
+        return None if mm is None else _mmwave_at_desk(mm, pcfg)
 
     return hint
 
@@ -182,7 +205,7 @@ def build_frame(
     tof_present = bool(tof.data.get("present", False)) if tof else False
     present, _ = resolve_presence(mm, tof, cfg)
     pcfg = cfg.get("presence") or {}
-    # mmWave 가 '없음' 이면 ToF 가 무엇을 보든 자세로 쓰지 않는다(빈 의자·지나가는 사람)
+    # mmWave 가 책상에 사람이 없다고 하면 ToF 가 무엇을 보든 자세로 쓰지 않는다(빈 의자·지나가는 사람·방 안 다른 자리)
     tof_gated = bool(pcfg.get("gate_posture", True)) and mm is not None and not present
     signals: dict[str, Signal] = {}
 
@@ -193,7 +216,7 @@ def build_frame(
         signals["posture"] = _tof_posture_signal(_tof_with_mlp(view, tof.data, now, cfg), cfg["tof"])
         tof_posture_used = True
         tracker.still_since = None
-    if mm and mm_present:
+    if mm and mm_present and present:       # 책상이 비면 mmWave 체동·호흡 대체 신호도 쓰지 않는다(침대에서 자는 사람)
         level = float(mm.data.get("motion_level") or 0.0)
         if level <= mcfg["still_motion_level_max"]:
             if tracker.still_since is None:
@@ -318,6 +341,8 @@ def sensor_summary(view: CacheView, now: float, cfg: dict[str, Any],
     if mm or tof:
         # 재실은 build_frame 과 같은 규칙(presence.source) — 화면 배지와 FSM 이 다른 말을 하지 않게
         out["present"], out["presence_source"] = resolve_presence(mm, tof, cfg)
+        if mm:
+            out["in_room"] = bool(mm.data.get("present", False))       # 책상은 비어도 방엔 있음(화면 표시용)
     if mm:
         out["mmwave"] = {
             k: mm.data[k]
