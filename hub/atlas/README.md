@@ -44,7 +44,18 @@ payload 해석은 Python(`deskmate_hub/ingest/uart_frame.py`)이 한다. 규약�
 Python 브리지를 실센서 모드로 띄우려면 서비스 환경에 `DESKMATE_HUB_MODE=live`(선택: `DESKMATE_MQTT_HOST`)를 준다.
 빌드 시 `paho-mqtt` 가 설치돼 있으면 payload 에 동봉된다(`tools/build_payload.py`).
 
-호스트 테스트: `cmake -DBUILD_TESTING=ON` 후 `ctest` 로 `deskmate_uart_rx_host_test`(CRC check value·COBS·라인 형식).
+## 자세 서비스 판정 폴링 (2026-10-23)
+
+`src/tof_service_poll.cpp` 가 별도 자세 서비스 `deskmate_tofposture`(PostureNet GRU, HTTP 8771)의 `GET /api/state` 를
+`DESKMATE_TOF_SERVICE_PERIOD_MS`(기본 1000) 마다 받아 `TOFSVC	<json 한 줄>` 로 Python 브리지 stdin 에 쓴다(UART·MQTT 줄과 같은
+mutex). 브리지의 제한 Python 은 `_socket` 이 없어 직접 못 읽기 때문이다. Python 쪽(`deskmate_hub/ingest/tof_service.py`)이 이를
+`tof_service` 표본으로 두고 `ingest.yaml tof.posture_source: service` 면 FSM posture 신호로 쓴다. 환경변수:
+`DESKMATE_TOF_SERVICE_HOST`(127.0.0.1) · `DESKMATE_TOF_SERVICE_PORT`(8771, 0 = 끔) · `DESKMATE_TOF_SERVICE_PATH`(/api/state) ·
+`DESKMATE_TOF_SERVICE_TIMEOUT_MS`(500). 서비스가 없으면 첫 실패만 로그하고 주기마다 다시 붙어 본다 — 그동안 hub 는 MLP/0x03 규칙 판정으로 돈다.
+0x05 격자를 서비스로 넘기는 중계(`src/uart_relay.cpp`, tcp:9100)와 짝이다.
+
+호스트 테스트: `cmake -DBUILD_TESTING=ON` 후 `ctest` 로 `deskmate_uart_rx_host_test`(CRC check value·COBS·라인 형식),
+`deskmate_uart_relay_host_test`, `deskmate_tof_service_poll_host_test`(HTTP 파싱·mock 서비스 폴링·재시도), `deskmate_mqtt_host_test`.
 
 실보드 검증 완료(2026-09-18): `rx=71 discarded=0 crc_errors=0`, `/health` `mqtt=true`,
 `/api/state` 에 실측 temp 26.4 · humidity 53.8 · lux 392.
