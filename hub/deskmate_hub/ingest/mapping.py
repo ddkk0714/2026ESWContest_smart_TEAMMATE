@@ -11,7 +11,7 @@ from typing import Any
 
 from ..features import BaselineStore
 from ..inference import SensorFrame, Signal, State
-from .cache import CacheView
+from .cache import CacheView, Sample
 
 
 def _clip(value: float) -> float:
@@ -151,8 +151,7 @@ def build_frame(
 
     mm_present = bool(mm.data.get("present", False)) if mm else False
     tof_present = bool(tof.data.get("present", False)) if tof else False
-    # 재실은 둘 중 하나라도 보면 참. ToF 가 자리비움(away)이고 mmWave 가 없으면 거짓.
-    present = mm_present or tof_present
+    present, tof_present = _decide_presence(cfg, mm, mm_present, tof_present, tof is not None)
     signals: dict[str, Signal] = {}
 
     # ---- posture: ToF tof_feature 가 신선하면 그것을, 아니면 mmWave 체동으로 대체 ----
@@ -162,7 +161,7 @@ def build_frame(
         signals["posture"] = _tof_posture_signal(_tof_with_mlp(view, tof.data, now, cfg), cfg["tof"])
         tof_posture_used = True
         tracker.still_since = None
-    if mm and mm_present:
+    if mm and mm_present and present:              # 책상 재실일 때만(방 안 먼 사람의 체동·호흡은 책상 작업 증거가 아니다)
         level = float(mm.data.get("motion_level") or 0.0)
         if level <= mcfg["still_motion_level_max"]:
             if tracker.still_since is None:
@@ -267,6 +266,26 @@ def build_frame(
     )
 
 
+def _decide_presence(cfg: dict[str, Any], mm: Sample | None, mm_present: bool, tof_present: bool,
+                     tof_fresh: bool = True) -> tuple[bool, bool]:
+    """책상 재실 판정. presence_priority: mmwave(기본) — mmWave(C1001)가 신선·유효하면 그것을 먼저 본다:
+      - mmWave 부재 → 부재 (ToF 가 빈 의자·짐을 사람으로 봐도)
+      - mmWave 재실 + distance_cm ≤ desk_max_cm → 책상 재실 (ToF 가 놓쳐도 — 엎드림·가만히)
+      - mmWave 재실 + 더 멀다 → 방엔 있지만 책상은 빔 → 부재 (C1001 은 11 m 까지 봐서 원룸의 침대·주방도 잡는다)
+      - 거리가 없으면 ToF 로 가린다(ToF 도 없으면 재실)
+    mmWave 가 끊기면 ToF 만. any = 둘 중 하나라도 보면 참(이전 동작). 돌려주는 값: (present, ToF 자세를 써도 되는지)."""
+    if cfg.get("presence_priority", "mmwave") == "mmwave" and mm is not None and mm.data.get("valid", True):
+        if not mm_present:
+            return False, False
+        dist = mm.data.get("distance_cm")
+        if dist is not None:
+            at_desk = float(dist) <= float(cfg.get("desk_max_cm", 130))
+        else:
+            at_desk = tof_present if tof_fresh else True
+        return at_desk, tof_present and at_desk
+    return mm_present or tof_present, tof_present
+
+
 def sensor_summary(view: CacheView, now: float, cfg: dict[str, Any],
                    tracker: SessionTracker | None = None) -> dict[str, Any]:
     """state/phase 의 sensor_summary — 화면 표시용 특징 요약. 없는 필드는 생략한다."""
@@ -286,7 +305,8 @@ def sensor_summary(view: CacheView, now: float, cfg: dict[str, Any],
         }
     mm = view.fresh("mmwave", now, fresh["mmwave"])
     if mm:
-        out["present"] = bool(out.get("present", False)) or bool(mm.data.get("present", False))
+        out["present"], _ = _decide_presence(cfg, mm, bool(mm.data.get("present", False)), bool(out.get("present", False)), tof is not None)
+        out["in_room"] = bool(mm.data.get("present", False))
         out["mmwave"] = {
             k: mm.data[k]
             # 심박·호흡은 *_valid 와 짝으로 넘긴다. 락온이 풀린 구간의 값을 화면이 그대로

@@ -13,6 +13,13 @@ freshness_sec:
   tof: 3              # ESP32 가 0x03 을 5 Hz 로 보낸다. 센서가 둘 다 죽으면 아무것도 안 보내 미가용이 된다
   tof_mlp: 3          # Pi 4 MLP 판정(원본 격자 0x05, 5 Hz). 이보다 낡으면 0x03 규칙 판정으로 돌아간다
 
+# 재실 판정 우선순위(2026-10-23 결정): mmwave = mmWave(C1001)가 신선·유효하면 그것만 따르고 ToF 는 mmWave 가 끊겼을 때 대체 /
+# any = 둘 중 하나라도 보면 재실(이전 동작). life_sim 에서 ToF 가 빈 의자를 사람으로 보는 배치(시드 1)는 any 로는 20 분 넘게
+# 비워도 IDLE 로 가지 않았다.
+presence_priority: mmwave
+# mmWave 가 재실이라도 사람까지 거리가 이보다 멀면 "방엔 있지만 책상은 빔"(C1001 은 11 m·100° 를 본다). 실제 설치에서 재 맞춘다.
+desk_max_cm: 130
+
 # MVP 지름길: 디스플레이 터치 대신 재실 상승엣지(IDLE 에서 present false→true)로 세션을 시작한다.
 auto_start_on_presence: true
 # MVP 지름길: 제어 모듈이 없으므로 ACTION_* 상태를 한 tick 뒤 실행 완료로 간주해 MONITOR 로 넘긴다.
