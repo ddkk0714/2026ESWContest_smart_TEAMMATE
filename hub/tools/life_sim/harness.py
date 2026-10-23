@@ -25,6 +25,7 @@ import time
 from typing import Any
 
 import numpy as np
+import yaml
 
 from .devices import DeviceWorld
 from .hub_bridge import HubBridge
@@ -201,6 +202,15 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
     ingest_cfg = load_ingest_config()
     if scenario["hub"].get("presence_priority"):
         ingest_cfg["presence_priority"] = scenario["hub"]["presence_priority"]     # mmwave | any (비교 실험)
+    if scenario["hub"].get("desk_max_cm") is not None:
+        ingest_cfg["desk_max_cm"] = float(scenario["hub"]["desk_max_cm"])        # 책상 재실 거리 민감도 실험
+    for item in scenario["hub"].get("ingest_set") or []:                         # --ingest-set a.b=값 (실험)
+        key, _, raw = str(item).partition("=")
+        *path, leaf = key.strip().split(".")
+        node = ingest_cfg
+        for k in path:
+            node = node.setdefault(k, {})
+        node[leaf] = yaml.safe_load(raw)
     hub = HubBridge(posture_model=model, fsm_config=fsm_config_path(scenario["hub"].get("fsm_config")), ingest_cfg=ingest_cfg,
                     esm_log_path=os.path.join(run_dir, "esm.jsonl"), t0=t0,
                     personalize_cfg=pcfg, personalize_policy_path=policy_path, personalize_log_path=plog_path)

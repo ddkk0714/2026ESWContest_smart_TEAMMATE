@@ -33,6 +33,14 @@ def cmd_run(args: argparse.Namespace) -> int:
             sc["hub"]["presence_priority"] = args.presence
         if args.room_random:
             sc["devices_resolved"].setdefault("room", {})["randomize"] = True
+        if args.desk_max_cm is not None:
+            sc["hub"]["desk_max_cm"] = args.desk_max_cm
+        if args.ingest_set:
+            sc["hub"]["ingest_set"] = list(args.ingest_set)
+        if args.policy_engine:
+            sc["policy"]["engine"] = args.policy_engine
+        if args.policy_profile:
+            sc["policy"]["profile"] = args.policy_profile
         src = None
         if args.synthetic:
             from tools.posture_sim.synthetic import SyntheticPerson
@@ -160,6 +168,11 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--replay", action="store_true", help="프레임마다 Pose·격자·판정을 replay.jsonl 로(video 명령용, 실행당 ~20 MB)")
     r.add_argument("--presence", choices=["mmwave", "any"], help="hub 재실 판정: mmwave(우선, 기본 설정) | any(둘 중 하나, 이전 동작)")
     r.add_argument("--room-random", action="store_true", help="사용 환경(천장등·일광률·방 크기·무드등 세기)을 시드마다 뽑는다(devices.yaml room.randomize_ranges)")
+    r.add_argument("--desk-max-cm", type=float, help="책상 재실 거리 상한(ingest.yaml desk_max_cm 덮어쓰기, 민감도 실험)")
+    r.add_argument("--ingest-set", action="append", metavar="KEY=VALUE",
+                   help="ingest.yaml 값 덮어쓰기(점 경로, 값은 YAML). 예: elapsed.reset_on_rest=true. 여러 번 줄 수 있다")
+    r.add_argument("--policy-engine", choices=["hub", "simple", "none"], help="각본의 policy.engine 덮어쓰기")
+    r.add_argument("--policy-profile", choices=["none", "synth", "global"], help="각본의 policy.profile 덮어쓰기")
     r.add_argument("--raise-errors", action="store_true")
     r.set_defaults(fn=cmd_run)
     v = sub.add_parser("video", help="replay.jsonl 로 MuJoCo 3D + 센서 격자 + 상태 영상(mp4)")

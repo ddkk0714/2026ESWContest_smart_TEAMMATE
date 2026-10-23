@@ -30,6 +30,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             sc["seed"] = int(args.seed)
         if args.presence:
             sc["sensors_resolved"]["presence"]["priority"] = args.presence
+        if args.desk_max_cm is not None:
+            sc["sensors_resolved"]["presence"]["desk_max_cm"] = args.desk_max_cm
         src = None
         if args.synthetic:
             from tools.posture_sim.synthetic import SyntheticPerson
@@ -79,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--tofsim", help="tofsim 루트(TOFSIM_ROOT)")
     r.add_argument("--seed", type=int)
     r.add_argument("--presence", choices=["mmwave", "any"], help="책상 재실 규칙(기본: config/sensors.yaml presence.priority)")
+    r.add_argument("--desk-max-cm", type=float, help="책상 재실 거리 상한(config/sensors.yaml presence.desk_max_cm 덮어쓰기)")
     r.add_argument("--label")
     r.add_argument("--raise-errors", action="store_true")
     r.set_defaults(func=cmd_run)
