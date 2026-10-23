@@ -92,6 +92,9 @@ def run_posture(scenario: dict[str, Any], *, out_dir: str, model_path: str | Non
     rows: list[dict[str, Any]] = []
     mm: dict[str, Any] | None = None
     verdict: dict[str, Any] | None = None
+    gated_since: float | None = None
+    gated_reset = False
+    reset_after = float((sens.get("posture_model") or {}).get("reset_on_away_s", 60))
     k = 0
     prof = {"render": 0.0, "model": 0.0}
     next_report = time.time() + 15.0
@@ -113,8 +116,16 @@ def run_posture(scenario: dict[str, Any], *, out_dir: str, model_path: str | Non
                                            priority=str(pres_cfg.get("priority", "mmwave")))
         sample = wire.push(frames)
         if sample is not None:
-            hint = present if pres_cfg.get("gate_posture", True) else bool(feats["present"])
-            verdict = model.update(sample, t, present=hint)
+            if pres_cfg.get("gate_posture", True) and not present:
+                # hub 계약(TofMlpPosture.update(present=False)): 책상 부재면 모델·기준선을 건너뛰고 away. 오래 비면 은닉 상태를 비운다
+                gated_since = t if gated_since is None else gated_since
+                if t - gated_since >= reset_after and not gated_reset and hasattr(model, "reset"):
+                    model.reset(t)
+                    gated_reset = True
+                verdict = {"posture": "away", "posture_confidence": 1.0, "raw_posture": "away", "source": "presence_gate"}
+            else:
+                gated_since, gated_reset = None, False
+                verdict = model.update(sample, t, present=present if pres_cfg.get("gate_posture", True) else bool(feats["present"]))
         prof["render"] += p1 - p0
         prof["model"] += time.perf_counter() - p1
         if k % int(fps) == 0:

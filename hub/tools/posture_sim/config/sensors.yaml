@@ -7,7 +7,7 @@
 presence:
   priority: mmwave
   desk_max_cm: 130
-  gate_posture: true        # 책상 부재면 자세 모델에 present=False 를 넘긴다(TofMlpPosture.update(sample, now, present))
+  gate_posture: true        # 책상 부재면 자세 모델을 건너뛰고 away (TofMlpPosture.update(sample, now, present=False) 계약)
 
 # mmWave(C1001) 대역(mmwave.py). 1 Hz, UART 0x20.
 mmwave:
