@@ -10,13 +10,15 @@
   screen        Pi 5 화면 카드(제안 수락·거절·무응답, 자동 실행 알림 + 되돌리기, 정정).
   window        사람이 여는 창문(기기 아님) — 환기 권유 카드를 수락하면 vent_minutes 동안 열린다.
 
-환경 물리(설정 `environment`)는 1 초 단위 1차 모델이다. 숫자는 그럴듯한 가정이지 실측이 아니다.
+환경 물리(설정 `environment`·`room`, room.py)는 1 초 단위 1차 모델이다: CO₂·온도·절대습도·조도(일광+천장등+무드등)·PM. 숫자는 그럴듯한 가정이지 실측이 아니다.
 날씨는 deskmate/sensor/weather(retain) 를 각본이 발행하는 것으로 모사하고, 환기 규칙(`weather_rules`)은 여기서 판정한다.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+
+from .room import ah_from_rh, indoor_daylight, rh_from_ah
 
 
 @dataclass
@@ -34,7 +36,7 @@ class DeviceState:
 
 
 class DeviceWorld:
-    def __init__(self, cfg: dict[str, Any], env0: dict[str, Any], weather: dict[str, Any], t0: float):
+    def __init__(self, cfg: dict[str, Any], env0: dict[str, Any], weather: dict[str, Any], t0: float, *, seed: int | None = None):
         self.cfg = cfg
         self.e = dict(cfg.get("environment") or {})
         self.dev_cfg = dict(cfg.get("devices") or {})
@@ -50,9 +52,31 @@ class DeviceWorld:
             self.state.window_open_until = float("inf")
         self.t = t0
         self.forced: dict[str, float] = {}          # 각본이 강제한 환경값 (co2_ppm 램프 등)
+        self.co2_forcing_released = False           # 구간 안에서 창문을 열면 True — 하네스가 구간이 바뀔 때 new_segment() 로 되돌린다
+        self.room = dict(cfg.get("room") or {})
+        self.room_drawn: dict[str, float] = {}
+        if self.room.get("randomize") and seed is not None:     # 사용 환경(방·조명)을 시드마다 뽑는다 — 기준선 학습·강건성 확인용
+            import random as _random
+            rr = _random.Random(seed + 61)
+            for key, (lo, hi) in (self.room.get("randomize_ranges") or {}).items():
+                v = rr.uniform(float(lo), float(hi))
+                self.room_drawn[key] = round(v, 4)
+                if key == "lamp_lux_per_pct":
+                    self.e[key] = v
+                else:
+                    self.room[key] = v
+        self.ah0 = ah_from_rh(self.env["temp_c"], self.env["humidity_pct"])
+        self.ah = self.ah0
+        self.ceiling_on = bool(env0.get("room_light_on", False))
+        self._away_s = 0.0
+        self.env["daylight_lux"] = 0.0
+
+    def new_segment(self) -> None:
+        self.co2_forcing_released = False
 
     # ---------------------------------------------------------------- 물리
-    def step(self, now: float, *, present: bool, segment_env: dict[str, Any] | None = None, seg_progress: float = 0.0) -> None:
+    def step(self, now: float, *, present: bool, segment_env: dict[str, Any] | None = None, seg_progress: float = 0.0,
+             person_kind: str | None = None) -> None:
         dt = max(0.0, now - self.t)
         self.t = now
         if dt <= 0:
@@ -62,43 +86,86 @@ class DeviceWorld:
         if s.window_open_until is not None and now >= s.window_open_until:
             s.window_open_until = None
             self._log(now, "window", "closed", {})
-        # CO2: 사람 발생 − 누설/창문 환기 (선풍기·공기청정기는 못 내린다)
-        gen = float(e.get("person_co2_ppm_per_s", 0.07)) if present else 0.0
-        rate = float(e.get("window_vent_per_s", 0.0025)) if window else float(e.get("leak_per_s", 0.00003))
+        rm = self.room
+        seg = segment_env or {}
+        # CO2: 사람 발생(L/h ÷ 방 부피, 조는 동안 조금 적다) − 공기 교환 (선풍기·공기청정기는 못 내린다)
+        vol = float(rm.get("volume_m3", 40.0))
+        lph = (rm.get("co2_lph") or {}).get("drowsy" if person_kind in ("drowsy", "face_down") else "awake", 18.0)
+        gen = float(lph) / 1000.0 / vol * 1e6 / 3600.0 if present else 0.0
+        wind = float(self.weather.get("wind_ms", 2.0) or 0.0)
+        win_rate = float(e.get("window_vent_per_s", 0.0025)) * (1.0 + float(rm.get("wind_gain_per_ms", 0.08)) * wind)
+        rate = win_rate if window else float(e.get("leak_per_s", 0.00008))
         out_co2 = float(e.get("outdoor_co2_ppm", 420.0))
         env["co2_ppm"] += dt * (gen - rate * (env["co2_ppm"] - out_co2))
+        # 온도: 외피(느림) + 창문 + 냉난방 + 재실 발열
+        t_out = float(self.weather.get("temp_c", 18.0))
+        k_t = float(rm.get("wall_per_s", 0.00002)) + (float(rm.get("window_temp_per_s", 0.0006)) if window else 0.0)
+        hv = dict(rm.get("hvac") or {})
+        hv.update(seg.get("hvac") or {})
+        hvac = 0.0
+        mode = str(hv.get("mode", "off"))
+        if mode in ("heat", "cool"):
+            sp = float(hv.get("setpoint", 22.0 if mode == "heat" else 25.0))
+            if (mode == "heat" and env["temp_c"] < sp) or (mode == "cool" and env["temp_c"] > sp):
+                hvac = float(hv.get("k_per_s", 0.0005)) * (sp - env["temp_c"])
+        gain = float(rm.get("heat_gain_c_per_s", 0.0002)) if present else 0.0
+        env["temp_c"] += dt * (k_t * (t_out - env["temp_c"]) + hvac + gain)
+        env["felt_temp_c"] = env["temp_c"] + float((e.get("fan_felt_delta_c") or {}).get(str(s.fan_level), 0.0))
+        # 습도(절대습도): 사람 수분 + 공기 교환 + 벽·가구 흡방습 → 실내 온도에서 RH
+        ah_out = ah_from_rh(t_out, float(self.weather.get("humidity", 55.0)))
+        moist = float(rm.get("moisture_g_per_h", 50.0)) / 3600.0 / vol if present else 0.0
+        moist += float(seg.get("moisture_add_g_per_s", 0.0)) / vol      # 요리 수증기·젖은 빨래 등
+        self.ah += dt * (moist + rate * (ah_out - self.ah) + float(rm.get("buffer_per_s", 0.0001)) * (self.ah0 - self.ah))
+        env["humidity_pct"] = rh_from_ah(env["temp_c"], self.ah)
+        # 조도: 창 일광 + 천장등(자동: 재실 중 일광이 어두우면 켠다) + 무드등
+        day = indoor_daylight(now, self.weather, rm)
+        light = str(seg.get("room_light", rm.get("room_light", "auto")))
+        if light == "on" or (light == "auto" and present and day < float(rm.get("light_on_below_lux", 250))):
+            self.ceiling_on = True
+        elif light == "off" or (light == "auto" and not present and self.ceiling_on and self._away_s >= 600):
+            self.ceiling_on = False                        # 10 분 넘게 비우면 끄고 나간 것으로
+        self._away_s = 0.0 if present else self._away_s + dt
+        lamp = self.lamp_lux()
+        self.ambient_lux = day + (float(rm.get("ceiling_lux", 250)) if self.ceiling_on else 0.0)
+        env["lux"] = self.ambient_lux + lamp
+        env["daylight_lux"] = day
         # PM2.5: 발생 − 공기청정기 − 창문(바깥 PM 으로 수렴)
+        # 각본 구간의 pm_add_per_s = 실내 발생원(요리·간식·먼지 털기). 닫힌 창 틈새로도 바깥 PM 이 조금씩 들어온다.
         pm_out = float(self.weather.get("pm25", e.get("pm25_outdoor", 25.0)))
         pur = float((e.get("purifier_per_s") or {}).get(str(s.purifier_level), 0.0))
-        pm_rate = pur + (float(e.get("window_vent_per_s", 0.0025)) if window else 0.0)
-        env["pm25"] += dt * (float(e.get("pm_gen_per_s", 0.002)) * (1.0 if present else 0.3)
-                             - pur * env["pm25"] - (rate if window else 0.0) * (env["pm25"] - pm_out))
+        pm_ex = rate if window else float(e.get("pm_leak_per_s", 0.0))
+        pm_src = float((segment_env or {}).get("pm_add_per_s", 0.0))
+        env["pm25"] += dt * (float(e.get("pm_gen_per_s", 0.002)) * (1.0 if present else 0.3) + pm_src
+                             - pur * env["pm25"] - pm_ex * (env["pm25"] - pm_out))
         env["pm25"] = max(2.0, env["pm25"])
-        # 온도: 창문이면 바깥으로 수렴, 아니면 천천히 실내 기준으로. 체감온도 = 온도 + 선풍기 효과
-        t_out = float(self.weather.get("temp_c", 18.0))
-        couple = float(e.get("window_temp_per_s", 0.001)) if window else float(e.get("room_temp_per_s", 0.0002))
-        target = t_out if window else float(e.get("room_temp_c", env["temp_c"]))
-        env["temp_c"] += dt * couple * (target - env["temp_c"])
-        env["felt_temp_c"] = env["temp_c"] + float((e.get("fan_felt_delta_c") or {}).get(str(s.fan_level), 0.0))
-        # 습도: 창문이면 바깥 습도로
-        h_out = float(self.weather.get("humidity", 55.0))
-        env["humidity_pct"] += dt * (float(e.get("window_hum_per_s", 0.001)) if window else 0.0) * (h_out - env["humidity_pct"])
-        # 조도: 주변광 + 램프
-        lamp = s.lamp_brightness * float(e.get("lamp_lux_per_pct", 2.5)) if s.lamp_on else 0.0
-        env["lux"] = self.ambient_lux + lamp
-        # 각본 강제값 (예: co2_to 램프) — 물리 위에 덮는다
+        # 각본 강제값 (예: co2_to 램프) — 물리 위에 덮는다. 단 이 구간에서 창문을 한 번 열었으면 CO₂ 강제는 풀고 물리(발생−환기)를
+        # 따른다: 강제 램프가 환기 효과를 지워 "창문을 열어도 CO₂ 가 그대로"였던 10-22 결과의 원인이었다.
+        if window:
+            self.co2_forcing_released = True
         if segment_env:
-            if "co2_to" in segment_env and "co2_from" in segment_env:
+            if self.co2_forcing_released:
+                pass
+            elif "co2_to" in segment_env and "co2_from" in segment_env:
                 env["co2_ppm"] = float(segment_env["co2_from"]) + (float(segment_env["co2_to"]) - float(segment_env["co2_from"])) * seg_progress
             elif "co2_to" in segment_env:
                 k = min(1.0, dt * float(e.get("forced_ramp_per_s", 0.002)))
                 env["co2_ppm"] += k * (float(segment_env["co2_to"]) - env["co2_ppm"])
-            if "lux" in segment_env:
+            if "lux" in segment_env:                         # 옛 각본 호환: 주변광을 직접 정한다(일광·천장등 대신)
                 self.ambient_lux = float(segment_env["lux"])
+                env["lux"] = self.ambient_lux + self.lamp_lux()
             if "temp_c" in segment_env:
                 env["temp_c"] = float(segment_env["temp_c"])
+                env["humidity_pct"] = rh_from_ah(env["temp_c"], self.ah)
             if "pm25" in segment_env:
                 env["pm25"] = float(segment_env["pm25"])
+
+    def lamp_lux(self) -> float:
+        """무드등이 책상 위에 더하는 조도 — 무드등이라 작다(작업등 아님). 따뜻한 색은 lamp_warm_factor 배."""
+        s = self.state
+        if not s.lamp_on:
+            return 0.0
+        k = float(self.e.get("lamp_lux_per_pct", 0.4)) * (float(self.e.get("lamp_warm_factor", 0.6)) if s.lamp_mode == "warm" else 1.0)
+        return s.lamp_brightness * k
 
     def env_sample(self) -> dict[str, Any]:
         return {"co2_ppm": self.env["co2_ppm"], "temp_c": self.env["temp_c"], "humidity_pct": self.env["humidity_pct"],
@@ -118,7 +185,8 @@ class DeviceWorld:
             s.fan_level = max(0, min(3, int(value)))
             channels.append("fan_high" if s.fan_level >= 3 else "fan_on" if s.fan_level > 0 else "fan_off")
         elif target == "desk_lamp" and op == "set_brightness":
-            pct = int(round(int(value) / 255.0 * 100)) if int(value) > 100 else int(value)   # iLink 0~255 도 받는다
+            # iLink 원시 밝기 0~255 (mqtt-topics.md: 퍼센트 아님) — hub 기본 환경 명령 70 ≈ 27 %, personalize cool_bright 200 ≈ 78 %
+            pct = int(round(max(0, min(255, int(value))) / 255.0 * 100))
             s.lamp_on = pct > 0
             s.lamp_brightness = pct
             s.lamp_mode = "hub" if s.lamp_on else "off"
@@ -179,12 +247,13 @@ class DeviceWorld:
             exclude, why = True, why + [f"{w.get('condition')}"]
         if float(w.get("temp_c", 18.0)) - self.env["temp_c"] >= float(r.get("exclude_if_outdoor_warmer_c", 2.0)):
             exclude, why = True, why + ["outdoor_warmer"]
+        if w.get("pm25") is not None and float(w["pm25"]) >= float(r.get("exclude_if_outdoor_pm25", 36.0)):
+            exclude, why = True, why + ["outdoor_pm_bad"]
         if not exclude and float(w.get("wind_ms", 0.0)) >= float(r.get("wind_vent_ms", 4.0)):
             why.append("windy")
         if not exclude:
             return {"choice": "window", "minutes": self.vent_minutes(), "why": why or ["co2_high"]}
-        if pm25 >= float(r.get("pm25_purifier", 35.0)):
-            return {"choice": "air_purifier", "why": why + ["pm_high"]}
+        # 공기청정기는 CO₂ 를 못 내린다 → 고르지 않는다(PM 은 purifier_control 이 따로). 남는 건 선풍기(체감)뿐.
         return {"choice": "vent_fan", "why": why + ["co2_stays_fan_only_comfort"]}
 
     def publish_weather(self) -> dict[str, Any]:
@@ -192,7 +261,7 @@ class DeviceWorld:
         return {"temp_c": self.weather.get("temp_c"), "humidity": self.weather.get("humidity"),
                 "wind_ms": self.weather.get("wind_ms"), "condition": self.weather.get("condition", "unknown"),
                 "season": self.weather.get("season"), "fetched_at": self.weather.get("fetched_at"),
-                "source": self.weather.get("source", "sim")}
+                "pm25": self.weather.get("pm25"), "source": self.weather.get("source", "sim")}
 
     def snapshot(self) -> dict[str, Any]:
         s = self.state

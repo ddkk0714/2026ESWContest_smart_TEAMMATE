@@ -1,0 +1,23 @@
+# 환경 ① 한여름 오후, 에어컨 끔 (대학생, PC). 바깥 31 ℃·습도 70 %·맑음. 서향 창 일광이 강하고(조도 높음) 방은 재실 발열로 덥고 습해진다.
+#  볼 것: 온도·습도 쾌적 밖 → environment 신호 phi, CO₂ 상승(물리) → ACTION_ENV 의 선풍기(체감 −1.5 ℃)·환기 카드
+#  (바깥이 더 더워 환기 제외 outdoor_warmer), 해 질 무렵 일광이 줄어 천장등 자동 켜짐, 졸음 → 깨우기. 전부 물리 모델(co2_to 없음).
+name: env_summer_hot
+persona: student
+seed: 501
+start_clock: "15:00"
+l8_params: v5
+env: {co2_ppm: 600, temp_c: 27.5, humidity_pct: 62, pm25: 18}
+weather: {temp_c: 31.0, humidity: 70, wind_ms: 2.0, condition: clear, season: summer, pm25: 20}
+policy: {profile: none}
+devices: {room: {hvac: {mode: off}, daylight_factor: 0.02}}
+segments:
+  - {kind: away, seconds: 10}
+  - {kind: upright, seconds: 330, typing: true}
+  - {kind: upright, seconds: 1500, typing: true, keys: {idle_ratio: 0.18, flight_cv: 0.32, correction_rate: 0.05}}
+  - {kind: mouse_work, seconds: 900, typing: true, keys: {idle_ratio: 0.30, flight_cv: 0.42, correction_rate: 0.07}}
+  - {kind: drowsy, seconds: 1200, typing: false,
+     nods: {interval_s: [6, 14], amp_deg: [30, 50], micro_sleep_p: 0.5, hold_s: [5, 15], first_s: [20, 40]}}
+  - {kind: upright, seconds: 900, typing: true, keys: {idle_ratio: 0.3, flight_cv: 0.45, correction_rate: 0.08}}
+  - {kind: chin_rest, seconds: 420, typing: false}
+  - {kind: upright, seconds: 600, typing: true}
+  - {kind: away, seconds: 30, no_return: true}

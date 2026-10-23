@@ -21,7 +21,7 @@ from deskmate_hub.control import load_control_config
 from deskmate_hub.inference import State, load_config
 from deskmate_hub.ingest import SensorCache, load_ingest_config
 from deskmate_hub.ingest.mqtt_lines import route_mqtt_message
-from deskmate_hub.ingest.uart_frame import (TYPE_TOF_FEATURES, TYPE_TOF_GRID, Frame, TofGridAssembler, decode_payload,
+from deskmate_hub.ingest.uart_frame import (TYPE_ENV, TYPE_MMWAVE, TYPE_TOF_FEATURES, TYPE_TOF_GRID, Frame, TofGridAssembler, decode_payload,
                                             encode_payload, encode_tof_sensor_frames)
 from deskmate_hub.ingest.uart_source import UartStats, ingest_frame
 from deskmate_hub.live import LiveHub
@@ -132,6 +132,20 @@ class HubBridge:
         ingest_frame(self.cache, Frame(type=TYPE_TOF_FEATURES, seq=self.seq["tof"], ts_ms=ts_ms,
                                        payload=encode_payload(TYPE_TOF_FEATURES, clean)), self.stats, received=t, node=self.node)
         return verdict
+
+    def feed_mmwave(self, data: dict[str, Any], t: float) -> None:
+        """C1001 대역 → UART 0x20 payload → ingest_frame → cache.mmwave (실기와 같은 디코더)."""
+        self.seq["mmwave"] = self.seq.get("mmwave", 0) + 1
+        ts_ms = int(round(t * 1000)) & 0xFFFFFFFF
+        ingest_frame(self.cache, Frame(type=TYPE_MMWAVE, seq=self.seq["mmwave"], ts_ms=ts_ms,
+                                       payload=encode_payload(TYPE_MMWAVE, data)), self.stats, received=t, node=self.node)
+
+    def feed_env_uart(self, data: dict[str, Any], t: float) -> None:
+        """ESP32 환경 센서(SCD41·DHT22·BH1750) → UART 0x10 payload → ingest_frame → cache.env (실기와 같은 디코더·valid 비트)."""
+        self.seq["env"] += 1
+        ts_ms = int(round(t * 1000)) & 0xFFFFFFFF
+        ingest_frame(self.cache, Frame(type=TYPE_ENV, seq=self.seq["env"], ts_ms=ts_ms,
+                                       payload=encode_payload(TYPE_ENV, data)), self.stats, received=t, node=self.node)
 
     def feed_env(self, env: dict[str, Any], t: float) -> None:
         self.seq["env"] += 1

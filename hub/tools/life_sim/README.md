@@ -34,6 +34,10 @@ pylib/ = pyyaml·matplotlib·pytest, repo/ = 이 레포의 hub/·tools/). `sbatc
 | `reaction.py`, `config/reaction.yaml` | 사람 반응: 카드 수락/무응답/거절, 채널별 깨어남 확률(1−Π(1−p)), 자세 복귀, 되돌리기, 휴식 이탈. 페르소나별 덮어쓰기 |
 | `devices.py`, `config/devices.yaml` | 기기 mock(선풍기 0~3·공기청정기·무드등 cool/warm·스피커 TTS·화면 카드·창문) + 실내 환경 1차 물리(CO₂·PM·온도·조도) + 날씨 규칙(바람≥4 m/s 환기 우선, 비·눈·바깥이 2 ℃ 더우면 환기 제외, 겨울 5분/그 외 15분) + hub 액션→채널 매핑 |
 | `policy.py`, `config/policy_simple.yaml` | §B-2 간이 개인화(feat/personalize-policy 대역): 보상 2축, 채널 점수(간이 밴딧), 되돌리기마다 자동 문턱 +0.05·2회 뒤 자동→제안, 거절 재제안 금지, 쿨다운·세션 상한, 취침 권유 규칙, "왜 이 개입인지" 한 줄 |
+| `room.py` | 방 물리(10-23): CO₂(사람 L/h ÷ 부피, 공기 교환) · 온도(외피·창문·냉난방·재실 발열) · 절대습도→RH · 조도(일광[시각·계절·날씨] + 천장등 자동 + 무드등). 설정 `devices.yaml room` |
+| `env_sensors.py` | ESP32 환경 센서 대역: SCD41(CO₂)·DHT22(T/RH)·BH1750(lux) 고정 오차·잡음·응답 지연·읽기 실패 → **UART 0x10** 으로 hub(0.2 Hz) |
+| `mmwave.py` | C1001 mmWave 대역(재실·체동·호흡·DrowsyDetector) → **UART 0x20**. **재실 판정은 mmWave 우선**, mmWave 가 없을 때만 ToF (hub mapping.py 는 아직 OR) |
+| `purifier.py` | 공기청정기 타이밍 규칙(FSM 밖, PM2.5 만): 켜기 ≥35·60 s / 올리기 60 s / 내리기 300 s / 끄기 ≤15·300 s·최소 10 분 / 정숙·몰입 상한 2 / 자리비움 boost. 설정 `devices.yaml purifier_control` |
 | `harness.py` | 폐루프 본체 + JSONL·summary.md/json·PNG |
 | `ab.py` | §B-4: 같은 하루를 계정 A(합성 30일 프로필) vs B(전역 기본값) 로, 시드 여러 개 평균 |
 
@@ -64,5 +68,7 @@ pylib/ = pyyaml·matplotlib·pytest, repo/ = 이 레포의 hub/·tools/). `sbatc
 
 - 반응 확률·기기 효과 계수·환경 물리는 전부 가정값(yaml). 페르소나 프로필 A 도 합성이다.
 - 0x03 규칙 특징은 펌웨어 코드의 이식이 아니라 같은 뜻의 단순 규칙(머리 띠 거리·행 무게중심 이탈 → 끄덕임).
-- mmWave 는 넣지 않았다(재실·자세는 ToF 만). 카메라·마이크·얼굴 신호 없음.
+- mmWave·환경 센서는 데이터시트 기반 대역이다(실측 보정 전). 카메라·마이크·얼굴 신호 없음.
+- 옛 각본(a1~a3, day_*)은 `co2_to` 로 CO₂ 를 강제한다 — 구간 안에서 창문이 열리면 강제를 풀고 물리를 따른다. 새 각본(pm_*, env_*)은 강제 없이 물리.
+- 공기청정기 입력은 공기청정기 자체 PM 표시값(ThinQ)을 가정한다 — hub 에는 PM 입력이 없다. 바깥 PM 은 날씨 payload 의 `pm25`(가정).
 - GRU 는 ≤900 s 세션으로 학습됐다 → 장기 상태 표류를 막으려고 `posture_model.reset_every_s: 900`(가정)으로 은닉 상태를 비운다.

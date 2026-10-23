@@ -30,6 +30,9 @@ from .devices import DeviceWorld
 from .hub_bridge import HubBridge
 from .policy import GROUP_OF, SimplePolicy, synth_profile
 from .posture_model import OraclePosture, RuleFeatures
+from .env_sensors import EnvSensors
+from .mmwave import MmwaveSensor, presence_decision
+from .purifier import PurifierController, purifier_metrics
 from .reaction import Reaction, ReactionModel
 from .scenario import fsm_config_path
 
@@ -216,7 +219,11 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
     pcfg, policy_path, plog_path, policy_info = (None, None, None, {"engine": engine, "profile": profile})
     if engine == "hub":
         pcfg, policy_path, plog_path, policy_info = _setup_hub_policy(scenario, profile, run_dir, seed)
-    hub = HubBridge(posture_model=model, fsm_config=fsm_config_path(scenario["hub"].get("fsm_config")),
+    from deskmate_hub.ingest import load_ingest_config
+    ingest_cfg = load_ingest_config()
+    if scenario["hub"].get("presence_priority"):
+        ingest_cfg["presence_priority"] = scenario["hub"]["presence_priority"]     # mmwave | any (비교 실험)
+    hub = HubBridge(posture_model=model, fsm_config=fsm_config_path(scenario["hub"].get("fsm_config")), ingest_cfg=ingest_cfg,
                     esm_log_path=os.path.join(run_dir, "esm.jsonl"), t0=t0,
                     personalize_cfg=pcfg, personalize_policy_path=policy_path, personalize_log_path=plog_path)
     hub_policy = getattr(hub.hub, "personalize_policy", None)
@@ -224,7 +231,11 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
         hub_policy.rng = np.random.default_rng(seed + 11)       # Thompson 샘플도 시드로 고정(재현)
         policy_info["loaded_n_feedback"] = hub_policy.n_feedback
     period = float(scenario["hub"].get("tick_sec") or hub.period)
-    world = DeviceWorld(dev, scenario["env"], scenario["weather"], t0)
+    world = DeviceWorld(dev, scenario["env"], scenario["weather"], t0, seed=seed)
+    purifier = PurifierController(dev.get("purifier_control") or {}, seed=seed, t0=t0)
+    mmw = MmwaveSensor(dev.get("mmwave") or {}, seed=seed)
+    envs = EnvSensors(dev.get("env_sensors") or {}, seed=seed)
+    env_meas: dict[str, Any] = {}
     channels_cfg = dev.get("channels") or {}
     arm_channels = dev.get("arm_channels") or {}
     arm_card_table = dev.get("arm_card_table") or {}
@@ -255,6 +266,18 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
 
     def person_kind() -> str:
         return src.current.kind if not src.done else "away"
+
+    def where_now() -> str:
+        """desk | room(방 안 다른 곳 — 침대·주방) | out. 각본 구간의 where, 없으면 취침=room, 그 밖은 각본 away_where(기본 out)."""
+        if person_kind() != "away":
+            return "desk"
+        if src.done:
+            return str(scenario.get("away_where", "out"))
+        cur = src.current
+        w = (getattr(cur, "spec", None) or {}).get("where")
+        if w is None:
+            w = "room" if getattr(cur, "override", None) == "bedtime" else str(scenario.get("away_where", "out"))
+        return str(w)
 
     def in_focus() -> bool:
         return bool(last_tick and last_tick["state"] in FOCUS_STATES)
@@ -452,10 +475,6 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
                 if vent is not None and vent["choice"] == "window":
                     counters["vent_cards"] += 1
                     sim_card("vent_suggest", now, why="co2_high+" + "+".join(vent["why"]), extra={"minutes": vent["minutes"]})
-                elif vent is not None and vent["choice"] == "air_purifier":
-                    world.apply_channel("purifier", now, {"level": 2})
-                    emit({"t": now, "kind": "command", "target_id": "air_purifier", "operation": "set_level", "value": 2, "gate": "sim_policy",
-                          "channels": ["purifier"], "why": vent["why"], "devices": world.snapshot()})
         # hub 가 이번 tick 에 발행한 기기 명령 (ACTION_ENV auto, 정책 arm 의 조명/선풍기, 카드 수락 뒤 dispatch)
         cmd_channels: list[str] = []
         live_cmds: list[dict[str, Any]] = []
@@ -505,6 +524,7 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
             seg_t0[info.segment_index] = info.t
             prev_seg = info.segment_index
             emit({"t": t, "kind": "segment", "index": info.segment_index, "segment": info.kind, "override": info.override})
+            world.new_segment()
             if info.env.get("co2_to") is not None and "co2_from" not in info.env:
                 info.env["co2_from"] = world.env["co2_ppm"]
         _p0 = time.perf_counter()
@@ -530,16 +550,32 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
         if k % int(fps) == 0:
             sec = int(round(info.t))
             seg_len = max(1e-6, src.current.seconds if not src.done else 1.0)
-            world.step(t, present=bool(feats["present"]), segment_env=info.env,
-                       seg_progress=min(1.0, (info.t - seg_t0.get(info.segment_index, info.t)) / seg_len))
+            truth_present = person_kind() != "away"                          # 정답 = 책상 재실
+            where = where_now()
+            world.step(t, present=where != "out", segment_env=info.env,      # CO₂·PM·열·수분은 방 안에 있는지로(센서 판정 아님)
+                       seg_progress=min(1.0, (info.t - seg_t0.get(info.segment_index, info.t)) / seg_len),
+                       person_kind=person_kind())
+            env_meas = envs.step(t, world.env)                                 # SCD41·DHT22·BH1750 가 읽은 값
+            mm = mmw.step(t, kind=person_kind(), typing=bool(info.typing), where=where)
+            if mm is not None:
+                hub.feed_mmwave(mm, t)
+            present_dec, present_src = presence_decision(mm, bool(feats["present"]), desk_max_cm=float(ingest_cfg.get("desk_max_cm", 130)),
+                                                         priority=str(ingest_cfg.get("presence_priority", "mmwave")))   # hub 와 같은 규칙
             hub.feed_keystroke(info.typing, info.keys, t, rnd)
-            if sec % 5 == 0 or not env_sent:
-                hub.feed_env(world.env_sample(), t)
+            if sec % int(dev.get("env_sensors", {}).get("uart_period_s", 5)) == 0 or not env_sent:
+                hub.feed_env_uart(env_meas, t)                                 # ESP32 → UART 0x10 (0.2 Hz)
                 env_sent = True
             if t >= next_weather:
                 hub.feed_weather(dict(world.publish_weather(), fetched_at=int(t)), t)
                 next_weather = t + WEATHER_PERIOD_S
             run_due(t)
+            # 공기청정기 타이밍 규칙(FSM 밖, PM2.5 만) — purifier.py
+            pcmd = purifier.observe(t, world.env["pm25"], present=present_dec,
+                                    state=last_tick["state"] if last_tick else None)
+            if pcmd is not None:
+                applied = world.apply_command(pcmd, t)
+                emit({"t": t, "kind": "command", **{k2: pcmd[k2] for k2 in ("target_id", "operation", "value", "gate", "why")},
+                      "pm_avg": round(purifier.avg or 0.0, 1), "channels": applied["channels"], "devices": world.snapshot()})
             if sec % int(period) == 0 and sec > 0:
                 _p3 = time.perf_counter()
                 tk = hub.tick(t)
@@ -552,10 +588,14 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
                 "transition": bool(info.flags & 1), "nodding": bool(info.flags & 2), "typing": info.typing,
                 "pred": (last_verdict or {}).get("posture"), "conf": (last_verdict or {}).get("posture_confidence"),
                 "raw": (last_verdict or {}).get("raw_posture"),
-                "present": feats["present"], "motion": feats["motion_score"], "nods": feats["nods_in_window"],
+                "present": present_dec, "present_src": present_src, "truth_present": truth_present, "where": where,
+                "tof_present": bool(feats["present"]), "mm_present": None if mm is None else mm["present"],
+                "mm_level": None if mm is None else mm["motion_level"], "mm_drowsy": None if mm is None else mm["drowsy_state"],
+                "motion": feats["motion_score"], "nods": feats["nods_in_window"],
                 "nod_rate_hz": feats["nod_rate_hz"], "drowsy_flag": feats["drowsy"], "coverage": feats["coverage_ratio"],
                 "rule_dbg": dict(rules.debug),
                 "env": {k2: round(v2, 1) for k2, v2 in world.env.items()}, "devices": world.snapshot(),
+                "env_meas": {k2: env_meas.get(k2) for k2 in ("co2_ppm", "temp_c", "humidity_pct", "lux")},
                 "state": last_tick["state"] if last_tick else "IDLE",
                 "c_fatigue": last_tick["c_fatigue"] if last_tick else 0.0, "c_focus": last_tick["c_focus"] if last_tick else 0.0,
             }
@@ -586,6 +626,8 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
     summary = summarize(scenario, second_rows, tick_rows, event_rows, interventions, report, src, model, world, reaction, simple,
                         policy_info, elapsed=time.time() - started, run_dir=run_dir)
     summary["profile_s"] = {k2: round(v2, 1) for k2, v2 in prof.items()}
+    summary["env_sensors"] = envs.error_stats()
+    summary["scene_room"] = world.room_drawn or None
     try:
         from .plots import plot_timeline
         plot_timeline(second_rows, tick_rows, event_rows, os.path.join(run_dir, "timeline.png"), title=name,
@@ -687,12 +729,84 @@ def summarize(scenario, rows, ticks, events, interventions, report, src, model, 
         "commands": [{"t_rel_s": round(e["t"] - t0), "target": e.get("target_id"), "op": e.get("operation"),
                       "value": e.get("value"), "gate": e.get("gate")} for e in commands],
         "overrides": list(getattr(src, "overrides_applied", [])),
+        "presence": _presence_metrics(rows),
+        "env": _env_metrics(rows, scenario["devices_resolved"]),
+        "purifier": purifier_metrics(rows, commands, t0, (scenario["devices_resolved"] or {}).get("purifier_control") or {}),
+        "co2": {"max": round(max((r["env"]["co2_ppm"] for r in rows), default=0)),
+                "over1000_min": round(sum(1 for r in rows if r["env"]["co2_ppm"] >= 1000) / 60, 1),
+                "over1400_min": round(sum(1 for r in rows if r["env"]["co2_ppm"] >= 1400) / 60, 1),
+                "window_min": round(sum(1 for r in rows if r["devices"].get("window")) / 60, 1)},
         "devices_final": world.snapshot(), "reaction_log": reaction.history,
         "policy": simple.snapshot() if simple else None, "policy_log": simple.log if simple else [],
         "personalize": policy_info,
         "hub_report": {k: report.get(k) for k in ("duration_s", "focus_time_s", "fatigue_episodes", "interventions", "metrics",
                                                     "esm_labels") if k in report},
     }
+
+
+def _env_metrics(rows: list[dict[str, Any]], dev: dict[str, Any]) -> dict[str, Any]:
+    """재실 중 쾌적 범위 밖 시간(hub ingest.yaml 의 쾌적 범위와 같은 경계를 쓴다) + 참값 범위."""
+    try:
+        from deskmate_hub.ingest import load_ingest_config
+        ec = load_ingest_config()["environment"]
+    except Exception:  # noqa: BLE001
+        ec = {"temp_comfort_min": 20.0, "temp_comfort_max": 26.0, "humidity_comfort_min": 30.0, "humidity_comfort_max": 60.0,
+              "lux_dim_low": 150.0, "lux_dim_high": 300.0}
+    pres = [r for r in rows if r.get("truth_present")]
+    def mins(pred):
+        return round(sum(1 for r in pres if pred(r["env"])) / 60, 1)
+    def rng(key):
+        v = [r["env"][key] for r in rows]
+        return [round(min(v), 1), round(max(v), 1)] if v else None
+    return {"present_min": round(len(pres) / 60, 1),
+            "temp_out_min": mins(lambda e: not (ec["temp_comfort_min"] <= e["temp_c"] <= ec["temp_comfort_max"])),
+            "rh_out_min": mins(lambda e: not (ec["humidity_comfort_min"] <= e["humidity_pct"] <= ec["humidity_comfort_max"])),
+            "dim_min": mins(lambda e: e["lux"] < float(ec.get("lux_dim_high", 300))),
+            "co2_over1000_present_min": mins(lambda e: e["co2_ppm"] >= 1000),
+            "range": {k: rng(k) for k in ("co2_ppm", "temp_c", "humidity_pct", "lux", "pm25")}}
+
+
+def _presence_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """재실 판정 정확도(정답 = 사람이 실제로 앉아 있는지): mmWave · ToF(0x03) · 결정(mmWave 우선) · hub 식(OR)."""
+    def score(get):
+        n = len(rows)
+        miss = sum(1 for r in rows if r["truth_present"] and not get(r))
+        false = sum(1 for r in rows if not r["truth_present"] and get(r))
+        return {"acc": round(1 - (miss + false) / max(1, n), 4), "miss_s": miss, "false_s": false}
+    out = {"tof": score(lambda r: r["tof_present"]), "decision": score(lambda r: r["present"]),
+           "hub_or": score(lambda r: bool(r["tof_present"]) or bool(r.get("mm_present")))}
+    if any(r.get("mm_present") is not None for r in rows):
+        out["mmwave"] = score(lambda r: bool(r.get("mm_present")))
+    by_seg: dict[str, list[int]] = {}
+    for r in rows:
+        if r["truth_present"] and not r["tof_present"]:
+            by_seg.setdefault(r["label"], [0])[0] += 1
+    # 자리비움 구간(정답 부재 ≥ 60 s)마다 hub 가 IDLE 로 갔는지(몇 초 만에), 돌아온 뒤 몇 초 만에 다시 START 했는지
+    eps, cur = [], None
+    for i, r in enumerate(rows):
+        if not r["truth_present"] and cur is None:
+            cur = i
+        elif r["truth_present"] and cur is not None:
+            eps.append((cur, i))
+            cur = None
+    if cur is not None:
+        eps.append((cur, len(rows)))
+    out["away_episodes"] = []
+    for a, b in eps:
+        if b - a < 60 or a < 30:
+            continue
+        idle_at = next((k - a for k in range(a, b) if rows[k]["state"] == "IDLE"), None)
+        back = None
+        if b < len(rows) and idle_at is not None:
+            back = next((k - b for k in range(b, min(len(rows), b + 900)) if rows[k]["state"] in ("START", "CONTEXT_DETECT")), None)
+        out["away_episodes"].append({"t_rel_s": a, "away_s": b - a, "idle_after_s": idle_at, "restart_after_return_s": back,
+                                     "state_at_end": rows[b - 1]["state"]})
+    out["tof_miss_by_label_s"] = {k: v[0] for k, v in sorted(by_seg.items(), key=lambda kv: -kv[1][0])}
+    out["drowsy_state_s"] = {}
+    for r in rows:
+        if r.get("mm_drowsy"):
+            out["drowsy_state_s"][r["mm_drowsy"]] = out["drowsy_state_s"].get(r["mm_drowsy"], 0) + 1
+    return out
 
 
 def format_summary(s: dict[str, Any]) -> str:
@@ -714,7 +828,17 @@ def format_summary(s: dict[str, Any]) -> str:
              f"수락 {s['accepted']} 거절 {s['rejected']} 되돌리기 {s['undos']}, 수락률 {s['accept_rate']}, arms {s['arms']}",
              f"- 깨어남 {len(s['wakes'])}회 {s['wakes']}, 휴식/취침 이탈 {len(s['rests'])}회 {s['rests']}, 취침 권유 {s['bedtime_suggested']}, "
              f"환기 선택 {[v['choice'] for v in s['vent_choices']]}",
-             f"- 깬 뒤: {s['after_wake']}", "",
+             f"- 깬 뒤: {s['after_wake']}",
+             f"- CO₂: 최대 {s['co2']['max']} ppm, ≥1000 {s['co2']['over1000_min']} 분, ≥1400 {s['co2']['over1400_min']} 분, 창문 열림 {s['co2']['window_min']} 분",
+             f"- 환경(참값 범위) {s['env']['range']}; 재실 {s['env']['present_min']} 분 중 온도 쾌적 밖 {s['env']['temp_out_min']} 분, "
+             f"습도 밖 {s['env']['rh_out_min']} 분, 어두움(<300 lx) {s['env']['dim_min']} 분, CO₂≥1000 {s['env']['co2_over1000_present_min']} 분",
+             f"- 환경 센서 오차(측정−참): {json.dumps(s['env_sensors'], ensure_ascii=False)}",
+             f"- 재실 판정(mmWave 우선): " + ", ".join(f"{k} 정확도 {v['acc']} (놓침 {v['miss_s']} s·헛재실 {v['false_s']} s)"
+                                                      for k, v in s['presence'].items() if isinstance(v, dict) and 'acc' in v)
+             + f"; ToF 가 놓친 자세 {s['presence']['tof_miss_by_label_s']}; mmWave drowsy_state {s['presence']['drowsy_state_s']}",
+             f"- 공기청정기: PM 최대 {s['purifier']['pm_max']} / 평균 {s['purifier']['pm_mean']}, 나쁨(≥on_pm) {s['purifier']['bad_min']} 분"
+             f"(재실 중 {s['purifier']['bad_present_min']} 분), 켜짐 {s['purifier']['on_min']} 분, 명령 {s['purifier']['commands']}회, "
+             f"켜기 지연 {s['purifier']['on_latency_s']} s, 몰입 중 강풍 {s['purifier']['loud_in_focus_min']} 분, 단계별 분 {s['purifier']['level_min']}", "",
              "| 라벨 | 초 | 재현율 | 정밀도 |", "|---|---|---|---|"]
     for lab, v in s["posture"]["per_label"].items():
         lines.append(f"| {lab} | {v['n_sec']} | {v['recall']} | {v['precision']} |")

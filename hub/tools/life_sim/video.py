@@ -63,6 +63,12 @@ def make_video(run_dir: str, out: str | None, *, speed: float = 10.0, fps: int =
     cfg_cam = {"distance": 2.4, "azimuth": 35.0, "elevation": -16.0}
     cfg_cam.update(camera or {})
     head = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, "head")
+    # 자리비움(pose 없음)이면 사람 몸 geom 을 숨긴다 — set_pose(None) 은 센서 광선에서만 몸을 빼고 렌더 장면에는 남겨 둔다
+    body_geoms = []
+    if head >= 0:
+        root = int(m.body_rootid[head])
+        body_geoms = [g for g in range(m.ngeom) if int(m.body_rootid[m.geom_bodyid[g]]) == root and root != 0]
+    body_alpha0 = {g: float(m.geom_rgba[g][3]) for g in body_geoms}
     lookat_fixed = None
     sensor_marks = [(np.asarray(o, dtype=float), np.asarray(R, dtype=float)) for (o, R) in scene._frames]
 
@@ -103,6 +109,7 @@ def make_video(run_dir: str, out: str | None, *, speed: float = 10.0, fps: int =
     tick_by_t = {round(tk["t"]): tk for tk in ticks}
     secs = _load_jsonl(os.path.join(run_dir, "frames.jsonl"))
     dev_by_sec = {int(r["sec"]): r.get("devices") or {} for r in secs}
+    row_by_sec = {int(r["sec"]): r for r in secs}
     tts_flash: dict[int, bool] = {}
     prev_tts = 0
     for r in secs:
@@ -199,6 +206,8 @@ def make_video(run_dir: str, out: str | None, *, speed: float = 10.0, fps: int =
         pose = frame_pose(rec)
         scene._desk.set_walker(tuple(rec["walker"]) if rec.get("walker") else None)
         scene._desk.set_pose(pose)
+        for g in body_geoms:
+            m.geom_rgba[g][3] = body_alpha0[g] if pose is not None else 0.0
         mujoco.mj_forward(m, d)
         if lookat_fixed is None:
             lookat_fixed = np.array(d.xpos[head]) if head >= 0 else d.xpos.mean(0)
@@ -236,6 +245,13 @@ def make_video(run_dir: str, out: str | None, *, speed: float = 10.0, fps: int =
         c_foc = tk["c_focus"] if tk else 0.0
         lines = [f"model: {pred}" + (f" ({conf:.2f})" if isinstance(conf, (int, float)) else "") +
                  f"   0x03 flag {'ON' if rec.get('drowsy_flag') else 'off'}   C_fat {c_fat:.2f}  C_foc {c_foc:.2f}"]
+        row = row_by_sec.get(sec_i) or {}
+        env = row.get("env") or {}
+        if env:
+            yn = lambda v: "-" if v is None else ("Y" if v else "n")  # noqa: E731
+            lines.append(f"PM2.5 {env.get('pm25', 0):3.0f}  CO2 {env.get('co2_ppm', 0):4.0f}  {env.get('temp_c', 0):4.1f}C "
+                         f"{env.get('humidity_pct', 0):3.0f}%  {env.get('lux', 0):4.0f}lx   present mmW {yn(row.get('mm_present'))} "
+                         f"ToF {yn(row.get('tof_present'))}")
         chips = [("FAN %d" % int(dev.get("fan", 0) or 0), "#36c" if int(dev.get("fan", 0) or 0) else "#aaa"),
                  ("LAMP %s" % (dev.get("lamp", "off") if dev.get("lamp", "off") == "off" else f"{dev.get('lamp')} {int(dev.get('lamp_pct', 0) or 0)}%"),
                   "#e90" if dev.get("lamp", "off") != "off" else "#aaa"),
@@ -245,15 +261,15 @@ def make_video(run_dir: str, out: str | None, *, speed: float = 10.0, fps: int =
                  ("CARD" if card_on else "no card", "#c90" if card_on else "#aaa")]
         x = 0.0
         for txt, col in chips:
-            axt.text(x, 0.74, txt, va="center", ha="left", fontsize=7.5, color="white", weight="bold", family="monospace",
+            axt.text(x, 0.70, txt, va="center", ha="left", fontsize=7.5, color="white", weight="bold", family="monospace",
                      transform=axt.transAxes, bbox=dict(boxstyle="round,pad=0.22", fc=col, ec="none"))
             x += 0.022 * len(txt) + 0.05
         recent = [b for b in banners if 0 <= t_abs - b[0] <= 45.0][-3:]
-        axt.text(0.0, 0.95, "\n".join(lines), va="top", ha="left", fontsize=10, family="monospace", transform=axt.transAxes)
-        axt.add_patch(plt.Rectangle((0.0, 0.56), 1.0, 0.1, transform=axt.transAxes, color=STATE_COLORS.get(state, "#888"), alpha=0.9))
-        axt.text(0.01, 0.61, state, va="center", ha="left", fontsize=11, color="white", weight="bold", transform=axt.transAxes)
+        axt.text(0.0, 0.99, "\n".join(lines), va="top", ha="left", fontsize=9, family="monospace", transform=axt.transAxes)
+        axt.add_patch(plt.Rectangle((0.0, 0.53), 1.0, 0.1, transform=axt.transAxes, color=STATE_COLORS.get(state, "#888"), alpha=0.9))
+        axt.text(0.01, 0.58, state, va="center", ha="left", fontsize=11, color="white", weight="bold", transform=axt.transAxes)
         for j, (bt, text, color) in enumerate(recent):
-            axt.text(0.0, 0.47 - 0.14 * j, f"+{t_abs - bt:4.0f}s  {text}", va="top", ha="left", fontsize=8.5, color=color,
+            axt.text(0.0, 0.45 - 0.14 * j, f"+{t_abs - bt:4.0f}s  {text}", va="top", ha="left", fontsize=8.5, color=color,
                      family="monospace", transform=axt.transAxes)
         axt.text(1.0, 0.0, "simulation (not measured)  speed x%d" % int(speed), va="bottom", ha="right", fontsize=7, color="#777",
                  transform=axt.transAxes)

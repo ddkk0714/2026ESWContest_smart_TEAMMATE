@@ -51,31 +51,101 @@ synth_persona:
 devices:
   vent_fan:      {kind: bt_fan_esp32_l9110, levels: [0, 1, 2, 3], hub_on_level: 2, sms_contract: "0~3 = 끄기/약/중/강"}
   air_purifier:  {kind: lg_thinq, levels: [0, 1, 2, 3], note: "읽기 전용 탐색(device_gateway); CO2 는 못 내린다"}
-  desk_lamp:     {kind: ilink_ble, cool_pct: 90, warm_pct: 35, bright_pct: 60}
+  desk_lamp:     {kind: ilink_ble, model: KLZS-L1, cool_pct: 90, warm_pct: 35, bright_pct: 60}   # 밝기 명령은 iLink 원시 0~255
   speaker:       {kind: atlas_a2dp_tts, tts_api: "VoiceManager1.StartTTS", korean_verified: false}
   screen:        {kind: pi5_atlas_card}
 
 environment:
   outdoor_co2_ppm: 420
-  person_co2_ppm_per_s: 0.07        # 1인·작은 방 ≈ +250 ppm/h (가정)
-  leak_per_s: 0.00003               # 창문 닫힘 자연 환기
-  window_vent_per_s: 0.0025         # 창문 열림: 15 분에 바깥값으로 90 % 회복
-  forced_ramp_per_s: 0.002          # 각본 co2_to 강제 램프 속도
+  leak_per_s: 0.00008               # 창문 닫힘 공기 교환(0.3 회/h) — CO₂·습도에 같이 쓴다
+  window_vent_per_s: 0.0025         # 창문 열림: 15 분에 바깥값으로 90 % 회복(바람 m/s 마다 room.wind_gain_per_ms 가산)
+  forced_ramp_per_s: 0.002          # 옛 각본 co2_to 강제 램프 속도(새 각본은 co2_to 없이 물리로)
   pm25_outdoor: 25
   pm_gen_per_s: 0.002
-  purifier_per_s: {"0": 0.0, "1": 0.0008, "2": 0.0016, "3": 0.003}
-  room_temp_per_s: 0.0002
-  window_temp_per_s: 0.001
-  window_hum_per_s: 0.001
+  purifier_per_s: {"0": 0.0, "1": 0.0008, "2": 0.0016, "3": 0.003}   # 1차 제거율 — 3 단계면 PM 이 ~13 분에 1/10 (작은 방 가정)
+  pm_leak_per_s: 0.00005            # 창문 닫힘 틈새로 바깥 PM 이 스며드는 속도(바깥이 나쁜 날 실내도 천천히 오른다)
   fan_felt_delta_c: {"0": 0.0, "1": -0.8, "2": -1.5, "3": -2.2}
-  lamp_lux_per_pct: 2.5             # desk_lamp 70 % → +175 lux
+  lamp_lux_per_pct: 0.4             # KLZS-L1(스피커·무드등 일체형, iLink 제어) — 조도 사양 없음, 100 % 에서 책상 위 +40 lx 가정(작업등 아님). hub 의 set_brightness 70(원시 0~255 ≈ 27 %) 은 +11 lx
+  lamp_warm_factor: 0.6             # 따뜻한 색(warm)은 같은 밝기에서 조도가 더 낮다
+
+# 방 물리(room.py) — 1인 작은 방. 전부 가정값(실측 아님). 각본의 devices.room 으로 덮는다.
+room:
+  volume_m3: 40                     # 원룸·자취방 책상 공간
+  co2_lph: {awake: 18, drowsy: 14}  # 앉아서 일하는 성인 CO₂ 배출(L/h) → 40 m³ 에서 +450 ppm/h
+  wind_gain_per_ms: 0.08            # 창문 환기율 × (1 + 0.08·풍속)
+  wall_per_s: 0.00002               # 외피 열 결합(느림)
+  window_temp_per_s: 0.0006
+  heat_gain_c_per_s: 0.0002         # 재실 발열(사람 ~100 W + PC) → 닫힌 방 +0.7 ℃/h
+  hvac: {mode: off}                 # 각본에서 {mode: heat, setpoint: 22} / {mode: cool, setpoint: 25}
+  moisture_g_per_h: 50              # 사람 호흡·땀 수분
+  buffer_per_s: 0.0001              # 벽·가구 흡방습(시작 절대습도 쪽으로, 시간상수 ~3 h)
+  # 조도: 바깥 수평 조도 × 일광률 + 천장등 + 무드등
+  daylight_factor: 0.015            # 창가에서 조금 떨어진 책상
+  sun_hours: {spring: [6.0, 19.0], summer: [5.3, 19.8], autumn: [6.6, 18.0], winter: [7.5, 17.5]}
+  peak_outdoor_lux: {spring: 80000, summer: 100000, autumn: 70000, winter: 45000}
+  condition_factor: {clear: 1.0, cloudy: 0.4, rain: 0.2, snow: 0.3, fog: 0.3}
+  room_light: auto                  # auto = 재실 중 일광이 light_on_below_lux 미만이면 켜고, 10 분 넘게 비우면 끈다 | on | off
+  light_on_below_lux: 250
+  ceiling_lux: 350                  # 천장등만 켰을 때 책상 위(보통 300~500 lx)
+  randomize: false                  # true 면 아래 범위에서 시드마다 사용 환경을 뽑는다(summary.scene_room 에 기록)
+  randomize_ranges:
+    ceiling_lux: [150, 500]         # 어두운 형광등 ~ 밝은 LED 천장등
+    daylight_factor: [0.004, 0.03]  # 북향·안쪽 책상 ~ 창가
+    volume_m3: [25, 60]
+    lamp_lux_per_pct: [0.2, 0.8]    # 무드등 거리·기종
+    heat_gain_c_per_s: [0.0001, 0.0003]
 
 weather_rules:
   wind_vent_ms: 4.0                 # 바람 ≥ 4 m/s 면 환기 우선
   exclude_conditions: [rain, snow]
   exclude_if_outdoor_warmer_c: 2.0  # 바깥이 실내보다 2 ℃ 더우면 환기 제외
   vent_minutes: {winter: 5, other: 15}
-  pm25_purifier: 35.0               # 환기 제외 + PM 높음 → 공기청정기, 아니면 선풍기
+  exclude_if_outdoor_pm25: 36.0     # 바깥 PM2.5 나쁨(≥36) 이면 창문 환기 제외 — 날씨 payload 의 pm25(가정: Pi 5 앱이 에어코리아 값을 함께 낸다)
+  # 환기를 못 하면 CO₂ 는 선풍기(체감)·화면 카드만 남는다. 공기청정기는 CO₂ 를 못 내리므로 여기서 고르지 않는다 → purifier_control 이 PM 으로 따로 켠다.
+
+# ESP32 환경 센서 대역(env_sensors.py) — UART 0x10 으로 hub 에. 데이터시트 기반 가정(실측 아님).
+env_sensors:
+  uart_period_s: 5          # environment_sample 0.2 Hz
+  scd41:  {period_s: 5, first_after_s: 5, tau_s: 60, noise_ppm: 10, bias_ppm: 15, bias_pct: 2.0}   # ±(40 ppm+5 %)
+  dht22:  {period_s: 2, tau_t_s: 20, tau_rh_s: 8, noise_c: 0.1, noise_rh: 0.5, bias_c: 0.3, bias_rh: 2.0, fail_p: 0.02}
+  bh1750: {period_s: 1, tau_s: 0.5, noise_pct: 1.0, gain_sd: 0.07}                               # ±20 %
+
+# mmWave(C1001) 대역(mmwave.py) — 재실 판정 우선 센서. 1 Hz, UART 0x20 으로 hub 에 들어간다. 전부 가정값.
+mmwave:
+  enabled: true
+  enter_delay_s: 2.0        # 앉은 뒤 present 켜지기까지
+  leave_hold_s: 15.0        # 떠난 뒤 present 유지(무인 판정 지연)
+  dropout_p: 0.0005         # 재실 중 1 초마다 짧게 놓칠 확률
+  dropout_s: [2, 6]
+  active_level: 25          # bodyMove 가 이보다 크면 motion_state=active
+  resp_lost_when_active_p: 0.5
+  resp_bpm: {awake: [12, 18], drowsy: [9, 13]}
+  distance_cm: [65, 95]
+  warmup_s: 60              # DrowsyDetector 워밍업
+  drowsy_lock_s: 180        # 졸음이 이만큼 이어지면 DROWSY 를 낼 수 있다
+  drowsy_episode_p: 0.6     # 졸음 에피소드마다 DROWSY 를 잡을 확률(실측 없음 — 보수적으로)
+  nod_spike_p: 0.08
+
+# 공기청정기 타이밍 규칙(purifier.py) — FSM 밖, PM2.5 만 본다. 전부 가정값. 등급: 좋음 ≤15 · 보통 16~35 · 나쁨 36~75 · 매우나쁨 76+
+purifier_control:
+  enabled: true
+  sample_s: 10              # ThinQ 상태 조회 주기(공기청정기 자체 PM 표시값)
+  sensor_noise: 2.0         # µg/m³ 표준편차
+  avg_s: 60                 # 이동평균 창
+  on_pm: 35                 # 꺼져 있을 때 이 값을 넘어야 켠다
+  off_pm: 15                # 이 아래가 off_hold_s 이어지면 끈다
+  bands: [[16, 1], [36, 2], [76, 3]]   # 하한 → 단계(1 약 · 2 중 · 3 강)
+  hysteresis: 5             # 내릴 때 경계 아래로 더 내려가야 한다
+  on_hold_s: 60
+  up_hold_s: 60
+  down_hold_s: 300
+  off_hold_s: 300
+  min_on_s: 600             # 켠 뒤 최소 유지
+  min_cmd_gap_s: 60
+  quiet_hours: [23, 7]      # 정숙 시간(personalize quiet 와 같은 뜻)
+  quiet_max_level: 2        # 정숙 시간·몰입 중 상한(강풍 소음)
+  bypass_pm: 76             # 매우나쁨이면 상한 무시
+  away_boost_after_s: 300   # 자리를 이만큼 비우면 한 단계 더
 
 # 0x03 규칙 특징 대역(ESP32 규칙 추정기의 단순 대역)
 rule_features:

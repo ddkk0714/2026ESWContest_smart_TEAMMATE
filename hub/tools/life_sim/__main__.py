@@ -29,11 +29,17 @@ def cmd_run(args: argparse.Namespace) -> int:
             sc["seed"] = int(args.seed)
         if args.fsm_config:
             sc["hub"]["fsm_config"] = args.fsm_config
+        if args.presence:
+            sc["hub"]["presence_priority"] = args.presence
+        if args.room_random:
+            sc["devices_resolved"].setdefault("room", {})["randomize"] = True
         src = None
         if args.synthetic:
             from tools.life_sim.synthetic import SyntheticPerson
             src = SyntheticPerson(sc["segments"], seed=sc["seed"], fps=float(sc["fps"]))
-        label = args.label or (f"{sc['persona']}_{sc['name']}" + (f"_s{args.seed}" if args.seed is not None else ""))
+        label = args.label or (f"{sc['persona']}_{sc['name']}" + ("_rr" if args.room_random else "")
+                               + (f"_pres-{args.presence}" if args.presence else "")
+                               + (f"_s{args.seed}" if args.seed is not None else ""))
         try:
             res = run_scenario(sc, out_dir=args.out, model_path=args.model, posture=args.posture, source=src,
                                backend=args.backend, tofsim_root=args.tofsim, label=label, replay=bool(args.replay))
@@ -152,6 +158,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--seed", type=int)
     r.add_argument("--label")
     r.add_argument("--replay", action="store_true", help="프레임마다 Pose·격자·판정을 replay.jsonl 로(video 명령용, 실행당 ~20 MB)")
+    r.add_argument("--presence", choices=["mmwave", "any"], help="hub 재실 판정: mmwave(우선, 기본 설정) | any(둘 중 하나, 이전 동작)")
+    r.add_argument("--room-random", action="store_true", help="사용 환경(천장등·일광률·방 크기·무드등 세기)을 시드마다 뽑는다(devices.yaml room.randomize_ranges)")
     r.add_argument("--raise-errors", action="store_true")
     r.set_defaults(fn=cmd_run)
     v = sub.add_parser("video", help="replay.jsonl 로 MuJoCo 3D + 센서 격자 + 상태 영상(mp4)")
