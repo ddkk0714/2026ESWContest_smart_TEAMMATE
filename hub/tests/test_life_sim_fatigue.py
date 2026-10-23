@@ -143,3 +143,19 @@ def test_harness_emits_truth_rows_and_fatigue_summary(tmp_path):
     assert len(lines["frames"]) == len(lines["state"]) == len(lines["truth"]) > 100
     first = json.loads(lines["truth"][0])
     assert first["truth"] in ("focus", "fatigue", "rest", "idle") and abs(first["now"] - json.loads(lines["frames"][0])["now"]) < 1e-6
+
+
+def test_stage2_metrics_reads_observe_mode_from_state_log(tmp_path):
+    """--stage2(2단계 피로 모델 관찰 모드): state-hub.jsonl 의 personalization 판정을 truth-hub.jsonl 과 맞춰 센다."""
+    import json
+    from tools.life_sim.harness import _stage2_metrics
+    obs = [{"status": "warming_up"}] + [{"status": "predicted", "label": lab, "inference_ms": 0.5}
+                                        for lab in ("focus", "focus", "fatigue", "rest")]
+    truth = ["focus", "focus", "fatigue", "fatigue", "rest"]
+    (tmp_path / "state-hub.jsonl").write_text("\n".join(json.dumps({"data": {"sensor_summary": {"personalization": o}}})
+                                                        for o in obs) + "\n", encoding="utf-8")
+    (tmp_path / "truth-hub.jsonl").write_text("\n".join(json.dumps({"truth": t}) for t in truth) + "\n", encoding="utf-8")
+    m = _stage2_metrics(str(tmp_path))
+    assert m["ticks"] == 5 and m["status"] == {"warming_up": 1, "predicted": 4}
+    assert m["truth_agreement"] == 0.75 and m["inference_ms"]["p50"] == 0.5
+    assert m["labels"] == {"focus": 2, "fatigue": 1, "rest": 1, "idle": 0}

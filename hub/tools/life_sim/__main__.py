@@ -41,6 +41,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             sc["devices_resolved"].setdefault("vent_control", {})["enabled"] = True
         if args.fatigue:
             sc["reaction_resolved"].setdefault("fatigue", {})["enabled"] = True
+        if args.stage2:
+            sc["hub"]["stage2"] = os.path.abspath(args.stage2)
         if args.policy_engine:
             sc["policy"]["engine"] = args.policy_engine
         if args.policy_profile:
@@ -191,6 +193,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="CO₂ 환기 타이밍 규칙 켜기(devices.yaml vent_control — FSM 밖, 깨어 있을 때 창문 환기 카드)")
     r.add_argument("--fatigue", action="store_true",
                    help="잠재 피로 켜기(reaction.yaml fatigue — 졸음·자세 무너짐·키 입력 저하가 피로 F 에서 생기고 정답 라벨을 남김)")
+    r.add_argument("--stage2", metavar="DIR",
+                   help="2단계 피로 모델 portable 폴더(common.portable.json·common.metadata.json) — hub 관찰 모드로 매 tick 판정")
     r.add_argument("--policy-engine", choices=["hub", "simple", "none"], help="각본의 policy.engine 덮어쓰기")
     r.add_argument("--policy-profile", choices=["none", "synth", "global"], help="각본의 policy.profile 덮어쓰기")
     r.add_argument("--raise-errors", action="store_true")

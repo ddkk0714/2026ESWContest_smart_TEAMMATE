@@ -235,7 +235,15 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
     absent_since: float | None = None
     # 2단계 학습용 로그(ml/training/build_dataset.py --logs --truth): hub tick 마다 SensorFrame·state·정답 한 줄씩, 줄 수가 같다
     truth_log = None
-    if fat.enabled or scenario["hub"].get("logs"):
+    stage2 = scenario["hub"].get("stage2")        # 2단계 피로 모델(portable 폴더) — 관찰 모드, FSM 게이트는 안 바꾼다
+    if stage2:
+        from deskmate_hub.personalization import PersonalizationRuntime, load_personalization_config
+        hub.hub.personalization_cfg = dict(load_personalization_config(), enabled=True, mode="observe", backend="portable_cnn",
+                                           model_path=os.path.join(stage2, "common.portable.json"),
+                                           metadata_path=os.path.join(stage2, "common.metadata.json"))
+        hub.hub.personalization = PersonalizationRuntime(hub.hub._effective_model_config(), period=hub.hub.period,
+                                                         normalization=hub.hub.ingest_cfg.get("normalization", "linear"))
+    if fat.enabled or scenario["hub"].get("logs") or stage2:
         hub.hub.frame_log = open(os.path.join(run_dir, "frames-hub.jsonl"), "w", encoding="utf-8")
         hub.hub.state_log = open(os.path.join(run_dir, "state-hub.jsonl"), "w", encoding="utf-8")
         truth_log = open(os.path.join(run_dir, "truth-hub.jsonl"), "w", encoding="utf-8")
@@ -658,6 +666,7 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
     summary["env_sensors"] = envs.error_stats()
     summary["scene_room"] = world.room_drawn or None
     summary["fatigue"] = fat.summary(second_rows) if fat.enabled else None
+    summary["stage2"] = _stage2_metrics(run_dir) if stage2 else None
     vcfg = dev.get("vent_control") or {}
     summary["vent_rule"] = vent_metrics(second_rows, vent_rule.log, [e for e in event_rows if e.get("kind") == "feedback"],
                                         on_ppm=float(vcfg.get("on_ppm", 1000))) if vent_rule.enabled else None
@@ -676,6 +685,34 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
 
 
 # ---------------------------------------------------------------- 요약
+
+def _stage2_metrics(run_dir: str) -> dict[str, Any]:
+    """state-hub.jsonl 의 sensor_summary.personalization(관찰 모드 판정)을 모아 상태·추론 시간·정답 일치를 낸다."""
+    import statistics
+    states = [json.loads(line) for line in open(os.path.join(run_dir, "state-hub.jsonl"), encoding="utf-8")]
+    obs = [((s.get("data") or {}).get("sensor_summary") or {}).get("personalization") or {} for s in states]
+    truth_path = os.path.join(run_dir, "truth-hub.jsonl")
+    truth = ([json.loads(line).get("truth") for line in open(truth_path, encoding="utf-8")]
+             if os.path.exists(truth_path) else [None] * len(obs))
+    ms = [o["inference_ms"] for o in obs if o.get("inference_ms") is not None]
+    pairs = [(t, o.get("label")) for t, o in zip(truth, obs) if t and o.get("label")]
+    status: dict[str, int] = {}
+    for o in obs:
+        status[str(o.get("status"))] = status.get(str(o.get("status")), 0) + 1
+    out: dict[str, Any] = {"ticks": len(obs), "status": status,
+                           "inference_ms": {"p50": round(statistics.median(ms), 2), "max": round(max(ms), 2)} if ms else None,
+                           "labels": {k: sum(1 for _, p in pairs if p == k) for k in ("focus", "fatigue", "rest", "idle")}}
+    if pairs:
+        out["truth_agreement"] = round(sum(1 for t, p in pairs if t == p) / len(pairs), 3)
+        f1 = []
+        for k in ("focus", "fatigue", "rest", "idle"):
+            tp = sum(1 for t, p in pairs if t == k and p == k)
+            n_t, n_p = sum(1 for t, _ in pairs if t == k), sum(1 for _, p in pairs if p == k)
+            if n_t + n_p:
+                f1.append(2 * tp / (n_t + n_p))
+        out["truth_macro_f1"] = round(sum(f1) / len(f1), 3) if f1 else None
+    return out
+
 
 def summarize(scenario, rows, ticks, events, interventions, report, src, model, world, reaction, simple, policy_info, *,
               elapsed, run_dir) -> dict[str, Any]:
