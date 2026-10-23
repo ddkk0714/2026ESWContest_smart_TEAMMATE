@@ -133,3 +133,16 @@ purifier_control:
   quiet_max_level: 2        # 정숙 시간·몰입 중 상한(강풍 소음)
   bypass_pm: 76             # 매우나쁨이면 상한 무시
   away_boost_after_s: 300   # 자리를 이만큼 비우면 한 단계 더
+
+# CO₂ 환기 타이밍 규칙(ventilation.py) — FSM 밖, CO₂ 가 높고 깨어 책상에 있을 때 창문 환기 카드를 먼저 띄운다. 전부 가정값.
+# 기본 꺼짐(실험: life_sim run --vent-rule). FSM 의 환경 개입은 피로 확정 뒤라 사람이 이미 졸고 있을 때 카드가 떴다(v8, 10-23).
+vent_control:
+  enabled: false
+  avg_s: 60                 # SCD41 측정값 이동평균 창
+  on_ppm: 1000              # 이 이상이 hold_s 이어지면 환기 권유
+  hold_s: 300
+  high_ppm: 1400            # 이 이상이면 몰입 중이어도 기다리지 않는다
+  awake_s: 60               # 자세 모델이 drowsy/face_down 아닌 상태로 이만큼 — 깨어 있을 때 묻는다
+  focus_defer_s: 600        # 몰입(FOCUS_*) 중이면 끝나기를 최대 이만큼 기다린다
+  retry_s: 1200             # 카드 무응답이면 이 뒤에 다시
+  reject_retry_s: 2400      # 거절이면 더 오래 쉰다

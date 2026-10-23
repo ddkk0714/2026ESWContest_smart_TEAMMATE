@@ -37,6 +37,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             sc["hub"]["desk_max_cm"] = args.desk_max_cm
         if args.ingest_set:
             sc["hub"]["ingest_set"] = list(args.ingest_set)
+        if args.vent_rule:
+            sc["devices_resolved"].setdefault("vent_control", {})["enabled"] = True
         if args.policy_engine:
             sc["policy"]["engine"] = args.policy_engine
         if args.policy_profile:
@@ -171,6 +173,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--desk-max-cm", type=float, help="책상 재실 거리 상한(ingest.yaml desk_max_cm 덮어쓰기, 민감도 실험)")
     r.add_argument("--ingest-set", action="append", metavar="KEY=VALUE",
                    help="ingest.yaml 값 덮어쓰기(점 경로, 값은 YAML). 예: elapsed.reset_on_rest=true. 여러 번 줄 수 있다")
+    r.add_argument("--vent-rule", action="store_true",
+                   help="CO₂ 환기 타이밍 규칙 켜기(devices.yaml vent_control — FSM 밖, 깨어 있을 때 창문 환기 카드)")
     r.add_argument("--policy-engine", choices=["hub", "simple", "none"], help="각본의 policy.engine 덮어쓰기")
     r.add_argument("--policy-profile", choices=["none", "synth", "global"], help="각본의 policy.profile 덮어쓰기")
     r.add_argument("--raise-errors", action="store_true")

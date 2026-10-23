@@ -35,6 +35,7 @@ from tools.posture_sim.posture_model import OraclePosture, RuleFeatures
 from tools.posture_sim.source import TofsimSource, where_now as _where_now
 from .env_sensors import EnvSensors
 from .purifier import PurifierController, purifier_metrics
+from .ventilation import VentRule, vent_metrics
 from .reaction import Reaction, ReactionModel
 from .scenario import fsm_config_path
 
@@ -221,6 +222,7 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
     period = float(scenario["hub"].get("tick_sec") or hub.period)
     world = DeviceWorld(dev, scenario["env"], scenario["weather"], t0, seed=seed)
     purifier = PurifierController(dev.get("purifier_control") or {}, seed=seed, t0=t0)
+    vent_rule = VentRule(dev.get("vent_control") or {}, t0=t0)
     mmw = MmwaveSensor(dev.get("mmwave") or {}, seed=seed)
     envs = EnvSensors(dev.get("env_sensors") or {}, seed=seed)
     env_meas: dict[str, Any] = {}
@@ -340,6 +342,8 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
                 if not sim_card:
                     hub.feedback(verdict, now, request_id=p.get("request_id"), response_ms=p.get("response_ms"))
                 emit({"t": now, "kind": "feedback", **{k: v for k, v in p.items()}, "source": r.source})
+                if ev_kind == "vent_suggest":
+                    vent_rule.on_feedback(verdict, now)
                 if verdict == "accept":
                     if engine == "hub":
                         acc = arm_chans(arm, "accept", ev_kind.replace("_suggest", "_accept"))
@@ -384,6 +388,8 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
             if rr.kind == "feedback":
                 rr.payload["sim_card"] = True
                 rr.payload["event"] = kind
+                if extra and "minutes" in extra:
+                    rr.payload["minutes"] = extra["minutes"]          # 수락하면 이 시간만큼 창문을 연다
         pending.extend(reactions)
         rec = {"t": now, "kind": "intervention", **ev, "channels": chans, "person_kind": person_kind(),
                "reaction": reaction.history[-1] if reaction.history and reaction.history[-1]["t"] == now else None,
@@ -556,6 +562,16 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
                 applied = world.apply_command(pcmd, t)
                 emit({"t": t, "kind": "command", **{k2: pcmd[k2] for k2 in ("target_id", "operation", "value", "gate", "why")},
                       "pm_avg": round(purifier.avg or 0.0, 1), "channels": applied["channels"], "devices": world.snapshot()})
+            # CO₂ 환기 타이밍 규칙(FSM 밖, 기본 꺼짐) — ventilation.py
+            if vent_rule.enabled:
+                vreq = vent_rule.observe(t, env_meas.get("co2_ppm") if env_meas.get("co2_valid") else None, present=present_dec,
+                                         posture=(last_verdict or {}).get("posture"),
+                                         state=last_tick["state"] if last_tick else None,
+                                         window_open=bool(world.snapshot().get("window")),
+                                         vent=world.ventilation_choice(world.env["co2_ppm"], world.env["pm25"]))
+                if vreq is not None:
+                    counters["vent_cards"] += 1
+                    sim_card("vent_suggest", t, why="+".join(vreq["why"]), extra={"minutes": vreq["minutes"], "rule": "co2_rule"})
             if sec % int(period) == 0 and sec > 0:
                 _p3 = time.perf_counter()
                 tk = hub.tick(t)
@@ -608,6 +624,9 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
     summary["profile_s"] = {k2: round(v2, 1) for k2, v2 in prof.items()}
     summary["env_sensors"] = envs.error_stats()
     summary["scene_room"] = world.room_drawn or None
+    vcfg = dev.get("vent_control") or {}
+    summary["vent_rule"] = vent_metrics(second_rows, vent_rule.log, [e for e in event_rows if e.get("kind") == "feedback"],
+                                        on_ppm=float(vcfg.get("on_ppm", 1000))) if vent_rule.enabled else None
     try:
         from .plots import plot_timeline
         plot_timeline(second_rows, tick_rows, event_rows, os.path.join(run_dir, "timeline.png"), title=name,
@@ -810,6 +829,9 @@ def format_summary(s: dict[str, Any]) -> str:
              f"환기 선택 {[v['choice'] for v in s['vent_choices']]}",
              f"- 깬 뒤: {s['after_wake']}",
              f"- CO₂: 최대 {s['co2']['max']} ppm, ≥1000 {s['co2']['over1000_min']} 분, ≥1400 {s['co2']['over1400_min']} 분, 창문 열림 {s['co2']['window_min']} 분",
+             (f"- CO₂ 환기 규칙: 카드 {s['vent_rule']['cards']}회(수락 {s['vent_rule']['accepted']}·거절 {s['vent_rule']['rejected']}), "
+              f"재실 중 CO₂≥1000 {s['vent_rule']['co2_high_present_min']} 분, 재실 평균 {s['vent_rule']['co2_mean_present']} ppm, "
+              f"카드별 {s['vent_rule']['card_log']}" if s.get('vent_rule') else "- CO₂ 환기 규칙: 꺼짐"),
              f"- 환경(참값 범위) {s['env']['range']}; 재실 {s['env']['present_min']} 분 중 온도 쾌적 밖 {s['env']['temp_out_min']} 분, "
              f"습도 밖 {s['env']['rh_out_min']} 분, 어두움(<300 lx) {s['env']['dim_min']} 분, CO₂≥1000 {s['env']['co2_over1000_present_min']} 분",
              f"- 환경 센서 오차(측정−참): {json.dumps(s['env_sensors'], ensure_ascii=False)}",
