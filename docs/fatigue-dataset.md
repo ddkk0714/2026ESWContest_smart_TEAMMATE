@@ -89,7 +89,7 @@ python -m ml.training.fatigue_train --synthetic --out <임시 경로>      # 파
 
 `hub/deskmate_hub/fatigue/live.py` · 설정 `config/fatigue.yaml`. **FSM 입력이 아니다** — 화면·기록용으로 `state/phase` 에만 싣는다.
 
-- 수신: Pi 4 C++ 브리지(`hub/atlas/src/mqtt_bridge.cpp`)가 `deskmate/fatigue/label` 을 QoS 1 로 구독해 `MQTT` 줄로 넘기고,
+- 수신: Pi 4 C++ 서비스(`hub/atlas/src/main.cpp` 구독 목록)가 `deskmate/fatigue/label` 을 QoS 1 로 구독해 `MQTT` 줄로 넘기고,
   PC 경로(`MqttSource`)도 같은 토픽을 구독한다. 앱 `session_start` 의 시작 KSS·수면·프로필이 세션 문맥이다.
   앱 세션이 없으면 hub FSM 세션 시작 시각만 쓴다(문맥 답변 특징은 비고 모델이 학습 평균으로 대신한다).
 - 계산: tick(10 s)마다 state/phase 와 같은 모양(`ts`·`c_fatigue`·`sensor_summary`)을 모으고 `period_sec`(60 s)마다

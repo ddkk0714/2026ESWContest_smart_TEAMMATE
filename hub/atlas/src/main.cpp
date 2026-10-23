@@ -688,8 +688,9 @@ int main()
 
         deskmate::MqttConfig mqtt_config = deskmate::mqttConfigFromEnvironment();
         mqtt_config.will = {kHealthTopic, R"({"node":"hub","status":"offline"})", 1, true};
+        // deskmate/fatigue/label = Pi 5 피로 기록 앱 KSS 응답 — 피로 점수 문맥·프로필 보정 전용(FSM 입력 아님)
         mqtt_config.subscriptions = {{"deskmate/sensor/#", 0}, {"deskmate/feedback/user", 1},
-                                     {"deskmate/control/result", 1}};
+                                     {"deskmate/control/result", 1}, {"deskmate/fatigue/label", 1}};
         deskmate::MqttClient mqtt(
             mqtt_config,
             [&hub, &bridge_input_mutex](const std::string& topic, const std::string& payload) {
