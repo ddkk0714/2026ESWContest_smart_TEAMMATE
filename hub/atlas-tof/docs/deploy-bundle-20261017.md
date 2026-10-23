@@ -185,3 +185,7 @@ POST /api/reset   모든 센서의 모델 상태(GRU)를 0 으로 — 장치를 
 - 결과: relay.log `ch340 version=0x31 baud=115200`, type5 증가, /health online_sensors 1(tcp:9100#s1 ≈5 Hz), /raw 격자. 센서 A(0)는 PC·Pi 4 전원 모두에서 미기동(mask=2) — 배선 확인 필요.
 - PC 뷰어: `pc/view.ps1`(ssh 터널 8771·8772 + http.server 8790 + 브라우저, `posture_view.html?base=&raw=`). 터널 없이 직접 닿으면 `-Direct <IP>`.
 - 주의: 팀 hub(deskmate_hub_service)는 /dev/serial0 만 읽고 지금 안 떠 있음. USB 경로에서 hub 에도 프레임을 주려면 중계기가 hub 로 복사해야 한다(미구현). 중계기와 hub 가 같은 tty 를 열면 바이트가 갈린다.
+- 같은 날 추가(보드에 올라가 있는 판): 중계기 `/raw` 에 `"other"` — ToF 격자 말고 나머지 프레임의 마지막 값(`relay/other_sensors.h`).
+  mmWave `0x20`·환경 `0x10`·ToF 특징 `0x03`·ToF 자세 `0x04`·하트비트 `0xF0` 를 `hub/deskmate_hub/ingest/uart_frame.py` 와 같은 규칙으로 풀고, 공통 필드는 `have`·`age_ms`·`seq`·`ts_ms`·`count`·`len`.
+  9100 으로는 여전히 0x05 만 넘긴다. `pc/posture_view.html` 아래에 "나머지 센서 raw" 패널. `relay/usbpower.cpp` 는 Pi 4 USB 포트 전원을 껐다 켜서 ESP32·ToF 를 재시작하는 도구(온보드 허브라 USB 포트 전부 같이 꺼진다).
+- 펌웨어 방향: 재장착 뒤 실기로 좌우 거울상 → `DESKMATE_TOF_FLIP_COLS=0`(esp32dev·esp32dev_usb·tof_logger), esp32dev_usb 는 fw 0x0125.

@@ -8,6 +8,7 @@
 //     CH340(1a86:7523) 은 ATLAS 커널에 드라이버가 없어 generic usb-serial 에 ID 를 붙여 ttyUSB 를 만들고(ch340.h),
 //     열 때마다 보드율·8N1 을 usbfs 로 칩에 직접 쓴다. 뽑았다 꽂으면 EOF → 다시 찾아 연다.
 #include "ch340.h"
+#include "other_sensors.h"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -232,7 +233,7 @@ static std::string rawJson(const LastFrame* lf, const char* dev, unsigned long f
         }
         j += "}";
     }
-    j += "]}";
+    j += "]" + other::tail();  // ,"other":{mmwave,env,tof_feature,tof_posture,heartbeat}}
     return j;
 }
 
@@ -333,11 +334,11 @@ int main(int argc, char** argv) {
             const uint16_t crc = static_cast<uint16_t>(r[H + len] | (r[H + len + 1] << 8));
             if (crc != crc16(r, H + len)) { ++bad; continue; }
             ++frames;
-            if (r[2] != 0x05) continue;
-            ++t5;
             const uint16_t seq = static_cast<uint16_t>(r[3] | (r[4] << 8));
             const uint32_t ts_ms = static_cast<uint32_t>(r[7]) | (static_cast<uint32_t>(r[8]) << 8) |
                                    (static_cast<uint32_t>(r[9]) << 16) | (static_cast<uint32_t>(r[10]) << 24);
+            if (r[2] != 0x05) { other::record(r[2], seq, ts_ms, r + H, len); continue; }  // 나머지 센서는 /raw.other 로만
+            ++t5;
             int sensor = -1;
             if (!toServicePayload(r + H, len, trk, conv, sensor, last)) { ++bad; continue; }
             if (sensor >= 0 && sensor < 2) { last[sensor].uart_seq = seq; last[sensor].ts_ms = ts_ms; }
