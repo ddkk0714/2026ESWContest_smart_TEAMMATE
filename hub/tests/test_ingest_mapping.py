@@ -396,3 +396,18 @@ def test_live_hub_publishes_request_on_suggest_and_matches_feedback(cfg):
     view_before = hub.tracker.pending_feedback
     hub.tick_once(130.0)          # tick 안에서 build_frame 이 pending_feedback 을 소비한다(IDLE 상태라 무시)
     assert view_before is None and hub.pending_request is None
+
+
+@pytest.mark.parametrize("reset,expected_start", [(False, 0.0), (True, 1300.0)])
+def test_elapsed_clock_restarts_after_rest_only_when_enabled(reset, expected_start):
+    tr = SessionTracker(elapsed_reset_on_rest=reset)
+    for state, now in [(State.START, 0.0), (State.FOCUS_PC, 400.0), (State.REST, 1000.0), (State.REST, 1290.0),
+                       (State.RECOVERY, 1300.0), (State.FOCUS_PC, 1310.0)]:
+        tr.observe_state(state, now)
+    assert tr.session_started == expected_start
+
+
+def test_live_hub_reads_elapsed_reset_on_rest_from_ingest_config(cfg):
+    assert LiveHub(SensorCache(), ingest_cfg=cfg, out=io.StringIO()).tracker.elapsed_reset_on_rest is False
+    cfg2 = dict(cfg, elapsed=dict(cfg["elapsed"], reset_on_rest=True))
+    assert LiveHub(SensorCache(), ingest_cfg=cfg2, out=io.StringIO()).tracker.elapsed_reset_on_rest is True

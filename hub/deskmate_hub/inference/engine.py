@@ -215,7 +215,10 @@ class FSMEngine:
 
         elif s is State.MONITOR:
             # TODO(9월): C_fatigue trend 를 5~10분 윈도우로 측정. 지금은 진입 대비 부호로 판정.
-            if c.c_fatigue < self._monitor_entry_fatigue:
+            # timers.monitor_window_sec(없으면 0 = 다음 tick 에 바로 판정): 개입 효과가 나타날 시간을 기다린 뒤 판정한다.
+            if (now - self._state_since) < self.tm.get("monitor_window_sec", 0):
+                pass
+            elif c.c_fatigue < self._monitor_entry_fatigue:
                 self._goto(State.RECOVERY, now)
                 actions += ["reward:+", "update_ai_policy"]
             else:

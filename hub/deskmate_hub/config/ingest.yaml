@@ -144,3 +144,4 @@ environment:
 elapsed:
   # delta = clip(세션 경과초 / full_sec)
   full_sec: 5400
+  reset_on_rest: false     # true 면 휴식(REST)을 마친 뒤부터 경과 시간을 다시 잰다. false 면 휴식 중에도 쌓여 C_fatigue 가 내려오지 않는다(life_sim 10-23)
