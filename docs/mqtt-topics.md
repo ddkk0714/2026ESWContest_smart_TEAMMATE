@@ -292,6 +292,18 @@ ACTION_ENV 진입 시 원인별 명령 목록, 게이트 auto 면 즉시 · sugg
 
 모든 명령이 종료(succeeded/failed/timeout)되거나 제안이 만료(`suggest_timeout_sec`)되면 hub 는 `frame.action_done=true` 로
 FSM 을 MONITOR 로 보낸다. `state/phase.sensor_summary.control` 에 진행 중 에피소드(명령·상태)가 실린다.
+기본 비활성인 `environment_control.yaml` 정책을 Mock 시험에서 활성화한 경우에만
+`state/phase.data.sensor_summary.control.execution_mode`가 `"mock"`으로 추가된다.
+이는 합성 제어 결과를 실측 기기 동작과 구분하기 위한 선택 필드다. 기존 cmd/result 필드,
+게이트·수락/거절·undo 계약과 정책 비활성 상태의 payload는 유지한다.
+
+통합 검증에서 `sensor_summary.control`에 선택적 진단 필드를 보강했다:
+`commands[*].command_id/error_code`, 명령 없는 사용자 행동 제안 `advice`, 비활성 에피소드의
+직전 결과 `last_episode`. `advice.kind=manual_ventilation`은 기기 제어 성공을 뜻하지 않는다.
+`MONITOR`는 실행 성공과 무관하게 에피소드가 종료됐다는 뜻이며 commands의 실제 status로 결과를 판단한다.
+새 정책의 제안 수락은 현재 interaction/request의 정확한 request_id가 필요하다.
+기존 cmd/result topic·필드와 정책 OFF의 legacy HTTP feedback 경로는 유지한다.
+
 어댑터가 없을 때의 리허설: `python tools/mock_plug.py --broker <ip>` (결과 응답 + `deskmate/control/state/<target>` retain).
 
 Pi 5 앱은 `desk_lamp`의 `set_brightness`(iLink 원시 밝기 정수 **0~255**, 퍼센트 아님)와
@@ -303,7 +315,8 @@ Pi 5 앱은 `desk_lamp`의 `set_brightness`(iLink 원시 밝기 정수 **0~255**
 응답한다. `requires_confirmation=true` 명령과 지원하지 않는 동작은 실행하지 않는다.
 retain으로 들어온 명령은 무시한다. 최근 128개 `command_id`의 처리 결과(진행 중 포함)를
 메모리에 보관해 QoS 1 중복 수신 시 BLE를 다시 쓰지 않고 같은 결과를 재발행한다.
-`succeeded`는 GATT 쓰기 호출 완료를 뜻하며 실제 밝기를 센서로 측정했다는 뜻은 아니다.
+`executing`+`confirmation=transport_only`는 GATT 전송 완료만 의미한다. 상태 확인이 없으므로
+`succeeded`/`actual_value`를 보고하지 않는다(아래 2026-10-19 보완 계약 참고).
 
 제안 명령의 `expires_ts_ms`는 **수락 후 발행 시각 + result_timeout_sec**로 정한다.
 카드가 30초 동안 대기했다고 수락 즉시 만료되는 일이 없어야 한다. 앱은 큐 대기·재연결
@@ -384,3 +397,65 @@ retain으로 들어온 명령은 무시한다. 최근 128개 `command_id`의 처
 실행 중인 학습 job이 있고 실제 상태가 IDLE/END 밖이면 status=paused로 표시한다. 입력·판단·제어는 유지하고, 다시 유휴 상태가 되면 training으로 재개한다. Pi 5는 이 snapshot을 표시하며 연결 끊김이나 동의 철회 때 이전 개인 모델 상태를 현재처럼 표시하지 않는다. 서비스 시작 self-check는 stderr 진단만 사용하며 MQTT 명령·개인 표본을 새로 만들지 않는다.
 
 ondevice.yaml이 활성화된 경우에만 `state/phase.data.sensor_summary.ondevice_learning`을 추가한다. `execution: local`, `decision_source: fsm`, `head_source: common|personal`, `samples`, `sessions`, `training_step`(job이 없으면 null)을 제공한다. status는 disabled, unavailable, awaiting_consent, awaiting_portable_model, collecting, training, paused, accepted, rejected, storage_error, head_load_failed이다. embedding·개인 head·표본·파일 경로는 MQTT로 보내지 않는다. 기본 비활성에서는 기존 출력과 FSM을 유지한다. [실행·학습 계약](ondevice-personalization.md)을 따른다.
+
+### 환경 제안/결과의 표시 및 수락 바인딩 (2026-10-19)
+
+기존 topic/schema 1.0은 유지하며, `env_suggest`의 `data.control_plan`을 선택 필드로 추가한다.
+값은 같은 에피소드의 `sensor_summary.control` 스냅샷이다.
+
+```json
+{
+  "request_id": "mock-hub-12", "kind": "env_suggest", "expires_in_s": 60,
+  "control_plan": {
+    "active": true, "execution_mode": "mock", "state": "ACTION_ENV",
+    "cause": "environment", "gate": "suggest", "awaiting_user": true,
+    "commands": [{"command_id": "mock-c1", "target": "mock_ac", "op": "set_power",
+      "value": "on", "status": "accepted", "reason": "temperature_high", "error_code": null}],
+    "advice": []
+  }
+}
+```
+
+- `commands[].reason`은 실제 planner rule(기존 planner는 cause)이다. UI는 target/op/value/reason을
+  그대로 표시하며 env_flags에서 실행 동작을 추정하지 않는다. `advice`는 별도로 모두 표시한다.
+- UI는 request_id/boot_id, 절대 만료(ts+expires_in_s), 최신 상태(30초, 미래 오차 2초 이내),
+  gate=suggest/awaiting_user, mode 및 명령 ID/대상/op/value/reason/advice가 일치할 때만 수락한다.
+  계획이 없는 구버전 ENV 카드나 연결이 끊긴 상태는 실행 수락을 차단한다. 기존 휴식/자세 카드는 유지한다.
+- feedback/user는 기존 request_id+verdict를 사용한다. 재연결 전후 request_id를 다시 검사한다.
+  `correct`는 제안을 소모하지 않는다. retain request/cmd는 재실행하지 않는다.
+- `active=false`에서도 `last_episode`의 명령 상태·오류를 유지한다. `outcome=executed/undone`,
+  MONITOR 진입, API accepted는 성공 증거가 아니다. Mock은 항상 "MOCK · 모의 제어"로 표시한다.
+- Mock용 UART/FSM 종단 시험의 cmd에는 선택 필드 `execution_mode=mock`을 붙인다. Pi5 BLE는
+  이 명령을 `cancelled/mock_command_blocked`로 차단한다. 일반 제어를 활성화하는 플래그가 아니다.
+- undo cmd의 `undo_of_command_id`는 원래 명령을 가리킨다. Pi5는 마지막 램프 명령과 다르거나
+  누락된 undo를 `cancelled/superseded_command`로 차단한다(구형 서버 undo는 안전하게 거절).
+
+**BLE 우선순위와 확인 수준**: 사용자 직접 밝기 조작 > 명시적 환경 명령 > phase 피드백.
+수동 조작은 프로세스 안의 대기 쓰기를 무효화하고, 자동 피드백을 명시적으로 OFF→ON 하기
+전까지 자동/undo 쓰기를 차단한다. 환경 명령 후 MONITOR/RECOVERY phase는 램프를 덮어쓰지 않는다.
+GATT 연결 이후, 각 프레임 쓰기 직전에 만료·권한·수동 변경을 재검사한다. 이미 전송된 프레임은
+취소할 수 없으며 수동 쓰기가 뒤이어 적용된다. 실제 기기의 외부 버튼 조작 감지는 아직 없다.
+
+기존 설명의 `succeeded=GATT 쓰기 완료`를 대체한다: BLE 쓰기만 완료되면
+`executing`, `confirmation=transport_only`, `error_code=device_state_unconfirmed`를 반환하고
+`actual_value`를 만들어 넣지 않는다. 상태 읽기/피드백이 없으면 Hub의 기존 timeout이 적용된다.
+따라서 이를 실제 기기 성공으로 표시하지 않는다. 메모리 중복 억제는 프로세스 재시작을 넘지 않는다.
+
+- `commands[].state_confirmed`는 일치하는 `actual_value`로 확인된 결과인지 나타낸다.
+  이 필드 없는 legacy succeeded는 새 UI에서 '기기 상태 미확인'으로 남긴다.
+  BLE executing의 completed_ts_ms도 null이다. MqttStateSource는 MQTT 3.1.1을 명시적으로 사용한다.
+
+환경 결과 카드의 되돌리기에는 선택 필드 `feedback/user.data.undo_command_ids`에 표시 중인
+에피소드의 command_id 목록을 넣는다(verdict=reject 유지). UI는 현재 상태/계획과 대조하고,
+Hub도 새 pending 제안이 없고 현재/직전 에피소드의 ID 목록과 일치할 때만 처리한다.
+이전 결과 카드의 늦은 터치가 새 에피소드의 명령을 되돌리는 것을 차단한다.
+휴식/자세 카드의 기존 feedback 및 기존 client payload는 유지한다.
+
+### 독립 Mock Gateway 실행
+
+일반 Linux의 `deskmate_hub.control.gateway_service`는 기존 cmd/result QoS1 계약만 사용한다.
+명시적 Mock 실행과 private journal이 필요하며, 등록된 `mock_*` target과
+`data.execution_mode=mock`인 명령만 처리한다. 결과는 `node=device-gateway-mock`,
+retain=false다. 재시작/재연결 시 journal의 결과를 다시 알릴 수 있지만 명령은 재실행하지 않는다.
+기존 BLE/실기 controller의 target을 소유하지 않는다. 실행·인증·TLS·ACL·저장 위치는
+[mock-device-gateway.md](mock-device-gateway.md)를 참조한다.

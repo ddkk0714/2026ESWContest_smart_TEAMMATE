@@ -36,14 +36,18 @@ class ControlCommand:
     expires_ts: float
     undo_value: Any = None
     status: str = "accepted"          # accepted | executing | succeeded | failed | timeout | cancelled | skipped
+    context: dict[str, Any] = field(default_factory=dict)  # Internal planner data, never MQTT.
     sent_ts: float | None = None
     completed_ts: float | None = None
+    error_code: str | None = None
+    state_confirmed: bool = False
 
     def to_payload(self) -> dict[str, Any]:
         return {
             "command_id": self.command_id, "target_id": self.target_id, "operation": self.operation,
             "value": self.value, "origin_state": self.origin_state, "cause": self.cause, "gate": self.gate,
             "requires_confirmation": self.requires_confirmation, "expires_ts_ms": int(self.expires_ts * 1000),
+            **({"undo_of_command_id": self.context["undo_of_command_id"]} if "undo_of_command_id" in self.context else {}),
         }
 
     @property
@@ -59,6 +63,7 @@ class Episode:
     gate: GateMode
     started_ts: float
     commands: list[ControlCommand] = field(default_factory=list)
+    advice: list[dict[str, Any]] = field(default_factory=list)
     awaiting_user: bool = False
     executed: bool = False
     executed_ts: float | None = None
@@ -73,8 +78,16 @@ class Episode:
 
 class ControlDispatcher:
     def __init__(self, cfg: dict[str, Any], *, publish_cmd: Publish, on_log: Callable[[str], None] | None = None,
-                 clock: Callable[[], float] = time.time) -> None:
+                 clock: Callable[[], float] = time.time,
+                 plan_commands: Callable | None = None,
+                 plan_advice: Callable | None = None,
+                 dispatch_guard: Callable | None = None,
+                 on_dispatched: Callable | None = None) -> None:
         self.cfg = cfg
+        self._plan_commands = plan_commands
+        self._plan_advice = plan_advice
+        self._dispatch_guard = dispatch_guard
+        self._on_dispatched = on_dispatched
         self.publish_cmd = publish_cmd
         self._log = on_log or (lambda m: None)
         self._clock = clock
@@ -94,8 +107,12 @@ class ControlDispatcher:
         now = self._clock() if now is None else now
         ep = Episode(state=state, cause=cause, gate=gate, started_ts=now)
         ep.commands = self._plan(state, cause, gate, now)
+        if self._plan_advice is not None and state == "ACTION_ENV" and cause == "environment":
+            ep.advice = [dict(item) for item in self._plan_advice()]
         self.episode = ep
-        if not ep.commands:
+        if not ep.commands and ep.advice and gate is GateMode.SUGGEST:
+            ep.awaiting_user = True  # A manual ventilation suggestion needs the same feedback path.
+        elif not ep.commands:
             ep.outcome = "skipped"
             self._log(f"[control] {state}/{cause}: 실행할 명령 없음(쿨다운·비가역·미정의) → skipped")
         elif gate is GateMode.AUTO:
@@ -148,14 +165,22 @@ class ControlDispatcher:
         cid = payload.get("command_id")
         for ep in ([self.episode] if self.episode else []) + self.history[-5:]:
             for c in ep.commands:
-                if c.command_id == cid and not c.terminal:
-                    if c.sent_ts is not None and now >= c.expires_ts:
-                        c.status, c.completed_ts = "timeout", now
+                if c.command_id == cid and not c.terminal and c.sent_ts is not None:
+                    if now >= c.expires_ts:
+                        c.status, c.completed_ts, c.error_code = "timeout", now, "result_expired"
                         return False
                     status = str(payload.get("status", "")).lower()
+                    error = payload.get("error_code")
+                    c.error_code = error if isinstance(error, str) and len(error) <= 64 and all(
+                        char.isalnum() or char == "_" for char in error) else None
                     if status == "succeeded" and "actual_value" in payload and payload["actual_value"] != c.value:
-                        status = "failed"
-                    c.status = status if status in ("executing", "succeeded", "failed", "cancelled") else "failed"
+                        status, c.error_code = "failed", "actual_value_mismatch"
+                    elif status == "succeeded" and c.context.get("policy_rule") and "actual_value" not in payload:
+                        status, c.error_code = "failed", "actual_value_unconfirmed"
+                    c.state_confirmed = (status == "succeeded" and "actual_value" in payload
+                                         and payload["actual_value"] == c.value
+                                         and payload.get("confirmation") != "transport_only")
+                    c.status = status if status in ("accepted", "executing", "succeeded", "failed", "timeout", "cancelled") else "failed"
                     if c.terminal:
                         c.completed_ts = now
                     self._log(f"[control] {c.target_id}.{c.operation}={c.value!r} → {c.status}")
@@ -173,7 +198,7 @@ class ControlDispatcher:
         for episode in episodes:
             for c in episode.commands:
                 if not c.terminal and c.sent_ts is not None and now >= c.expires_ts:
-                    c.status, c.completed_ts = "timeout", now
+                    c.status, c.completed_ts, c.error_code = "timeout", now, "result_timeout"
                     self._log(f"[control] {c.target_id}.{c.operation} result timeout")
 
     def _expire(self, ep: Episode, why: str) -> None:
@@ -194,17 +219,30 @@ class ControlDispatcher:
             self.history.append(self.episode)
             self.episode = None
 
-    def summary(self) -> dict[str, Any]:
-        ep = self.episode
-        if ep is None:
-            return {"active": False}
-        return {"active": True, "state": ep.state, "cause": ep.cause, "gate": ep.gate.value, "outcome": ep.outcome,
+    @staticmethod
+    def _episode_summary(ep: Episode) -> dict[str, Any]:
+        return {"state": ep.state, "cause": ep.cause, "gate": ep.gate.value, "outcome": ep.outcome,
                 "awaiting_user": ep.awaiting_user,
-                "commands": [{"target": c.target_id, "op": c.operation, "value": c.value, "status": c.status} for c in ep.commands]}
+                "commands": [{"command_id": c.command_id, "target": c.target_id, "op": c.operation,
+                              "value": c.value, "status": c.status, "error_code": c.error_code,
+                              "reason": c.context.get("policy_rule") or c.cause, "state_confirmed": c.state_confirmed}
+                             for c in ep.commands],
+                **({"advice": ep.advice} if ep.advice else {})}
+
+    def summary(self) -> dict[str, Any]:
+        if self.episode is not None:
+            return {"active": True, **self._episode_summary(self.episode)}
+        # Preserve the outcome through MONITOR instead of dropping the only
+        # state that would let a display distinguish failure from completion.
+        return {"active": False, **({"last_episode": self._episode_summary(self.history[-1])}
+                                   if self.history else {})}
 
     # ---------------------------------------------------------------- 내부
     def _plan(self, state: str, cause: str | None, gate: GateMode, now: float) -> list[ControlCommand]:
-        specs = self.actions.get(cause or "", []) if state == "ACTION_ENV" else []
+        # Exclusive planning owner: a policy replaces legacy fan+lamp specs.
+        # It still cannot publish, select another gate, or create a second episode.
+        specs = (self._plan_commands(state, cause, gate, now) if self._plan_commands is not None
+                 else self.actions.get(cause or "", []) if state == "ACTION_ENV" else [])
         cmds: list[ControlCommand] = []
         for spec in specs:
             key = (spec["target_id"], spec["operation"])
@@ -220,20 +258,28 @@ class ControlDispatcher:
                 command_id=uuid.uuid4().hex[:12], target_id=spec["target_id"], operation=spec["operation"],
                 value=spec.get("value"), undo_value=spec.get("undo_value"), origin_state=state, cause=cause,
                 gate=gate.value, requires_confirmation=irreversible, expires_ts=now + self.timeout,
+                context=dict(spec.get("context") or {}),
             ))
         return cmds
 
     def _dispatch(self, ep: Episode, now: float) -> None:
+        sent = False
         for c in ep.commands:
+            if self._dispatch_guard is not None and not self._dispatch_guard(c, now):
+                c.status = "skipped"
+                continue
             c.sent_ts, c.status = now, "executing"
             # A suggestion can wait 180 s before dispatch; its execution timeout
             # starts when the user accepts, not when the card was created.
             c.expires_ts = now + self.timeout
             self._last_sent[(c.target_id, c.operation)] = now
+            if self._on_dispatched is not None:
+                self._on_dispatched(c, now)
             self.publish_cmd(c.to_payload())
-        ep.executed = True
-        ep.executed_ts = now
-        ep.outcome = "executed"
+            sent = True
+        ep.executed = sent
+        ep.executed_ts = now if sent else None
+        ep.outcome = "executed" if sent else "advised" if ep.advice and not ep.commands else "skipped"
         self._log(f"[control] {ep.state}/{ep.cause}: {len(ep.commands)}건 발행 ({ep.gate.value})")
 
     def _undo(self, ep: Episode, now: float) -> None:
@@ -245,7 +291,10 @@ class ControlDispatcher:
                 command_id=uuid.uuid4().hex[:12], target_id=c.target_id, operation=c.operation, value=c.undo_value,
                 origin_state=ep.state, cause=ep.cause, gate="undo", requires_confirmation=False,
                 expires_ts=now + self.timeout, sent_ts=now, status="executing",
+                context=dict(c.context, undo_of_value=c.value, undo_of_command_id=c.command_id),
             )
+            if self._dispatch_guard is not None and not self._dispatch_guard(undo, now):
+                continue
             ep.commands.append(undo)
             self.publish_cmd(undo.to_payload())
             sent = True

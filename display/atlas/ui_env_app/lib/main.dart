@@ -12,6 +12,7 @@ import 'bluetooth_service.dart';
 import 'connection_guide.dart';
 import 'connection_page.dart';
 import 'display_state.dart';
+import 'control_state.dart';
 import 'feedback_policy.dart';
 import 'dashboard_view.dart';
 import 'deskmate_theme.dart';
@@ -235,6 +236,9 @@ class _DashboardPageState extends State<DashboardPage> {
       if (_override == null) {
         _intervention.update(next,
             hasPendingRequest: _source.hasPendingRequest,
+            requestKey: _source is MqttStateSource
+                ? (_source as MqttStateSource).pendingRequestId
+                : null,
             expiresInS: _source.pendingRequestExpiresInS,
             now: DateTime.now());
       }
@@ -264,12 +268,20 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
-  Future<void> _feedback(String verdict) async {
+  Future<void> _feedback(String verdict, {ControlProposal? proposal}) async {
     if (_override != null) return _devAnswer(verdict);
     final acceptedState = _state;
     try {
-      await _source.feedback(verdict,
-          responseMs: _intervention.responseMs(DateTime.now()));
+      if (proposal != null && _source is MqttStateSource) {
+        await (_source as MqttStateSource).feedbackControl(proposal, verdict,
+            responseMs: _intervention.responseMs(DateTime.now()));
+      } else {
+        if (verdict == 'accept' && acceptedState?.fsmState == 'ACTION_ENV') {
+          throw StateError('서버 제어 계획과 request_id 확인이 필요합니다.');
+        }
+        await _source.feedback(verdict,
+            responseMs: _intervention.responseMs(DateTime.now()));
+      }
       if (verdict == 'accept' && acceptedState != null) {
         await _feedbackController.accept(acceptedState);
       }
@@ -292,6 +304,12 @@ class _DashboardPageState extends State<DashboardPage> {
   /// 라벨이다 — 사람이 못 봤거나 무시한 것과 거절한 것은 다르다.
   void _checkSuggestionTimeout() {
     final now = DateTime.now();
+    if (_source is MqttStateSource &&
+        _override == null &&
+        (_source as MqttStateSource).pendingRequestId !=
+            _intervention.requestKey) {
+      return;
+    }
     if (!_intervention.takeTimeout(now)) return;
     if (_override != null) return _devAnswer('timeout');
     final ms = _intervention.responseMs(now);
@@ -299,6 +317,16 @@ class _DashboardPageState extends State<DashboardPage> {
     unawaited(_source
         .feedback('timeout', responseMs: ms)
         .catchError((Object error) => diag.write('timeout 전송 실패: $error')));
+  }
+
+  Future<void> _undoEnvironment(DisplayState shown) async {
+    try {
+      if (_source is! MqttStateSource || _override != null) return;
+      await (_source as MqttStateSource).feedbackUndo(shown);
+      _notify('표시된 제어의 되돌리기를 요청했습니다. 완료는 결과에서 확인하세요.');
+    } catch (error) {
+      _notify('되돌리기 전송 실패: $error');
+    }
   }
 
   /// 자동 실행을 되돌린다: hub 에 reject 를 보내면 제어 디스패처가 undo 명령을 낸다.
@@ -371,6 +399,9 @@ class _DashboardPageState extends State<DashboardPage> {
     if (live != null) {
       _intervention.update(live,
           hasPendingRequest: _source.hasPendingRequest,
+          requestKey: _source is MqttStateSource
+              ? (_source as MqttStateSource).pendingRequestId
+              : null,
           expiresInS: _source.pendingRequestExpiresInS,
           now: DateTime.now());
     }
@@ -388,36 +419,44 @@ class _DashboardPageState extends State<DashboardPage> {
     _notify('개발자 화면: $verdict${ms != null ? ' · $ms ms' : ''} (hub 로 보내지 않음)');
   }
 
-  Widget _buildDashboard(DisplayState state) => DashboardView(
-        state: state,
-        displayMessage: _source.displayMessage,
-        hasPendingRequest: _hasPendingRequest,
-        keystroke: _localKeystroke ?? state.keystroke,
-        keystrokeReference:
-            _localKeystroke != null ? DateTime.now() : state.timestamp,
-        liveKeys: _localKeystroke != null ? _liveKeys : null,
-        onFeedback: _feedback,
-        autoNotice: _intervention.autoNotice,
-        onUndoAuto: _undoAuto,
-        onDismissAuto: _dismissAuto,
-        suggestionRemaining:
-            _hasPendingRequest ? _intervention.remaining(DateTime.now()) : null,
-        // 데모에는 보낼 곳이 없으니 정정 버튼을 그리지 않는다(개발자 화면 고정 중에는 보여 준다).
-        onCorrect: _source is DemoStateSource && _override == null
-            ? null
-            : _correctState,
-        focusSummary: _focusSummary(),
-        showDemoControl: true,
-        demoCyclingEnabled: _autoScreenCyclingEnabled,
-        onToggleDemoCycling: _toggleAutoScreenCycling,
-        phaseOverride: _source is! DemoStateSource && _autoScreenCyclingEnabled
-            ? _autoScreenPhases[_autoScreenPhaseIndex]
-            : null,
-        // 테스트로 상태를 고정한 동안에는 그 국면 화면을 봐야 한다.
-        pinAmbient: !_autoScreenCyclingEnabled && _override == null,
-        showFocusDetail: _showFocusDetail,
-        onShowFocusDetail: (value) => setState(() => _showFocusDetail = value),
-      );
+  Widget _buildDashboard(DisplayState state) {
+    final proposal = _override == null && _source is MqttStateSource
+        ? (_source as MqttStateSource).controlProposal
+        : null;
+    return DashboardView(
+      state: state,
+      displayMessage: _source.displayMessage,
+      hasPendingRequest: _hasPendingRequest,
+      keystroke: _localKeystroke ?? state.keystroke,
+      keystrokeReference:
+          _localKeystroke != null ? DateTime.now() : state.timestamp,
+      liveKeys: _localKeystroke != null ? _liveKeys : null,
+      controlProposal: proposal,
+      controlConnected: _source.isConnected,
+      onFeedback: (verdict) => _feedback(verdict, proposal: proposal),
+      autoNotice: _intervention.autoNotice,
+      onUndoAuto: _undoAuto,
+      onUndoEnvironment: () => _undoEnvironment(state),
+      onDismissAuto: _dismissAuto,
+      suggestionRemaining:
+          _hasPendingRequest ? _intervention.remaining(DateTime.now()) : null,
+      // 데모에는 보낼 곳이 없으니 정정 버튼을 그리지 않는다(개발자 화면 고정 중에는 보여 준다).
+      onCorrect: _source is DemoStateSource && _override == null
+          ? null
+          : _correctState,
+      focusSummary: _focusSummary(),
+      showDemoControl: true,
+      demoCyclingEnabled: _autoScreenCyclingEnabled,
+      onToggleDemoCycling: _toggleAutoScreenCycling,
+      phaseOverride: _source is! DemoStateSource && _autoScreenCyclingEnabled
+          ? _autoScreenPhases[_autoScreenPhaseIndex]
+          : null,
+      // 테스트로 상태를 고정한 동안에는 그 국면 화면을 봐야 한다.
+      pinAmbient: !_autoScreenCyclingEnabled && _override == null,
+      showFocusDetail: _showFocusDetail,
+      onShowFocusDetail: (value) => setState(() => _showFocusDetail = value),
+    );
+  }
 
   /// 대기 화면의 오늘 집중 요약. 리포트가 없거나 아직 0분이면 null(기본 인사말).
   String? _focusSummary() {
@@ -932,13 +971,13 @@ class _MusicVolumeDialogState extends State<_MusicVolumeDialog> {
             key: const ValueKey('music-volume-slider'),
             value: _value,
             divisions: 20,
-            label: (_value * 100).round().toString() + '%',
+            label: '${(_value * 100).round()}%',
             onChanged: (value) {
               setState(() => _value = value);
               widget.onChanged(value);
             }),
         actions: [
-          Text((_value * 100).round().toString() + '%'),
+          Text('${(_value * 100).round()}%'),
           TextButton(
               onPressed: () => Navigator.pop(context),
               child: const Text('\uB2EB\uAE30'))
@@ -1001,7 +1040,7 @@ class _Header extends StatelessWidget {
                   Text(connectionLabel),
                   const SizedBox(width: 4),
                 ],
-                Text('#' + sequence.toString())
+                Text('#$sequence')
               ])),
           PopupMenuButton<int>(
               key: const ValueKey('music-select'),
@@ -1012,7 +1051,7 @@ class _Header extends StatelessWidget {
               itemBuilder: (context) => [
                     for (var i = 0; i < classicalTrackTitles.length; i++)
                       CheckedPopupMenuItem<int>(
-                          key: ValueKey('music-track-' + i.toString()),
+                          key: ValueKey('music-track-$i'),
                           value: i,
                           checked: i == selectedTrack,
                           child: Text(classicalTrackTitles[i]))

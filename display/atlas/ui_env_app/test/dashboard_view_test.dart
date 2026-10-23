@@ -42,8 +42,12 @@ void main() {
       ),
     );
     // 환경 원인의 제목은 env_flags 로 고른다. 플래그가 없으면 일반 문구.
-    expect(find.text('환경을 잠시 조정해볼까요?'), findsOneWidget);
-    expect(find.textContaining('이유: CO₂ 720 ppm'), findsOneWidget);
+    expect(find.text('서버 제어 계획 확인 필요'), findsOneWidget);
+    expect(
+        tester
+            .widget<FilledButton>(find.byKey(const ValueKey('control-accept')))
+            .onPressed,
+        isNull);
 
     await _pump(tester, _state(phase: 'end', fsmState: 'END'));
     expect(find.text('오늘의 집중 리포트'), findsOneWidget);

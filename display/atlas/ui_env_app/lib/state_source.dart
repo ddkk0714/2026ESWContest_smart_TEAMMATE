@@ -6,6 +6,7 @@ import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 
 import 'display_state.dart';
+import 'control_state.dart';
 import 'session_report.dart';
 import 'privacy_state.dart';
 
@@ -174,6 +175,7 @@ class MqttStateSource implements StateSource, PrivacySource {
           'deskmate-display-${DateTime.now().microsecondsSinceEpoch}',
           port,
         ) {
+    _client.setProtocolV311();
     _client.logging(on: false);
     _client.keepAlivePeriod = 30;
     _client.autoReconnect = true;
@@ -255,6 +257,10 @@ class MqttStateSource implements StateSource, PrivacySource {
     }
   }
 
+  ControlProposal? _controlProposal;
+  DateTime? _pendingDeadline;
+  ControlProposal? get controlProposal => _controlProposal;
+  String? get pendingRequestId => _pendingRequestId;
   String? _pendingRequestId;
   int? _pendingExpiresInS;
   int _sequence = 0;
@@ -299,8 +305,13 @@ class MqttStateSource implements StateSource, PrivacySource {
   bool get hasPendingRequest => _pendingRequestId != null;
 
   @override
-  int? get pendingRequestExpiresInS =>
-      _pendingRequestId == null ? null : _pendingExpiresInS;
+  int? get pendingRequestExpiresInS => _pendingRequestId == null
+      ? null
+      : (_pendingDeadline == null
+          ? _pendingExpiresInS
+          : (_pendingDeadline!.difference(DateTime.now()).inMilliseconds / 1000)
+              .ceil()
+              .clamp(0, 3600));
 
   @override
   Future<DisplayState> fetch() async {
@@ -360,6 +371,8 @@ class MqttStateSource implements StateSource, PrivacySource {
           _latest = DisplayState.fromEnvelope(envelope);
           if (!_latest!.fsmState.startsWith('ACTION_')) {
             _pendingRequestId = null;
+            _controlProposal = null;
+            _pendingDeadline = null;
             _pendingExpiresInS = null;
           }
           final data = envelope['data'];
@@ -386,13 +399,25 @@ class MqttStateSource implements StateSource, PrivacySource {
             unawaited(_handleControl(data));
           }
         } else if (received.topic == _requestTopic) {
+          if (publish.header?.retain == true ||
+              envelope['schema_version'] != '1.0') {
+            continue;
+          }
           final data = envelope['data'];
           if (data is Map<String, dynamic>) {
             final requestId = data['request_id'];
             if (requestId is String && requestId.isNotEmpty) {
               _pendingRequestId = requestId;
               final expires = data['expires_in_s'];
-              _pendingExpiresInS = expires is num ? expires.round() : null;
+              _pendingExpiresInS =
+                  expires is num && expires.isFinite ? expires.round() : null;
+              final ts = envelope['ts'];
+              _pendingDeadline =
+                  ts is num && ts.isFinite && expires is num && expires.isFinite
+                      ? DateTime.fromMillisecondsSinceEpoch(
+                          ((ts + expires) * 1000).round())
+                      : null;
+              _controlProposal = ControlProposal.parse(envelope);
             }
           }
         } else if (received.topic == _hubHealthTopic) {
@@ -449,7 +474,62 @@ class MqttStateSource implements StateSource, PrivacySource {
   @override
   Future<void> feedback(String verdict,
       {String? correctedState, int? responseMs}) async {
+    return _sendFeedback(verdict,
+        correctedState: correctedState, responseMs: responseMs);
+  }
+
+  Future<void> feedbackControl(ControlProposal shown, String verdict,
+          {int? responseMs}) =>
+      _sendFeedback(verdict, responseMs: responseMs, shown: shown);
+
+  Future<void> feedbackUndo(DisplayState shown) =>
+      _sendFeedback('reject', undo: shown);
+
+  Future<void> _sendFeedback(String verdict,
+      {String? correctedState,
+      int? responseMs,
+      ControlProposal? shown,
+      DisplayState? undo}) async {
+    // Capture before reconnect: a tap on an old card must never accept a newer card.
+    final requestId = _pendingRequestId;
     await _ensureConnected();
+    if (requestId != _pendingRequestId) throw StateError('제안이 변경되었습니다.');
+    final state = _latest;
+    if (undo != null &&
+        (requestId != null ||
+            state == null ||
+            undo.control == null ||
+            state.hubBootId != undo.hubBootId ||
+            state.control?.signature != undo.control!.signature ||
+            DateTime.now().difference(state.timestamp) >
+                const Duration(seconds: 30))) {
+      throw StateError('되돌릴 제어 계획이 변경되었거나 만료되었습니다.');
+    }
+    if (verdict == 'accept' &&
+        (requestId == null ||
+            (_pendingDeadline != null &&
+                !DateTime.now().isBefore(_pendingDeadline!)))) {
+      throw StateError('활성 제안이 없거나 만료되었습니다.');
+    }
+    if (shown != null &&
+        (shown.requestId != requestId ||
+            _controlProposal?.plan.signature != shown.plan.signature)) {
+      throw StateError('현재 제안과 표시된 계획이 다릅니다.');
+    }
+    if (verdict == 'accept' &&
+        (shown != null || state?.fsmState == 'ACTION_ENV')) {
+      if (shown == null ||
+          state == null ||
+          state.fsmState != 'ACTION_ENV' ||
+          state.gate != 'suggest' ||
+          !shown.matches(
+              current: state.control,
+              hubBootId: state.hubBootId,
+              stateTime: state.timestamp,
+              now: DateTime.now())) {
+        throw StateError('제안이 만료되었거나 서버 계획을 확인할 수 없습니다.');
+      }
+    }
     final payload = jsonEncode({
       'schema_version': '1.0',
       'ts': DateTime.now().millisecondsSinceEpoch / 1000,
@@ -457,7 +537,11 @@ class MqttStateSource implements StateSource, PrivacySource {
       'boot_id': _bootId,
       'seq': ++_sequence,
       'data': {
-        'request_id': _pendingRequestId ?? 'atlas-display',
+        'request_id': requestId ?? 'atlas-display',
+        if (undo != null)
+          'undo_command_ids': [
+            for (final command in undo.control!.commands) command.id
+          ],
         'verdict': verdict,
         if (correctedState != null) 'corrected_state': correctedState,
         'response_ms': responseMs ?? 0,
@@ -469,8 +553,12 @@ class MqttStateSource implements StateSource, PrivacySource {
       MqttQos.atLeastOnce,
       builder.payload!,
     );
-    _pendingRequestId = null;
-    _pendingExpiresInS = null;
+    if (verdict != 'correct') {
+      _pendingRequestId = null;
+      _pendingExpiresInS = null;
+      _pendingDeadline = null;
+      _controlProposal = null;
+    }
   }
 
   @override
