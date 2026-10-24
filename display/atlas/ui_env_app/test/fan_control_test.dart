@@ -87,7 +87,7 @@ void main() {
 
     setUp(() {
       bluetooth = _FakeBluetooth();
-      fan = BleFanControl(bluetooth);
+      fan = BleFanControl(bluetooth, retryDelay: Duration.zero);
       coordinator = FeedbackCoordinator(
           music: _NoMusic(),
           lamp: IlinkLampFeedback(bluetooth),
@@ -150,6 +150,29 @@ void main() {
       final result = await coordinator.handleControlCommand(_command('c5'));
       expect(result?['status'], 'succeeded');
       expect(bluetooth.connects, 2);
+    });
+
+    test('a link that fails to come up is retried after a short scan',
+        () async {
+      // 10-24 Pi 5: about half the GATT connects to the Pico 2 W fail at once.
+      fan.select(_fanAddress);
+      bluetooth
+        ..state = _state()
+        ..connectFailuresRemaining = 3;
+      final result = await coordinator.handleControlCommand(_command('c6'));
+      expect(result?['status'], 'succeeded');
+      expect(bluetooth.connects, 4);
+      expect(bluetooth.scans, 3);
+    });
+
+    test('gives up after the configured attempts', () async {
+      final limited = BleFanControl(bluetooth,
+          connectAttempts: 2, retryDelay: Duration.zero)
+        ..select(_fanAddress);
+      bluetooth.connectFailuresRemaining = 5;
+      expect(await limited.connect(), isFalse);
+      expect(bluetooth.connects, 2);
+      expect(limited.lastError, isA<StateError>());
     });
 
     test('refusals never reach the fan', () async {
@@ -256,6 +279,8 @@ Map<String, dynamic> _command(String id) => {
 // implements는 실제 시스템 D-Bus 클라이언트를 생성하지 않는다.
 class _FakeBluetooth implements AtlasBluetoothService {
   int connects = 0;
+  int connectFailuresRemaining = 0;
+  int scans = 0;
   int writeFailuresRemaining = 0;
   List<int>? state;
   final List<List<int>> frames = [];
@@ -264,6 +289,10 @@ class _FakeBluetooth implements AtlasBluetoothService {
   @override
   Future<GattConnection> connectLamp(String address) async {
     connects++;
+    if (connectFailuresRemaining > 0) {
+      connectFailuresRemaining--;
+      throw StateError('Failed to connect with remote device');
+    }
     return GattConnection(adapter: 'test-adapter', clientId: 'client-$connects');
   }
 
@@ -280,6 +309,14 @@ class _FakeBluetooth implements AtlasBluetoothService {
     }
     frames.add(List.of(value));
     serviceIds.add(serviceId);
+  }
+
+  @override
+  Stream<List<BluetoothDeviceInfo>> scanProgressive(
+      {Duration duration = const Duration(seconds: 8),
+      Duration interval = const Duration(seconds: 1)}) async* {
+    scans++;
+    yield const [_fanInfo];
   }
 
   @override

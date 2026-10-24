@@ -252,7 +252,12 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
         if (btstack_event_state_get_state(packet) != HCI_STATE_WORKING) return;
         bd_addr_t addr, null_addr;
         gap_local_bd_addr(addr);
-        printf("[fan] BLE up as DESKMATE-FAN %s\n", bd_addr_to_str(addr));
+        /* 10-24 Pi 5: ATLAS GATT Connect refused this fan on its public address before even calling BlueZ;
+         * the iLink lamp it does accept uses a random static one. Advertise the board's own address with the
+         * top two bits set (2C:CF:.. -> EC:CF:..), which stays the same across reboots. */
+        gap_random_address_set(addr);
+        addr[0] |= 0xc0;
+        printf("[fan] BLE up as DESKMATE-FAN %s (random static)\n", bd_addr_to_str(addr));
         memset(null_addr, 0, sizeof(null_addr));
         gap_advertisements_set_params(160, 320, 0, 0, null_addr, 0x07, 0x00); /* 100-200 ms, connectable */
         gap_advertisements_set_data(sizeof(adv_data), (uint8_t *)adv_data);
