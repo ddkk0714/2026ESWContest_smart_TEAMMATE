@@ -88,6 +88,7 @@ struct SensorStatus {
 
 struct ResetStats {
     uint64_t periodic = 0, away = 0, manual = 0;
+    uint64_t model_switch = 0;      // POST /api/placement 로 모델을 바꿔 끼운 뒤의 리셋
     int64_t last_reset_ms = -1;     // 마지막 리셋 시각 (어떤 계기든). 리셋이 없었으면 첫 tick 시각
 };
 
@@ -112,6 +113,11 @@ public:
     explicit DevicePosture(DeviceConfig cfg = {});
 
     bool loadModel(const std::string& path, std::string* err = nullptr);
+    // 돌아가는 중에 같은 구조(H·W·classes·hidden)의 다른 가중치로 교체 + 리셋(resets.model_switch). 못 읽거나 모양이
+    // 다르면 false 를 돌려주고 기존 모델을 그대로 둔다. 뮤텍스 아래에서 교체하므로 tick 과 겹쳐도 안전.
+    bool switchModel(const std::string& path, int64_t now_ms, std::string* err = nullptr);
+    void setPlacement(const std::string& key);               // /api/state 의 "placement" (비우면 필드 없음)
+    std::string modelPath() const;
     int addSensor(const std::string& name);                 // 센서 번호를 돌려준다
     void renameSensor(int sensor, const std::string& name);
     int sensorCount() const { return static_cast<int>(slots_.size()); }
@@ -159,6 +165,8 @@ private:
     };
 
     std::string modelPath_;
+    std::string placement_;         // 비어 있으면 위치 기능 꺼짐
+    int net_H_ = 0, net_W_ = 0, net_hidden_ = 0;
     std::string devLabel_;
     uint64_t frames_total_ = 0;
     DeviceConfig cfg_;

@@ -7,6 +7,8 @@
 // 3) GRU 리셋 규칙 (device_posture.h "리셋"): (a) 주기 리셋이 N s 뒤 h·EMA 를 비우고 시각을 갱신, (b) coverage 미달이
 //    N s 이어지면 반복 리셋·재실 한 프레임에 타이머 해제, (c) 둘 다 0 이면 DevicePosture 경로가 golden 과 같다(회귀 없음)
 // 4) GET /raw: uart_relay_board 스키마(두 센서 64칸·have·id=물리 번호·받은 그대로), HttpServer 리스너로 실제 GET
+// 4'') 장치 위치별 모델(placement.h): 맵 파싱, 시작 때 파일 우선, POST 성공·잘못된 키 400·모양 다른 모델 500(기존 유지)·
+//     같은 키 재요청, 교체 뒤 첫 스텝 EMA = 그 프레임 확률, 기능 꺼짐 = /api/state 에 placement 없음(골든 동일은 3-c)
 // 5) 리플레이(있으면): 시뮬 세션을 두 센서 파일로 넣어 DevicePosture 전체 경로를 가상 시계로 돌리고
 //    파일의 "label" 과 비교 (dataset/tof_sim_v5/tools/sim_to_toflines.py 가 만든 파일). 기본 설정과 리셋 끔 두 번. 끝에 /raw 확인
 #include <arpa/inet.h>
@@ -25,6 +27,7 @@
 
 #include "device_posture.h"
 #include "http_server.h"
+#include "placement.h"
 #include "posture_net.h"
 #include "tof_line.h"
 
@@ -626,7 +629,7 @@ void testRawHttp(const std::string& bin) {
     tof::parseTofLine(uartV1Line(0, 3, 1, 10, 1), l0);
     d.feed(d.addSensor("x"), l0, 0);
     const int port = 38772;
-    tof::HttpServer srv("127.0.0.1", port, tof::HttpHandlers{nullptr, nullptr, nullptr, [&d] { return d.rawJson(100); }});
+    tof::HttpServer srv("127.0.0.1", port, tof::HttpHandlers{nullptr, nullptr, nullptr, [&d] { return d.rawJson(100); }, nullptr, nullptr});
     if (!srv.start(&err)) { std::printf("skip raw http test (port %d: %s)\n", port, err.c_str()); return; }
     auto get = [&](const char* path) {
         const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -650,6 +653,192 @@ void testRawHttp(const std::string& bin) {
           "raw http: GET /raw -> 200, CORS *, relay-shaped JSON with 64 zones");
     check(r2.rfind("HTTP/1.0 200", 0) == 0 && r2.find("\"dev\":") != std::string::npos, "raw http: GET / on the raw-only listener is /raw too");
     check(r3.rfind("HTTP/1.0 404", 0) == 0, "raw http: raw-only listener has no /api/state");
+}
+
+// 구조가 다른(은닉 16) 가짜 posture_net.bin — 헤더는 맞고 가중치는 0. 로더는 값을 검사하지 않으므로 읽히지만 모양이 다르다
+std::string writeFakeModel(const std::string& path, int H, int W, int C, int hidden) {
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f.write("TOFPN001", 8);
+    const int32_t hdr[4] = {H, W, C, hidden};
+    f.write(reinterpret_cast<const char*>(hdr), sizeof hdr);
+    const size_t n_fc_in = 32 * 4 * 4;
+    const size_t sizes[14] = {16u * 2 * 9, 16, 32u * 16 * 9, 32, 32u * 32 * 9, 32, (size_t)hidden * n_fc_in, (size_t)hidden,
+                              (size_t)3 * hidden * hidden, (size_t)3 * hidden * hidden, (size_t)3 * hidden, (size_t)3 * hidden,
+                              (size_t)C * hidden, (size_t)C};
+    size_t total = 0;
+    for (size_t s : sizes) total += s;
+    std::vector<float> zeros(total, 0.f);
+    f.write(reinterpret_cast<const char*>(zeros.data()), total * sizeof(float));
+    return path;
+}
+
+void testPlacement(const std::string& bin) {
+    // 맵 파싱
+    tof::PlacementConfig pc;
+    std::string err;
+    check(tof::parsePlacementModels(" left = a/one.bin , center=b.bin,right=/abs/c.bin ", "/base", pc, &err) && pc.models.size() == 3 &&
+              pc.models[0].first == "left" && pc.models[0].second == "/base/a/one.bin" && pc.models[1].second == "/base/b.bin" &&
+              pc.models[2].first == "right" && pc.models[2].second == "/abs/c.bin",
+          "placement: parse map with spaces, relative paths under exe dir, absolute kept");
+    check(!tof::parsePlacementModels("left=a,up=b", "/base", pc, &err) && pc.models.empty() && err.find("unknown placement key") != std::string::npos,
+          "placement: unknown key rejected (map cleared)");
+    check(!tof::parsePlacementModels("left=a,left=b", "/base", pc, &err) && err.find("duplicate") != std::string::npos, "placement: duplicate key rejected");
+    check(!tof::parsePlacementModels("left=", "/base", pc, &err), "placement: empty path rejected");
+    check(!tof::parsePlacementModels("left", "/base", pc, &err), "placement: missing '=' rejected");
+    check(tof::parsePlacementModels("   ", "/base", pc, &err) && pc.models.empty() && !pc.enabled(), "placement: empty spec = disabled");
+    check(tof::parsePlacementBody("{\"placement\": \"left\"}") == "left" && tof::parsePlacementBody("{ \"placement\":\"right\" , \"x\":1}") == "right" &&
+              tof::parsePlacementBody("{\"x\":\"left\"}").empty() && tof::parsePlacementBody("").empty(),
+          "placement: POST body parser");
+
+    const std::string tmpdir = "/tmp";
+    const std::string pfile = tmpdir + "/tofposture_placement_test_" + std::to_string((long)::getpid()) + ".txt";
+    const std::string bad = writeFakeModel(tmpdir + "/tofposture_badshape_" + std::to_string((long)::getpid()) + ".bin", 8, 8, 9, 16);
+    const std::string garbage = tmpdir + "/tofposture_garbage_" + std::to_string((long)::getpid()) + ".bin";
+    { std::ofstream g(garbage, std::ios::trunc); g << "not a model"; }
+    std::remove(pfile.c_str());
+
+    // 시작: 파일 없음 + TOFPOSTURE_MODEL 이 맵의 center 와 같은 경로 → center; 다른 경로 → unknown
+    tof::PlacementConfig cfg;
+    cfg.models = {{"left", bin}, {"center", bin}, {"right", bad}};
+    cfg.file = pfile;
+    {
+        tof::DevicePosture d0;
+        tof::Placement p0(cfg, d0);
+        check(p0.initialModelPath(bin) == bin && p0.current() == "left", "placement: no file -> TOFPOSTURE_MODEL kept, key = first map entry with that path");
+        tof::DevicePosture d1;
+        tof::Placement p1(cfg, d1);
+        check(p1.initialModelPath("/nowhere/other.bin") == "/nowhere/other.bin" && p1.current() == "unknown",
+              "placement: no file, model not in map -> unknown");
+        // 파일에 right 가 있으면 파일이 우선
+        check(tof::writePlacementFile(pfile, "right", &err) && tof::readPlacementFile(pfile) == "right", "placement: file write (tmp+rename) and read back");
+        tof::DevicePosture d2;
+        tof::Placement p2(cfg, d2);
+        check(p2.initialModelPath(bin) == bad && p2.current() == "right", "placement: file key wins over TOFPOSTURE_MODEL");
+        std::ofstream(pfile, std::ios::trunc) << "  upside_down \n";
+        tof::DevicePosture d3;
+        tof::Placement p3(cfg, d3);
+        check(p3.initialModelPath(bin) == bin && p3.current() == "left", "placement: file with a key not in the map is ignored");
+        std::remove(pfile.c_str());
+    }
+
+    // 전환: 두 센서가 돌아가는 중에 POST
+    tof::DevicePosture d;
+    tof::Placement p(cfg, d);
+    const std::string start_model = p.initialModelPath(bin);
+    d.setPlacement(p.current());
+    check(d.loadModel(start_model, &err), "placement: model loads");
+    const int s0 = d.addSensor("p0"), s1 = d.addSensor("p1");
+    const int C = d.classes();
+    auto step = [&](int k) {
+        const int64_t now = 100 * k;
+        d.feed(s0, makeFrame(k + 1, (uint32_t)now, 20), now);
+        d.feed(s1, makeFrame(k + 1, (uint32_t)now, 12), now);
+        d.tick(now);
+        return d.result();
+    };
+    for (int k = 0; k < 30; ++k) step(k);
+    check(d.stateJson(2900).find("\"placement\":\"left\"") != std::string::npos, "placement: /api/state has placement before any switch");
+    const auto before = d.result();
+    check(!smoothEqualsInstant(before, C), "placement: EMA has history before the switch (sanity)");
+    std::string out;
+    int code = p.apply("{\"placement\":\"center\"}", 3000, out);
+    const auto after_switch = d.result();
+    check(code == 200 && out.find("\"placement\":\"center\"") != std::string::npos && out.find("\"switches\":1") != std::string::npos &&
+              out.find("\"changed_ms\":3000") != std::string::npos && out.find("\"options\":[\"left\",\"center\",\"right\"]") != std::string::npos,
+          "placement: POST center -> 200 with GET-shaped JSON (placement, switches, changed_ms, options)");
+    check(after_switch.resets.model_switch == 1 && after_switch.resets.last_reset_ms == 3000 && after_switch.smooth_argmax == -1 &&
+              d.sensors(3000)[0].resets == 1 && d.sensors(3000)[1].resets == 1,
+          "placement: switch resets every sensor GRU and clears the fused EMA (resets.model_switch)");
+    const auto first = step(30);
+    check(smoothEqualsInstant(first, C) && first.label_since_ms == 3000 && first.valid, "placement: first step after the switch starts EMA from that frame's probabilities");
+    check(tof::readPlacementFile(pfile) == "center", "placement: chosen key saved to the placement file");
+    check(d.stateJson(3000).find("\"placement\":\"center\"") != std::string::npos && d.modelPath() == bin,
+          "placement: /api/state placement updated, model.file is the new path");
+    // 같은 키 다시: 200, 다시 읽고 리셋
+    code = p.apply("{\"placement\":\"center\"}", 3100, out);
+    check(code == 200 && out.find("\"switches\":2") != std::string::npos && d.result().resets.model_switch == 2,
+          "placement: same key again -> 200, model reloaded and reset again");
+    // 잘못된 키: 400, 아무것도 안 바뀜
+    code = p.apply("{\"placement\":\"up\"}", 3200, out);
+    check(code == 400 && out.find("\"error\"") != std::string::npos && p.current() == "center" && d.result().resets.model_switch == 2 &&
+              tof::readPlacementFile(pfile) == "center",
+          "placement: bad key -> 400, nothing changes");
+    code = p.apply("{}", 3250, out);
+    check(code == 400, "placement: body without placement -> 400");
+    // 모양 다른 모델: 500, 기존 유지
+    code = p.apply("{\"placement\":\"right\"}", 3300, out);
+    check(code == 500 && out.find("shape mismatch") != std::string::npos && p.current() == "center" && d.modelPath() == bin &&
+              d.result().resets.model_switch == 2 && tof::readPlacementFile(pfile) == "center",
+          "placement: model with a different shape -> 500, previous model and key kept");
+    const auto still = step(31);
+    check(still.valid && still.smooth_argmax >= 0, "placement: service keeps running after the failed switch");
+    // 못 읽는 파일: 500
+    tof::PlacementConfig gcfg = cfg;
+    gcfg.models = {{"left", bin}, {"center", garbage}, {"right", bin}};
+    tof::Placement pg(gcfg, d);
+    code = pg.apply("{\"placement\":\"center\"}", 3400, out);
+    check(code == 500 && d.modelPath() == bin, "placement: unreadable model -> 500, previous model kept");
+    // 꺼짐: placement 필드 없음
+    tof::DevicePosture off;
+    off.loadModel(bin, &err);
+    check(off.stateJson(0).find("\"placement\"") == std::string::npos, "placement: disabled -> /api/state has no placement field");
+    std::remove(pfile.c_str());
+    std::remove(bad.c_str());
+    std::remove(garbage.c_str());
+}
+
+// HttpServer 로 GET/POST /api/placement (본문 Content-Length 읽기, 코드 400). raw 전용 리스너에는 없다
+void testPlacementHttp(const std::string& bin) {
+    tof::DevicePosture d;
+    std::string err;
+    d.loadModel(bin, &err);
+    tof::PlacementConfig cfg;
+    cfg.models = {{"left", bin}, {"center", bin}, {"right", bin}};
+    cfg.file = "/tmp/tofposture_placement_http_" + std::to_string((long)::getpid()) + ".txt";
+    tof::Placement p(cfg, d);
+    p.initialModelPath(bin);
+    const int port = 38773;
+    tof::HttpHandlers hs{nullptr, [&d] { return d.stateJson(0); }, nullptr, nullptr,
+                         [&p] { return p.json(0); },
+                         [&p](const std::string& body, std::string& out) { return p.apply(body, 5000, out); }};
+    tof::HttpServer srv("127.0.0.1", port, hs);
+    if (!srv.start(&err)) { std::printf("skip placement http test (port %d: %s)\n", port, err.c_str()); return; }
+    auto req = [&](const std::string& text) {
+        const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        sockaddr_in a{};
+        a.sin_family = AF_INET; a.sin_port = htons((uint16_t)port); ::inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
+        std::string out;
+        if (::connect(fd, (sockaddr*)&a, sizeof a) == 0) {
+            ::send(fd, text.data(), text.size(), 0);
+            char buf[4096];
+            ssize_t n;
+            while ((n = ::recv(fd, buf, sizeof buf, 0)) > 0) out.append(buf, (size_t)n);
+        }
+        ::close(fd);
+        return out;
+    };
+    const std::string g1 = req("GET /api/placement HTTP/1.0\r\n\r\n");
+    const std::string body = "{\"placement\":\"right\"}";
+    const std::string p1 = req("POST /api/placement HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: " +
+                               std::to_string(body.size()) + "\r\n\r\n" + body);
+    const std::string bad = "{\"placement\":\"up\"}";
+    const std::string p2 = req("POST /api/placement HTTP/1.1\r\nContent-Length: " + std::to_string(bad.size()) + "\r\n\r\n" + bad);
+    const std::string o1 = req("OPTIONS /api/placement HTTP/1.1\r\nOrigin: http://pi5\r\n\r\n");
+    srv.stop();
+    check(g1.rfind("HTTP/1.0 200", 0) == 0 && g1.find("\"placement\":\"left\"") != std::string::npos && g1.find("Access-Control-Allow-Origin: *") != std::string::npos,
+          "placement http: GET /api/placement -> 200 with CORS");
+    check(p1.rfind("HTTP/1.0 200", 0) == 0 && p1.find("\"placement\":\"right\"") != std::string::npos && p1.find("\"switches\":1") != std::string::npos &&
+              p.current() == "right" && tof::readPlacementFile(cfg.file) == "right",
+          "placement http: POST with Content-Length body -> 200, switched and saved");
+    check(p2.rfind("HTTP/1.0 400", 0) == 0 && p2.find("\"error\"") != std::string::npos, "placement http: bad key -> 400");
+    check(o1.rfind("HTTP/1.0 200", 0) == 0 && o1.find("Access-Control-Allow-Origin: *") != std::string::npos, "placement http: OPTIONS preflight -> 200 with CORS");
+    tof::HttpServer rawonly("127.0.0.1", port, tof::HttpHandlers{nullptr, nullptr, nullptr, [&d] { return d.rawJson(0); }, nullptr, nullptr});
+    if (rawonly.start(&err)) {
+        const std::string r404 = req("GET /api/placement HTTP/1.0\r\n\r\n");
+        rawonly.stop();
+        check(r404.rfind("HTTP/1.0 404", 0) == 0, "placement http: raw-only listener has no /api/placement");
+    }
+    std::remove(cfg.file.c_str());
 }
 
 struct ReplayLine { uint32_t ms; int sensor; tof::TofLine line; };
@@ -746,6 +935,8 @@ int main(int argc, char** argv) {
     testDevicePathMatchesGolden(argv[1], argv[2]);
     testRawJson(argv[1]);
     testRawHttp(argv[1]);
+    testPlacement(argv[1]);
+    testPlacementHttp(argv[1]);
     if (argc > 3) {
         const std::vector<std::string> files(argv + 3, argv + argc);
         testReplay(argv[1], files, tof::DeviceConfig{}, "defaults (resets off)");

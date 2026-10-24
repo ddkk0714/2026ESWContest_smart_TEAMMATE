@@ -11,6 +11,11 @@
 //   TOFPOSTURE_BAUD    auto(기본: 921600→115200→460800→230400 중 센서 줄이 읽히는 값) 또는 숫자.
 //                      tof_logger 펌웨어는 921600, bring-up 펌웨어(tof-bringup-full-4MB.bin)는 미확인
 //   TOFPOSTURE_MODEL   posture_net.bin 경로. 기본 <실행파일 폴더>/models/posture_net.bin
+//   TOFPOSTURE_PLACEMENT_MODELS  "left=<경로>,center=<경로>,right=<경로>" 장치 위치별 모델(상대 경로는 실행 파일 폴더 기준).
+//                      비우면 기능 꺼짐(이전과 같음). 켜면 GET/POST /api/placement 로 위치를 보고·바꾸고, /api/state 에 "placement".
+//                      보드 예(지금은 셋 다 같은 모델로 자리만): left=models/opt_l8_c256/posture_net.bin,center=models/opt_l8_c256/posture_net.bin,right=models/opt_l8_c256/posture_net.bin
+//   TOFPOSTURE_PLACEMENT_FILE    기본 <실행파일 폴더>/placement.txt. 고른 위치(left|center|right)를 남겨 다음 시작 때 그 모델로
+//                      뜬다(TOFPOSTURE_MODEL 보다 우선). 없으면 TOFPOSTURE_MODEL 로 시작, placement 는 맵에 같은 경로가 있으면 그 키, 아니면 unknown
 //   TOFPOSTURE_HTTP    HTTP 포트. 기본 8771 (8765 hub, 8770 camsvc 와 겹치지 않게). 0 이면 끔
 //   TOFPOSTURE_BIND    0.0.0.0 (개발 PC 에서 curl). 보드 안에서만 쓰면 127.0.0.1
 //   TOFPOSTURE_RAW_HTTP 0(끔). 보드에서는 8772: 그 포트에 두 번째 리스너를 열고 GET /raw 에 uart_relay_board 와 같은 스키마로
@@ -55,6 +60,7 @@
 #include "device_posture.h"
 #include "http_server.h"
 #include "line_source.h"
+#include "placement.h"
 #include "tof_line.h"
 
 #ifdef TOFPOSTURE_HAVE_SDBUS
@@ -190,13 +196,29 @@ int main() {
     const int http_port = envInt("TOFPOSTURE_HTTP", 8771);
     const std::string bind_addr = envOr("TOFPOSTURE_BIND", "0.0.0.0");
     const int raw_port = envInt("TOFPOSTURE_RAW_HTTP", 0);
-    const std::string model_path = envOr("TOFPOSTURE_MODEL", exe_dir + "/models/posture_net.bin");
+    std::string model_path = envOr("TOFPOSTURE_MODEL", exe_dir + "/models/posture_net.bin");
+    if (!model_path.empty() && model_path[0] != '/') model_path = exe_dir + "/" + model_path;
     const std::string stdout_mode = envOr("TOFPOSTURE_STDOUT", "change");
     const bool exit_on_eof = envInt("TOFPOSTURE_EXIT_ON_EOF", 0) != 0;
     const std::string ports_env = envOr("TOFPOSTURE_PORTS", "");
 
     tof::DevicePosture device(cfg);
     std::string err;
+    // 장치 위치별 모델 (placement.h). 맵이 비면 꺼짐.
+    tof::PlacementConfig pcfg;
+    if (!tof::parsePlacementModels(envOr("TOFPOSTURE_PLACEMENT_MODELS", ""), exe_dir, pcfg, &err)) {
+        std::cerr << "tofposture: TOFPOSTURE_PLACEMENT_MODELS ignored: " << err << "\n";
+        pcfg.models.clear();
+    }
+    pcfg.file = envOr("TOFPOSTURE_PLACEMENT_FILE", exe_dir + "/placement.txt");
+    if (!pcfg.file.empty() && pcfg.file[0] != '/') pcfg.file = exe_dir + "/" + pcfg.file;
+    tof::Placement placement(pcfg, device);
+    if (placement.enabled()) {
+        model_path = placement.initialModelPath(model_path);
+        device.setPlacement(placement.current());
+        std::cerr << "tofposture: placement " << placement.current() << " (" << pcfg.models.size() << " models, file "
+                  << pcfg.file << ")\n";
+    }
     if (!device.loadModel(model_path, &err)) {
         std::cerr << "tofposture: model load failed: " << err << " (" << model_path << ")\n"
                   << "  tools/push-model.sh 로 posture_net.bin 을 넣는다\n";
@@ -253,19 +275,24 @@ int main() {
     if (sources.empty()) std::cerr << "tofposture: no serial port yet; scanning /dev/ttyUSB* /dev/ttyACM* every 5 s\n";
 
     auto rawHandler = [&device] { return device.rawJson(nowMs()); };
-    tof::HttpServer http(bind_addr, http_port,
-                         tof::HttpHandlers{[&device] { return device.healthJson(nowMs()); },
-                                           [&device] { return device.stateJson(nowMs()); },
-                                           [&device] { device.reset(nowMs()); }, rawHandler});
+    tof::HttpHandlers handlers{[&device] { return device.healthJson(nowMs()); },
+                               [&device] { return device.stateJson(nowMs()); },
+                               [&device] { device.reset(nowMs()); }, rawHandler, nullptr, nullptr};
+    if (placement.enabled()) {
+        handlers.placement_get = [&placement] { return placement.json(nowMs()); };
+        handlers.placement_post = [&placement](const std::string& body, std::string& out) { return placement.apply(body, nowMs(), out); };
+    }
+    tof::HttpServer http(bind_addr, http_port, handlers);
     if (http_port > 0) {
         if (!http.start(&err)) {
             std::cerr << "tofposture: HTTP listen failed on " << bind_addr << ":" << http_port << " (" << err << ")\n";
             return 1;
         }
-        std::cerr << "tofposture: HTTP on " << bind_addr << ":" << http_port << "  (GET /api/state, /health, /raw, POST /api/reset)\n";
+        std::cerr << "tofposture: HTTP on " << bind_addr << ":" << http_port << "  (GET /api/state, /health, /raw, POST /api/reset"
+                  << (placement.enabled() ? ", GET/POST /api/placement" : "") << ")\n";
     }
     // 두 번째 리스너: /raw 만 (uart_relay_board 의 8772 자리). 실패해도 서비스는 계속 — 옛 중계기가 아직 그 포트를 쥐고 있을 수 있다.
-    tof::HttpServer raw_http(bind_addr, raw_port, tof::HttpHandlers{nullptr, nullptr, nullptr, rawHandler});
+    tof::HttpServer raw_http(bind_addr, raw_port, tof::HttpHandlers{nullptr, nullptr, nullptr, rawHandler, nullptr, nullptr});
     if (raw_port > 0) {
         if (raw_http.start(&err))
             std::cerr << "tofposture: raw HTTP on " << bind_addr << ":" << raw_port << "  (GET /raw)\n";

@@ -31,6 +31,7 @@ std::string probsJson(const float* p, int n) {
 std::string resetsJson(const ResetStats& r, int64_t now_ms, const DeviceConfig& cfg) {
     std::ostringstream o;
     o << "\"resets\":{\"periodic\":" << r.periodic << ",\"away\":" << r.away << ",\"manual\":" << r.manual
+      << ",\"model_switch\":" << r.model_switch
       << ",\"last_reset_ms\":" << r.last_reset_ms
       << ",\"since_reset_ms\":" << (r.last_reset_ms >= 0 ? now_ms - r.last_reset_ms : -1)
       << ",\"period_s\":" << cfg.reset_period_s << ",\"away_s\":" << cfg.away_reset_s
@@ -51,10 +52,52 @@ bool DevicePosture::loadModel(const std::string& path, std::string* err) {
     std::lock_guard<std::mutex> lock(mutex_);
     modelPath_ = path;
     net_classes_ = probe.classes;
+    net_H_ = probe.H; net_W_ = probe.W; net_hidden_ = probe.hidden;
     for (Slot& s : slots_) {
         if (!s.net.load(path, err)) return false;
     }
     return true;
+}
+
+bool DevicePosture::switchModel(const std::string& path, int64_t now_ms, std::string* err) {
+    PostureNet probe;
+    if (!probe.load(path, err)) return false;                 // 못 읽음 → 기존 유지
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (net_classes_ > 0 && (probe.H != net_H_ || probe.W != net_W_ || probe.classes != net_classes_ || probe.hidden != net_hidden_)) {
+        if (err) {
+            char buf[160];
+            std::snprintf(buf, sizeof buf, "model shape mismatch: have %dx%d c%d h%d, file %dx%d c%d h%d",
+                          net_H_, net_W_, net_classes_, net_hidden_, probe.H, probe.W, probe.classes, probe.hidden);
+            *err = buf;
+        }
+        return false;
+    }
+    // 슬롯마다 다시 읽는다(PostureNet 은 가중치 안을 가리키는 포인터를 들고 있어 복사하지 않는다). 하나라도 실패하면 이전
+    // 파일로 되돌린다 — probe 가 방금 읽은 파일이라 실패는 I/O 가 사라진 경우뿐.
+    for (size_t i = 0; i < slots_.size(); ++i) {
+        std::string e;
+        if (!slots_[i].net.load(path, &e)) {
+            for (size_t k = 0; k <= i && k < slots_.size(); ++k) slots_[k].net.load(modelPath_);
+            if (err) *err = "reload failed on sensor " + std::to_string(i) + ": " + e + " (kept " + modelPath_ + ")";
+            return false;
+        }
+    }
+    modelPath_ = path;
+    net_classes_ = probe.classes;
+    net_H_ = probe.H; net_W_ = probe.W; net_hidden_ = probe.hidden;
+    ++res_.resets.model_switch;
+    resetLocked("model_switch", now_ms < 0 ? res_.last_tick_ms : now_ms);
+    return true;
+}
+
+void DevicePosture::setPlacement(const std::string& key) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    placement_ = key;
+}
+
+std::string DevicePosture::modelPath() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return modelPath_;
 }
 
 int DevicePosture::addSensor(const std::string& name) {
@@ -287,7 +330,12 @@ std::vector<SensorStatus> DevicePosture::sensors(int64_t now_ms) const {
 std::string DevicePosture::stateJson(int64_t now_ms) const {
     const DeviceResult r = result();
     const std::vector<SensorStatus> ss = sensors(now_ms);
-    const int C = net_classes_;
+    std::string model_file, placement;
+    int C = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        model_file = modelPath_; placement = placement_; C = net_classes_;
+    }
     std::ostringstream o;
     o << "{\"schema\":\"deskmate/tof_posture/1\",\"ts_ms\":" << now_ms
       << ",\"valid\":" << (r.valid ? "true" : "false")
@@ -301,8 +349,9 @@ std::string DevicePosture::stateJson(int64_t now_ms) const {
       << ",\"probs\":" << probsJson(r.smooth, C)
       << ",\"present\":" << ((r.valid && r.smooth_argmax >= 0 && r.smooth_argmax != kAwayIndex) ? "true" : "false")
       << ",\"misplaced\":" << ((r.valid && r.smooth_argmax == kMisplacedIndex) ? "true" : "false")
-      << ",\"online_sensors\":" << r.online_sensors << ",\"ticks\":" << r.ticks
-      << ",\"present_rule\":" << (r.present_rule ? "true" : "false") << ",\"coverage\":[";
+      << ",\"online_sensors\":" << r.online_sensors << ",\"ticks\":" << r.ticks;
+    if (!placement.empty()) o << ",\"placement\":\"" << jsonEscape(placement) << "\"";
+    o << ",\"present_rule\":" << (r.present_rule ? "true" : "false") << ",\"coverage\":[";
     for (size_t i = 0; i < ss.size(); ++i) o << (i ? "," : "") << (ss[i].online ? ss[i].coverage : 0.f);
     o << "]," << resetsJson(r.resets, now_ms, cfg_)
       << ",\"sensors\":[";
@@ -321,7 +370,7 @@ std::string DevicePosture::stateJson(int64_t now_ms) const {
           << ",\"rule\":\"" << jsonEscape(s.rule) << "\",\"hello\":\"" << jsonEscape(s.hello)
           << "\",\"info\":\"" << jsonEscape(s.info) << "\",\"error\":\"" << jsonEscape(s.error) << "\"}";
     }
-    o << "],\"model\":{\"file\":\"" << jsonEscape(modelPath_) << "\",\"classes\":" << C
+    o << "],\"model\":{\"file\":\"" << jsonEscape(model_file) << "\",\"classes\":" << C
       << ",\"rate_hz\":" << cfg_.rate_hz << ",\"fusion\":\"" << fusionName(cfg_.fusion) << "\""
       << ",\"flip_rows\":" << (cfg_.flip_rows < 0 ? "\"auto\"" : cfg_.flip_rows ? "true" : "false")
       << ",\"flip_cols\":" << (cfg_.flip_cols < 0 ? "\"auto\"" : cfg_.flip_cols ? "true" : "false")
