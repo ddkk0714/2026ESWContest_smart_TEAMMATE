@@ -7,7 +7,7 @@ fsm:
     fatigue_confirm_hold_sec: 20    # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 180 (SUSPECT→FATIGUE 유지)
     monitor_window_sec: 30          # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 0 (MONITOR 가 개입 효과를 기다리는 시간)
     rest_min_sec: 60                # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 300 (REST 최소 유지)
-    # fatigue_hold_min_frac: 0.8    # 시연 전용 — 시뮬 근거. 기본 1.0. 엔진이 아직 모르는 키라 뺐다 — PC 커밋(fork/feat/life-sim 1fd856d) 수신 뒤 넣는다
+    fatigue_hold_min_frac: 0.8      # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 1.0 (지난 hold 초 tick 중 이 비율 이상 임계 위면 유지 성립, 1fd856d)
   gate:
     conf_auto: 0.60                 # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 0.75 (이상이면 자동 실행)
 ingest:

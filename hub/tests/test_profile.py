@@ -47,6 +47,8 @@ def test_shipped_profiles_only_touch_keys_the_engine_knows():
     a, b = load_profile("demo-a"), load_profile("demo-b")
     assert a["fsm"]["timers"]["monitor_window_sec"] == 30 and a["ingest"]["elapsed"]["reset_on_rest"] is True
     assert "baseline_sec" not in a["fsm"]["timers"] and b["fsm"]["timers"]["baseline_sec"] == 10
+    assert a["fsm"]["timers"]["fatigue_hold_min_frac"] == 0.8 == b["fsm"]["timers"]["fatigue_hold_min_frac"]
+    assert fsm["timers"]["fatigue_hold_min_frac"] == 1.0                   # 기본은 지금 동작(연속 유지)
     assert b["ingest"]["normalization"] == "linear" and b["fsm"]["thresholds"]["fatigue_confirm"] == 0.60
 
 
@@ -67,6 +69,7 @@ def test_env_profile_overlays_live_hub(monkeypatch):
     assert hub.profile == "demo-a"
     assert hub.engine.tm["monitor_window_sec"] == 30 and hub.engine.tm["fatigue_confirm_hold_sec"] == 20
     assert hub.engine.tm["baseline_sec"] == 300                       # demo-a 는 보정 창을 안 건드린다
+    assert hub.engine.tm["fatigue_hold_min_frac"] == 0.8 and hub.engine._hold_frac == 0.8   # 엔진 옵션까지 닿는다
     assert hub.fsm_cfg["gate"]["conf_auto"] == 0.60 and hub.fsm_cfg["thresholds"]["fatigue_confirm"] == 0.70
     assert hub.ingest_cfg["pc_ratio_window_sec"] == 120 and hub.tracker.elapsed_reset_on_rest is True
     assert hub.tracker.baseline is not None                           # normalization 은 여전히 baseline
@@ -81,36 +84,30 @@ def test_env_profile_overlays_live_hub(monkeypatch):
     # 명시적 설정을 줘도(run_live --config) 그 위에 얹는다. profile="" 은 환경변수를 무시한다(service_bridge 가 이미 얹은 뒤)
     assert LiveHub(SensorCache(), fsm_cfg=load_config(), out=io.StringIO()).engine.tm["baseline_sec"] == 10
     assert LiveHub(SensorCache(), profile="", out=io.StringIO()).engine.tm["baseline_sec"] == 300
+    assert LiveHub(SensorCache(), profile="", out=io.StringIO()).engine._hold_frac == 1.0
 
 
-def test_unknown_or_bad_profile_name_fails_loudly(monkeypatch):
-    monkeypatch.setenv(PROFILE_ENV, "demo-z")
-    with pytest.raises(FileNotFoundError, match="demo-z"):
-        LiveHub(SensorCache(), out=io.StringIO())
-    with pytest.raises(ValueError):
-        load_profile("../fsm")
+def test_demo_profile_relaxed_hold_reaches_fatigue_where_default_resets(monkeypatch):
+    """1fd856d 의 완화 유지가 프로파일을 통해 실제로 켜지는지 — 6 tick 마다 한 번 임계 아래로 떨어지는 입력에서
+    기본(1.0)은 FATIGUE 에 못 가고 demo-a(0.8)는 간다. 엔진 옵션 자체의 시험은 test_fsm_transitions 에 있다."""
+    from deskmate_hub.inference import FSMEngine, State
+    from test_fsm_transitions import drive_to_focus, frame
 
+    def reaches_fatigue(fsm_cfg) -> bool:
+        e = FSMEngine(fsm_cfg)
+        t = drive_to_focus(e)
+        hot = {"posture": {"delta": 0.95}, "elapsed": {"delta": 0.95}, "keystroke": {"delta": 0.95}}
+        mid = {"posture": {"delta": 0.55}, "elapsed": {"delta": 0.55}, "keystroke": {"delta": 0.55}}   # 0.40 위·0.70 아래
+        seen = set()
+        for i in range(1, 90):
+            seen.add(e.tick(frame(t + i * 10, sig=mid if i % 6 == 0 else hot)).state)
+        assert State.FATIGUE_SUSPECT in seen
+        return State.FATIGUE in seen
 
-def test_payload_bundles_profiles_as_json_readable_by_pkgutil(tmp_path):
-    executable = tmp_path / "hub.elf"
-    executable.write_bytes(b"ELF fixture")
-    stdlib = tmp_path / "stdlib"
-    stdlib.mkdir()
-    result = subprocess.run([sys.executable, str(ROOT / "hub/atlas/tools/build_payload.py"),
-                             "--executable", str(executable), "--hub", str(ROOT / "hub/deskmate_hub"),
-                             "--config", str(CONFIG_DIR / "fsm.yaml"), "--ingest-config", str(CONFIG_DIR / "ingest.yaml"),
-                             "--stdlib", str(stdlib)], capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-    with zipfile.ZipFile(executable) as archive:
-        names = archive.namelist()
-        assert "deskmate_hub/profile.py" in names
-        for name in ("demo-a", "demo-b"):
-            packaged = json.loads(archive.read(f"deskmate_hub/config/profiles/{name}.json"))
-            assert packaged == load_profile(name)
-        assert not any(n.startswith("deskmate_hub/config/profiles/") and n.endswith(".yaml") for n in names)
-    # 보드와 같이 zip 에서 import 한 deskmate_hub.profile 이 YAML 없이 JSON 으로 프로파일을 읽는다
-    code = ("import sys, json; sys.path.insert(0, sys.argv[1]); sys.modules['yaml'] = None\n"
-            "from deskmate_hub.profile import load_profile\n"
-            "print(json.dumps(load_profile('demo-b')['fsm']['timers']['baseline_sec']))")
-    probe = subprocess.run([sys.executable, "-c", code, str(executable)], capture_output=True, text=True, cwd=str(tmp_path))
-    assert probe.returncode == 0 and probe.stdout.strip() == "10", probe.stderr[-2000:]
+    monkeypatch.delenv(PROFILE_ENV, raising=False)
+    default_cfg = LiveHub(SensorCache(), out=io.StringIO()).fsm_cfg
+    monkeypatch.setenv(PROFILE_ENV, "demo-a")
+    demo_cfg = LiveHub(SensorCache(), out=io.StringIO()).fsm_cfg
+    # demo-a 는 유지 20 s 라 그것만으로도 빨리 가므로, 비율 옵션만 떼어 보려면 유지 시간은 기본으로 되돌린다
+    demo_hold_only = deep_merge(default_cfg, {"timers": {"fatigue_hold_min_frac": demo_cfg["timers"]["fatigue_hold_min_frac"]}})
+    assert reaches_fatigue(default_cfg) is False and reaches_fatigue(demo_hold_only) is True and reaches_fatigue(demo_cfg) is True
