@@ -22,14 +22,18 @@
        확인 카드(checkin_suggest "지금 피곤하세요?"): 모델이 애매할 때(|p − 0.5| < probe_band) probe_gap_s 마다 하나,
          세션당 probe_max 까지 — 예 1 · 아니요 0 · 무응답 버림. 최근 probe_gap_s 안에 앱 KSS 응답이 있으면 묻지 않는다.
   5. 상태 저장: state_path(JSON: 가중치·라벨 수·최근 맞힘 기록) — 세션·날을 넘어 이어 배운다.
+     보드(Pi 4): state_path 의 {profile_id} 를 채워 서비스 디렉터리 logs/profiles/<profile_id>/reaction.json 에 tmp → rename 으로 쓴다.
+     파일이 깨졌거나 특징 이름·순서가 다르면 로그 한 줄을 남기고 FSM(가중치 0)에서 다시 시작한다.
   6. 공통모델(life_sim common, "common": true 인 상태 파일)에서 출발하면, 개인 라벨이 쌓이기 전에도 common_alpha 만큼 모델을 쓴다
      (여러 사람에게서 이미 FSM 보다 나았던 모델이라서). 개인 라벨이 쌓이면 원래 α 규칙이 이기면 그쪽을 따른다.
+     보드: state_path 파일이 없고 common_path 파일이 있으면 그것을 첫 상태로 읽어 state_path 에 복사한다("공통 모델 출발").
 """
 from __future__ import annotations
 
 import json
 import math
 import os
+import pkgutil
 from collections import deque
 from typing import Any, Callable
 
@@ -40,6 +44,13 @@ ACTION = {"ACTION_ENV", "ACTION_POSTURE", "ACTION_BREAK"}
 
 def _clip(x: float, lo: float, hi: float) -> float:
     return lo if x < lo else hi if x > hi else x
+
+
+def _num(v: Any) -> float | None:
+    """JSON 숫자만(bool 제외) float 로. 아니면 None."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return float(v)
 
 
 def _sigmoid(z: float) -> float:
@@ -79,10 +90,14 @@ class OnlineLogistic:
 
 
 class ReactionLearner:
-    def __init__(self, cfg: dict[str, Any], fsm_cfg: dict[str, Any] | None = None, *, state_path: str | None = None):
+    def __init__(self, cfg: dict[str, Any], fsm_cfg: dict[str, Any] | None = None, *, state_path: str | None = None,
+                 on_log: Callable[[str], None] | None = None):
         self.c = dict(cfg or {})
         self.enabled = bool(self.c.get("enabled", False))
-        self.state_path = state_path or self.c.get("state_path")
+        self._on_log = on_log
+        self.state_path = self._profile_path(state_path or self.c.get("state_path"))
+        self.common_path = self._profile_path(self.c.get("common_path"))
+        self.started_from = "fsm"                     # fsm | state | common — 어디서 출발했나(snapshot·로그용)
         self.model = OnlineLogistic(len(self.feature_names()), lr=float(self.c.get("lr", 0.3)), l2=float(self.c.get("l2", 1e-3)))
         self.n_labels = 0
         self.hist: deque[tuple[int, int, int]] = deque(maxlen=int(self.c.get("acc_window", 40)))  # (y, ai_hat, fsm_hat)
@@ -105,32 +120,81 @@ class ReactionLearner:
         self._load()
 
     # ---------------------------------------------------------------- 상태 저장
+    def _log(self, msg: str) -> None:
+        if self._on_log is not None:
+            self._on_log(msg)
+
+    def _profile_path(self, path: Any) -> str | None:
+        """설정 경로의 {profile_id} 를 채운다(사람마다 파일 하나). 비어 있으면 None = 저장하지 않음."""
+        if not path:
+            return None
+        return str(path).replace("{profile_id}", str(self.c.get("profile_id") or "default"))
+
     def _load(self) -> None:
-        if not self.state_path or not os.path.exists(self.state_path):
+        path = self.state_path if self.state_path and os.path.exists(self.state_path) else None
+        if path is None and self.common_path:
+            if os.path.exists(self.common_path):
+                path = self.common_path
+            else:
+                self._log(f"[learning] 공통 모델 파일 없음({self.common_path}) — FSM 에서 출발")
+        if path is None:
             return
         try:
-            with open(self.state_path, encoding="utf-8") as fh:
+            with open(path, encoding="utf-8") as fh:
                 d = json.load(fh)
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
+            self._log(f"[learning] 상태 파일을 못 읽어 FSM 에서 다시 시작: {path}: {exc}")
+            return
+        if not isinstance(d, dict):
+            self._log(f"[learning] 상태 파일 형식이 아니어서 FSM 에서 다시 시작: {path}")
             return
         names = d.get("features")
         if names is not None and list(names) != self.feature_names():
+            own = self.feature_names()
+            names = list(names)
+            i = next((k for k, (a, b) in enumerate(zip(names, own)) if a != b), min(len(names), len(own)))
+            got = names[i] if i < len(names) else "-"
+            want = own[i] if i < len(own) else "-"
+            self._log(f"[learning] 특징 이름·순서가 달라 FSM 에서 다시 시작: {path} "
+                      f"(파일 {len(names)}개·코드 {len(own)}개, #{i} {got} ≠ {want})")
             return                                      # 특징 이름·순서가 다른 상태(옛 버전·다른 기기) — 틀린 가중치를 쓰느니 FSM 에서 다시 시작
-        self.model.load(d.get("model") or {})
-        self.n_labels = int(d.get("n_labels", 0))
-        self.common = bool(d.get("common", False))
-        for row in d.get("hist") or []:
-            self.hist.append(tuple(row))
+        m = d.get("model") or {}
+        try:
+            n = len(self.feature_names())
+            if int(m.get("n", -1)) == n and (len(m["w"]) != n + 1 or len(m["g2"]) != n + 1):
+                raise ValueError("가중치 길이")
+            self.model.load(m)
+            self.n_labels = int(d.get("n_labels", 0))
+            self.common = bool(d.get("common", False))
+            for row in d.get("hist") or []:
+                y, a, f = row
+                self.hist.append((int(y), int(a), int(f)))
+        except (KeyError, TypeError, ValueError) as exc:
+            self.model = OnlineLogistic(len(self.feature_names()), lr=self.model.lr, l2=self.model.l2)
+            self.n_labels, self.common = 0, False
+            self.hist.clear()
+            self._log(f"[learning] 상태 파일이 깨져 FSM 에서 다시 시작: {path}: {exc!r}")
+            return
+        if path == self.state_path:
+            self.started_from = "state"
+            self._log(f"[learning] 상태 이어 배움: {path} (라벨 {self.n_labels}, 공통 {self.common})")
+        else:
+            self.started_from = "common"
+            self._log(f"[learning] 공통 모델 출발: {path} → {self.state_path or '(저장 안 함)'}")
+            self.save()                                 # 공통 모델을 이 사람의 첫 상태로 복사
 
     def save(self) -> None:
         if not self.state_path:
             return
-        os.makedirs(os.path.dirname(self.state_path) or ".", exist_ok=True)
-        tmp = self.state_path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump({"model": self.model.to_dict(), "n_labels": self.n_labels, "hist": list(self.hist),
-                       "features": self.feature_names(), "common": self.common}, fh)
-        os.replace(tmp, self.state_path)
+        try:
+            os.makedirs(os.path.dirname(self.state_path) or ".", exist_ok=True)
+            tmp = self.state_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({"model": self.model.to_dict(), "n_labels": self.n_labels, "hist": list(self.hist),
+                           "features": self.feature_names(), "common": self.common}, fh)
+            os.replace(tmp, self.state_path)
+        except OSError as exc:                          # 보드: 저장 실패로 tick 이 죽지 않게 — 다음 라벨에서 다시 쓴다
+            self._log(f"[learning] 상태 저장 실패: {exc}")
 
     # ---------------------------------------------------------------- 특징
     @staticmethod
@@ -145,7 +209,9 @@ class ReactionLearner:
             s = frame.get(k)
             x += [float(s.delta) if s.available else 0.0, float(s.phi) if s.available else 0.0, 1.0 if s.available else 0.0]
         import time as _t
-        lt = _t.localtime(frame.now)
+        # 보드: 시계 TZ 가 UTC 일 수 있어 local_utc_offset_hours(KST 9)가 있으면 그것으로 지역시를 잰다. 없으면 기기 지역시(원본)
+        off = self.c.get("local_utc_offset_hours")
+        lt = _t.gmtime(frame.now + float(off) * 3600.0) if off is not None else _t.localtime(frame.now)
         h = (lt.tm_hour + lt.tm_min / 60.0) / 24.0 * 2.0 * math.pi
         since = 1.0 if self.last_iv_t is None else _clip((frame.now - self.last_iv_t) / 3600.0, 0.0, 1.0)
         hr = getattr(frame, "hr_drop_bpm", None)
@@ -283,6 +349,16 @@ class ReactionLearner:
         if present and not typing:
             self._label(self.last_x, 1, self.last_c_fsm, now, "missed")
 
+    def on_app_labels(self, kss_answer: tuple[float, float] | None, missed_prompt_ts: float | None, now: float, *,
+                      present: bool, typing: bool) -> None:
+        """이번 tick 에 들어온 앱 기록(latest_app_labels 결과)을 라벨로. 앱은 끊긴 동안의 기록을 다시 보내므로 label_max_age_s 보다
+        옛 것은 지금 특징에 붙이지 않는다(응답 시각 = 앱 시계 기준)."""
+        max_age = float(self.c.get("label_max_age_s", 900))
+        if kss_answer is not None and now - kss_answer[1] <= max_age:
+            self.on_self_report(kss_answer[0], kss_answer[1], now)
+        if missed_prompt_ts is not None and now - missed_prompt_ts <= max_age:
+            self.on_prompt_missed(missed_prompt_ts, now, present=present, typing=typing)
+
     def link_request(self, request_id: str) -> None:
         """FSM 이 낸 카드(request)를 방금 연 개입에 묶는다 — 수락·거절이 그 개입의 라벨이 된다."""
         if self.pending and self.pending[-1]["request_id"] is None:
@@ -347,14 +423,46 @@ class ReactionLearner:
     # ---------------------------------------------------------------- 요약
     def snapshot(self) -> dict[str, Any]:
         acc_ai, acc_fsm = self.accuracy()
-        return {"enabled": self.enabled, "alpha": round(self.alpha(), 3), "n_labels": self.n_labels,
+        return {"enabled": self.enabled, "alpha": round(self.alpha(), 3), "n_labels": self.n_labels, "common": self.common,
+                "started_from": self.started_from,
                 "acc_ai": None if acc_ai is None else round(acc_ai, 3), "acc_fsm": None if acc_fsm is None else round(acc_fsm, 3),
                 "p": round(self.last_p, 3), "c_fsm": round(self.last_c_fsm, 3), "c_adj": round(self.last_c_adj, 3),
                 "pending": len(self.pending), "probe_open": self.probe is not None, **self.counts}
 
 
+def latest_app_labels(events: list[Any]) -> tuple[tuple[float, float] | None, float | None]:
+    """deskmate/fatigue/label 큐(cache.pop_fatigue_label_events 의 data)에서 이번 tick 의 가장 새 KSS 응답 (kss, 응답 시각)과
+    가장 새 무응답 질문 시각(prompt_ts). 끊긴 동안 쌓였다 한꺼번에 오는 기록이 있어 종류마다 하나만 고른다. 계약 밖 기록은 버린다
+    (kss 1~9 숫자, ts·prompt_ts 숫자 — docs/mqtt-topics.md 피로 데이터 수집)."""
+    kss_answer: tuple[float, float] | None = None
+    missed: float | None = None
+    for d in events:
+        if not isinstance(d, dict):
+            continue
+        if d.get("event") == "kss":
+            kss, ts = _num(d.get("kss")), _num(d.get("ts"))
+            if kss is not None and ts is not None and 1 <= kss <= 9 and (kss_answer is None or ts > kss_answer[1]):
+                kss_answer = (kss, ts)
+        elif d.get("event") == "prompt_missed":
+            pts = _num(d.get("prompt_ts"))
+            if pts is not None and (missed is None or pts > missed):
+                missed = pts
+    return kss_answer, missed
+
+
 def load_learning_config(path: str | None = None) -> dict[str, Any]:
-    """config/learning.yaml(없으면 꺼진 기본값). 보드 제한 Python 에 yaml 이 없으면 꺼진 채로 돈다."""
+    """config/learning.yaml. 보드 제한 Python 엔 PyYAML 이 없어 빌드(atlas/tools/build_payload.py)가 만든 learning.json 을
+    pkgutil 로 먼저 읽는다(fsm.json·personalize.json 과 같은 방식). 둘 다 못 읽으면 꺼진 기본값 — hub 는 FSM 그대로 돈다."""
+    if path is None:
+        try:
+            raw = pkgutil.get_data("deskmate_hub", "config/learning.json")
+        except OSError:
+            raw = None
+        if raw is not None:
+            try:
+                return json.loads(raw.decode("utf-8")) or {}
+            except ValueError:
+                return {"enabled": False}
     path = path or os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "learning.yaml")
     try:
         import yaml

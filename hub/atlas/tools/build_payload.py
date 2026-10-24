@@ -127,6 +127,13 @@ def main() -> None:
                     ondevice_config = yaml.safe_load(source)
                 archive.writestr("deskmate_hub/config/ondevice.json",
                                  json.dumps(ondevice_config, ensure_ascii=False, separators=(",", ":")))
+            # 반응 학습(learning/reaction.py, 순수 Python) — 이 JSON 이 없으면 보드는 YAML 을 못 읽어 학습이 꺼진 채 FSM 그대로 돈다
+            learning_yaml = args.config.with_name("learning.yaml")
+            if learning_yaml.exists():
+                with learning_yaml.open(encoding="utf-8") as source:
+                    learning_config = yaml.safe_load(source)
+                archive.writestr("deskmate_hub/config/learning.json",
+                                 json.dumps(learning_config, ensure_ascii=False, separators=(",", ":")))
             # 피로 점수(fatigue/live.py) — 설정은 JSON 으로, 학습한 가중치(fatigue_linear.json)는 있을 때만 넣는다
             fatigue_yaml = args.config.with_name("fatigue.yaml")
             if fatigue_yaml.exists():

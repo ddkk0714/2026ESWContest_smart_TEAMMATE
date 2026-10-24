@@ -34,6 +34,13 @@ except ImportError:  # pragma: no cover
     InterventionPolicy = None  # type: ignore[assignment,misc]
     load_personalize_config = None  # type: ignore[assignment]
 
+try:  # 사용자 반응으로 배우는 피로 판단(learning/reaction.py, 순수 Python). 못 읽으면 FSM 그대로 돈다.
+    from .learning import ReactionLearner, latest_app_labels, load_learning_config
+except ImportError:  # pragma: no cover
+    ReactionLearner = None  # type: ignore[assignment,misc]
+    latest_app_labels = None  # type: ignore[assignment]
+    load_learning_config = None  # type: ignore[assignment]
+
 
 def frame_to_dict(frame: SensorFrame) -> dict[str, Any]:
     """replay.iter_frames 가 그대로 읽는 형식."""
@@ -65,6 +72,8 @@ class LiveHub:
         profile: str | None = None,
         fatigue_cfg: dict[str, Any] | None = None,
         fatigue_model=None,
+        learning_cfg: dict[str, Any] | None = None,
+        learning_state_path: str | None = None,
         frame_log: TextIO | None = None,
         state_log: TextIO | None = None,
         out: TextIO = sys.stdout,
@@ -154,6 +163,15 @@ class LiveHub:
         self.fatigue = build_fatigue_runtime(
             self.fatigue_cfg, tick_period=self.period, model=fatigue_model,
             personal_allowed=self._fatigue_personal_allowed, on_log=lambda m: print(m, file=self.out))
+        # 반응 학습(learning.yaml enabled): FSM C_fatigue 를 배운 모델로 울타리 안에서 보정한다 — 꺼져 있으면 learner 가 없다.
+        # 상태는 learning.yaml state_path(보드: logs/profiles/<profile_id>/reaction.json)에 라벨마다 저장한다.
+        self.learning_cfg = learning_cfg if learning_cfg is not None else (
+            load_learning_config() if load_learning_config is not None else {})
+        self.learner = None
+        if ReactionLearner is not None and self.learning_cfg.get("enabled"):
+            self.learner = ReactionLearner(self.learning_cfg, self.fsm_cfg, state_path=learning_state_path,
+                                           on_log=lambda m: print(m, file=self.out, flush=True))
+            self.engine.score_adjust = self.learner.adjust
 
     def tick_once(self, now: float | None = None) -> dict[str, Any]:
         now = time.time() if now is None else now
@@ -168,6 +186,11 @@ class LiveHub:
                 verdict = feedback.get("verdict")
                 # request_id 가 오면 현재 질문과 맞는지 본다. 없거나 'atlas-display'(HTTP 시절 기본값)면 그대로 받는다.
                 rid = feedback.get("request_id")
+                if self.learner is not None and verdict != "correct":
+                    if self.learner.owns(rid):            # 확인 카드 응답은 학습 라벨로만 쓴다(FSM·제어에는 안 감)
+                        self.learner.on_feedback(verdict, rid, now)
+                        continue
+                    self.learner.on_feedback(verdict, rid, now)   # 개입 카드 수락·거절, 자동 실행 되돌리기 → 라벨
                 current = self.pending_request["data"]["request_id"] if self.pending_request else None
                 if verdict not in ("accept", "reject", "correct", "timeout"):
                     print(f"[esm] 알 수 없는 verdict: {verdict!r}", file=self.out)
@@ -192,9 +215,15 @@ class LiveHub:
                     self._record_feedback(feedback, now, request)
 
         # Pi 5 피로 기록 앱 응답: 세션 문맥(시작 KSS·수면·프로필)과 프로필 보정. 모델이 없으면 버린다.
+        app_labels = []
         for label, _received in self.cache.pop_fatigue_label_events():
+            app_labels.append(label)
             if self.fatigue is not None:
                 self.fatigue.on_label(label)
+        # 같은 기록을 반응 학습도 쓴다: 가장 새 KSS 응답은 frame.self_kss 로, 응답·무응답은 tick 뒤 라벨로(아래 learner 블록)
+        app_kss, app_missed = latest_app_labels(app_labels) if latest_app_labels is not None else (None, None)
+        if app_kss is not None and (self.tracker.self_kss is None or app_kss[1] > self.tracker.self_kss[1]):
+            self.tracker.self_kss = app_kss
 
         self._expire_pending_request(now)
         if self.control is not None:
@@ -264,6 +293,11 @@ class LiveHub:
             snap = self.tracker.baseline.snapshot()
             summary["baseline"] = {"calibrating": snap["calibrating"], "ready": sorted(snap["session"]),
                                    "seeded": sorted({m for b in snap["buckets"].values() for m in b})}
+        if self.learner is not None:
+            self.learner.after_tick(result, prev_state, frame, now)
+            self.learner.on_app_labels(app_kss, app_missed, now, present=bool(frame.present),
+                                       typing=bool(frame.get("keystroke").available))
+            summary["learning"] = self.learner.snapshot()
         if self.privacy.enabled:
             summary["privacy"] = self.privacy.snapshot()
         if self.personalization_cfg.get("enabled"):
@@ -293,6 +327,16 @@ class LiveHub:
         if (self.personalize_recorder is not None and self.personalize_recorder.last_episode_id
                 and self.pending_request is not None):
             self.personalize_recorder.link_request(self.pending_request["data"]["request_id"])
+        if self.learner is not None:
+            # 방금 낸 개입 카드를 학습 대기에 묶고, 모델이 애매하면 확인 카드("지금 피곤하세요?", learning.yaml probe)를 낸다
+            if self.pending_request is not None and self.pending_request["ts"] == now:
+                self.learner.link_request(self.pending_request["data"]["request_id"])
+            probe = self.learner.maybe_checkin(result, frame, now, busy=self.pending_request is not None,
+                                               request_id=f"{self.boot_id}-{self.seq}-checkin")
+            if probe is not None:
+                self.seq += 1
+                self.publish_request({"schema_version": "1.0", "ts": now, "node": "hub", "boot_id": self.boot_id,
+                                      "seq": self.seq, "data": probe})
 
         if self.frame_log:
             self.frame_log.write(json.dumps(frame_to_dict(frame), ensure_ascii=False) + "\n"); self.frame_log.flush()
