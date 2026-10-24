@@ -46,6 +46,34 @@ busctl --system call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.
 - 이때 UART 수신은 0이었다(`DESKMATE UART rx=0`). ESP32 값이 안 들어오는 것은 이 절차와 별개다.
 - Pi 5 앱의 점검은 hub가 아예 안 떴을 때도 "3. hub 생존"을 통과로 표시한다. health가 없으면 통과로 치기 때문이다(`display/atlas/ui_env_app/lib/mqtt_probe.dart`). 그 뒤 문구 "hub 는 떠 있는데 상태가 오지 않습니다"도 이 경우에는 맞지 않는다. 이때는 위 세 줄을 돌린다.
 
+### ESP32를 USB로 붙였을 때 (10-24)
+
+10-22부터 ESP32(`esp32dev_usb` 펌웨어)를 Pi 4 USB-A에 꽂아 쓴다. ATLAS에는 CH340 드라이버가 없어서 꽂아도 `/dev/ttyUSB0`이 안 생긴다. 그대로 두면 hub는 `/dev/serial0`(GPIO UART)만 기다리며 `rx=0`에 머문다.
+
+hub가 USB를 읽게 한 방법:
+
+1. `hub.env`의 `DESKMATE_UART_DEV`를 `/dev/ttyUSB0`으로 바꾼다. 보드에서 한 번만 하면 되고, 재부팅해도 남는다(10-24 변경, 원본은 `hub.env.bak_1024_serial0`).
+2. 부팅할 때마다(그리고 ESP32를 다시 꽂을 때마다) hub를 깨우기 전에 CH340을 잡는다.
+
+```sh
+sh /data/share/deskmate/bin/pi4-broker-start.sh
+/mnt/rawdata/deskmate_tof/ch340cfg auto 115200      # generic 드라이버에 붙이고 115200 8N1 설정 → /dev/ttyUSB0
+cd /data/share/deskmate/recovery && sh lifecycle.sh hub-prepare   # ttyUSB0 를 g0_a5015 660 으로
+busctl --system call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus StartServiceByName su com.deskmate.hub1 0
+```
+
+순서가 중요하다. `hub-prepare`는 장치가 있을 때만 권한을 고친다. `ttyUSB0`은 처음에 `root:dialout`이라 hub 계정이 열지 못한다. 보드율 설정은 CH340을 다시 꽂거나 리셋하면 풀린다. ESP32를 다시 꽂았으면 `ch340cfg`와 `hub-prepare`를 다시 돌린다(hub는 10초마다 다시 연다).
+
+10-24 17:09 확인한 것:
+
+- 30초에 `DESKMATE UART rx=527 bytes=70913 discarded=20 crc_errors=0`. 버려진 것은 환경 센서 드라이버가 섞어 찍는 텍스트(`DHT22 read failed…`)다.
+- `[bridge] uart frames=284 dropped=0 hb=25 grids=116`.
+- FSM IDLE → START, `sensor_summary`에 ToF·mmWave가 찼다(`tof.sensors_ok=3`, `mmwave.distance_cm=35`, `heart_bpm=73`).
+- Pi 5 앱 센서 화면에 mmWave 값(재실·움직임·거리·심박)이 나온다.
+- 환경 값(CO₂·온도·습도·조도)은 ESP32 쪽 센서 오류로 비어 있다.
+
+USB 중계기(`/mnt/rawdata/deskmate_tof/relay.sh`, `uart_relay_board`)와 hub는 같은 `ttyUSB0`을 동시에 열면 안 된다. 하나만 띄운다.
+
 ## 동작
 
 - broker: Mosquitto를 foreground로 실행하고 systemd가 종료 시 재시작한다.
