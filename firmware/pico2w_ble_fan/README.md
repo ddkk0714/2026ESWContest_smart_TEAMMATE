@@ -147,13 +147,15 @@ Pi 4 hub ── MQTT control/cmd (vent_fan) ──▶ Pi 5 앱 ── 블루투�
 
 hub 의 환경 개입 대상 `vent_fan`(`config/control.yaml`)이 이 선풍기다. Pi 5 앱이 램프와 같은 Atlas 블루투스 경로로 명령을 쓴다.
 
-> **⚠ 10-24 Pi 5 실기: 아직 연결되지 않는다.** 같은 선풍기가 노트북(Windows, bleak·Edge)과는 매번 붙는데,
-> Pi 5 ATLAS 의 `com.atlas.Bluetooth1.Gatt.Connect` 는 client id 를 한 번도 돌려주지 않았다.
-> - 공용 주소일 때: Atlas SIL(`bluez5profilegatt::connectGatt`)이 BlueZ 를 부르기 전에 즉시 "Failed to connect with remote device".
->   BlueZ `Device1.ConnectGatt` 를 root 로 직접 부르면 약 절반 성공(나머지 `le-connection-abort-by-local`).
-> - 랜덤 정적 주소로 바꾼 뒤: SIL 이 BlueZ 까지 연결을 넘기고 링크가 잠깐 올라오지만 곧 끊기고, 여전히 client id 가 없다.
-> - 앱은 실패하면 잠깐 검색해 다시 붙도록 5회까지 재시도한다(`BleFanControl`) — 이것으로도 붙지 않았다.
-> - 원인은 Atlas 블루투스 계층 안쪽으로 보이고 확인하지 못했다. 그때까지 Pi 4 명령은 노트북 `tools/ble_fan.py bridge` 로 선풍기에 보낸다.
+> **10-24 Pi 5 실기: 동작한다(연결은 가끔 끊긴다).** Pi 5 앱 블루투스 탭의 선풍기 1단·3단 테스트가 실제 선풍기에 들어갔다
+> (선풍기 로그 `[fan] ble: … level=1` 15:00:38, `level=3` 15:00:44·15:16:05). 거기까지 걸린 것:
+> - **랜덤 정적 주소가 필요하다.** 공용 주소일 때 Atlas SIL(`bluez5profilegatt::connectGatt`)이 BlueZ 를 부르기 전에
+>   "Failed to connect with remote device" 로 끝났다. 랜덤 정적 주소로 바꾸자 같은 앱이 붙었다.
+> - **앱은 PR #40 방식 그대로다**: 앱이 받는 Adapter.GetInfo 는 비어 있고, 빈 어댑터로 `Gatt.Connect` → 연결 번호,
+>   서비스 검색·쓰기에는 GetStatus 의 어댑터를 쓴다. root 로 어댑터 주소를 **채워** Connect 하면 실패하니 시험할 때 주의.
+> - 연결 번호를 받고도 링크가 안 올라오거나(서비스 검색 "Device with supplied address is not available"),
+>   붙었다가 끊길 때가 있다. 앱이 검색 후 최대 5회 다시 붙는다(`BleFanControl`). Pi 5 → 선풍기 링크 성공률이 노트북보다 낮다
+>   (root BlueZ 직접 연결 약 절반 `le-connection-abort-by-local`). 2.4 GHz 핫스팟 Wi-Fi 간섭 여부는 확인하지 않았다.
 >
 > Pi 5 에서 시험할 때 걸리는 것: 앱을 다시 설치하면 저장된 기기(스피커·램프·선풍기)가 지워지고 **블루투스 권한 동의 창**이 뜬다(화면에서 Ok).
 > 블루투스 연결이 끊길 때마다 시스템 "Bluetooth device disconnected" 창이 뜨는데, 멈춰서 안 눌리면
