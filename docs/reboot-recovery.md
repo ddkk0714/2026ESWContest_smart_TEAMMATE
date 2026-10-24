@@ -6,6 +6,46 @@
 >
 > 같은 날 Pi 4에서 확인한 것: hub 프로세스 강제 종료 → 약 11초 뒤 새 PID로 복구. broker 재시작 → hub MQTT 재연결, broker 프로세스 1개. UART 권한 `g0_a5015 660` 복구. Pi 5 앱이 AppManager로 기동. Pi 4에는 broker·hub 감독 서비스, Pi 5에는 디스플레이 기동 서비스를 설치한다. 두 보드 모두 30초 간격으로 복구 상태를 점검한다.
 
+## 10-24 재부팅 뒤 Pi 4 허브 켜기
+
+10-24 핫스팟(Pi 4 `172.20.10.3`)에서 두 번 재부팅했는데, 두 번 다 broker·hub가 꺼진 채로 올라왔다. Pi 5 앱의 "Pi 4 연결 점검"은 4단계(상태 수신)에서 `health/hub 도 받지 못함`으로 실패했다.
+
+원인은 위 10-14 결과와 같다.
+
+- hub(`com.deskmate.hub1`)는 D-Bus 온디맨드라 누가 부르기 전에는 뜨지 않는다.
+- 부르는 유닛을 부팅에 걸 방법이 없다.
+- 부팅 때마다 `serial-getty@ttyAMA0`(login·sh)가 hub가 읽을 UART(`/dev/serial0` → `ttyAMA0`)를 다시 잡는다.
+
+root로 아래 세 줄을 돌려 복구했다.
+
+```sh
+sh /data/share/deskmate/bin/pi4-broker-start.sh
+cd /data/share/deskmate/recovery && sh lifecycle.sh hub-prepare
+busctl --system call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus StartServiceByName su com.deskmate.hub1 0
+```
+
+`hub-prepare`는 다음을 한다. 마지막 줄이 hub를 깨운다.
+
+- getty를 멈춘다.
+- `ttyAMA0`을 `g0_a5015 660`으로 바꾼다.
+- D-Bus 활성화 파일과 이름 소유 정책을 설치된 계정으로 맞춘다.
+
+수 초 안에 확인된 것:
+
+- `deskmate/health/hub`가 `online`.
+- `deskmate/state/phase`가 10 s마다 들어옴(`source: fsm`).
+- `wget -q -O - http://127.0.0.1:8765/health` = `{"status":"ok","state_ready":true,"mqtt":true}`.
+- Pi 5 앱 로그 `state 수신 성공: MQTT 172.20.10.3:1883 seq=0 state=IDLE`.
+- MQTT 확인 명령: `/data/share/deskmate/bin/mosquitto_sub -h 127.0.0.1 -t 'deskmate/#' -v -C 5 -W 20`(보드 busybox에는 `timeout`이 없다).
+
+감독(hub가 죽으면 재시작)까지 원하면 위 세 줄 대신 `sh install.sh pi4 --runtime-only` 한 줄을 쓴다. 이미 손으로 띄운 broker가 있으면 같은 포트를 쓰니 먼저 멈춘다. 10-24에는 이 한 줄을 다시 돌려 보지 않았다.
+
+함께 본 것:
+
+- 저널은 휘발성(`/var/log/journal` 없음)이라 재부팅 전 hub 로그는 남지 않는다. hub가 직접 남기는 파일은 `logs/esm-*.jsonl`(ESM 기록)뿐이다.
+- 이때 UART 수신은 0이었다(`DESKMATE UART rx=0`). ESP32 값이 안 들어오는 것은 이 절차와 별개다.
+- Pi 5 앱의 점검은 hub가 아예 안 떴을 때도 "3. hub 생존"을 통과로 표시한다. health가 없으면 통과로 치기 때문이다(`display/atlas/ui_env_app/lib/mqtt_probe.dart`). 그 뒤 문구 "hub 는 떠 있는데 상태가 오지 않습니다"도 이 경우에는 맞지 않는다. 이때는 위 세 줄을 돌린다.
+
 ## 동작
 
 - broker: Mosquitto를 foreground로 실행하고 systemd가 종료 시 재시작한다.
