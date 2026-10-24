@@ -26,6 +26,11 @@ class DisplayState {
     this.mmwaveDrowsyState,
     this.interventionExplanation,
     this.envFlags = const [],
+    this.tofPosture,
+    this.tofPostureConfidence,
+    this.tofPostureSource,
+    this.presenceSource,
+    this.inRoom,
   });
 
   final String fsmState;
@@ -64,6 +69,19 @@ class DisplayState {
   /// too_cold · too_humid · too_dry · too_dark. 제안·자동 실행 카드의 "이유" 문구가 된다.
   final List<String> envFlags;
 
+  /// hub 가 FSM 입력으로 실제로 쓴 ToF 자세(`sensor_summary.tof.posture`). 없으면 null.
+  final String? tofPosture;
+  final double? tofPostureConfidence;
+
+  /// 그 자세가 어디서 왔는지(`sensor_summary.tof.posture_source`): service | mlp | rule.
+  final String? tofPostureSource;
+
+  /// 재실 판정의 근거(`sensor_summary.presence_source`), 예: mmwave · tof · both.
+  final String? presenceSource;
+
+  /// 책상은 비어도 방에는 있는지(`sensor_summary.in_room`, mmWave 기준). 없으면 null.
+  final bool? inRoom;
+
   factory DisplayState.fromEnvelope(Map<String, dynamic> envelope) {
     if (envelope['schema_version'] != '1.0') {
       throw const FormatException('unsupported schema_version');
@@ -73,6 +91,7 @@ class DisplayState {
     final mmwave = _map(sensors['mmwave']);
     final personalize = _map(sensors['personalize']);
     final explanation = personalize['explanation'];
+    final tof = _map(sensors['tof']);
     return DisplayState(
       fsmState: _requiredString(data, 'fsm_state'),
       phase: _requiredString(data, 'phase'),
@@ -113,6 +132,11 @@ class DisplayState {
       envFlags: (sensors['env_flags'] as List? ?? const [])
           .map((value) => value.toString())
           .toList(growable: false),
+      tofPosture: tof['posture']?.toString(),
+      tofPostureConfidence: _nullableDouble(tof['posture_confidence']),
+      tofPostureSource: tof['posture_source']?.toString(),
+      presenceSource: sensors['presence_source']?.toString(),
+      inRoom: sensors['in_room'] is bool ? sensors['in_room'] as bool : null,
     );
   }
 

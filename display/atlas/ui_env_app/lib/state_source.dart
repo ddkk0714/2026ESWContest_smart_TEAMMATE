@@ -195,7 +195,8 @@ class HttpStateSource implements StateSource {
 /// 남겨 둔다. MQTT가 끊겨도 display는 재연결할 뿐, Pi 4의 FSM에는 영향을
 /// 주지 않는다.
 class MqttStateSource implements StateSource, PrivacySource {
-  MqttStateSource(this._host, {required this.port, this.onControlCommand})
+  MqttStateSource(this._host,
+      {required this.port, this.onControlCommand, this.onTopicEvent})
       : _bootId = 'display-${DateTime.now().microsecondsSinceEpoch}',
         _client = MqttServerClient.withPort(
           _host,
@@ -227,6 +228,18 @@ class MqttStateSource implements StateSource, PrivacySource {
   final int port;
   final Future<Map<String, dynamic>?> Function(Map<String, dynamic>)?
       onControlCommand;
+
+  /// 개발자 모드의 명령 로그가 받는 콜백 — `control/cmd`·`control/result`·`interaction/request`·
+  /// `feedback/user` 의 envelope 를 받은 그대로(retain 제외) 넘긴다. 해석·실행은 바꾸지 않는다.
+  /// 이 콜백이 있으면 result·feedback 토픽도 구독한다(앱이 낸 결과도 브로커를 거쳐 돌아온다).
+  final void Function(String topic, Map<String, dynamic> envelope)?
+      onTopicEvent;
+  static const _loggedTopics = {
+    _controlTopic,
+    _controlResultTopic,
+    _requestTopic,
+    _feedbackTopic,
+  };
   bool _closed = false;
   final String _bootId;
   final MqttServerClient _client;
@@ -361,8 +374,12 @@ class MqttStateSource implements StateSource, PrivacySource {
       _client.subscribe(_reportTopic, MqttQos.atLeastOnce);
       _client.subscribe(_hubHealthTopic, MqttQos.atLeastOnce);
       _client.subscribe(_keystrokeTopic, MqttQos.atMostOnce);
-      if (onControlCommand != null) {
+      if (onControlCommand != null || onTopicEvent != null) {
         _client.subscribe(_controlTopic, MqttQos.atLeastOnce);
+      }
+      if (onTopicEvent != null) {
+        _client.subscribe(_controlResultTopic, MqttQos.atLeastOnce);
+        _client.subscribe(_feedbackTopic, MqttQos.atLeastOnce);
       }
     } catch (_) {
       _client.disconnect();
@@ -384,6 +401,12 @@ class MqttStateSource implements StateSource, PrivacySource {
           continue;
         }
         final envelope = jsonDecode(text) as Map<String, dynamic>;
+        final logger = onTopicEvent;
+        if (logger != null &&
+            _loggedTopics.contains(received.topic) &&
+            publish.header?.retain != true) {
+          logger(received.topic, envelope);
+        }
         if (received.topic == _stateTopic) {
           _latest = DisplayState.fromEnvelope(envelope);
           if (!_latest!.fsmState.startsWith('ACTION_')) {

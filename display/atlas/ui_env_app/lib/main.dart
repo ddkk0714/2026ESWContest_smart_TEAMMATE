@@ -25,6 +25,8 @@ import 'music_playback.dart';
 import 'mqtt_watchdog.dart';
 import 'posture_screen.dart';
 import 'preview_page.dart';
+import 'command_log.dart';
+import 'dev_mode_page.dart';
 import 'sensor_overview_page.dart';
 import 'developer_page.dart';
 import 'session_report.dart';
@@ -121,6 +123,8 @@ class _DashboardPageState extends State<DashboardPage> {
   Set<String> _devFlags = const {};
   Timer? _screenCycleTimer;
   _AppView _view = _AppView.dashboard;
+  // 개발자 모드의 명령 로그. MQTT 소스가 네 토픽의 envelope 를 넘기면 줄로 쌓는다(최근 200줄).
+  final _commandLog = CommandLog();
   late final MusicPlayback _music;
   late final StreamSubscription<bool> _musicChanges;
   late final StreamSubscription<double> _musicVolumeChanges;
@@ -179,6 +183,8 @@ class _DashboardPageState extends State<DashboardPage> {
     _settingsStore = widget.settings ?? SettingsStore();
     _startupCheck = MqttStartupCheck(prober: widget.prober);
     _source = _initialSource();
+    // 설정 dev_mode_default: 켜자마자 개발자 모드 화면(ToF 열지도·판정·명령 로그).
+    if (_settings.devModeDefault) _view = _AppView.devMode;
     // 이 보드는 앱 표준출력이 journal 에도 app_log 에도 안 남는다. 허브에 왜 못
     // 붙었는지 알 방법이 화면밖에 없어서, 첫 판단과 그 결과를 파일로 남긴다.
     diag.write(
@@ -451,7 +457,8 @@ class _DashboardPageState extends State<DashboardPage> {
   MqttStateSource _mqttSource(String host, {required int port}) =>
       MqttStateSource(host,
           port: port,
-          onControlCommand: _feedbackController.handleControlCommand);
+          onControlCommand: _feedbackController.handleControlCommand,
+          onTopicEvent: _commandLog.addMessage);
 
   /// MQTT 로 붙을 때만 시작 점검을 돌린다. 결과는 대기 화면의 가이드가 그린다.
   void _startMqttCheck() {
@@ -811,6 +818,7 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void dispose() {
     _timer?.cancel();
+    _commandLog.dispose();
     _screenCycleTimer?.cancel();
     _linkBadgeTimer?.cancel();
     HardwareKeyboard.instance.removeHandler(_onKey);
@@ -832,7 +840,10 @@ class _DashboardPageState extends State<DashboardPage> {
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(44, 24, 44, 28),
-          child: state == null
+          child: state == null && _view == _AppView.devMode
+              // 개발자 모드는 hub 상태가 아직 없어도 뜬다 — ToF 중계기·로그는 hub 와 따로 볼 수 있다.
+              ? _devModeWithoutState()
+              : state == null
               ? (_source is MqttStateSource
                   // MQTT 는 시작 점검 결과를 보여 준다. 실패해도 앱은 막지 않고,
                   // 상태가 오면 곧바로 평소 화면으로 넘어간다.
@@ -923,6 +934,7 @@ class _DashboardPageState extends State<DashboardPage> {
                           },
                         ),
                       _AppView.preview => _buildPreview(state),
+                      _AppView.devMode => _buildDevMode(state),
                       _AppView.fsmGraph =>
                         FsmGraphPage(currentState: state.fsmState),
                       _AppView.bluetooth => BluetoothControlPage(
@@ -951,6 +963,53 @@ class _DashboardPageState extends State<DashboardPage> {
         ),
       ),
     );
+  }
+
+  // ── 개발자 모드(ToF 열지도 · 판정 · 명령 로그) ─────────────────────────────
+
+  Widget _buildDevMode(DisplayState? state) => DevModePage(
+        state: state,
+        host: _previewHost,
+        onHostChanged: _setPreviewHost,
+        log: _commandLog,
+        defaultOnStart: _settings.devModeDefault,
+        onDefaultOnStartChanged: _setDevModeDefault,
+        connectionLabel: _source.connectionLabel,
+      );
+
+  /// hub 상태가 아직 없을 때의 개발자 모드 — 위에 대기 문구 한 줄, 아래는 같은 화면.
+  Widget _devModeWithoutState() => Column(
+        key: const ValueKey('devmode-no-state'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(children: [
+            Expanded(
+              child: Text(
+                'hub 상태 대기 중 · ${_source.label} · ${_source.connectionLabel}'
+                '${_error == null ? '' : ' · $_error'}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
+            ),
+            TextButton(
+              key: const ValueKey('devmode-to-dashboard'),
+              onPressed: () => setState(() => _view = _AppView.dashboard),
+              child: const Text('대시보드로'),
+            ),
+          ]),
+          const SizedBox(height: 6),
+          Expanded(child: _buildDevMode(null)),
+        ],
+      );
+
+  void _setDevModeDefault(bool on) {
+    final next = _settingsStore.load().copyWith(devModeDefault: on);
+    final saved = _settingsStore.save(next);
+    setState(() => _settings = next);
+    _notify(saved
+        ? (on ? '다음부터 개발자 모드로 시작합니다.' : '다음부터 대시보드로 시작합니다.')
+        : '저장할 곳이 없어 이번 실행에만 적용됩니다.');
   }
 
   Widget _buildPreview(DisplayState state) => PreviewPage(
@@ -1027,6 +1086,8 @@ enum _AppView {
   connection,
   // 개발 도구의 프리뷰 탭(ToF 열지도·전 센서·피드백). posture(카메라) 탭 자리에 온다.
   preview,
+  // 개발자 모드: 열지도 두 장 + hub 판정 + 명령 로그를 한 화면에(설정 dev_mode_default 로 시작 화면).
+  devMode,
 }
 
 /// 카메라 자세 탭(ESP32-CAM/camsvc, `posture_screen.dart`)을 개발 도구 헤더에 보일지.
@@ -1151,6 +1212,11 @@ class _Header extends StatelessWidget {
               icon: Icons.science_outlined,
               label: '\uD504\uB9AC\uBDF0',
               onTap: () => onViewChanged(_AppView.preview)),
+          _HeaderNav(
+              selected: view == _AppView.devMode,
+              icon: Icons.terminal_rounded,
+              label: '개발자 모드',
+              onTap: () => onViewChanged(_AppView.devMode)),
           if (kShowCameraPostureTab)
             _HeaderNav(
                 selected: view == _AppView.posture,

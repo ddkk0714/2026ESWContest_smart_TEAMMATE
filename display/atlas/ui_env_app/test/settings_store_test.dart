@@ -36,6 +36,21 @@ void main() {
         settings.toJson());
   });
 
+  test('dev_mode_default round-trips and is omitted when false', () {
+    final on = const DeskmateSettings(devModeDefault: true);
+    expect(on.toJson()['dev_mode_default'], isTrue);
+    expect(on.isEmpty, isFalse);
+    expect(DeskmateSettings.empty.toJson().containsKey('dev_mode_default'),
+        isFalse);
+    expect(SettingsStore(candidates: [path('dev')]).save(on), isTrue);
+    final loaded = SettingsStore(candidates: [path('dev')]).load();
+    expect(loaded.devModeDefault, isTrue);
+    expect(loaded.copyWith(devModeDefault: false).devModeDefault, isFalse);
+    // 다른 타입이 들어 있으면 false.
+    expect(DeskmateSettings.fromJson({'dev_mode_default': 'yes'}).devModeDefault,
+        isFalse);
+  });
+
   test('missing and malformed files return empty without throwing', () {
     final missing = SettingsStore(candidates: [path('missing')]);
     expect(missing.load().isEmpty, isTrue);

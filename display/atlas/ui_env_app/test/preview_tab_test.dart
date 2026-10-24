@@ -3,15 +3,14 @@ import 'package:deskmate_display/settings_store.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'workspace_test_helpers.dart';
-
-/// 개발 도구(설정 → 개발자 화면) 헤더의 탭. '프리뷰' 가 카메라 '자세' 탭 자리에 있다.
-const _devTabs = [
+/// 헤더의 탭. '프리뷰' 가 카메라 '자세' 탭 자리에 있고, 그 옆에 '개발자 모드' 가 있다.
+const _tabs = [
   '상태',
   '센서 전체',
   'PC 키스트로크',
   '개발자',
   '프리뷰',
+  '개발자 모드',
   'FSM 전체',
   'Bluetooth',
   '세션 리포트',
@@ -19,21 +18,17 @@ const _devTabs = [
 ];
 
 void main() {
-  testWidgets('developer tools show the preview tab instead of the camera tab',
+  testWidgets('header shows the preview and dev mode tabs instead of the camera tab',
       (tester) async {
     tester.view.physicalSize = const Size(1024, 600);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
-    await pumpDeveloperApp(
-        tester,
-        DeskmateApp(
-            settings: SettingsStore(
-                candidates: const [], legacyPostureCandidates: const [])));
+    await tester.pumpWidget(DeskmateApp(
+        settings: SettingsStore(
+            candidates: const [], legacyPostureCandidates: const [])));
     await tester.pump();
 
-    // 사용자 화면(워크스페이스)에는 프리뷰가 없다 — 개발 도구 안에만.
-    expect(find.text('개발 도구'), findsOneWidget);
-    for (final t in _devTabs) {
+    for (final t in _tabs) {
       expect(find.byTooltip(t), findsOneWidget, reason: t);
     }
     expect(find.byTooltip('자세'), findsNothing);
@@ -54,10 +49,26 @@ void main() {
     expect(find.byKey(const ValueKey('preview-send')), findsOneWidget);
     expect(find.byKey(const ValueKey('preview-verdict-correct')), findsOneWidget);
 
+    // 개발자 모드 탭: 열지도 두 장 + 판정 + 명령 로그, 기본 시작은 꺼져 있다.
+    await tester.tap(find.byTooltip('개발자 모드'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('preview-badge')), findsNothing);
+    expect(find.byKey(const ValueKey('devmode-page')), findsOneWidget);
+    expect(find.byKey(const ValueKey('tof-a-zone-63')), findsOneWidget);
+    expect(find.byKey(const ValueKey('tof-b-zone-63')), findsOneWidget);
+    expect(find.byKey(const ValueKey('judge-state')), findsOneWidget);
+    expect(find.byKey(const ValueKey('cmdlog-empty')), findsOneWidget);
+    expect(find.byKey(const ValueKey('devmode-host-input')), findsOneWidget);
+    expect(
+        tester
+            .widget<Switch>(find.byKey(const ValueKey('devmode-default-switch')))
+            .value,
+        isFalse);
+
     // 다른 탭으로 갔다 와도 그대로
     await tester.tap(find.byTooltip('상태'));
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('preview-badge')), findsNothing);
+    expect(find.byKey(const ValueKey('devmode-page')), findsNothing);
     await tester.tap(find.byTooltip('프리뷰'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('preview-badge')), findsOneWidget);

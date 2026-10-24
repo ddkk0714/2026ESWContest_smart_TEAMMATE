@@ -131,6 +131,19 @@ flutter-atlas build atlas --ipk --release \
 설명(`state/phase` 의 `sensor_summary`)을 한 화면에 모은다. 아래 "지금 판정이 맞나요?" 는 기존 `feedback/user` 경로로 수락·거절·정정(+짧은 메모 `data.note`)을 보낸다.
 Pi 4 주소는 `settings.json` 의 `preview_host` → MQTT 브로커 호스트 → `DESKMATE_HUB_URL` 순이고, 전부 없으면 탭 안의 입력칸에 적는다.
 
+**개발자 모드 화면(헤더 '개발자 모드' 탭, `lib/dev_mode_page.dart`).** 주변기기 블루투스 연동이 불안정할 때 램프·선풍기를 실제로 켜지 않아도
+hub 가 **무엇을 켜라고 했는지** 글로 확인하는 화면이다 — 꾸미지 않은 단색·고정폭, 1024×600 한 화면에 세 덩이:
+(1) **ToF A·B 8×8 열지도** — Pi 4 중계기 `http://<pi4>:8772/raw` 를 300 ms 마다 폴링(프리뷰 탭과 같은 주소 규칙 `preview_host` → MQTT 호스트 → 입력칸).
+(2) **판정** — `deskmate/state/phase` 의 FSM state·C_fatigue·C_focus·cause·gate, 자세 서비스 `http://<pi4>:8771/api/state` 의 라벨·확신과
+hub 가 FSM 입력으로 실제 쓴 자세·출처(`sensor_summary.tof.posture`·`posture_source` = service|mlp|rule), 재실(`present`·`presence_source`·`in_room`·mmWave 거리),
+개인화 설명(`sensor_summary.personalize.explanation`). 값이 없으면 `-`.
+(3) **명령 로그** — MQTT `deskmate/control/cmd`·`control/result`·`interaction/request`·`feedback/user` 를 받은 순서대로 한 줄씩(최근 200줄, 자동 스크롤, 지우기), 예
+`12:03:41 CMD desk_lamp set_brightness 230 (auto, id 9f3c1a)` / `12:03:42 RESULT 9f3c1a failed lamp_not_configured (display-control)` /
+`12:05:10 REQUEST posture_suggest fix_posture "졸음 2회…" 180 s` / `12:05:30 FEEDBACK accept`. 제어 동작은 바꾸지 않는다 — 블루투스가 안 붙어 있으면
+앱은 전처럼 `failed lamp_not_configured` 를 내고, 그 결과도 로그에 같이 보인다(앱이 낸 결과는 브로커를 거쳐 돌아온다). hub 상태가 아직 안 와도 이 화면은 뜬다.
+화면 안의 **'시작 시 이 화면' 스위치**는 `settings.json` 에 `"dev_mode_default": true` 를 저장해 다음 실행부터 이 화면으로 켜진다
+(보드에서 파일을 직접 고쳐도 된다: `~/.config/deskmate/settings.json`, 없으면 `/tmp/deskmate/settings.json`).
+
 `DESKMATE_MQTT_HOST`와 `DESKMATE_HUB_URL`을 동시에 주면 MQTT를 우선한다. HTTP는 센서 테스트와
 화면·Hub 분리 검증을 위한 개발용 fallback으로만 유지한다.
 

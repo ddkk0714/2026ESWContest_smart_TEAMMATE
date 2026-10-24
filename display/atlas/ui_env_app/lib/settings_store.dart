@@ -41,6 +41,7 @@ class DeskmateSettings {
     this.lamp,
     this.fan,
     this.previewHost,
+    this.devModeDefault = false,
   });
 
   final String? mqttHost;
@@ -53,6 +54,9 @@ class DeskmateSettings {
   /// 개발자 화면의 프리뷰 탭이 ToF 원본·자세 라벨을 읽을 Pi 4 주소(IP 또는 호스트 이름). 비우면 MQTT 호스트를 쓴다.
   final String? previewHost;
 
+  /// 앱을 켤 때 개발자 모드 화면(ToF 열지도·판정·명령 로그)을 바로 띄울지. 기본 false.
+  final bool devModeDefault;
+
   static const empty = DeskmateSettings();
 
   bool get isEmpty =>
@@ -62,7 +66,8 @@ class DeskmateSettings {
       speaker == null &&
       lamp == null &&
       fan == null &&
-      previewHost == null;
+      previewHost == null &&
+      !devModeDefault;
 
   DeskmateSettings copyWith({
     String? mqttHost,
@@ -79,6 +84,7 @@ class DeskmateSettings {
     bool clearFan = false,
     String? previewHost,
     bool clearPreviewHost = false,
+    bool? devModeDefault,
   }) =>
       DeskmateSettings(
         mqttHost: clearMqttHost ? null : mqttHost ?? this.mqttHost,
@@ -88,6 +94,7 @@ class DeskmateSettings {
         lamp: clearLamp ? null : lamp ?? this.lamp,
         fan: clearFan ? null : fan ?? this.fan,
         previewHost: clearPreviewHost ? null : previewHost ?? this.previewHost,
+        devModeDefault: devModeDefault ?? this.devModeDefault,
       );
 
   Map<String, Object?> toJson() {
@@ -113,6 +120,9 @@ class DeskmateSettings {
     if (previewHost != null) {
       json['preview_host'] = previewHost;
     }
+    if (devModeDefault) {
+      json['dev_mode_default'] = true;
+    }
     return json;
   }
 
@@ -133,6 +143,7 @@ class DeskmateSettings {
       lamp: SavedBluetoothDevice._from(json['lamp']),
       fan: SavedBluetoothDevice._from(json['fan']),
       previewHost: rawPreviewHost is String ? validHostName(rawPreviewHost) : null,
+      devModeDefault: json['dev_mode_default'] == true,
     );
   }
 
