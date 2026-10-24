@@ -83,17 +83,18 @@ class BluetoothLinkManager extends ChangeNotifier {
   bool get fanBusy => _fanPhase == _Phase.connecting;
 
   /// 앱 시작 때 부른다. 저장된 기기가 있으면 검색 없이 붙는다. 던지지 않는다.
+  ///
+  /// 하나씩 차례로 붙인다. 10-24 Pi 5: 스피커·램프·선풍기를 동시에 붙이면 스피커만 붙고 BLE 둘은
+  /// 실패했는데, 같은 기기를 하나씩 다시 연결하면 셋 다 붙었다.
   Future<void> restore() async {
     final saved = settings.load();
     _speaker = saved.speaker;
     _lamp = saved.lamp;
     _fan = saved.fan;
     _notify();
-    await Future.wait([
-      if (_speaker != null) reconnectSpeaker(),
-      if (_lamp != null) reconnectLamp(),
-      if (_fan != null) reconnectFan(),
-    ]);
+    if (_speaker != null) await reconnectSpeaker();
+    if (_lamp != null) await reconnectLamp();
+    if (_fan != null) await reconnectFan();
   }
 
   /// 저장된 스피커에 다시 붙는다(검색 없이).
