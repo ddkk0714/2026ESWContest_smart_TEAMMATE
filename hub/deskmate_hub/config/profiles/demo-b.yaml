@@ -14,6 +14,9 @@ fsm:
     conf_auto: 0.55                 # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 0.75
   thresholds:
     fatigue_confirm: 0.60           # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 0.70 (피로 확정)
+personalize:
+  gate:
+    conf_auto: 0.55                 # 시연 전용 — PC 리허설 10-24 근거. 기본 0.75. FSM gate.conf_auto 와 같은 값으로 맞춘 것 — 다르면 정책이 FSM 자동을 제안(personalize:ask)으로 낮춰 무드등이 자동으로 안 켜진다
 ingest:
   normalization: linear             # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 baseline (10 s 보정 창으로는 기준선이 안 잡힌다)
   pc_ratio_window_sec: 120          # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 900

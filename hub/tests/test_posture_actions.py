@@ -170,6 +170,30 @@ def test_live_hub_drowsy_turns_desk_lamp_on_then_monitor(posture_configs, tmp_pa
     assert ctrl and ctrl[0]["active"] is True and ctrl[0]["commands"][0]["target"] == "desk_lamp"
 
 
+def test_demo_b_profile_keeps_policy_gate_auto_so_lamp_goes_on_without_a_card(tmp_path):
+    """10-24 PC 리허설 결함: FSM 은 자동인데 개인화 정책이 자기 conf_auto 0.75 로 제안(personalize:ask)으로 낮춰 카드만 떴다.
+    demo-b 프로파일이 personalize gate.conf_auto 도 0.55 로 얹으므로, 정책을 켠 채(Pi 4 기본) 자동으로 기본 명령이 나가야 한다."""
+    from deskmate_hub.personalize import load_personalize_config
+
+    cache, states = SensorCache(), []
+    pcfg = dict(load_personalize_config(), log_dir=str(tmp_path))
+    assert pcfg["enabled"] is True and pcfg["gate"]["conf_auto"] == 0.75           # Pi 4 배포판 기본
+    hub = LiveHub(cache, control_cfg=CFG, publish=states.append, out=io.StringIO(), profile="demo-b",
+                  personalize_cfg=pcfg, personalize_log_path=str(tmp_path / "p.jsonl"),
+                  personalize_policy_path=str(tmp_path / "policy.json"))
+    assert hub.personalize_policy is not None and hub.personalize_cfg["gate"]["conf_auto"] == 0.55
+    assert hub.fsm_cfg["gate"]["conf_auto"] == 0.55 and hub.engine.tm["baseline_sec"] == 10
+    seen, accepted = _drive_to_monitor(hub, cache, co2=2000)
+    assert State.ACTION_POSTURE in seen and State.MONITOR in seen, seen[-10:]
+    assert accepted == 0, "카드(suggest)가 떴다 — 정책이 자동을 낮췄다"
+    ep = hub.control.history[-1]
+    assert ep.state == "ACTION_POSTURE" and ep.gate is GateMode.AUTO and ep.outcome == "executed"
+    assert hub.mock_plug.state.get("desk_lamp") == {"set_brightness": 230}
+    posture_states = [s["data"] for s in states if s["data"]["fsm_state"] == "ACTION_POSTURE"]
+    assert posture_states and posture_states[0]["sensor_summary"]["control"]["gate"] == "auto"
+    assert "personalize:ask" not in (posture_states[0].get("actions") or [])
+
+
 def test_live_hub_without_posture_bundle_keeps_lamp_off(posture_configs, tmp_path):
     fcfg, icfg, pcfg = posture_configs
     cache = SensorCache()

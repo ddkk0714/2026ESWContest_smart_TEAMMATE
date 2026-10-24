@@ -46,7 +46,7 @@ Python 브리지를 실센서 모드로 띄우려면 서비스 환경에 `DESKMA
 ### 시연 프로파일 (2026-10-24)
 
 `hub.env`(`pi4-hub-activate.sh` 가 만드는 서비스 환경 파일)에 한 줄을 더하고 서비스를 다시 띄우면 Python 브리지가 기본 fsm·ingest 위에
-`deskmate_hub/config/profiles/<이름>.yaml` 의 `fsm:`·`ingest:` 절을 깊은 병합으로 얹는다(`deskmate_hub/profile.py`). 줄을 지우면 기본으로 돌아온다.
+`deskmate_hub/config/profiles/<이름>.yaml` 의 `fsm:`·`ingest:`·`personalize:` 절을 깊은 병합으로 얹는다(`deskmate_hub/profile.py`). 줄을 지우면 기본으로 돌아온다.
 
 ```
 DESKMATE_PROFILE=demo-a

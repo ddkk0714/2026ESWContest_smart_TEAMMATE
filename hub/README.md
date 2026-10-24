@@ -78,7 +78,7 @@ python -m deskmate_hub run --broker <ip> --ingest-config my-ingest.yaml --log-di
 - 제어 어댑터가 없으면 명령은 `result_timeout_sec` 뒤 timeout 으로 닫히고 FSM 은 계속 진행한다. 리허설은 `python tools/mock_plug.py --broker <ip>`. `control.yaml adapter: mock` 이면 프로세스 안에서 즉시 성공 처리
 - 매핑은 `config/ingest.yaml`. `normalization: baseline`(기본)이면 START 보정 창에서 만든 개인 기준선(중앙값·MAD Modified z)을 우선 쓰고, 기준선이 없는 지표·보정 전에는 선형 램프로 폴백한다. `baseline.persist.enabled: true` 면 median·MAD·표본 수만 JSON 에 저장(opt-in).
 - `--config deskmate_hub/config/fsm.demo.yaml` 은 임계값은 같고 **타이머만 짧은 시연·리허설 프로파일**(baseline 30 s, 이탈 60 s 등). 운영 기본값이 아니다.
-- 환경변수 `DESKMATE_PROFILE=demo-a|demo-b` 는 `config/profiles/<이름>.yaml` 의 `fsm:`·`ingest:` 절을 기본 설정 위에 깊은 병합으로 얹는다(`run`·bridge 둘 다, 10-24). demo-a = 피로 유지 20 s·MONITOR 창 30 s·휴식 60 s·자동 0.60·PC 창 120 s·휴식 뒤 경과 초기화, demo-b = demo-a + 보정 10 s·자동 0.55·확정 0.60·선형 정규화. **시연 전용(시뮬 근거) — 실측 성공 기록에 쓰지 않는다.** 보드에서는 `hub.env` 한 줄(`hub/atlas/README.md`).
+- 환경변수 `DESKMATE_PROFILE=demo-a|demo-b` 는 `config/profiles/<이름>.yaml` 의 `fsm:`·`ingest:`·`personalize:` 절을 기본 설정 위에 깊은 병합으로 얹는다(`run`·bridge 둘 다, 10-24). demo-a = 피로 유지 20 s·MONITOR 창 30 s·휴식 60 s·자동 0.60·PC 창 120 s·휴식 뒤 경과 초기화, demo-b = demo-a + 보정 10 s·자동 0.55·확정 0.60·선형 정규화. 개인화 정책 gate.conf_auto 도 같은 값으로 맞춘다(다르면 정책이 자동을 제안으로 낮춘다). **시연 전용(시뮬 근거) — 실측 성공 기록에 쓰지 않는다.** 보드에서는 `hub.env` 한 줄(`hub/atlas/README.md`).
 - `logs/frames-*.jsonl` 은 `--replay` 로 그대로 재생되고, `logs/state-*.jsonl` 은 발행한 envelope 다.
 - 콘솔 한 줄 = 한 tick: 상태·ctx·C_fatigue/C_focus·present·pc_ratio·가용 신호(`ekprs` 첫 글자, `.`=미가용)
 

@@ -20,7 +20,7 @@ from .control import ControlDispatcher, MockPlugAdapter, load_control_config
 from .features import BaselineStore
 from .ingest import SensorCache, SessionTracker, build_frame, load_ingest_config, sensor_summary
 from .presentation import state_envelope
-from .profile import apply_profile
+from .profile import apply_profile, apply_section
 from .esm import make_label, write_label
 from .personalization import PersonalizationRuntime, load_personalization_config
 from .personalization.privacy import PersonalizationPrivacy, load_privacy_config
@@ -124,6 +124,8 @@ class LiveHub:
         # logs/personalize-<boot_id>.jsonl 에 한 줄씩 쓴다. 정책(enabled)은 별개 — 꺼져 있어도 기록은 쌓는다.
         self.personalize_cfg = personalize_cfg if personalize_cfg is not None else (
             load_personalize_config() if load_personalize_config is not None else {})
+        # 프로파일의 personalize: 절(정책 gate.conf_auto 등) — FSM 만 낮추고 정책이 0.75 로 남아 자동이 제안으로 깎이던 결함(10-24 PC 리허설)
+        self.personalize_cfg = apply_section(self.personalize_cfg, "personalize", self.profile or "")
         # `enabled: true` 면 3층 정책(InterventionPolicy, 순수 Python — Pi 4 에서도 돈다)도 켜서 결정 tick 에
         # arm·전달 게이트를 고르고 profiles/<profile_id>/policy.json 에 학습 상태를 저장한다.
         self.personalize_recorder: EpisodeRecorder | None = None
