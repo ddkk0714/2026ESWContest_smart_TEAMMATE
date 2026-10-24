@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DESKMATE 개발자 화면</title>
+<style>
+/* 1920×1080 녹화 기준. 외부 글꼴·CDN 없음(오프라인). 판단·제어는 보드에서, 이 페이지는 /data 를 그리기만 한다. */
+:root {
+  --bg: #0b0d12; --panel: #151922; --line: #2a3040; --fg: #f3f5f8; --dim: #9aa3b5; --faint: #5d6578;
+  --ok: #4cc38a; --bad: #f06a6a; --warn: #f5b93a; --info: #5cc8ff; --accent: #8f9cff; --invalid: #3a3e48;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); }
+body {
+  font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif;
+  font-size: 18px; overflow: hidden;
+  display: grid; height: 100vh; gap: 8px; padding: 0 14px 10px;
+  /* 배너가 숨으면(display:none) 자리가 밀리지 않게 영역 이름으로 놓는다 */
+  grid-template-areas: "band" "banner" "row1" "row2" "devices" "log";
+  grid-template-rows: 40px auto auto auto auto minmax(0, 1fr);
+}
+#band { grid-area: band; } #banner { grid-area: banner; } #row1 { grid-area: row1; }
+#row2 { grid-area: row2; } #devices { grid-area: devices; } #logPanel { grid-area: log; }
+.mono, .num { font-family: Consolas, "D2Coding", "Cascadia Mono", monospace; font-variant-numeric: tabular-nums; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; min-height: 0; overflow: hidden; }
+.ptitle { font-size: 15px; color: var(--dim); letter-spacing: .02em; margin-bottom: 8px; display: flex; justify-content: space-between; gap: 12px; }
+.ptitle b { color: var(--fg); font-weight: 700; font-size: 17px; }
+
+/* 맨 위 띠 */
+#band { display: flex; align-items: center; gap: 18px; font-size: 15px; color: var(--dim); border-bottom: 1px solid var(--line); margin: 0 -14px; padding: 0 14px; }
+#band .who { color: var(--fg); font-weight: 700; }
+#band .who em { font-style: normal; color: var(--warn); }
+#band .sp { flex: 1; }
+.chip { display: inline-flex; align-items: center; gap: 6px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); display: inline-block; }
+.dot.on { background: var(--ok); }
+#fakeTag { color: #111; background: var(--warn); padding: 1px 8px; border-radius: 4px; font-weight: 700; display: none; }
+#banner { display: none; background: #3a1418; border: 1px solid var(--bad); color: #ffd6d6; border-radius: 8px; padding: 8px 14px; font-size: 16px; }
+#banner b { color: var(--bad); }
+
+/* 1행: ToF 두 장 + 자세 서비스 */
+#row1 { display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 10px; min-height: 0; }
+.tof .grid { display: grid; grid-template-columns: repeat(8, var(--cell)); grid-auto-rows: var(--cell); gap: 2px; --cell: 31px; }
+.tof .grid i { display: flex; align-items: center; justify-content: center; font-style: normal; font-size: 12px; border-radius: 3px; background: var(--invalid); color: rgba(255,255,255,.85); }
+.tof .grid i.near { color: #111; }
+.tof .sub { margin-top: 8px; font-size: 16px; color: var(--dim); }
+.tof .sub b { color: var(--fg); }
+.legend { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); margin-top: 6px; }
+.legend .bar { flex: 1; height: 8px; border-radius: 4px; background: linear-gradient(90deg, #f06a6a, #f5a524, #4cc38a, #3b82f6, #282d3c); }
+#svc .head { display: flex; align-items: baseline; gap: 16px; margin-bottom: 10px; }
+#svcLabel { font-size: 40px; font-weight: 800; }
+#svcConf { font-size: 18px; color: var(--dim); }
+.prow { display: grid; grid-template-columns: 130px minmax(0,1fr) 70px; gap: 10px; align-items: center; font-size: 16px; height: 24px; }
+.prow .track { height: 14px; background: #222836; border-radius: 7px; overflow: hidden; }
+.prow .track i { display: block; height: 100%; background: var(--faint); border-radius: 7px; }
+.prow.top { color: var(--fg); font-weight: 700; }
+.prow.top .track i { background: var(--info); }
+.prow:not(.top) { color: var(--dim); }
+.prow .num { text-align: right; }
+
+/* 2행: 판정 + 센서 값 */
+#row2 { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 10px; min-height: 0; }
+#judge { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 24px; align-content: start; }
+#fsmWrap { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 16px; margin-bottom: 6px; }
+#fsm { font-size: 54px; font-weight: 800; line-height: 1.05; letter-spacing: .01em; }
+#fsmMeta { font-size: 16px; color: var(--dim); }
+.meter { margin: 4px 0 8px; }
+.meter .lab { display: flex; justify-content: space-between; font-size: 16px; color: var(--dim); }
+.meter .lab .num { color: var(--fg); font-size: 24px; font-weight: 700; }
+.meter .track { height: 16px; background: #222836; border-radius: 8px; overflow: hidden; }
+.meter .track i { display: block; height: 100%; border-radius: 8px; transition: width .4s; }
+.kv { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 2px 12px; font-size: 17px; align-content: start; }
+.kv dt { color: var(--dim); }
+.kv dd { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#judgeKv { grid-column: 1 / -1; }
+.place { display: inline-flex; gap: 4px; vertical-align: middle; }
+.place span { padding: 1px 14px; border: 1px solid var(--line); border-radius: 5px; color: var(--faint); font-size: 16px; }
+.place span.on { background: var(--info); color: #071018; border-color: var(--info); font-weight: 700; }
+#sensors { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 24px; align-content: start; }
+#sensors h4 { margin: 0 0 6px; font-size: 15px; color: var(--accent); font-weight: 700; }
+#ksRow { grid-column: 1 / -1; margin-top: 10px; }
+
+/* 기기 상태 한 줄 */
+#devices { display: flex; align-items: center; gap: 30px; padding: 8px 16px; font-size: 19px; }
+#devices .lab { color: var(--dim); font-size: 15px; }
+#devices .dev b { margin-right: 8px; }
+#devices .ok { color: var(--ok); } #devices .bad { color: var(--bad); } #devices .pend { color: var(--warn); }
+
+/* 명령 로그 */
+#logPanel { display: flex; flex-direction: column; }
+#log { flex: 1; overflow-y: auto; font-size: 16px; line-height: 1.5; min-height: 0; }
+#log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#log .t { color: var(--faint); margin-right: 10px; }
+#log .k { display: inline-block; width: 92px; font-weight: 700; }
+#log .CMD .k { color: var(--info); }
+#log .REQUEST .k, #log .FEEDBACK .k { color: var(--warn); }
+#log .RESULT .k { color: var(--dim); }
+#log .RESULT.ok .k, #log .RESULT.ok .x { color: var(--ok); }
+#log .RESULT.fail .k, #log .RESULT.fail .x { color: var(--bad); }
+.empty { color: var(--faint); }
+</style>
+</head>
+<body>
+<header id="band">
+  <span class="who">판단·제어는 <em>Pi 4·Pi 5 보드</em>에서 · 이 화면은 노트북 보기 전용</span>
+  <span id="fakeTag">가짜 데이터(--fake)</span>
+  <span class="sp"></span>
+  <span class="chip"><span class="dot" id="dMqtt"></span>MQTT <span class="num" id="aMqtt">-</span></span>
+  <span class="chip"><span class="dot" id="dPosture"></span>자세 서비스 <span class="num" id="aPosture">-</span></span>
+  <span class="chip"><span class="dot" id="dRaw"></span>ToF raw <span class="num" id="aRaw">-</span></span>
+  <span>Pi 4 <span class="num" id="target">-</span></span>
+  <span>마지막 수신 <span class="num" id="lastRx">-</span></span>
+</header>
+<div id="banner"></div>
+
+<section id="row1">
+  <div class="panel tof" id="tof0"></div>
+  <div class="panel tof" id="tof1"></div>
+  <div class="panel" id="svc">
+    <div class="ptitle"><span><b>자세 서비스</b> · Pi 4 GRU 모델 (:8771)</span><span class="mono" id="svcModel">-</span></div>
+    <div class="head"><span id="svcLabel">-</span><span id="svcConf">-</span></div>
+    <div id="probs"></div>
+  </div>
+</section>
+
+<section id="row2">
+  <div class="panel">
+    <div class="ptitle"><span><b>판정</b> · Pi 4 hub FSM (state/phase)</span><span class="mono" id="seq">-</span></div>
+    <div id="judge">
+      <div id="fsmWrap"><span id="fsm">-</span><span id="fsmMeta">-</span></div>
+      <div class="meter"><div class="lab"><span>피로도 C_fatigue</span><span class="num" id="fatT">-</span></div><div class="track"><i id="fatB"></i></div></div>
+      <div class="meter"><div class="lab"><span>집중 저하 C_focus</span><span class="num" id="focT">-</span></div><div class="track"><i id="focB"></i></div></div>
+      <dl class="kv" id="judgeKv"></dl>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="ptitle"><span><b>센서 값</b> · hub 가 받은 요약 (sensor_summary)</span></div>
+    <div id="sensors">
+      <div><h4>mmWave C1001</h4><dl class="kv" id="mmKv"></dl></div>
+      <div><h4>환경 SCD41 · DHT22 · BH1750</h4><dl class="kv" id="envKv"></dl></div>
+      <div id="ksRow"><dl class="kv"><dt>키 입력</dt><dd id="ks">-</dd></dl></div>
+    </div>
+  </div>
+</section>
+
+<section class="panel" id="devices"></section>
+
+<section class="panel" id="logPanel">
+  <div class="ptitle"><span><b>명령 로그</b> · control/cmd · control/result · interaction/request · feedback/user</span><span class="mono" id="logCount">0</span></div>
+  <div id="log" class="mono"></div>
+</section>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const PHASE_COLOR = {start: "#5cc8ff", focus: "#4cc38a", fatigue: "#f5b93a", action: "#f06a6a", rest: "#8f9cff", end: "#9aa3b5"};
+
+// 거리(mm) → 색. posture_view.html·Pi 5 tof_heatmap.dart 와 같은 눈금(20 cm 붉음 → 2 m 어둠).
+function distColor(mm) {
+  const t = Math.min(Math.max((mm - 200) / 1800, 0), 1);
+  const stops = [[240,106,106],[245,165,36],[76,195,138],[59,130,246],[40,45,60]];
+  const x = t * (stops.length - 1), i = Math.min(Math.floor(x), stops.length - 2), f = x - i;
+  const c = stops[i].map((v, k) => Math.round(v + (stops[i + 1][k] - v) * f));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+function renderTof(el, s) {
+  if (!el.dataset.built) {
+    el.innerHTML = `<div class="ptitle"><span><b>ToF ${esc(s.name)}</b> · VL53L8CX 8×8</span><span class="mono age"></span></div>
+      <div class="grid">${"<i></i>".repeat(64)}</div><div class="sub"></div>
+      <div class="legend"><span>20 cm</span><span class="bar"></span><span>2 m</span><span>· 회색 = 무효</span></div>`;
+    el.dataset.built = "1";
+  }
+  const cells = el.querySelectorAll(".grid i");
+  for (let i = 0; i < 64; i++) {
+    const c = cells[i];
+    const mm = s.grid ? s.grid[i] : null, ok = s.valid ? s.valid[i] : false;
+    if (mm != null && ok) {
+      c.style.background = distColor(mm);
+      c.textContent = Math.round(mm / 10);
+      c.className = mm < 900 ? "near" : "";
+    } else {
+      c.style.background = ""; c.textContent = s.have ? "·" : ""; c.className = "";
+    }
+  }
+  el.querySelector(".age").textContent = s.have ? (s.age_ms != null ? `${s.age_ms} ms 전` : "") : "프레임 없음";
+  el.querySelector(".sub").innerHTML = s.have
+    ? `유효 <b class="num">${s.valid_count}/${s.zone_count}</b> 칸 · 최소 <b class="num">${s.min_mm == null ? "-" : (s.min_mm / 10).toFixed(0) + " cm"}</b> · 칸 숫자 = cm`
+    : `<span class="empty">센서 프레임 없음</span>`;
+}
+
+function renderSvc(p) {
+  if (!p) { $("svcLabel").textContent = "-"; $("svcConf").textContent = "자세 서비스 응답 없음"; $("probs").innerHTML = ""; return; }
+  $("svcLabel").textContent = p.valid ? p.label : `${p.label} (입력 없음)`;
+  $("svcConf").textContent = `${p.posture} · 신뢰도 ${p.conf == null ? "-" : (p.conf * 100).toFixed(0) + " %"} · 센서 ${p.online_sensors ?? "-"}개${p.misplaced ? " · misplaced" : ""}`;
+  $("svcModel").textContent = p.model;
+  const top = p.probs.reduce((a, b) => (b[2] > a[2] ? b : a), p.probs[0] || ["", "", 0]);
+  $("probs").innerHTML = p.probs.map(([l, ko, v]) =>
+    `<div class="prow ${l === top[0] ? "top" : ""}"><span>${esc(ko)}</span><div class="track"><i style="width:${(v * 100).toFixed(1)}%"></i></div><span class="num">${(v * 100).toFixed(0)} %</span></div>`).join("");
+}
+
+function kv(rows) { return rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join(""); }
+
+function placeHtml(pl) {
+  const names = [["left", "왼쪽"], ["center", "가운데"], ["right", "오른쪽"]];
+  if (!pl) return `<span class="place">${names.map(([, n]) => `<span>${n}</span>`).join("")}</span> <span class="empty">-</span>`;
+  return `<span class="place">${names.map(([k, n]) => `<span class="${k === pl ? "on" : ""}">${n}</span>`).join("")}</span>`;
+}
+
+function renderJudge(ph, p) {
+  $("fsm").textContent = ph.fsm_state;
+  $("fsm").style.color = PHASE_COLOR[ph.phase] || "var(--fg)";
+  $("fsmMeta").textContent = `단계 ${ph.phase} · 맥락 ${ph.context}`;
+  $("seq").textContent = ph.seq == null ? "-" : `seq ${ph.seq}`;
+  const meter = (v, t, b, color) => { $(t).textContent = v == null ? "-" : v.toFixed(2); $(b).style.width = v == null ? "0" : (v * 100).toFixed(1) + "%"; $(b).style.background = color; };
+  meter(ph.fatigue, "fatT", "fatB", ph.fatigue >= 0.7 ? "var(--bad)" : ph.fatigue >= 0.45 ? "var(--warn)" : "var(--ok)");
+  meter(ph.focus, "focT", "focB", "var(--accent)");
+  const svc = p ? `${esc(p.label)} ${p.posture} ${p.conf == null ? "" : p.conf.toFixed(2)}` : "-";
+  $("judgeKv").innerHTML = kv([
+    ["원인·게이트", `${esc(ph.cause)} · ${esc(ph.gate)}` + (ph.reasons !== "-" ? ` <span class="empty">· ${esc(ph.reasons)}</span>` : "")],
+    ["자세(서비스)", svc],
+    ["자세(hub)", esc(ph.hub_posture)],
+    ["재실", `${esc(ph.presence)} · 위치 ${esc(ph.place)} · mmWave ${esc(ph.mmwave_distance)}`],
+    ["장치 위치", placeHtml(p && p.placement)],
+    ["개인화", esc(ph.explanation)],
+  ]);
+}
+
+function renderSensors(ph) {
+  $("mmKv").innerHTML = kv(ph.mmwave.map(([k, v]) => [k, esc(v)]));
+  $("envKv").innerHTML = kv(ph.env.map(([k, v]) => [k, esc(v)]));
+  $("ks").textContent = ph.keystroke;
+}
+
+function renderDevices(devs) {
+  $("devices").innerHTML = `<span class="lab">기기 상태 · 마지막 명령</span>` + devs.map(d =>
+    `<span class="dev"><b>${esc(d.name)}</b>${esc(d.value)} <span class="${d.ok === true ? "ok" : d.ok === false ? "bad" : "pend"}">${esc(d.mark)}</span></span>`).join("");
+}
+
+let logKey = "";
+function renderLog(log) {
+  const key = log.length + "|" + (log.length ? log[log.length - 1].t + log[log.length - 1].text : "");
+  if (key === logKey) return;
+  logKey = key;
+  const box = $("log");
+  const stick = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+  box.innerHTML = log.length ? log.map(e => {
+    const cls = e.kind + (e.ok === true ? " ok" : e.ok === false ? " fail" : "");
+    return `<div class="${cls}"><span class="t">${e.t}</span><span class="k">${e.kind}</span><span class="x">${esc(e.text)}</span></div>`;
+  }).join("") : `<div class="empty">아직 명령·결과·제안·피드백 없음</div>`;
+  $("logCount").textContent = `${log.length} / 200`;
+  if (stick) box.scrollTop = box.scrollHeight;
+}
+
+const LINKS = [["mqtt", "MQTT 브로커 :1883", "dMqtt", "aMqtt"], ["posture", "자세 서비스 :8771", "dPosture", "aPosture"], ["raw", "ToF raw :8772", "dRaw", "aRaw"]];
+function renderBand(d) {
+  $("fakeTag").style.display = d.mode === "fake" ? "inline" : "none";
+  $("target").textContent = d.target || "-";
+  const down = [];
+  let last = null;
+  for (const [k, name, dot, age] of LINKS) {
+    const l = d.links[k];
+    $(dot).className = "dot" + (l.ok ? " on" : "");
+    $(age).textContent = l.age_s == null ? "-" : l.age_s < 1 ? "방금" : l.age_s.toFixed(0) + " s 전";
+    if (!l.ok) down.push(`<b>${name}</b> ${esc(l.reason)}`);
+    if (l.age_s != null) last = last == null ? l.age_s : Math.min(last, l.age_s);
+  }
+  const two = n => String(n).padStart(2, "0"), at = new Date(Date.now() - (last || 0) * 1000);
+  $("lastRx").textContent = last == null ? "없음" : `${two(at.getHours())}:${two(at.getMinutes())}:${two(at.getSeconds())}`;
+  const b = $("banner");
+  b.style.display = down.length ? "block" : "none";
+  b.innerHTML = down.length ? "연결 안 됨: " + down.join(" · ") + " — 계속 다시 시도 중" : "";
+}
+
+let serverFails = 0;
+async function tick() {
+  try {
+    const r = await fetch("/data", {cache: "no-store"});
+    const d = await r.json();
+    serverFails = 0;
+    renderBand(d);
+    d.raw.sensors.forEach(s => renderTof($("tof" + s.id), s));
+    renderSvc(d.posture);
+    renderJudge(d.phase, d.posture);
+    renderSensors(d.phase);
+    renderDevices(d.devices);
+    renderLog(d.log);
+  } catch (e) {
+    serverFails++;
+    if (serverFails > 2) {
+      $("banner").style.display = "block";
+      $("banner").innerHTML = `연결 안 됨: <b>노트북 서버(devview.py)</b> ${esc(e.message)} — 터미널에서 실행 중인지 확인`;
+    }
+  }
+}
+tick();
+setInterval(tick, 250);
+</script>
+</body>
+</html>
