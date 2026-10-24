@@ -151,7 +151,7 @@ class _BluetoothControlPageState extends State<BluetoothControlPage> {
                   style: Theme.of(context).textTheme.headlineSmall),
               const SizedBox(height: 8),
               const Text(
-                  '스피커는 Atlas A2DP 출력으로 연결됩니다. 자동 피드백은 아래 스위치를 켜야 합니다. 피로 제안은 수락 뒤, 자동 개입은 허브 명령에 따라 실행됩니다. '
+                  '스피커는 Atlas A2DP 출력으로 연결됩니다. 자동 제어 대상은 설정 화면에서 선택합니다. 피로 제안은 수락 뒤, 자동 개입은 허브 명령에 따라 실행됩니다. '
                   '연결한 기기는 저장되어 다음에 앱을 켜면 검색 없이 다시 연결됩니다.'),
               const SizedBox(height: 12),
               _SavedDevices(links: widget.links),
@@ -160,16 +160,6 @@ class _BluetoothControlPageState extends State<BluetoothControlPage> {
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Column(children: [
-                    SwitchListTile.adaptive(
-                      key: const ValueKey('feedback-enabled'),
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('상태 기반 조명·음악 피드백'),
-                      subtitle: const Text(
-                          '제안 수락·자동 개입 뒤 실행, recovery/idle/end에서 음악 정지'),
-                      value: widget.feedback.enabled,
-                      onChanged: (value) =>
-                          setState(() => widget.feedback.enabled = value),
-                    ),
                     Row(children: [
                       const Icon(Icons.volume_up_rounded),
                       const SizedBox(width: 10),

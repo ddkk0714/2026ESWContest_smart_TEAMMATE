@@ -30,6 +30,24 @@ void main() {
     expect(music.isPlaying, isTrue);
   });
 
+  test('custom queue wraps within selected tracks and rejects empty queues',
+      () async {
+    final player = _Player();
+    final music = AtlasMusicPlayback(playerFactory: player.create);
+    addTearDown(music.dispose);
+    music.setQueue([2, 5]);
+    await music.selectTrack(2);
+    await music.toggle();
+    player.finish();
+    await _flush();
+    expect(music.selectedTrack, 5);
+    player.finish();
+    await _flush();
+    expect(music.selectedTrack, 2);
+    expect(() => music.setQueue([]), throwsArgumentError);
+    expect(() => music.setQueue([99]), throwsArgumentError);
+  });
+
   test('OFF pauses and ON resumes without restarting the track', () async {
     final player = _Player();
     final music = AtlasMusicPlayback(playerFactory: player.create);

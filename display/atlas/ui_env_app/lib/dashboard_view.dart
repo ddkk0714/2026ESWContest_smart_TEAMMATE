@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -222,7 +223,7 @@ class DisplayMessageBanner extends StatelessWidget {
       );
 }
 
-class AmbientView extends StatelessWidget {
+class AmbientView extends StatefulWidget {
   const AmbientView({
     super.key,
     required this.state,
@@ -236,10 +237,34 @@ class AmbientView extends StatelessWidget {
   final VoidCallback? onCorrect;
 
   @override
+  State<AmbientView> createState() => _AmbientViewState();
+}
+
+class _AmbientViewState extends State<AmbientView> {
+  late final Timer _clockTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    // The wall clock keeps ticking even when demo state updates are paused.
+    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _clockTimer.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final now = state.timestamp.millisecondsSinceEpoch == 0
-        ? DateTime.now()
-        : state.timestamp;
+    final now = DateTime.now();
+    final state = widget.state;
+    final onDetail = widget.onDetail;
+    final focusSummary = widget.focusSummary;
+    final onCorrect = widget.onCorrect;
     return Padding(
       padding: const EdgeInsets.fromLTRB(22, 50, 22, 8),
       child: Row(children: [
