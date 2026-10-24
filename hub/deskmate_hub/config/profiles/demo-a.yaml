@@ -9,7 +9,10 @@ fsm:
     rest_min_sec: 60                # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 300 (REST 최소 유지)
     fatigue_hold_min_frac: 0.8      # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 1.0 (지난 hold 초 tick 중 이 비율 이상 임계 위면 유지 성립, 1fd856d)
   gate:
+    asleep_retry: rest
     conf_auto: 0.60                 # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 0.75 (이상이면 자동 실행)
+  thresholds:
+    still_asleep_delta: 0.9
 personalize:
   gate:
     conf_auto: 0.60                 # 시연 전용 — PC 리허설 10-24 근거. 기본 0.75. FSM gate.conf_auto 와 같은 값으로 맞춘 것 — 다르면 정책이 FSM 자동을 제안(personalize:ask)으로 낮춰 무드등이 자동으로 안 켜진다

@@ -29,11 +29,13 @@ thresholds:
   natural_recovery: 0.30     # 자연 회복
   recovery_success: 0.30     # 회복 승인
   recovery_fail: 0.70        # 회복 실패 → 격상
+  still_asleep_delta: null    # (시연) MONITOR·RECOVERY 판정을 자세로: 자세 delta 가 이 이상(졸음·엎드림 1.0)이면 격상. null = 점수 부호(지금 동작)
 
 gate:
   conf_auto: 0.75      # 이상 → 자동 제어
   conf_suggest: 0.45   # 이상 → 제안, 미만 → 무동작
   retry_max: suggest   # 첫 원인이 효과 없어 다른 원인을 재시도할 땐 자동 대신 제안까지만 (auto = 낮추지 않음)
+  asleep_retry: null    # (시연) still_asleep_delta 로 아직 졸음이면 rest = 다른 원인 제안 대신 바로 강제 휴식. null = 지금 동작
 
 timers:
   score_period_sec: 10           # 신뢰도 계산 주기 (2026-09-14 팀 결정: 30→10. ingest 가 이 주기로 SensorFrame 을 만든다)

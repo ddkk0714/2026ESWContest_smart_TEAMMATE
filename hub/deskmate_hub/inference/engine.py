@@ -52,6 +52,8 @@ class FSMEngine:
         self._break_entry_fatigue: float = 0.0
         self._monitor_entry_fatigue: float = 0.0
         self._rest_since: float = 0.0
+        self._asleep_since: float | None = None
+        self._last_cause: str | None = None
         # 이번 피로 에피소드에서 아직 시도하지 않은 개입 원인
         self._remaining_options: list[str] = []
         # 첫 원인이 효과가 없어 다른 원인을 재시도하는 중인지 (gate.retry_max 로 자동 실행을 낮춘다)
@@ -95,6 +97,14 @@ class FSMEngine:
         if confidence >= g["conf_suggest"]:
             return GateMode.SUGGEST
         return GateMode.NONE
+
+    def _asleep(self, frame: SensorFrame) -> bool | None:
+        """thresholds.still_asleep_delta 가 있으면 자세 신호 delta 가 그 이상인지(졸음·엎드림). 키가 없거나 자세 미가용이면 None."""
+        th = self.th.get("still_asleep_delta")
+        sig = frame.get("posture")
+        if th is None or not sig.available:
+            return None
+        return sig.delta >= float(th)
 
     def _action_gate(self, confidence: float) -> GateMode:
         """개입 게이트. 재시도 원인은 첫 원인보다 근거가 약하므로 `gate.retry_max: suggest` 면
@@ -229,6 +239,7 @@ class FSMEngine:
                 actions.append(f"guard_route:{forced}")
             if cause in self._remaining_options:
                 self._remaining_options.remove(cause)
+            self._last_cause = cause
             gate = self._action_gate(c.c_fatigue)
             self._goto(CAUSE_TO_ACTION[cause], now)
             actions.append(f"route:{cause}")
@@ -253,8 +264,14 @@ class FSMEngine:
         elif s is State.MONITOR:
             # TODO(9월): C_fatigue trend 를 5~10분 윈도우로 측정. 지금은 진입 대비 부호로 판정.
             # timers.monitor_window_sec(없으면 0 = 다음 tick 에 바로 판정): 개입 효과가 나타날 시간을 기다린 뒤 판정한다.
+            asleep = self._asleep(frame)
             if (now - self._state_since) < self.tm.get("monitor_window_sec", 0):
                 pass
+            elif asleep or (asleep is not None and self._last_cause == "posture"):
+                # thresholds.still_asleep_delta: 점수는 30 s 안에 거의 안 움직여 부호 판정이 잡음이다(PC life_sim 10-24) — 자세로 판정.
+                # 아직 졸음이면 어떤 원인이든 격상, 깨어 있으면 자세 원인일 때만 회복(다른 원인은 지금처럼 점수 부호)
+                self._goto(State.ESCALATE if asleep else State.RECOVERY, now)
+                actions += ["reward:-" if asleep else "reward:+", "update_ai_policy"]
             elif c.c_fatigue < self._monitor_entry_fatigue:
                 self._goto(State.RECOVERY, now)
                 actions += ["reward:+", "update_ai_policy"]
@@ -263,7 +280,17 @@ class FSMEngine:
                 actions += ["reward:-", "update_ai_policy"]
 
         elif s is State.RECOVERY:
-            if c.c_fatigue < th["recovery_success"]:
+            asleep = self._asleep(frame)
+            if asleep:
+                if self._asleep_since is None:
+                    self._asleep_since = now
+            else:
+                self._asleep_since = None
+            if asleep and (now - self._asleep_since) >= self.tm.get("monitor_window_sec", 0):
+                self._asleep_since = None
+                self._goto(State.ESCALATE, now)                   # 회복 중 다시 졸음
+                actions += ["recovery_fail", "reward:-"]
+            elif c.c_fatigue < th["recovery_success"]:
                 self._goto(_focus_state_for(self.context), now)
                 actions += ["recovery_ok", "reward:+"]
             elif c.c_fatigue >= th["recovery_fail"]:
@@ -272,7 +299,11 @@ class FSMEngine:
 
         elif s is State.ESCALATE:
             actions.append("log_intervention_fail")
-            if self._remaining_options:
+            if self._asleep(frame) and self.cfg["gate"].get("asleep_retry") == "rest":
+                self._rest_since = now                            # 아직 졸음 — 카드(제안) 재시도 대신 바로 강제 휴식
+                self._goto(State.REST, now)
+                actions.append("force_rest")
+            elif self._remaining_options:
                 self._retry = True
                 self._goto(State.CAUSE_ANALYSIS, now)             # 다른 원인 재시도
             else:

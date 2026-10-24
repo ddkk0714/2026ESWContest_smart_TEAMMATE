@@ -269,3 +269,27 @@ def test_dominant_cause_routing_direct():
     assert dominant_cause(cog_heavy, w, cfg) == "cognitive"     # elapsed 0.15 최대
 
     assert dominant_cause(frame(0), w, cfg) == "cognitive"      # 근거 부족 시 안전 기본
+
+
+@pytest.mark.parametrize("asleep_delta,want", [(None, State.RECOVERY), (0.9, State.ESCALATE)])
+def test_monitor_judges_by_posture_when_still_asleep(asleep_delta, want):
+    """PC life_sim 10-24 리허설: 깨우기 30 s 뒤 점수는 잡음만큼만 움직여, 아직 자는데 RECOVERY 로 가서 17~22 분 멈췄다.
+    thresholds.still_asleep_delta 를 두면 자세가 아직 졸음(delta 1.0)일 때 격상하고, gate.asleep_retry: rest 면 바로 강제 휴식."""
+    from deskmate_hub.inference.config import load_config
+    cfg = load_config()
+    cfg["timers"]["monitor_window_sec"] = 30
+    cfg["thresholds"]["still_asleep_delta"] = asleep_delta
+    cfg["gate"]["asleep_retry"] = "rest"
+    e = FSMEngine(cfg)
+    t = drive_to_focus(e)
+    sig = {"posture": {"delta": 1.0}, "elapsed": {"delta": 0.9}, "keystroke": {"delta": 0.9}}
+    t = confirm_fatigue(e, t, sig)
+    e.tick(frame(t, sig=sig))                              # →CAUSE_ANALYSIS
+    e.tick(frame(t + 10, sig=sig))                         # →ACTION_*
+    e.tick(frame(t + 20, sig=sig, action_done=True))      # →MONITOR
+    assert e.state is State.MONITOR
+    dip = {"posture": {"delta": 1.0}, "elapsed": {"delta": 0.85}, "keystroke": {"delta": 0.85}}   # 점수만 조금 내려감
+    e.tick(frame(t + 30, sig=dip))
+    assert e.tick(frame(t + 60, sig=dip)).state is want
+    if want is State.ESCALATE:
+        assert e.tick(frame(t + 70, sig=dip)).state is State.REST      # 다른 원인 제안 대신 바로 강제 휴식
