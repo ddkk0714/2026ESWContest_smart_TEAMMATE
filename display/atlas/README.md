@@ -153,8 +153,21 @@ value `{"percent": <부호 있는 정수>}` 로 보내면 앱이 **램프에 마
 새 값 = clamp(round(기준 × (1 + percent/100)), 하한, 255). 올리는데 결과가 기준과 같으면 최소 +10 올려 체감되게 한다. 전원 켜기 프레임이 먼저 나간다.
 하한 기본 30(약 12 %)은 `lib/lamp_defaults.dart`, 보드에서는 `settings.json` `"lamp_brightness_floor": <0~255>` 로 바꾼다.
 게이트·만료·자동 피드백 스위치 규칙은 `set_brightness` 와 같다(feedback_disabled · expired · invalid_command · lamp_not_configured).
-`control/result` 에 기존 필드 + `previous`(기준) · `actual`(새 값)을 싣고, 되돌리기는 hub 가 `set_brightness <previous>` 로 보낸다.
+`control/result` 에 기존 필드 + `previous`(**실제 이전 상태**: 꺼져 있었으면 0, 앱이 이전 값을 모르면 필드 없음) · `actual`(새 값)을 싣고,
+되돌리기는 hub 가 `set_brightness <previous>` 로 보낸다(previous 가 없으면 생략). 계산 기준(꺼짐·모름 = 하한)과 previous 는 다른 값이다.
 개발자 모드에는 `CMD desk_lamp adjust_brightness +60%` · `RESULT … succeeded 110→176` · 기기 상태 `램프 밝기 110→176 ✓` 로 보인다.
+value 의 선택 키 `min_raw`(0~255): 계산 결과가 그보다 낮으면 거기까지 올린다(깨우기 = percent 60, min_raw 153).
+
+**사람이 직접 바꾼 값은 `manual_adjust` 로 알린다.** 블루투스 탭의 조명 밝기·선풍기 단계 버튼처럼 사람이 직접 바꾼 경우만(hub 명령 실행·국면 조명은 제외)
+`deskmate/feedback/user` 에 `{"kind":"manual_adjust","target_id":"desk_lamp"|"vent_fan","from":<이전 원시/단계>,"to":<새 값>,"ts":<epoch ms>}` 를 공통 envelope(UTF-8)로
+발행한다. 이전 값을 모르면(앱 시작 뒤 한 번도 안 씀) `from` 을 넣지 않는다. hub 는 "밝힌 뒤 직접 어둡게 = 밝음 싫음" 신호로 쓴다.
+
+**질문 카드 종류.** `interaction/request` 의 `kind` 가 `checkin_suggest` 면 "지금 피곤하세요?" 와 예/아니오(feedback accept/reject, 같은 request_id),
+`vent_suggest` 면 `data.minutes`·`why[]` 로 "창문을 N분 열어 주세요" + 이유(열게요/괜찮아요). 이 두 종류는 FSM 상태와 무관하게 응답·만료까지 떠 있다.
+그 밖의 kind 는 원인(cause) 기준 문구. 명령 로그에는 `REQUEST vent_suggest 5 분 why=co2_high,outdoor_ok 60 s` 처럼 그대로 찍힌다.
+
+개발자 모드 판정 패널 오른쪽 정보 패널: 블루투스 기기 연결 상태·자동 피드백 스위치 ON/OFF, mmWave(재실·움직임·거리·졸음·호흡), 환경(CO₂·온도·습도·조도·플래그),
+키 입력 요약, 2단계 피로 관찰(`sensor_summary.personalization` 의 status·label·confidence), 개인화 설명 한 줄. 판정 패널의 "위치" 는 `left ■□□` 처럼 세 칸 중 하나를 채운다.
 
 **장치 위치(왼쪽·가운데·오른쪽)와 Pi 4 자세 모델 교체(`lib/placement_page.dart`·`placement_controller.dart`·`placement_client.dart`).**
 장치를 보통 두는 위치를 **앉은 자리 기준**으로 고르면(`settings.json` `"placement": "left|center|right"`) 앱이 Pi 4 자세 서비스

@@ -30,6 +30,8 @@ class DevModePage extends StatefulWidget {
     required this.log,
     this.board,
     this.deviceAvailable = const {},
+    this.bluetoothLine,
+    this.placement,
     required this.defaultOnStart,
     required this.onDefaultOnStartChanged,
     this.connectionLabel,
@@ -49,6 +51,12 @@ class DevModePage extends StatefulWidget {
 
   /// target_id → 앱에 등록된 기기인지. false 면 "기기 없음 · 제어 못함" 을 덧붙인다.
   final Map<String, bool> deviceAvailable;
+
+  /// 블루투스 기기 연결 상태·자동 피드백 스위치 한 줄(main 이 만든다). null 이면 "-".
+  final String? bluetoothLine;
+
+  /// 앱에 저장된 장치 위치(left|center|right). 자세 서비스가 준 값이 있으면 그것을 우선 강조한다.
+  final String? placement;
 
   /// 설정 `dev_mode_default` — 앱을 켤 때 이 화면으로.
   final bool defaultOnStart;
@@ -170,9 +178,20 @@ class _DevModePageState extends State<DevModePage> {
             ),
             const SizedBox(width: 14),
             Expanded(
+              flex: 5,
               child: _Box(
                 child: JudgmentPanel(
-                    state: widget.state, posture: _poller.posture),
+                    state: widget.state,
+                    posture: _poller.posture,
+                    placement: widget.placement),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              flex: 4,
+              child: _Box(
+                child: DevInfoPanel(
+                    state: widget.state, bluetoothLine: widget.bluetoothLine),
               ),
             ),
           ]),
@@ -275,4 +294,104 @@ class _Box extends StatelessWidget {
         ),
         child: child,
       );
+}
+
+/// 개발자 모드 오른쪽 정보 패널: 블루투스·자동 피드백, 센서 요약(mmWave·CO₂·온습도·조도·키 입력),
+/// 2단계 피로 관찰(personalization status·label·confidence)과 개인화 설명. 값이 없으면 "-".
+class DevInfoPanel extends StatelessWidget {
+  const DevInfoPanel({super.key, required this.state, this.bluetoothLine});
+
+  final DisplayState? state;
+  final String? bluetoothLine;
+
+  static const _mono = TextStyle(
+      fontFamily: 'monospace',
+      fontFamilyFallback: ['Courier New', 'Menlo', 'DejaVu Sans Mono'],
+      fontSize: 12.5,
+      height: 1.25,
+      color: DeskmateColors.ink);
+
+  @override
+  Widget build(BuildContext context) {
+    final s = state;
+    final rows = <(String, String, String)>[
+      ('BT', bluetoothLine ?? '-', 'info-bt'),
+      ('mmWave', mmwave(s), 'info-mmwave'),
+      ('환경', environment(s), 'info-env'),
+      ('키 입력', keystroke(s?.keystroke), 'info-keys'),
+      ('2단계', observation(s), 'info-personalization'),
+      ('설명', s?.interventionExplanation ?? '-', 'info-explanation'),
+    ];
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      for (final (label, value, key) in rows)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 3),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            SizedBox(
+                width: 62,
+                child: Text(label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: _mono.copyWith(color: DeskmateColors.inkMuted))),
+            Expanded(
+              child: Text(value,
+                  key: ValueKey(key),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: _mono),
+            ),
+          ]),
+        ),
+    ]);
+  }
+
+  static String mmwave(DisplayState? s) {
+    if (s == null) return '-';
+    final parts = <String>[
+      if (s.present != null) (s.present! ? '재실' : '부재'),
+      if (s.mmwaveMotionState != null)
+        '${s.mmwaveMotionState}${s.mmwaveMotionLevel == null ? '' : ' ${s.mmwaveMotionLevel}'}',
+      if (s.mmwaveDistanceCm != null) '${s.mmwaveDistanceCm} cm',
+      if (s.mmwaveDrowsyState != null) s.mmwaveDrowsyState!,
+      if (s.mmwaveRespBpm != null) '호흡 ${s.mmwaveRespBpm}',
+    ];
+    return parts.isEmpty ? '-' : parts.join(' · ');
+  }
+
+  static String environment(DisplayState? s) {
+    if (s == null) return '-';
+    final parts = <String>[
+      if (s.co2Ppm != null) 'CO₂ ${s.co2Ppm} ppm',
+      if (s.temperatureC != null) '${s.temperatureC!.toStringAsFixed(1)}°C',
+      if (s.humidityPct != null) '${s.humidityPct!.round()}%',
+      if (s.lux != null) '${s.lux} lx',
+      if (s.envFlags.isNotEmpty) s.envFlags.join(','),
+    ];
+    return parts.isEmpty ? '-' : parts.join(' · ');
+  }
+
+  static String keystroke(KeystrokeMetrics? k) {
+    if (k == null) return '-';
+    final parts = <String>[
+      if (k.valid == false) '무효',
+      if (k.typingActive != null) (k.typingActive! ? '타이핑' : '멈춤'),
+      if (k.eventCount != null) '${k.eventCount}회',
+      if (k.flightMeanMs != null) 'flight ${k.flightMeanMs!.round()}ms',
+      if (k.correctionRate != null) '교정 ${k.correctionRate!.toStringAsFixed(2)}',
+    ];
+    return parts.isEmpty ? '-' : parts.join(' · ');
+  }
+
+  /// `predicted FATIGUE 0.71` 처럼. status 만 있으면 그것(warming_up 등).
+  static String observation(DisplayState? s) {
+    final status = s?.personalizationStatus;
+    if (status == null) return '-';
+    final parts = <String>[
+      status,
+      if (s!.personalizationLabel != null) s.personalizationLabel!,
+      if (s.personalizationConfidence != null)
+        s.personalizationConfidence!.toStringAsFixed(2),
+    ];
+    return parts.join(' ');
+  }
 }

@@ -16,6 +16,7 @@ class BluetoothControlPage extends StatefulWidget {
     required this.feedback,
     required this.music,
     required this.links,
+    this.onManualAdjust,
   });
   final AtlasBluetoothService bluetooth;
   final FeedbackCoordinator feedback;
@@ -23,6 +24,9 @@ class BluetoothControlPage extends StatefulWidget {
 
   /// 저장·자동 재연결을 맡는다. 연결은 전부 이것을 거쳐야 저장된다.
   final BluetoothLinkManager links;
+
+  /// 사람이 직접 램프 밝기·선풍기 단계를 바꿨을 때(target_id, 이전 값(모르면 null), 새 값). hub 에 manual_adjust 로 간다.
+  final void Function(String targetId, int? from, int to)? onManualAdjust;
 
   @override
   State<BluetoothControlPage> createState() => _BluetoothControlPageState();
@@ -38,7 +42,10 @@ class _BluetoothControlPageState extends State<BluetoothControlPage> {
   Future<void> _testBrightness(int value) async {
     setState(() => _testing = true);
     try {
+      // 사람이 직접 바꾼 값만 hub 에 manual_adjust 로 알린다(hub 명령·국면 조명은 제외). from 은 실제 이전 상태.
+      final from = widget.feedback.lamp.previousBrightness;
       final ok = await widget.feedback.lamp.setBrightness(value);
+      if (ok) widget.onManualAdjust?.call('desk_lamp', from, value);
       _notice(ok
           ? '밝기 명령을 전송했습니다. 실제 조명 변화를 확인하세요.'
           : '조명 쓰기 실패: ${widget.feedback.lamp.lastError ?? '램프를 먼저 연결하세요'}');
@@ -55,8 +62,17 @@ class _BluetoothControlPageState extends State<BluetoothControlPage> {
     if (fan == null) return;
     setState(() => _testing = true);
     try {
+      final before = fan.lastState;
+      final from = before == null ? null : (before.power ? before.level : 0);
       final sent = await fan.send(frame);
       final state = sent.state;
+      if (sent.written) {
+        // [0x03, n] = 단계 n · [0x01, 0] = 끔(단계 0). 읽은 상태가 있으면 그 단계가 더 정확하다.
+        final to = state == null
+            ? (frame.first == 0x03 ? frame[1] : 0)
+            : (state.power ? state.level : 0);
+        widget.onManualAdjust?.call('vent_fan', from, to);
+      }
       _notice(!sent.written
           ? '선풍기 쓰기 실패: ${fan.lastError ?? '선풍기를 먼저 연결하세요'}'
           : state == null

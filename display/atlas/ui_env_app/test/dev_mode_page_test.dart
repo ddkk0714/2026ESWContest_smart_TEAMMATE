@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:deskmate_display/command_log.dart';
 import 'package:deskmate_display/dev_mode_page.dart';
 import 'package:deskmate_display/device_state_board.dart';
+import 'package:deskmate_display/display_state.dart';
+import 'package:deskmate_display/judgment_panel.dart';
 import 'package:deskmate_display/main.dart';
 import 'package:deskmate_display/settings_store.dart';
 import 'package:deskmate_display/tof_heatmap.dart';
@@ -154,6 +156,86 @@ void main() {
     await tester.pump();
     expect(switched, isTrue);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('info panel shows bluetooth, sensors, keystroke, personalization and placement',
+      (tester) async {
+    tester.view.physicalSize = const Size(1024, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final state = DisplayState.fromEnvelope({
+      'schema_version': '1.0',
+      'ts': 1769000002.0,
+      'seq': 3,
+      'data': {
+        'fsm_state': 'FOCUS_PC',
+        'phase': 'focus',
+        'context': 'pc',
+        'c_fatigue': 0.2,
+        'c_focus': 0.1,
+        'confidence': 0.5,
+        'gate': 'none',
+        'reasons': [],
+        'sensor_summary': {
+          'present': true,
+          'co2_ppm': 812,
+          'temp_c': 24.6,
+          'humidity_pct': 41,
+          'lux': 380,
+          'env_flags': ['co2_rising'],
+          'mmwave': {'motion_state': 'still', 'motion_level': 12, 'distance_cm': 64},
+          'keystroke': {'typing_active': true, 'event_count': 214, 'flight_mean_ms': 131.4},
+          'personalization': {
+            'mode': 'observe',
+            'status': 'predicted',
+            'label': 'FATIGUE',
+            'confidence': 0.71,
+          },
+          'personalize': {'explanation': '최근 수락률이 높은 자세 제안'},
+        },
+      },
+    });
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Padding(
+          padding: const EdgeInsets.fromLTRB(44, 24, 44, 28),
+          child: DevModePage(
+            state: state,
+            host: null,
+            onHostChanged: (_) {},
+            log: CommandLog(),
+            board: DeviceStateBoard(),
+            defaultOnStart: false,
+            onDefaultOnStartChanged: (_) {},
+            bluetoothLine: '램프 정상 · 선풍기 미사용 · 스피커 미사용 · 자동피드백 ON',
+            placement: 'left',
+          ),
+        ),
+      ),
+    ));
+    await tester.pump();
+    String text(String key) => tester.widget<Text>(find.byKey(ValueKey(key))).data!;
+    expect(text('info-bt'), '램프 정상 · 선풍기 미사용 · 스피커 미사용 · 자동피드백 ON');
+    expect(text('info-mmwave'), '재실 · still 12 · 64 cm');
+    expect(text('info-env'), 'CO₂ 812 ppm · 24.6°C · 41% · 380 lx · co2_rising');
+    expect(text('info-keys'), '타이핑 · 214회 · flight 131ms');
+    expect(text('info-personalization'), 'predicted FATIGUE 0.71');
+    expect(text('info-explanation'), '최근 수락률이 높은 자세 제안');
+    // 위치: 서비스 응답이 없으니 설정값(left)을 세 칸으로 강조
+    expect(text('judge-placement'), 'left ■□□');
+    expect(JudgmentPanel.placementText('center'), 'center □■□');
+    expect(JudgmentPanel.placementText('right'), 'right □□■');
+    expect(JudgmentPanel.placementText('unknown'), 'unknown □□□');
+    expect(JudgmentPanel.placementText(null), '-');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('info panel without state shows "-" everywhere', (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+        home: Scaffold(body: SizedBox(width: 400, height: 200, child: DevInfoPanel(state: null)))));
+    for (final key in ['info-bt', 'info-mmwave', 'info-env', 'info-keys', 'info-personalization', 'info-explanation']) {
+      expect(tester.widget<Text>(find.byKey(ValueKey(key))).data, '-', reason: key);
+    }
   });
 
   testWidgets('without a host the page shows an address input and does not poll',

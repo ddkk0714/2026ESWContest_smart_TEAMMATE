@@ -13,7 +13,11 @@ import 'display_state.dart';
 import 'tof_raw_client.dart';
 
 class JudgmentPanel extends StatelessWidget {
-  const JudgmentPanel({super.key, required this.state, required this.posture});
+  const JudgmentPanel(
+      {super.key, required this.state, required this.posture, this.placement});
+
+  /// 앱에 저장된 장치 위치(설정). 서비스가 `/api/state` 로 준 값이 있으면 그것을 쓴다.
+  final String? placement;
 
   /// `deskmate/state/phase` 의 최신 상태. 아직 없으면 null.
   final DisplayState? state;
@@ -40,7 +44,7 @@ class JudgmentPanel extends StatelessWidget {
       ('자세(hub)', hubPosture(s), 'judge-posture-hub'),
       ('자세(svc)', servicePosture(p), 'judge-posture-svc'),
       ('재실', presence(s), 'judge-presence'),
-      ('위치', p?.placement ?? '-', 'judge-placement'),
+      ('위치', placementText(p?.placement ?? placement), 'judge-placement'),
       ('개인화', s?.interventionExplanation ?? '-', 'judge-personalize'),
     ];
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -82,6 +86,18 @@ class JudgmentPanel extends StatelessWidget {
   }
 
   static String ratio(double? v) => v == null ? '-' : v.toStringAsFixed(2);
+
+  /// `left ■□□` 처럼 세 칸 중 하나를 채워 강조한다. 모르면 "-", unknown 은 `unknown □□□`.
+  static String placementText(String? placement) {
+    if (placement == null || placement.isEmpty) return '-';
+    final cells = switch (placement) {
+      'left' => '■□□',
+      'center' => '□■□',
+      'right' => '□□■',
+      _ => '□□□',
+    };
+    return '$placement $cells';
+  }
 
   /// `posture (source, conf)`. 자세가 없으면 "-".
   static String hubPosture(DisplayState? s) {

@@ -28,17 +28,25 @@ void main() {
         settings: SettingsStore(
             candidates: const [], legacyPostureCandidates: const []));
     addTearDown(links.dispose);
+    final manual = <(String, int?, int)>[];
     await tester.pumpWidget(MaterialApp(
         home: Scaffold(
             body: BluetoothControlPage(
                 bluetooth: bluetooth,
                 feedback: feedback,
                 music: music,
-                links: links))));
+                links: links,
+                onManualAdjust: (t, from, to) => manual.add((t, from, to))))));
     await tester.ensureVisible(find.byKey(const ValueKey('lamp-test-bright')));
     await tester.tap(find.byKey(const ValueKey('lamp-test-bright')));
     await tester.pumpAndSettle();
     expect(bluetooth.frames.last, ilinkFrame([1, 8, 1, 255]));
+    // 사람이 직접 바꾼 값은 manual_adjust 로: 처음엔 이전 값을 모른다(null), 두 번째는 255 → 64
+    expect(manual, [('desk_lamp', null, 255)]);
+    await tester.ensureVisible(find.byKey(const ValueKey('lamp-test-dim')));
+    await tester.tap(find.byKey(const ValueKey('lamp-test-dim')));
+    await tester.pumpAndSettle();
+    expect(manual.last, ('desk_lamp', 255, 64));
     await tester.ensureVisible(find.byKey(const ValueKey('music-test')));
     await tester.tap(find.byKey(const ValueKey('music-test')));
     await tester.pump();
@@ -337,39 +345,65 @@ void main() {
 
     test('computes relative brightness with floor, ceiling and a minimum step', () {
       expect(adjustBrightness(current: 110, percent: 60, floor: 30),
-          (previous: 110, actual: 176));
+          (base: 110, actual: 176));
       expect(adjustBrightness(current: 110, percent: -50, floor: 30),
-          (previous: 110, actual: 55));
+          (base: 110, actual: 55));
       // 하한
       expect(adjustBrightness(current: 110, percent: -90, floor: 30),
-          (previous: 110, actual: 30));
+          (base: 110, actual: 30));
       // 상한
       expect(adjustBrightness(current: 200, percent: 60, floor: 30),
-          (previous: 200, actual: 255));
-      // 꺼짐·모름 → 기준 = 하한
+          (base: 200, actual: 255));
+      // 꺼짐·모름 → 계산 기준 = 하한
       expect(adjustBrightness(current: null, percent: 60, floor: 30),
-          (previous: 30, actual: 48));
+          (base: 30, actual: 48));
       // 올리는데 반올림이 기준과 같으면 최소 단계(+10)
       expect(adjustBrightness(current: 30, percent: 1, floor: 30),
-          (previous: 30, actual: 40));
+          (base: 30, actual: 40));
       // 반올림이 이미 기준과 다르면 최소 단계 없이 그 값(250 × 1.01 = 252.5 → 253)
       expect(adjustBrightness(current: 250, percent: 1, floor: 30),
-          (previous: 250, actual: 253));
+          (base: 250, actual: 253));
       // 254 에서 +1 % 는 256.5 → 상한 255
       expect(adjustBrightness(current: 254, percent: 1, floor: 30),
-          (previous: 254, actual: 255));
+          (base: 254, actual: 255));
       // 255 는 더 못 올린다
       expect(adjustBrightness(current: 255, percent: 10, floor: 30),
-          (previous: 255, actual: 255));
+          (base: 255, actual: 255));
       // 내릴 때 기준이 하한이면 그대로
       expect(adjustBrightness(current: 30, percent: -20, floor: 30),
-          (previous: 30, actual: 30));
+          (base: 30, actual: 30));
       // 0 % 는 그대로
       expect(adjustBrightness(current: 90, percent: 0, floor: 30),
-          (previous: 90, actual: 90));
+          (base: 90, actual: 90));
       // 기준이 하한보다 낮으면 하한으로 올려 잡는다
       expect(adjustBrightness(current: 10, percent: 50, floor: 30),
-          (previous: 30, actual: 45));
+          (base: 30, actual: 45));
+      // min_raw: 결과가 그보다 낮으면 거기까지(깨우기 = +60 %, 적어도 153)
+      expect(adjustBrightness(current: 48, percent: 60, floor: 30, minRaw: 153),
+          (base: 48, actual: 153));
+      expect(adjustBrightness(current: 200, percent: 10, floor: 30, minRaw: 153),
+          (base: 200, actual: 220));
+      expect(adjustBrightness(current: null, percent: 60, floor: 30, minRaw: 153),
+          (base: 30, actual: 153));
+    });
+
+    test('min_raw in the command lifts the result; invalid min_raw is ignored', () async {
+      final bluetooth = _FakeBluetooth();
+      final coordinator = FeedbackCoordinator(
+          music: _FakeMusic(),
+          lamp: IlinkLampFeedback(bluetooth)..select(firstAddress),
+          bluetooth: bluetooth)
+        ..enabled = true;
+      await coordinator.lamp.apply('start'); // 48
+      final wake = await coordinator.handleControlCommand(
+          {...adjust('w1', 60), 'value': {'percent': 60, 'min_raw': 153}});
+      expect(wake?['previous'], 48);
+      expect(wake?['actual'], 153);
+      expect(bluetooth.frames.last, ilinkFrame([1, 8, 1, 153]));
+      final bad = await coordinator.handleControlCommand(
+          {...adjust('w2', 10), 'value': {'percent': 10, 'min_raw': 999}});
+      expect(bad?['status'], 'succeeded');
+      expect(bad?['actual'], 168);
     });
 
     test('lamp tracks the last written brightness from phase lighting and commands',
@@ -377,13 +411,16 @@ void main() {
       final bluetooth = _FakeBluetooth();
       final lamp = IlinkLampFeedback(bluetooth)..select(firstAddress);
       expect(lamp.currentBrightness, isNull);
+      expect(lamp.previousBrightness, isNull);
       await lamp.apply('focus');
       expect(lamp.currentBrightness, 110);
+      expect(lamp.previousBrightness, 110);
       await lamp.apply('fatigue');
       expect(lamp.currentBrightness, 180);
-      // 끄면 모름(null) — 기준은 하한이 된다
+      // 끄면 계산 기준은 하한(null), 실제 이전 상태는 0
       await lamp.apply('idle');
       expect(lamp.currentBrightness, isNull);
+      expect(lamp.previousBrightness, 0);
       expect(lamp.poweredOn, isFalse);
       await lamp.setBrightness(70);
       expect(lamp.currentBrightness, 70);
@@ -432,7 +469,7 @@ void main() {
       expect(coordinator.lamp.currentBrightness, 40);
     });
 
-    test('off or unknown lamp uses the floor; the floor comes from settings',
+    test('unknown lamp: base is the floor and previous is omitted; off lamp: previous is 0',
         () async {
       final bluetooth = _FakeBluetooth();
       final coordinator = FeedbackCoordinator(
@@ -441,13 +478,17 @@ void main() {
           bluetooth: bluetooth)
         ..enabled = true;
       expect(coordinator.brightnessFloor, kLampBrightnessFloorDefault);
+      // 모름(앱 시작 뒤 한 번도 안 씀): 계산 기준 30, previous 는 넣지 않는다(hub 가 되돌리기 생략)
       final unknown = await coordinator.handleControlCommand(adjust('f1', 60));
-      expect(unknown?['previous'], 30);
+      expect(unknown?['status'], 'succeeded');
+      expect(unknown?.containsKey('previous'), isFalse);
       expect(unknown?['actual'], 48);
+      expect(unknown?['actual_value'], 48);
+      // 꺼짐: 계산 기준은 하한(50), previous 는 0(되돌리기 set_brightness 0 = 끔)
       await coordinator.lamp.apply('idle');
       coordinator.brightnessFloor = 50;
       final off = await coordinator.handleControlCommand(adjust('f2', 20));
-      expect(off?['previous'], 50);
+      expect(off?['previous'], 0);
       expect(off?['actual'], 60);
       // 전원 켜기 프레임이 먼저
       expect(bluetooth.frames[bluetooth.frames.length - 2], ilinkFrame([1, 8, 5, 1]));

@@ -128,7 +128,8 @@ class CommandLog extends ChangeNotifier {
         final action = data['action'] ?? data['prompt_code'];
         final explanation = data['explanation']?.toString().trim();
         final arm = data['arm_label'] ?? data['arm'];
-        final minutes = data['ventilate_minutes'];
+        final minutes = data['minutes'] ?? data['ventilate_minutes'];
+        final why = data['why'];
         final expires = data['expires_in_s'];
         final parts = <String>[
           kind,
@@ -137,6 +138,7 @@ class CommandLog extends ChangeNotifier {
             '"${_clip(explanation, 60)}"',
           if (arm != null) 'arm=$arm',
           if (minutes != null) '$minutes 분',
+          if (why is List && why.isNotEmpty) 'why=${why.join(',')}',
           if (expires != null) '$expires s',
         ];
         return CommandLogEntry(at, CommandLogKind.request, parts.join(' '));
@@ -144,6 +146,10 @@ class CommandLog extends ChangeNotifier {
         if (data['kind'] == 'personalization') {
           return CommandLogEntry(at, CommandLogKind.feedback,
               'personalization ${_s(data['action'])}');
+        }
+        if (data['kind'] == 'manual_adjust') {
+          return CommandLogEntry(at, CommandLogKind.feedback,
+              'manual_adjust ${_s(data['target_id'])} ${data['from'] ?? '?'}→${_s(data['to'])}');
         }
         final verdict = _s(data['verdict']);
         final corrected = data['corrected_state'];

@@ -14,6 +14,70 @@ import 'privacy_state.dart';
 /// 한글이 `ì¡°ëª…` 처럼 깨진다(10-24 실기). 깨진 바이트가 섞여 있어도 화면은 멈추지 않게 대체 문자로 둔다.
 String mqttPayloadText(List<int> bytes) => utf8.decode(bytes, allowMalformed: true);
 
+/// hub 가 보낸 질문(`deskmate/interaction/request`)의 화면용 상세. kind 로 카드 문구가 갈린다.
+class PendingRequest {
+  const PendingRequest({
+    required this.requestId,
+    required this.kind,
+    this.promptCode,
+    this.explanation,
+    this.minutes,
+    this.why = const [],
+    this.expiresInS,
+  });
+
+  final String requestId;
+
+  /// break_suggest · env_suggest · posture_suggest · checkin_suggest · vent_suggest …
+  final String kind;
+  final String? promptCode;
+  final String? explanation;
+
+  /// vent_suggest 의 `data.minutes`(창문 여는 분). 없으면 null.
+  final int? minutes;
+
+  /// vent_suggest 의 `data.why[]` 이유 코드.
+  final List<String> why;
+  final int? expiresInS;
+
+  static PendingRequest? fromData(Map<String, dynamic> data) {
+    final id = data['request_id'];
+    if (id is! String || id.isEmpty) return null;
+    final minutes = data['minutes'] ?? data['ventilate_minutes'];
+    final explanation = data['explanation'];
+    final expires = data['expires_in_s'];
+    return PendingRequest(
+      requestId: id,
+      kind: data['kind']?.toString() ?? 'unknown',
+      promptCode: data['prompt_code']?.toString(),
+      explanation: explanation is String && explanation.trim().isNotEmpty
+          ? explanation.trim()
+          : null,
+      minutes: minutes is num ? minutes.round() : null,
+      why: (data['why'] as List? ?? const [])
+          .map((e) => e.toString())
+          .toList(growable: false),
+      expiresInS: expires is num ? expires.round() : null,
+    );
+  }
+}
+
+/// 사용자가 앱에서 직접 바꾼 기기 값(블루투스 탭의 밝기·단계 버튼). hub 가 "밝힌 뒤 직접 어둡게 = 밝음 싫음" 신호로 쓴다.
+/// hub 명령 실행·국면 조명은 보내지 않는다. [from] 을 모르면(앱 시작 뒤 한 번도 안 씀) 키를 넣지 않는다.
+Map<String, Object?> buildManualAdjustData({
+  required String targetId,
+  required int? from,
+  required int to,
+  required int tsMs,
+}) =>
+    {
+      'kind': 'manual_adjust',
+      'target_id': targetId,
+      if (from != null) 'from': from,
+      'to': to,
+      'ts': tsMs,
+    };
+
 abstract interface class StateSource {
   String get label;
   bool get isConnected;
@@ -22,6 +86,13 @@ abstract interface class StateSource {
   String? get displayMessage;
   SessionReport? get sessionReport;
   bool get hasPendingRequest;
+
+  /// 지금 떠 있는 질문의 상세(kind·문구). 없으면 null.
+  PendingRequest? get pendingRequest;
+
+  /// `deskmate/feedback/user` 로 verdict 가 아닌 데이터(manual_adjust 등)를 공통 envelope 로 보낸다.
+  /// 보낼 곳이 없는 소스(HTTP·데모)는 조용히 무시한다.
+  Future<void> publishFeedbackData(Map<String, Object?> data);
 
   /// hub 가 준 질문의 응답 제한 시간(`expires_in_s`). 질문이 없거나 모르면 null.
   int? get pendingRequestExpiresInS;
@@ -124,6 +195,12 @@ class HttpStateSource implements StateSource {
 
   @override
   bool get hasPendingRequest => false;
+
+  @override
+  PendingRequest? get pendingRequest => null;
+
+  @override
+  Future<void> publishFeedbackData(Map<String, Object?> data) async {}
 
   @override
   int? get pendingRequestExpiresInS => null;
@@ -303,6 +380,7 @@ class MqttStateSource implements StateSource, PrivacySource {
 
   String? _pendingRequestId;
   int? _pendingExpiresInS;
+  PendingRequest? _pendingRequest;
   int _sequence = 0;
   String? _hubHealth;
   DateTime? _hubHealthAt;
@@ -345,8 +423,27 @@ class MqttStateSource implements StateSource, PrivacySource {
   bool get hasPendingRequest => _pendingRequestId != null;
 
   @override
+  PendingRequest? get pendingRequest =>
+      _pendingRequestId == null ? null : _pendingRequest;
+
+  @override
   int? get pendingRequestExpiresInS =>
       _pendingRequestId == null ? null : _pendingExpiresInS;
+
+  @override
+  Future<void> publishFeedbackData(Map<String, Object?> data) async {
+    await _ensureConnected();
+    final payload = jsonEncode({
+      'schema_version': '1.0',
+      'ts': DateTime.now().millisecondsSinceEpoch / 1000,
+      'node': 'display',
+      'boot_id': _bootId,
+      'seq': ++_sequence,
+      'data': data,
+    });
+    final builder = MqttClientPayloadBuilder()..addUTF8String(payload);
+    _client.publishMessage(_feedbackTopic, MqttQos.atLeastOnce, builder.payload!);
+  }
 
   @override
   Future<DisplayState> fetch() async {
@@ -412,9 +509,13 @@ class MqttStateSource implements StateSource, PrivacySource {
         }
         if (received.topic == _stateTopic) {
           _latest = DisplayState.fromEnvelope(envelope);
-          if (!_latest!.fsmState.startsWith('ACTION_')) {
+          // 질문이 있는 동안 FSM 이 ACTION_* 를 벗어나면 카드도 내린다. 다만 상태와 무관한
+          // 질문(checkin_suggest·vent_suggest)은 응답·만료까지 둔다.
+          if (!_latest!.fsmState.startsWith('ACTION_') &&
+              !_isStateIndependent(_pendingRequest?.kind)) {
             _pendingRequestId = null;
             _pendingExpiresInS = null;
+            _pendingRequest = null;
           }
           final data = envelope['data'];
           final summary = data is Map ? data['sensor_summary'] : null;
@@ -447,6 +548,7 @@ class MqttStateSource implements StateSource, PrivacySource {
               _pendingRequestId = requestId;
               final expires = data['expires_in_s'];
               _pendingExpiresInS = expires is num ? expires.round() : null;
+              _pendingRequest = PendingRequest.fromData(data);
             }
           }
         } else if (received.topic == _hubHealthTopic) {
@@ -526,7 +628,11 @@ class MqttStateSource implements StateSource, PrivacySource {
     );
     _pendingRequestId = null;
     _pendingExpiresInS = null;
+    _pendingRequest = null;
   }
+
+  static bool _isStateIndependent(String? kind) =>
+      kind == 'checkin_suggest' || kind == 'vent_suggest';
 
   @override
   Future<void> sendTestFrame(TestSensorInput input,
@@ -688,6 +794,12 @@ class DemoStateSource implements StateSource {
 
   @override
   bool get hasPendingRequest => false;
+
+  @override
+  PendingRequest? get pendingRequest => null;
+
+  @override
+  Future<void> publishFeedbackData(Map<String, Object?> data) async {}
 
   @override
   int? get pendingRequestExpiresInS => null;

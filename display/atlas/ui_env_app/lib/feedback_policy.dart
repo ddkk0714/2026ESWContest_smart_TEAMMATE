@@ -79,6 +79,10 @@ class IlinkLampFeedback {
   int? get currentBrightness => _poweredOn == false ? null : _lastBrightness;
   bool? get poweredOn => _poweredOn;
 
+  /// control/result 의 `previous` — **실제 이전 상태**. 꺼져 있었으면 0(되돌리기 set_brightness 0 이 끔으로 돌아가게),
+  /// 이전 값을 모르면(앱 시작 뒤 한 번도 안 씀 등) null → 필드를 넣지 않아 hub 가 되돌리기를 생략한다.
+  int? get previousBrightness => _poweredOn == false ? 0 : _lastBrightness;
+
   void select(String address) {
     if (_address == address) return;
     _address = address;
@@ -169,14 +173,18 @@ class IlinkLampFeedback {
   }
 }
 
-/// hub 의 `adjust_brightness {"percent": p}`: 지금 밝기 대비 p % 만큼. [current] 가 null(꺼짐·모름)이면 기준은 [floor].
+/// hub 의 `adjust_brightness {"percent": p}`: 지금 밝기 대비 p % 만큼. [current] 가 null(꺼짐·모름)이면 계산 기준은 [floor].
 /// 새 값 = clamp(round(기준 × (1 + p/100)), floor, 255). 올리는데 결과가 기준과 같으면(반올림·상한 전) 최소 [minStep] 만큼 올려
-/// 체감되게 한다(255 면 더 못 올림). 기준(previous)과 새 값(actual)을 함께 돌려준다.
-({int previous, int actual}) adjustBrightness({
+/// 체감되게 한다(255 면 더 못 올림). 계산 기준(base)과 새 값(actual)을 돌려준다 — 결과의 `previous` 는 이것이 아니라
+/// 실제 이전 상태([IlinkLampFeedback.previousBrightness])다.
+/// [minRaw] (선택 키 `min_raw`, 0~255): 계산 결과가 그보다 낮으면 거기까지 올린다 — 깨우기(percent 60, min_raw 153)처럼
+/// "적어도 이만큼은 밝게" 가 필요한 명령용.
+({int base, int actual}) adjustBrightness({
   required int? current,
   required int percent,
   required int floor,
   int minStep = kLampAdjustMinStep,
+  int? minRaw,
 }) {
   final lo = floor.clamp(0, 255);
   final base = (current ?? lo).clamp(lo, 255);
@@ -184,7 +192,8 @@ class IlinkLampFeedback {
   if (percent > 0 && next <= base && base < 255) {
     next = min(255, base + minStep);
   }
-  return (previous: base, actual: next);
+  if (minRaw != null && next < minRaw) next = minRaw.clamp(lo, 255);
+  return (base: base, actual: next);
 }
 
 /// The FSM authorizes interventions through its gate and control commands.
@@ -385,13 +394,20 @@ class FeedbackCoordinator {
         value is Map &&
         value['percent'] is num &&
         (value['percent'] as num).isFinite) {
+      final minRaw = value['min_raw'];
       final adjusted = adjustBrightness(
         current: lamp.currentBrightness,
         percent: (value['percent'] as num).round(),
         floor: brightnessFloor,
+        minRaw: minRaw is int && minRaw >= 0 && minRaw <= 255 ? minRaw : null,
       );
+      // previous = 실제 이전 상태(꺼짐 0 · 모름이면 생략). 계산 기준(하한)과 다르다.
+      final previous = lamp.previousBrightness;
       actual = adjusted.actual;
-      extra = {'previous': adjusted.previous, 'actual': adjusted.actual};
+      extra = {
+        if (previous != null) 'previous': previous,
+        'actual': adjusted.actual,
+      };
       frames = [
         ilinkFrame([0x01, 0x08, 0x05, 0x01]),
         ilinkFrame([0x01, 0x08, 0x01, adjusted.actual])

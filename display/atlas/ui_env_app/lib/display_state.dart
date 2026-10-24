@@ -31,6 +31,9 @@ class DisplayState {
     this.tofPostureSource,
     this.presenceSource,
     this.inRoom,
+    this.personalizationStatus,
+    this.personalizationLabel,
+    this.personalizationConfidence,
   });
 
   final String fsmState;
@@ -82,6 +85,11 @@ class DisplayState {
   /// 책상은 비어도 방에는 있는지(`sensor_summary.in_room`, mmWave 기준). 없으면 null.
   final bool? inRoom;
 
+  /// 2단계 피로 관찰(`sensor_summary.personalization`): status(warming_up·predicted…)·label·confidence. 없으면 null.
+  final String? personalizationStatus;
+  final String? personalizationLabel;
+  final double? personalizationConfidence;
+
   factory DisplayState.fromEnvelope(Map<String, dynamic> envelope) {
     if (envelope['schema_version'] != '1.0') {
       throw const FormatException('unsupported schema_version');
@@ -92,6 +100,7 @@ class DisplayState {
     final personalize = _map(sensors['personalize']);
     final explanation = personalize['explanation'];
     final tof = _map(sensors['tof']);
+    final observation = _map(sensors['personalization']);
     return DisplayState(
       fsmState: _requiredString(data, 'fsm_state'),
       phase: _requiredString(data, 'phase'),
@@ -137,6 +146,9 @@ class DisplayState {
       tofPostureSource: tof['posture_source']?.toString(),
       presenceSource: sensors['presence_source']?.toString(),
       inRoom: sensors['in_room'] is bool ? sensors['in_room'] as bool : null,
+      personalizationStatus: observation['status']?.toString(),
+      personalizationLabel: observation['label']?.toString(),
+      personalizationConfidence: _nullableDouble(observation['confidence']),
     );
   }
 

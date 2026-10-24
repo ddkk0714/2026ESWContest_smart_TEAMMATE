@@ -150,6 +150,36 @@ void main() {
     expect(res.ok, isTrue);
   });
 
+  test('vent_suggest shows minutes and why; manual_adjust feedback shows from→to', () {
+    final vent = CommandLog.entryFor(
+        CommandLog.topicRequest,
+        _env({
+          'request_id': 'v-1',
+          'kind': 'vent_suggest',
+          'minutes': 5,
+          'why': ['co2_high', 'outdoor_ok'],
+          'expires_in_s': 60,
+        }),
+        now: at)!;
+    expect(vent.line, '12:03:41 REQUEST vent_suggest 5 분 why=co2_high,outdoor_ok 60 s');
+    final checkin = CommandLog.entryFor(
+        CommandLog.topicRequest,
+        _env({'request_id': 'c-1', 'kind': 'checkin_suggest', 'expires_in_s': 30}),
+        now: at)!;
+    expect(checkin.text, 'checkin_suggest 30 s');
+    final manual = CommandLog.entryFor(
+        CommandLog.topicFeedback,
+        _env({'kind': 'manual_adjust', 'target_id': 'desk_lamp', 'from': 110, 'to': 64, 'ts': 1},
+            node: 'display'),
+        now: at)!;
+    expect(manual.line, '12:03:41 FEEDBACK manual_adjust desk_lamp 110→64');
+    final unknownFrom = CommandLog.entryFor(
+        CommandLog.topicFeedback,
+        _env({'kind': 'manual_adjust', 'target_id': 'vent_fan', 'to': 3, 'ts': 1}),
+        now: at)!;
+    expect(unknownFrom.text, 'manual_adjust vent_fan ?→3');
+  });
+
   test('unknown topics and messages without data are ignored', () {
     expect(CommandLog.entryFor('deskmate/state/phase', _env({'fsm_state': 'IDLE'})),
         isNull);

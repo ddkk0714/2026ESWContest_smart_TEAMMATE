@@ -422,6 +422,7 @@ class _DashboardPageState extends State<DashboardPage> {
         state: state,
         displayMessage: _source.displayMessage,
         hasPendingRequest: _hasPendingRequest,
+        pendingRequest: _override != null ? null : _source.pendingRequest,
         keystroke: _localKeystroke ?? state.keystroke,
         keystrokeReference:
             _localKeystroke != null ? DateTime.now() : state.timestamp,
@@ -988,6 +989,7 @@ class _DashboardPageState extends State<DashboardPage> {
                           feedback: _feedbackController,
                           music: _music,
                           links: _btLinks,
+                          onManualAdjust: _reportManualAdjust,
                         ),
                       _AppView.sessionReport =>
                         SessionReportCard(report: _source.sessionReport),
@@ -1027,10 +1029,28 @@ class _DashboardPageState extends State<DashboardPage> {
           'desk_lamp': _feedbackController.lamp.configured,
           'vent_fan': _feedbackController.fan?.configured ?? false,
         },
+        bluetoothLine: '램프 ${linkHealthLabel(_btLinks.lampStatus)}'
+            ' · 선풍기 ${linkHealthLabel(_btLinks.fanStatus)}'
+            ' · 스피커 ${linkHealthLabel(_btLinks.speakerStatus)}'
+            ' · 자동피드백 ${_feedbackController.enabled ? 'ON' : 'OFF'}',
+        placement: _settings.placement,
         defaultOnStart: _settings.devModeDefault,
         onDefaultOnStartChanged: _setDevModeDefault,
         connectionLabel: _source.connectionLabel,
       );
+
+  /// 사람이 블루투스 탭에서 직접 밝기·단계를 바꿨다 → `feedback/user` kind=manual_adjust. 실패해도 조용히.
+  void _reportManualAdjust(String targetId, int? from, int to) {
+    if (_override != null) return;
+    final data = buildManualAdjustData(
+        targetId: targetId,
+        from: from,
+        to: to,
+        tsMs: DateTime.now().millisecondsSinceEpoch);
+    unawaited(_source
+        .publishFeedbackData(data)
+        .catchError((Object e) => diag.write('manual_adjust 전송 실패: $e')));
+  }
 
   /// hub 상태가 아직 없을 때의 개발자 모드 — 위에 대기 문구 한 줄, 아래는 같은 화면.
   Widget _devModeWithoutState() => Column(

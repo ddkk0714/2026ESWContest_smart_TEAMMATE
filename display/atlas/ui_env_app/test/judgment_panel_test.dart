@@ -54,7 +54,7 @@ void main() {
     );
     await tester.pumpWidget(_wrap(JudgmentPanel(state: state, posture: posture)));
     expect(_text(tester, 'judge-state'), 'FATIGUE_SUSPECT');
-    expect(_text(tester, 'judge-placement'), 'left');
+    expect(_text(tester, 'judge-placement'), 'left ■□□');
     expect(_text(tester, 'judge-fatigue'), '0.61');
     expect(_text(tester, 'judge-focus'), '0.30');
     expect(_text(tester, 'judge-cause'), 'posture');

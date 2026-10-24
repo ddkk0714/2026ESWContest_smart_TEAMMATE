@@ -6,6 +6,7 @@ import 'app_motion.dart';
 import 'deskmate_theme.dart';
 import 'display_state.dart';
 import 'intervention.dart';
+import 'state_source.dart' show PendingRequest;
 
 class DashboardView extends StatelessWidget {
   const DashboardView({
@@ -30,11 +31,16 @@ class DashboardView extends StatelessWidget {
     this.suggestionRemaining,
     this.onCorrect,
     this.focusSummary,
+    this.pendingRequest,
   });
 
   final DisplayState state;
   final String? displayMessage;
   final bool hasPendingRequest;
+
+  /// 떠 있는 질문의 상세. checkin_suggest("지금 피곤하세요?")·vent_suggest("창문을 N분 열어 주세요")는
+  /// FSM 원인과 무관한 문구를 쓴다. null 이면 원인(cause) 기준 문구.
+  final PendingRequest? pendingRequest;
 
   /// 자동 실행 뒤 알림. 있으면 다른 화면보다 먼저 띄운다.
   final AutoNotice? autoNotice;
@@ -92,6 +98,7 @@ class DashboardView extends StatelessWidget {
         onFeedback: onFeedback,
         remaining: suggestionRemaining,
         onCorrect: onCorrect,
+        request: pendingRequest,
       );
     } else if (pinAmbient) {
       // 자동 순환이 꺼져 있으면 국면이 바뀌어도 화면을 바꾸지 않는다.
@@ -378,9 +385,13 @@ class SuggestionView extends StatelessWidget {
     required this.onFeedback,
     this.remaining,
     this.onCorrect,
+    this.request,
   });
   final DisplayState state;
   final ValueChanged<String> onFeedback;
+
+  /// hub 질문의 상세(kind). null 이면 원인 기준 문구.
+  final PendingRequest? request;
 
   /// 응답 제한 시간까지 남은 시간. 모르면 표시하지 않는다.
   final Duration? remaining;
@@ -431,8 +442,8 @@ class SuggestionView extends StatelessWidget {
                       switchOutCurve: AppMotion.reverseCurve,
                       transitionBuilder: AppMotion.fadeTransition,
                       child: Text(
-                        _suggestionTitle(state),
-                        key: ValueKey('title-${state.cause}'),
+                        suggestionTitle(state, request),
+                        key: ValueKey('title-${request?.kind ?? state.cause}'),
                         style: Theme.of(context).textTheme.headlineMedium,
                       ),
                     ),
@@ -448,8 +459,8 @@ class SuggestionView extends StatelessWidget {
                       switchOutCurve: AppMotion.reverseCurve,
                       transitionBuilder: AppMotion.fadeTransition,
                       child: Text(
-                        '이유: ${interventionReason(state)}',
-                        key: ValueKey('body-${state.cause}'),
+                        suggestionBody(state, request),
+                        key: ValueKey('body-${request?.kind ?? state.cause}'),
                         style: Theme.of(context).textTheme.bodyLarge,
                       ),
                     ),
@@ -472,13 +483,15 @@ class SuggestionView extends StatelessWidget {
                       const Spacer(),
                     ],
                     OutlinedButton(
+                      key: const ValueKey('suggestion-reject'),
                       onPressed: () => onFeedback('reject'),
-                      child: const Text('괜찮아요'),
+                      child: Text(suggestionButtons(request).reject),
                     ),
                     const SizedBox(width: 10),
                     FilledButton(
+                      key: const ValueKey('suggestion-accept'),
                       onPressed: () => onFeedback('accept'),
-                      child: const Text('적용할게요'),
+                      child: Text(suggestionButtons(request).accept),
                     ),
                   ]),
                 ]),
@@ -1078,6 +1091,53 @@ String _stateLabel(DisplayState state) =>
       'end': '세션 완료',
     }[state.phase] ??
     state.fsmState;
+/// 카드 제목. checkin_suggest 는 "지금 피곤하세요?", vent_suggest 는 "창문을 N분 열어 주세요", 그 밖은 원인 기준.
+String suggestionTitle(DisplayState state, PendingRequest? request) =>
+    switch (request?.kind) {
+      'checkin_suggest' => '지금 피곤하세요?',
+      'vent_suggest' => request!.minutes == null
+          ? '창문을 잠깐 열어 주세요'
+          : '창문을 ${request.minutes}분 열어 주세요',
+      _ => _suggestionTitle(state),
+    };
+
+/// 카드 본문. vent_suggest 는 why[] 를 사람 말로, checkin 은 설명이 있으면 그것, 없으면 짧은 안내.
+String suggestionBody(DisplayState state, PendingRequest? request) {
+  switch (request?.kind) {
+    case 'checkin_suggest':
+      return request!.explanation ?? '예/아니오로만 답해 주세요. 판정을 다듬는 데 써요.';
+    case 'vent_suggest':
+      final why = [for (final w in request!.why) ventWhyText(w)];
+      if (why.isNotEmpty) return '이유: ${why.join(' · ')}';
+      return request.explanation != null
+          ? '이유: ${request.explanation}'
+          : '이유: ${interventionReason(state)}';
+    default:
+      return '이유: ${interventionReason(state)}';
+  }
+}
+
+/// 카드 버튼 글자. checkin 은 예/아니오(feedback 은 그대로 accept/reject).
+({String accept, String reject}) suggestionButtons(PendingRequest? request) =>
+    switch (request?.kind) {
+      'checkin_suggest' => (accept: '예', reject: '아니오'),
+      'vent_suggest' => (accept: '열게요', reject: '괜찮아요'),
+      _ => (accept: '적용할게요', reject: '괜찮아요'),
+    };
+
+/// vent_suggest 의 why 코드 → 문구. 모르는 코드는 그대로.
+String ventWhyText(String code) => switch (code) {
+      'co2_high' => 'CO₂가 높아요',
+      'co2_rising' => 'CO₂가 오르고 있어요',
+      'too_hot' => '방이 더워요',
+      'too_humid' => '습도가 높아요',
+      'stale_air' => '공기가 답답해요',
+      'outdoor_ok' => '바깥 날씨가 괜찮아요',
+      'outdoor_cold' => '바깥이 추워 짧게만',
+      'wind' => '바람이 있어 환기가 잘 돼요',
+      _ => code,
+    };
+
 String _suggestionTitle(DisplayState state) => switch (state.cause) {
       // 환경은 원인이 여럿이라 플래그로 무엇을 할지 고른다(CO₂ 면 환기, 어두우면 조명).
       'environment' => _environmentTitle(state.envFlags),
