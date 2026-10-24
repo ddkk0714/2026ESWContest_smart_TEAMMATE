@@ -38,15 +38,15 @@ static void test_binary(void) {
     const uint8_t on_speed[] = {FAN_OP_POWER, 1, FAN_OP_SPEED, 40};
     CHECK(bin(&s, on_speed, sizeof(on_speed)) == FAN_OK);
     CHECK(s.power && s.speed == 40);
-    CHECK(fan_duty_permille(&s) == 1000); /* start kick */
+    CHECK(fan_duty_permille(&s) == FAN_MAX_DUTY_PERMILLE); /* start kick, capped */
     settle(&s);
-    CHECK(fan_duty_permille(&s) == FAN_MIN_DUTY_PERMILLE + (1000 - FAN_MIN_DUTY_PERMILLE) * 40 / 100);
+    CHECK(fan_duty_permille(&s) == FAN_MIN_DUTY_PERMILLE); /* 40 % of the 60 % ceiling is under the floor */
 
     const uint8_t level3[] = {FAN_OP_LEVEL, 3};
     CHECK(bin(&s, level3, 2) == FAN_OK);
     CHECK(s.speed == FAN_LEVEL3_SPEED && fan_level(&s) == 3);
     settle(&s);
-    CHECK(fan_duty_permille(&s) == 1000);
+    CHECK(fan_duty_permille(&s) == FAN_MAX_DUTY_PERMILLE); /* speed 100 % = the cap */
 
     const uint8_t timer[] = {FAN_OP_TIMER, 0x2c, 0x01}; /* 300 s */
     CHECK(bin(&s, timer, 3) == FAN_OK);
@@ -143,9 +143,9 @@ static void test_reverse_pause(void) {
     CHECK(text(&s, "reverse") == FAN_OK && s.dir == FAN_DIR_REVERSE);
     CHECK(fan_duty_permille(&s) == 0); /* pause first */
     fan_tick(&s, FAN_REVERSE_PAUSE_MS);
-    CHECK(fan_duty_permille(&s) == 1000); /* then kick */
+    CHECK(fan_duty_permille(&s) == FAN_MAX_DUTY_PERMILLE); /* then kick */
     fan_tick(&s, FAN_KICK_MS);
-    CHECK(fan_duty_permille(&s) > 0 && fan_duty_permille(&s) < 1000);
+    CHECK(fan_duty_permille(&s) > 0 && fan_duty_permille(&s) < FAN_MAX_DUTY_PERMILLE);
     CHECK(text(&s, "dir reverse") == FAN_OK && s.pause_ms == 0); /* same direction: no pause */
 }
 
@@ -162,8 +162,8 @@ static void test_natural_range(void) {
         if (d > hi) hi = d;
     }
     CHECK(lo >= FAN_MIN_DUTY_PERMILLE);
-    CHECK(hi <= 1000);
-    CHECK(hi - lo > 200); /* it actually gusts */
+    CHECK(hi <= FAN_MAX_DUTY_PERMILLE);
+    CHECK(hi - lo > (FAN_MAX_DUTY_PERMILLE - FAN_MIN_DUTY_PERMILLE) / 3); /* it actually gusts */
 }
 
 static void test_buttons(void) {
@@ -220,13 +220,31 @@ static void test_timer_button(void) {
     CHECK(!s.power && s.timer_step == 0);
 }
 
+/* The duties asked for on 10-24: 30 / 45 / 60 %, floor 30 %, nothing above 60 %. */
+static void test_level_duties(void) {
+    fan_state_t s;
+    fan_init(&s);
+    const uint16_t want[] = {0, 300, 450, 600};
+    for (uint8_t level = 1; level <= 3; level++) {
+        uint8_t cmd[] = {FAN_OP_LEVEL, level};
+        CHECK(bin(&s, cmd, 2) == FAN_OK);
+        settle(&s);
+        CHECK(fan_duty_permille(&s) == want[level]);
+    }
+    CHECK(text(&s, "speed 5") == FAN_OK);
+    settle(&s);
+    CHECK(fan_duty_permille(&s) == 300);
+    CHECK(text(&s, "off; speed 100") == FAN_OK);
+    CHECK(fan_duty_permille(&s) == 600); /* the start kick obeys the ceiling too */
+}
+
 static void test_encode(void) {
     fan_state_t s;
     fan_init(&s);
-    CHECK(text(&s, "speed 55; natural; reverse; timer 600") == FAN_OK);
+    CHECK(text(&s, "speed 75; natural; reverse; timer 600") == FAN_OK);
     uint8_t st[FAN_STATE_LEN];
     CHECK(fan_encode_state(&s, st) == 8);
-    const uint8_t want[] = {FAN_STATE_VERSION, 1, 55, 2, 1, 1, 0x58, 0x02};
+    const uint8_t want[] = {FAN_STATE_VERSION, 1, 75, 2, 1, 1, 0x58, 0x02};
     CHECK(memcmp(st, want, sizeof(want)) == 0);
 }
 
@@ -241,6 +259,7 @@ int main(void) {
     test_natural_range();
     test_buttons();
     test_timer_button();
+    test_level_duties();
     test_encode();
     printf("%d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;

@@ -81,7 +81,7 @@ class FanState {
   String get summary {
     if (!power) return '꺼짐';
     final timer = timerSeconds > 0 ? ' · ${(timerSeconds / 60).ceil()}분 뒤 꺼짐' : '';
-    return '$level단 $speed%${natural ? ' 자연풍' : ''}$timer';
+    return '$level단${natural ? ' 자연풍' : ''}$timer'; // 세기 값은 듀티가 아니라 단계로 보인다
   }
 }
 

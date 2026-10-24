@@ -100,7 +100,7 @@
       <summary>세밀하게 · 방향</summary>
       <div class="row">
         <div>
-          <div class="speed"><span>속도</span><span id="speedval">-</span></div>
+          <div class="speed"><span>세기 (100 = 3단)</span><span id="speedval">-</span></div>
           <input id="speed" type="range" min="0" max="100" step="5" disabled>
         </div>
         <button id="dir" disabled>방향: 정회전</button>
@@ -117,7 +117,7 @@ const SERVICE = 'f1970001-51e1-4b0e-a7f1-8d27d8e34683';
 const COMMAND = 'f1970002-51e1-4b0e-a7f1-8d27d8e34683';
 const STATE = 'f1970003-51e1-4b0e-a7f1-8d27d8e34683';
 const TIMER_PRESETS_MIN = [30, 60, 120, 240];   // firmware FAN_TIMER_PRESETS_MIN
-const LEVEL_SPEED = [0, 30, 60, 100];           // firmware FAN_LEVEL1..3_SPEED
+const LEVEL_SPEED = [0, 50, 75, 100];           // firmware FAN_LEVEL1..3_SPEED (duty 30/45/60 %)
 const OP = {power: 1, speed: 2, level: 3, mode: 4, dir: 5, timer: 6};
 
 const $ = (id) => document.getElementById(id);
@@ -162,7 +162,7 @@ function render() {
   fan.style.setProperty('--spin', `${(1.9 - state.speed / 100 * 1.5).toFixed(2)}s`);
   const left = remaining();
   $('status').innerHTML = state.power
-    ? `<b>${state.level}단</b> · ${state.speed}%${state.natural ? ' · 자연풍' : ''}${left ? ` · ${fmt(left)} 뒤 꺼짐` : ''}`
+    ? `<b>${state.level}단</b>${state.natural ? ' · 자연풍' : ''}${left ? ` · ${fmt(left)} 뒤 꺼짐` : ''}`
     : '<b>꺼짐</b>';
   $('power').textContent = state.power ? '전원 끄기' : '전원 켜기';
   $('power').classList.toggle('on', state.power);
@@ -175,7 +175,7 @@ function render() {
   $('timer').textContent = left > 0 ? `타이머 ${timerStep >= 0 ? label(timerStep) : fmt(left)}` : '타이머';
   $('timer').disabled = !state.power;
   if (document.activeElement !== $('speed')) $('speed').value = state.speed;
-  $('speedval').textContent = `${state.speed}%`;
+  $('speedval').textContent = `${state.speed}`;
   $('dir').textContent = `방향: ${state.reverse ? '역회전' : '정회전'}`;
 }
 
@@ -246,11 +246,11 @@ $('dir').onclick = () => send(OP.dir, state.reverse ? 0 : 1);
 setInterval(() => { if (state && state.timer) render(); }, 1000);
 
 // ?demo: the firmware's command handling in miniature, so the page can be tried without a fan.
-let sim = {power: false, speed: 60, natural: false, reverse: false, timerEnd: 0};
+let sim = {power: false, speed: 75, natural: false, reverse: false, timerEnd: 0};
 function demoState() {
   const timer = sim.timerEnd ? Math.max(0, Math.ceil((sim.timerEnd - Date.now()) / 1000)) : 0;
   if (sim.timerEnd && !timer) { sim.power = false; sim.timerEnd = 0; }
-  const level = !sim.power ? 0 : sim.speed <= 45 ? 1 : sim.speed <= 80 ? 2 : 3;
+  const level = !sim.power ? 0 : sim.speed <= 62 ? 1 : sim.speed <= 87 ? 2 : 3;
   return {power: sim.power, speed: sim.speed, level, natural: sim.natural, reverse: sim.reverse, timer};
 }
 function demoApply(bytes) {

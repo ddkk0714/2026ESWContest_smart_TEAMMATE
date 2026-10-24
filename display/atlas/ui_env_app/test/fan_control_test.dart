@@ -55,7 +55,7 @@ void main() {
     expect(state.actualFor('set_mode'), 'natural');
     expect(state.matches('set_timer', 601), isTrue);
     expect(state.matches('set_level', 3), isFalse);
-    expect(state.summary, '2단 55% 자연풍 · 10분 뒤 꺼짐');
+    expect(state.summary, '2단 자연풍 · 10분 뒤 꺼짐');
     expect(FanState.decode([2, 0, 0, 0, 0, 0, 0, 0]), isNull);
     expect(FanState.decode([1, 0]), isNull);
     expect(FanState.decode(null), isNull);
