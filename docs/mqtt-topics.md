@@ -177,13 +177,15 @@ Pi 5의 **PC 키스트로크** 탭은 앱에 설정된 동일 MQTT 브로커에�
     "light_pref": "low",              // low | mid | high
     "sound_pref": "off",              // off | low | mid | high — off 면 알림음·음성 안내 후보 제외
     "wind_pref": "mid",               // off | low | mid | high
-    "focus_help": ["light", "break"], // light | sound | wind | break | voice 중 복수
+    "focus_help": ["light", "break"], // light | sound | wind | break | voice 중 복수, 순서 = 몰입 도움 순위. 별칭 lamp·fan·notify 도 받는다
     "placement": "left"               // left | center | right
   }
 }
 ```
 
-- 허브는 받으면 `logs/profiles/<설정 profile_id>/user_profile.json` 에 저장하고(재시작·브로커 재시작 뒤에도 유지) 화면 `sensor_summary.personalize.signal` 에
+- envelope `node` 는 거르지 않는다(제품 UI `pi5-ui`·개발자 앱 `display` 모두). profile_id 는 앱이 재시작해도 같은 값을 유지한다.
+- 다른 profile_id 가 오면 그 사람의 정책으로 바꾼다(사람별 `logs/profiles/<profile_id>/`, 지금 사용자 `active_profile.json`).
+- 허브는 받으면 `logs/profiles/<profile_id>/user_profile.json` 에 저장하고(재시작·브로커 재시작 뒤에도 유지) 화면 `sensor_summary.personalize.signal` 에
   "첫 설정 반영: …" 한 줄을 싣는다. 같은 내용을 다시 받으면(retain 재수신) 아무것도 바꾸지 않는다.
 
 ### `deskmate/state/phase`

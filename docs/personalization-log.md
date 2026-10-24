@@ -159,5 +159,6 @@
   `kind`(manual_dim_app | manual_dim_lux | ignored), `reward`, `reason`(ignored 일 때: no_hub_command · unrelated_command ·
   outside_window · no_lux_rise · room_light), `detail`, `policy_arms`, `text_ko`. `ignored` 는 정책에 넣지 않은 기록이다.
 - `profile_id` 는 첫 설정 프로필(`deskmate/profile/user`)의 `profile_id` 를 받으면 그 값(불투명 id, 이름 아님). 프로필 자체는
-  `logs/profiles/<설정 profile_id>/user_profile.json` 에 `onboarding.keep_fields` 만 원자적으로 저장한다(정책 `policy.json` 옆).
+  `logs/profiles/<profile_id>/user_profile.json` 에 `onboarding.keep_fields` 만 원자적으로 저장한다(정책 `policy.json` 옆).
+  다른 profile_id 가 오면 사람별 폴더로 바꾸고(`active_profile.json`), 열린 에피소드는 `outcome.status: profile_switched` 로 닫는다.
 - 시험: `hub/tests/test_personalize_signals.py`.

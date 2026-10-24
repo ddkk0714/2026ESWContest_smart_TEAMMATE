@@ -435,10 +435,11 @@ session/report.data.control_results는 forward·undo 각각 total, executing, su
 | `light_pref` | `low`·`mid`·`high` | 조명 arm prior(어둡게 선호면 밝힘 ↓·따뜻하고 어둡게 ↑) |
 | `sound_pref` | `off`·`low`·`mid`·`high` | `off` 면 알림음·음성 안내 arm 후보 제외 |
 | `wind_pref` | `off`·`low`·`mid`·`high` | 선풍기 arm prior |
-| `focus_help` | `light`·`sound`·`wind`·`break`·`voice` 의 목록 | 고른 항목의 arm prior ↑ |
+| `focus_help` | `light`·`sound`·`wind`·`break`·`voice` 의 목록(몰입 도움 순서). 별칭 `lamp`→light·`fan`→wind·`notify`→sound | 고른 항목의 arm prior ↑. 보낸 순서 유지, 중복·모르는 값은 버림 |
 | `placement` | `left`·`center`·`right` | 저장만(설치 위치) |
 
-허브는 `onboarding.keep_fields` 에 적힌 필드만 `logs/profiles/<설정 profile_id, 기본 default>/user_profile.json`(정책 `policy.json` 옆)에 원자적(tmp → rename)으로 저장해
+사람별 저장: 다른 `profile_id` 가 오면 `logs/profiles/<profile_id>/`(policy.json·user_profile.json)로 바꾼다 — 있으면 불러오고, 없으면 전역 prior + 그 프로필의 mapping 에서 시작한다. 지금 사용자는 `logs/profiles/active_profile.json`(profile_id 만)에 남아 재시작하면 그 사람으로 이어 가고, 프로필 메시지가 한 번도 없으면 설정 `profile_id`(기본 default)가 사용자다. 바꾸기 전 열린 에피소드는 앞 사람 정책으로 `profile_switched` 로 닫는다. 화면 `sensor_summary.personalize.active_profile_id`, 코드 `LiveHub.active_profile_id`.
+허브는 `onboarding.keep_fields` 에 적힌 필드만 `logs/profiles/<profile_id>/user_profile.json`(정책 `policy.json` 옆)에 원자적(tmp → rename)으로 저장해
 재시작 뒤에도 쓴다. 삭제 등록 대상에 넣을 파일이다.
 
 `manual_adjust` — 사용자가 앱의 조명 조절로 밝기를 직접 바꿨다는 보고. 기존 `deskmate/feedback/user` 에 `kind: "manual_adjust"` 로 싣는다.

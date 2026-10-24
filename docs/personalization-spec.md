@@ -173,7 +173,10 @@ score(a) = w_accept·(θ̃_a,accept · x) + w_effect·(θ̃_a,effect · x)
 
 "밝힘" = 허브가 실행한 desk_lamp 명령 중 `adjust_brightness` percent > 0(결과 actual ≤ previous 면 아님) 또는 `set_brightness` 가
 결과의 previous 보다 큼(previous 를 모르면 `implicit.brighten_unknown_min` 이상). 갱신할 arm 은 그 에피소드 arm 이
-`implicit.brighten_arms` 중 하나면 그것, 아니면(FSM 기본 `actions.posture` 밝힘) 목록 전부. 화면에는 `sensor_summary.personalize.signal.text_ko`
+`implicit.brighten_arms`(light_cool_bright·wake_light) 중 하나면 그것, 아니면(FSM 기본 밝힘) 원인별 `implicit.fsm_default_arms`
+(자세 → wake_light). 깨우기 무드등은 밴딧 arm `wake_light`(adjust_brightness {percent: 60, min_raw: 153}, 되돌림 = 결과 previous,
+졸음일 때 앞서는 prior)라 "직접 어둡게" 로 이 사람에게 덜 고르게 된다. 사람별 저장: 다른 `profile_id` 가 오면 `logs/profiles/<profile_id>/`(policy.json·user_profile.json)로 바꾼다 — 있으면 불러오고, 없으면 전역 prior + 그 프로필의 mapping 에서 시작한다. 지금 사용자는 `logs/profiles/active_profile.json`(profile_id 만)에 남아 재시작하면 그 사람으로 이어 가고, 프로필 메시지가 한 번도 없으면 설정 `profile_id`(기본 default)가 사용자다. 바꾸기 전 열린 에피소드는 앞 사람 정책으로 `profile_switched` 로 닫는다. 화면 `sensor_summary.personalize.active_profile_id`, 코드 `LiveHub.active_profile_id`.
+화면에는 `sensor_summary.personalize.signal.text_ko`
 한 줄("밝힘 뒤 직접 어둡게 함 → 밝은 조명 덜 고름", "깨우기 성공 (엎드림→바른 자세 25 s)", "첫 설정 반영: …")이 실린다.
 
 ## 6. 취침 권유 — 밴딧 밖의 규칙
