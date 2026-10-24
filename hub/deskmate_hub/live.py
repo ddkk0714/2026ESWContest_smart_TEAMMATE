@@ -22,6 +22,8 @@ from .ingest import SensorCache, SessionTracker, build_frame, load_ingest_config
 from .presentation import state_envelope
 from .profile import apply_profile, apply_section
 from .esm import make_label, write_label
+from .co2_window import CARD_KIND as CO2_CARD_KIND, PROMPT_CODE as CO2_PROMPT, ARM_ID as CO2_ARM, ARM_LABEL as CO2_ARM_LABEL
+from .co2_window import Co2WindowRule, load_co2_window_config
 from .personalization import PersonalizationRuntime, load_personalization_config
 from .personalization.privacy import PersonalizationPrivacy, load_privacy_config
 from .personalization.ondevice import OnDeviceLearner, load_ondevice_config
@@ -61,6 +63,7 @@ class LiveHub:
         personalize_cfg: dict[str, Any] | None = None,
         personalize_log_path: str | None = None,
         personalize_policy_path: str | None = None,
+        co2_window_cfg: dict[str, Any] | None = None,
         profile: str | None = None,
         frame_log: TextIO | None = None,
         state_log: TextIO | None = None,
@@ -146,6 +149,15 @@ class LiveHub:
                 on_log=lambda m: print(m, file=self.out), policy=self.personalize_policy, policy_path=policy_path)
         self.ondevice_cfg = ondevice_cfg if ondevice_cfg is not None else load_ondevice_config()
         self.ondevice = OnDeviceLearner(self.ondevice_cfg, self.privacy)
+        # CO₂ 창문 환기 타이밍 규칙(co2_window.py, config/co2_window.yaml) — FSM 밖, 깨어 있을 때 vent_suggest 카드. 기기 명령 없음
+        if co2_window_cfg is None:
+            try:
+                co2_window_cfg = load_co2_window_config()
+            except (ImportError, OSError) as exc:     # 보드 payload 에 co2_window.json 이 없으면(PyYAML 없음) 규칙만 끈다
+                print(f"[co2_window] 설정을 못 읽어 끈다: {exc}", file=self.out)
+                co2_window_cfg = {}
+        self.co2_window = Co2WindowRule(co2_window_cfg, personalize_cfg=self.personalize_cfg,
+                                        on_log=lambda m: print(m, file=self.out, flush=True))
 
     def tick_once(self, now: float | None = None) -> dict[str, Any]:
         now = time.time() if now is None else now
@@ -161,6 +173,8 @@ class LiveHub:
                 # request_id 가 오면 현재 질문과 맞는지 본다. 없거나 'atlas-display'(HTTP 시절 기본값)면 그대로 받는다.
                 rid = feedback.get("request_id")
                 current = self.pending_request["data"]["request_id"] if self.pending_request else None
+                # CO₂ 창문 카드의 응답은 FSM·제어로 보내지 않는다(제어 디스패처에 거절이 가면 직전 자동 실행을 되돌린다)
+                co2_card = self._is_co2_card(self.pending_request)
                 if verdict not in ("accept", "reject", "correct", "timeout"):
                     print(f"[esm] 알 수 없는 verdict: {verdict!r}", file=self.out)
                 elif verdict == "correct":
@@ -173,8 +187,15 @@ class LiveHub:
                         request = self.pending_request
                         self.pending_request = None
                         self._record_feedback(feedback, now, request)
-                        if self.control is not None:
+                        if co2_card:
+                            self.co2_window.on_feedback("timeout", now)
+                        elif self.control is not None:
                             self.control.on_feedback("timeout", now)
+                elif co2_card and rid in (None, "", "atlas-display", current):
+                    request = self.pending_request
+                    self.pending_request = None
+                    self.co2_window.on_feedback(verdict, now)
+                    self._record_feedback(feedback, now, request)
                 elif rid in (None, "", "atlas-display", current):
                     request = self.pending_request
                     self.tracker.pending_feedback = verdict
@@ -253,6 +274,8 @@ class LiveHub:
                                    "seeded": sorted({m for b in snap["buckets"].values() for m in b})}
         if self.privacy.enabled:
             summary["privacy"] = self.privacy.snapshot()
+        if self.co2_window.enabled:
+            summary["co2_window"] = self.co2_window.snapshot(now)
         if self.personalization_cfg.get("enabled"):
             if self.ondevice_cfg.get("enabled"):
                 self.ondevice.bind(self.personalization)
@@ -270,6 +293,13 @@ class LiveHub:
         if (self.personalize_recorder is not None and self.personalize_recorder.last_episode_id
                 and self.pending_request is not None):
             self.personalize_recorder.link_request(self.pending_request["data"]["request_id"])
+        if self.co2_window.enabled:
+            # FSM 이 ACTION_* 이거나 카드가 떠 있으면 내지 않는다. 개인화 에피소드에 묶이지 않게 link_request 뒤에 낸다
+            card = self.co2_window.observe_view(
+                view, now, self.ingest_cfg, present=frame.present, state=result.state.value,
+                blocked=result.state in self._REQUEST_STATES or self.pending_request is not None)
+            if card is not None:
+                self._publish_co2_card(card, result, now)
 
         if self.frame_log:
             self.frame_log.write(json.dumps(frame_to_dict(frame), ensure_ascii=False) + "\n"); self.frame_log.flush()
@@ -342,7 +372,9 @@ class LiveHub:
         self.pending_request = None
         self._record_feedback({"verdict": "timeout", "request_id": request["data"]["request_id"]},
                               now, request, source="hub")
-        if self.control is not None:
+        if self._is_co2_card(request):
+            self.co2_window.on_feedback("timeout", now)
+        elif self.control is not None:
             self.control.on_feedback("timeout", now)
 
     def _record_feedback(self, feedback: dict[str, Any], now: float,
@@ -434,6 +466,28 @@ class LiveHub:
             if view.get("ventilate_minutes") is not None:       # 창문 환기 카드: "N 분만 열어 주세요"(날씨가 정한 길이)
                 self.pending_request["data"]["ventilate_minutes"] = view["ventilate_minutes"]
         self.seq += 1
+        self.publish_request(self.pending_request)
+
+    @staticmethod
+    def _is_co2_card(request: dict[str, Any] | None) -> bool:
+        return request is not None and request["data"].get("kind") == CO2_CARD_KIND
+
+    def _publish_co2_card(self, card: dict[str, Any], result, now: float) -> None:
+        """CO₂ 창문 환기 카드(vent_suggest) — _maybe_request 의 카드와 같은 모양. minutes·ventilate_minutes = 창문 열 시간(분)."""
+        self.pending_request = {
+            "schema_version": "1.0", "ts": now, "node": "hub", "boot_id": self.boot_id, "seq": self.seq,
+            "data": {
+                "request_id": f"{self.boot_id}-{self.seq}", "kind": CO2_CARD_KIND, "prompt_code": CO2_PROMPT,
+                "options": ["accept", "reject"], "expires_in_s": float(self.co2_window.c.get("expires_in_s", 180)),
+                "evidence": ["co2_window"], "cause": "environment",
+                "c_fatigue": round(float(result.scores.c_fatigue), 4),
+                "minutes": card["minutes"], "ventilate_minutes": card["minutes"], "why": list(card["why"]),
+                "explanation": card["explanation"], "arm": CO2_ARM, "arm_label": CO2_ARM_LABEL,
+                "co2_avg": card["co2_avg"], "source": "co2_window",
+            },
+        }
+        self.seq += 1
+        print(f"[co2_window] 카드: {card['explanation']} why={','.join(card['why'])}", file=self.out, flush=True)
         self.publish_request(self.pending_request)
 
 

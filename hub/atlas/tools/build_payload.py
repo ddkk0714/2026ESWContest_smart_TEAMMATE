@@ -108,6 +108,13 @@ def main() -> None:
                     personalize_config = yaml.safe_load(source)
                 archive.writestr("deskmate_hub/config/personalize.json",
                                  json.dumps(personalize_config, ensure_ascii=False, separators=(",", ":")))
+            # CO₂ 창문 환기 타이밍 규칙(co2_window.py) — 이 JSON 이 없으면 보드는 YAML 을 못 읽어 규칙이 꺼진다
+            co2_window_yaml = args.config.with_name("co2_window.yaml")
+            if co2_window_yaml.exists():
+                with co2_window_yaml.open(encoding="utf-8") as source:
+                    co2_window_config = yaml.safe_load(source)
+                archive.writestr("deskmate_hub/config/co2_window.json",
+                                 json.dumps(co2_window_config, ensure_ascii=False, separators=(",", ":")))
             privacy_yaml = args.config.with_name("privacy.yaml")
             if privacy_yaml.exists():
                 with privacy_yaml.open(encoding="utf-8") as source:
