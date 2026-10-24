@@ -246,13 +246,19 @@ class EpisodeRecorder:
             except Exception as exc:  # 정책 오류가 허브를 멈추면 안 된다 — 기록만 남기고 FSM 기본 동작
                 self._log(f"[personalize] decide 실패, FSM 기본 동작: {exc}")
                 decision = None
-        if (decision is not None and getattr(decision, "delivered_gate", None) == "none"
-                and getattr(decision, "source", "") == "fallback"):
-            decision = None   # 후보 없음·세션 상한: FSM 기본 동작 그대로, 로그엔 fallback 로 남긴다
+        logged: dict[str, Any] | None = None
+        if decision is not None and getattr(decision, "delivered_gate", None) == "none":
+            if getattr(decision, "source", "") == "fallback":
+                decision = None   # 후보 없음·세션 상한: FSM 기본 동작 그대로, 로그엔 fallback 로 남긴다
+            elif getattr(decision, "source", "") == "fsm_fixed":
+                # 정책이 맡지 않는 원인(환경): FSM 기본 명령·게이트 그대로. 에피소드는 그 이유(fsm_fixed)로 계속 기록한다 —
+                # dict 로 넘겨 밴딧 학습 대상(_decisions)에는 들어가지 않는다.
+                logged = dict(decision.to_dict(), delivered_gate=gate)
+                decision = None
         self.last_decision = decision if not isinstance(decision, dict) else None
         eid = self.logger.open_episode(
             session_id=self.session_id, situation=situation, fsm=fsm,
-            decision=decision if decision is not None else fallback_decision(result.gate, fsm_action=fsm_action),
+            decision=decision if decision is not None else (logged or fallback_decision(result.gate, fsm_action=fsm_action)),
             ts=now)
         delivered = self.last_decision.delivered_gate if self.last_decision is not None else gate
         self._episodes[eid] = {"cause": fsm["cause"], "gate": delivered, "upright_seen": False}

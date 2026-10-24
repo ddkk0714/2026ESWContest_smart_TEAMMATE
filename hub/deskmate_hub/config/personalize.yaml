@@ -7,6 +7,11 @@ profile_id: default
 local_utc_offset_hours: 9   # 시각·요일 특징의 지역시 (KST)
 log_dir: logs               # logs/personalize-<boot_id>.jsonl, profiles/<profile_id>/{daily.jsonl,policy.json}
 
+# 정책(밴딧)이 arm 을 고르는 FSM 원인(2026-10-25). 환경(environment)은 여기 없어 control.yaml actions.environment(FSM 고정)만 나간다 —
+# 환기·선풍기·공기청정기 arm 은 정의만 남고 기본으로는 뽑히지 않는다. null 이면 모든 원인. 환경 원인 에피소드도 기록(source fsm_fixed)은 계속.
+policy:
+  causes: [posture, cognitive]
+
 features:
   posture_window_min: 10        # 자세 분포 창
   posture_hold_full_min: 30     # 지속 시간 정규화 상한

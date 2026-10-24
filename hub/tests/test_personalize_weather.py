@@ -13,6 +13,9 @@ from deskmate_hub.personalize import (FEATURE_NAMES, InterventionPolicy, Situati
                                       load_personalize_config, vectorize, weather_from_sample)
 
 CFG = load_personalize_config()
+# 이 파일은 밴딧 수식·날씨·페르소나를 환경 arm(선풍기·환기)으로도 시험한다 — 10-25 기본값(policy.causes 에 environment 없음)은
+# test_policy_causes.py 가 따로 본다. 여기서는 모든 원인을 정책에 맡긴다.
+CFG["policy"] = {"causes": ["environment", "posture", "cognitive"]}
 NOW = 1_792_561_200.0          # 2026-10-21 15:40 KST
 
 
