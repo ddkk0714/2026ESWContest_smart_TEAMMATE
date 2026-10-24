@@ -113,6 +113,9 @@ class ReactionLearner:
                 d = json.load(fh)
         except (OSError, ValueError):
             return
+        names = d.get("features")
+        if names is not None and list(names) != self.feature_names():
+            return                                      # 특징 이름·순서가 다른 상태(옛 버전·다른 기기) — 틀린 가중치를 쓰느니 FSM 에서 다시 시작
         self.model.load(d.get("model") or {})
         self.n_labels = int(d.get("n_labels", 0))
         self.common = bool(d.get("common", False))

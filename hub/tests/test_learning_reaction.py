@@ -90,6 +90,21 @@ def test_state_persists_across_sessions(tmp_path):
     assert b.n_labels == 5 and b.model.w == a.model.w
 
 
+def test_state_with_other_feature_order_is_not_loaded(tmp_path):
+    """개수는 같고 순서가 다른 상태 파일(옛 버전·공통모델 형식 차이)의 가중치는 쓰지 않는다 — 틀린 가중치에 common_alpha 가 붙는 것을 막는다."""
+    import json
+    path = str(tmp_path / "learner.json")
+    names = ReactionLearner.feature_names()
+    n = len(names)
+    json.dump({"model": {"n": n, "w": [0.5] * (n + 1), "g2": [1.0] * (n + 1)}, "n_labels": 0, "hist": [],
+               "features": list(reversed(names)), "common": True}, open(path, "w", encoding="utf-8"))
+    lr = ReactionLearner(CFG, state_path=path)
+    assert lr.model.w != [0.5] * (n + 1)
+    json.dump({"model": {"n": n, "w": [0.5] * (n + 1), "g2": [1.0] * (n + 1)}, "n_labels": 0, "hist": [],
+               "features": names, "common": True}, open(path, "w", encoding="utf-8"))
+    assert ReactionLearner(CFG, state_path=path).model.w == [0.5] * (n + 1)
+
+
 def test_engine_uses_the_adjusted_score():
     e = FSMEngine()
     e.score_adjust = lambda s, f: Scores(c_focus=s.c_focus, c_fatigue=0.99, focus_weights=s.focus_weights,
