@@ -1,7 +1,7 @@
 # pico2w_ble_fan — 블루투스 선풍기
 
-> **⚠ 하드웨어 미검증(2026-10-24).** 호스트 테스트·UF2 빌드·리모컨 데모 화면까지만 확인했다.
-> 실제 Pico 2 W 에 구워 모터를 돌리거나 BLE 로 붙여 본 적은 아직 없다. 처음 켤 때는 아래 [실기 확인 순서](#실기-확인-순서)를 따른다.
+> **⚠ 모터·버튼은 미검증(2026-10-24).** Pico 2 W 단품(모듈 없음)에 구워 USB 시리얼 명령·BLE 광고·연결·읽기·쓰기·알림·거절까지
+> 확인했다(아래 [실기 확인 순서](#실기-확인-순서)의 ✔). L9110 모듈을 단 모터 구동, 버튼, LED, 리모컨 페이지의 실제 BLE 연결, Pi 5 경로는 아직이다.
 
 Raspberry Pi Pico 2 W 와 **L9110 선풍기 DC 모터 모듈**(Keyes 계열, 핀 `GND·VCC·INA·INB`)로 만든 블루투스 선풍기다.
 집 선풍기처럼 쓴다:
@@ -60,6 +60,10 @@ Raspberry Pi Pico 2 W 와 **L9110 선풍기 DC 모터 모듈**(Keyes 계열, 핀
 1. Pico 2 W 의 **BOOTSEL** 버튼을 누른 채 USB 를 꽂는다 → `RP2350` 드라이브가 뜬다.
 2. `deskmate_ble_fan.uf2` 를 그 드라이브에 끌어 놓는다 → 자동 재부팅, LED 가 1초마다 깜빡이면 정상.
 
+이미 Pico SDK 프로그램(이 펌웨어 포함, USB 장치 `2E8A:0009`)이 돌고 있으면 BOOTSEL 없이 COM 포트를 **1200 baud 로 열었다 닫으면**
+굽기 모드로 들어간다: `python -c "import serial,time; s=serial.Serial('COM10',1200); time.sleep(.2); s.close()"`
+(포트가 사라지며 오류가 나는 게 정상). 10-24 이 방법으로 구웠다.
+
 ## 블루투스 리모컨
 
 [`remote/index.html`](remote/index.html) — 전원·1/2/3단·자연풍·타이머 버튼이 있는 리모컨 페이지(Web Bluetooth).
@@ -85,7 +89,9 @@ PC 주소(`http://<PC IP>:8000`)를 넣는다.
 
 하드웨어가 생기면 이 순서로 하나씩 확인하고 결과를 PR 에 남긴다.
 
-1. **모듈 없이 굽기** — LED 가 1초마다 깜빡이는가. COM 포트(115200)에 `[fan] BLE up as DESKMATE-FAN …` 이 찍히는가.
+1. **모듈 없이 굽기** — LED 가 1초마다 깜빡이는가. COM 포트(115200)에 `status` → `[fan] usb: power=off speed=60 …`.
+   ✔ 10-24: 1200 baud 리셋으로 굽기, `status`·모르는 명령·범위 초과 거절 확인. 노트북 BLE 검색에 `DESKMATE-FAN`(RSSI −33),
+   `tools/ble_fan.py status`·`mode natural`(쓰기 뒤 다시 읽기), 잘못된 명령 ATT 0x13 거절, USB 로 바꾼 상태가 BLE 알림으로 옴. LED 는 아직 눈으로 안 봄.
 2. **USB 시리얼로 모터** — 줄 끝 LF 로 `level 1` → `level 2` → `level 3` → `off`. 1단에서도 출발하는가(안 되면 아래 조정).
 3. **자연풍·역회전·타이머** — `natural`(세기가 몇 초 주기로 오르내림), `reverse`, `on; timer 20s`(20초 뒤 꺼짐).
 4. **리모컨** — 연결, 1/2/3단, 자연풍, 타이머 30분 표시, 끊었다 다시 연결.

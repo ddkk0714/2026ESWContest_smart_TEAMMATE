@@ -372,6 +372,12 @@ def main(argv: list[str] | None = None) -> int:
     except (ValueError, ConnectionError, RuntimeError) as exc:
         logging.error("%s", exc)
         return 1
+    except Exception as exc:  # noqa: BLE001 - bleak 예외는 백엔드마다 다르다
+        if type(exc).__name__ == "BleakGATTProtocolError" and 0x13 in exc.args:
+            logging.error("선풍기가 명령을 거절했습니다(ATT 0x13) — 명령 형식·범위를 확인하세요")
+        else:
+            logging.error("%s: %s", type(exc).__name__, exc)
+        return 1
 
 
 if __name__ == "__main__":
