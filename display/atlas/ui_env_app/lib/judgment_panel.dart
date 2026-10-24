@@ -40,6 +40,7 @@ class JudgmentPanel extends StatelessWidget {
       ('자세(hub)', hubPosture(s), 'judge-posture-hub'),
       ('자세(svc)', servicePosture(p), 'judge-posture-svc'),
       ('재실', presence(s), 'judge-presence'),
+      ('위치', p?.placement ?? '-', 'judge-placement'),
       ('개인화', s?.interventionExplanation ?? '-', 'judge-personalize'),
     ];
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

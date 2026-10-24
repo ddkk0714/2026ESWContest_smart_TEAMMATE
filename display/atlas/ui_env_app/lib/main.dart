@@ -27,6 +27,9 @@ import 'posture_screen.dart';
 import 'preview_page.dart';
 import 'command_log.dart';
 import 'dev_mode_page.dart';
+import 'placement_client.dart' show placementKo;
+import 'placement_controller.dart';
+import 'placement_page.dart';
 import 'sensor_overview_page.dart';
 import 'developer_page.dart';
 import 'session_report.dart';
@@ -125,6 +128,8 @@ class _DashboardPageState extends State<DashboardPage> {
   _AppView _view = _AppView.dashboard;
   // 개발자 모드의 명령 로그. MQTT 소스가 네 토픽의 envelope 를 넘기면 줄로 쌓는다(최근 200줄).
   final _commandLog = CommandLog();
+  // 장치 위치(왼쪽·가운데·오른쪽): 저장값과 Pi 4 자세 서비스(:8771 /api/placement) 동기화.
+  late final PlacementController _placement;
   late final MusicPlayback _music;
   late final StreamSubscription<bool> _musicChanges;
   late final StreamSubscription<double> _musicVolumeChanges;
@@ -181,8 +186,17 @@ class _DashboardPageState extends State<DashboardPage> {
     );
     HardwareKeyboard.instance.addHandler(_onKey);
     _settingsStore = widget.settings ?? SettingsStore();
+    _placement = PlacementController(
+      store: _settingsStore,
+      onSettingsChanged: (next) {
+        if (mounted) setState(() => _settings = next);
+      },
+    )..addListener(() {
+        if (mounted) setState(() {});
+      });
     _startupCheck = MqttStartupCheck(prober: widget.prober);
     _source = _initialSource();
+    _connectPlacement();
     // 설정 dev_mode_default: 켜자마자 개발자 모드 화면(ToF 열지도·판정·명령 로그).
     if (_settings.devModeDefault) _view = _AppView.devMode;
     // 이 보드는 앱 표준출력이 journal 에도 app_log 에도 안 남는다. 허브에 왜 못
@@ -497,7 +511,27 @@ class _DashboardPageState extends State<DashboardPage> {
     previous.close();
     diag.write('state: 연결 대상 변경 → ${next.label}');
     _startMqttCheck();
+    _connectPlacement();
     _refresh();
+  }
+
+  /// Pi 4 주소가 정해질 때마다 장치 위치를 맞춘다(GET → 저장값과 다르면 POST). 끝나면 첫 실행 질문.
+  void _connectPlacement() {
+    final host = _previewHost;
+    unawaited(_placement.connect(host).then((_) {
+      if (!mounted) return;
+      diag.write('placement: host=${host ?? '-'} supported=${_placement.supported} '
+          'remote=${_placement.remote?.summary ?? '-'} saved=${_settings.placement ?? '-'}'
+          '${_placement.lastError == null ? '' : ' err=${_placement.lastError}'}');
+      _maybeAskPlacement();
+    }));
+  }
+
+  /// 저장값이 없고 건너뛴 적도 없고 서비스가 지원하면 한 번 묻는다. 건너뛰면 다시 묻지 않는다.
+  void _maybeAskPlacement() {
+    if (!mounted || !_placement.shouldAskOnStart) return;
+    _placement.askedThisRun = true;
+    unawaited(showPlacementDialog(context, _placement, allowSkip: true));
   }
 
   /// 같은 주소로 새 클라이언트를 만든다. 자동 재연결이 멈춘 상태도 이걸로 풀린다.
@@ -671,6 +705,7 @@ class _DashboardPageState extends State<DashboardPage> {
     final next = _settingsStore.load().copyWith(previewHost: host);
     final saved = _settingsStore.save(next);
     setState(() => _settings = next);
+    _connectPlacement();
     _notify(saved
         ? 'ToF 주소를 $host 로 저장했습니다.'
         : '$host 로 읽습니다 — 저장할 곳이 없어 이번 실행에만 적용됩니다.');
@@ -819,6 +854,7 @@ class _DashboardPageState extends State<DashboardPage> {
   void dispose() {
     _timer?.cancel();
     _commandLog.dispose();
+    _placement.dispose();
     _screenCycleTimer?.cancel();
     _linkBadgeTimer?.cancel();
     HardwareKeyboard.instance.removeHandler(_onKey);
@@ -956,6 +992,10 @@ class _DashboardPageState extends State<DashboardPage> {
                           onAction: _linkAction,
                           onReloadAll: _reloadAll,
                           onChangeAddress: _changeMqttAddress,
+                          placementLabel: placementKo(_settings.placement),
+                          placementApplied: _placement.appliedLabel,
+                          onChangePlacement: () =>
+                              unawaited(showPlacementDialog(context, _placement)),
                         ),
                     }),
                   ],

@@ -144,6 +144,18 @@ hub 가 FSM 입력으로 실제 쓴 자세·출처(`sensor_summary.tof.posture`�
 화면 안의 **'시작 시 이 화면' 스위치**는 `settings.json` 에 `"dev_mode_default": true` 를 저장해 다음 실행부터 이 화면으로 켜진다
 (보드에서 파일을 직접 고쳐도 된다: `~/.config/deskmate/settings.json`, 없으면 `/tmp/deskmate/settings.json`).
 
+**장치 위치(왼쪽·가운데·오른쪽)와 Pi 4 자세 모델 교체(`lib/placement_page.dart`·`placement_controller.dart`·`placement_client.dart`).**
+장치를 보통 두는 위치를 **앉은 자리 기준**으로 고르면(`settings.json` `"placement": "left|center|right"`) 앱이 Pi 4 자세 서비스
+`http://<pi4>:8771/api/placement` 에 `POST {"placement": "..."}` 를 보내고, 서비스가 재시작 없이 그 위치용 모델로 바꾼다(GRU 리셋·Pi 4 에 저장).
+`GET /api/placement` 은 지금 값·모델·선택지(`options`)·위치별 모델(`models`)을 돌려주고, 기능이 없는 옛 서비스는 404 다. `/api/state` 에도 `placement` 가 실린다.
+- **들어가는 곳**: 연결 탭의 "장치 위치" 항목(저장값·Pi 4 적용값·바꾸기), 개발자 모드 판정 패널의 "위치" 줄(`/api/state` placement, 옛 서비스면 `-`),
+  그리고 **첫 실행 질문** — 저장값이 없고 건너뛴 적도 없고 서비스가 `/api/placement` 를 지원할 때 앱 시작 때 한 번 "장치를 보통 어디에 두나요?" 를 띄운다.
+  건너뛰면 `"placement_asked": true` 를 적어 다시 묻지 않는다(연결 탭에서 언제든 바꿀 수 있다).
+- **규칙**: 사용자 선택이 기준. 고르면 먼저 로컬에 저장하고 POST 한다. 성공이면 "적용됨: <모델>", 실패면 이유(연결 안 됨·404 옛 서비스·400·500)와 '다시 시도'.
+  앱이 Pi 4 에 붙을 때(주소가 정해질 때마다) GET 값과 저장값이 다르면 저장값으로 한 번 POST 한다. 실패해도 앱은 계속 돈다.
+- 그림의 옆 위치는 모니터 옆 정도까지만이다 — PC 시뮬은 기기 방위각 ±50° 까지만 학습했고, 왼쪽은 사용자 기준 왼쪽이다.
+  모델은 지금 있는 `opt_l8_c256` 으로 자리만 잡아 둔 상태라 위치별 파일은 서비스 쪽 설정이 정한다.
+
 `DESKMATE_MQTT_HOST`와 `DESKMATE_HUB_URL`을 동시에 주면 MQTT를 우선한다. HTTP는 센서 테스트와
 화면·Hub 분리 검증을 위한 개발용 fallback으로만 유지한다.
 

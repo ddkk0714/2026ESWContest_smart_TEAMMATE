@@ -123,6 +123,21 @@ void main() {
   });
 
   group('TofPostureLabel', () {
+    test('reads placement when the service gives it, null for an old service', () {
+      final withPlacement = TofPostureLabel.fromJson({
+        'valid': true,
+        'posture': 'upright',
+        'conf': 0.9,
+        'present': true,
+        'misplaced': false,
+        'online_sensors': 2,
+        'placement': 'right',
+      });
+      expect(withPlacement.placement, 'right');
+      final old = TofPostureLabel.fromJson({'valid': false, 'posture': 'unknown'});
+      expect(old.placement, isNull);
+    });
+
     test('uses posture_ko when given and the table otherwise', () {
       final withKo = TofPostureLabel.fromJson({
         'valid': true,

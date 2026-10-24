@@ -50,9 +50,11 @@ void main() {
       present: true,
       misplaced: false,
       onlineSensors: 2,
+      placement: 'left',
     );
     await tester.pumpWidget(_wrap(JudgmentPanel(state: state, posture: posture)));
     expect(_text(tester, 'judge-state'), 'FATIGUE_SUSPECT');
+    expect(_text(tester, 'judge-placement'), 'left');
     expect(_text(tester, 'judge-fatigue'), '0.61');
     expect(_text(tester, 'judge-focus'), '0.30');
     expect(_text(tester, 'judge-cause'), 'posture');
@@ -78,6 +80,7 @@ void main() {
       'judge-posture-hub',
       'judge-posture-svc',
       'judge-presence',
+      'judge-placement',
       'judge-personalize',
     ]) {
       expect(_text(tester, key), '-', reason: key);
@@ -117,6 +120,8 @@ void main() {
     expect(_text(tester, 'judge-posture-hub'), '-');
     expect(_text(tester, 'judge-posture-svc'), 'unknown (입력 없음, 센서 0)');
     expect(_text(tester, 'judge-presence'), '-');
+    // 옛 서비스는 placement 를 안 준다 → "-"
+    expect(_text(tester, 'judge-placement'), '-');
     expect(tester.takeException(), isNull);
   });
 }

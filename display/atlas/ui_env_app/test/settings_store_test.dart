@@ -51,6 +51,25 @@ void main() {
         isFalse);
   });
 
+  test('placement round-trips, rejects unknown values, and records placement_asked',
+      () {
+    const on = DeskmateSettings(placement: 'left', placementAsked: true);
+    expect(on.toJson(), {'schema_version': 1, 'placement': 'left', 'placement_asked': true});
+    expect(on.isEmpty, isFalse);
+    expect(DeskmateSettings.empty.toJson().containsKey('placement'), isFalse);
+    expect(SettingsStore(candidates: [path('place')]).save(on), isTrue);
+    final loaded = SettingsStore(candidates: [path('place')]).load();
+    expect(loaded.placement, 'left');
+    expect(loaded.placementAsked, isTrue);
+    expect(loaded.copyWith(clearPlacement: true).placement, isNull);
+    expect(loaded.copyWith(placement: 'right').placement, 'right');
+    expect(DeskmateSettings.fromJson({'placement': 'top'}).placement, isNull);
+    expect(DeskmateSettings.fromJson({'placement': ' Center '}).placement, 'center');
+    expect(DeskmateSettings.fromJson({'placement': 3}).placement, isNull);
+    expect(DeskmateSettings.validPlacement('right'), 'right');
+    expect(DeskmateSettings.validPlacement('back'), isNull);
+  });
+
   test('missing and malformed files return empty without throwing', () {
     final missing = SettingsStore(candidates: [path('missing')]);
     expect(missing.load().isEmpty, isTrue);

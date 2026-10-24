@@ -42,6 +42,8 @@ class DeskmateSettings {
     this.fan,
     this.previewHost,
     this.devModeDefault = false,
+    this.placement,
+    this.placementAsked = false,
   });
 
   final String? mqttHost;
@@ -57,6 +59,15 @@ class DeskmateSettings {
   /// 앱을 켤 때 개발자 모드 화면(ToF 열지도·판정·명령 로그)을 바로 띄울지. 기본 false.
   final bool devModeDefault;
 
+  /// 장치를 보통 두는 위치(앉은 자리 기준): left | center | right. 미설정이면 null.
+  /// Pi 4 자세 서비스(:8771 `/api/placement`)에 같은 값을 보내 모델을 고른다.
+  final String? placement;
+
+  /// 첫 실행 질문("장치를 보통 어디에 두나요?")을 건너뛴 적이 있는지. true 면 다시 묻지 않는다.
+  final bool placementAsked;
+
+  static const placementOptions = ['left', 'center', 'right'];
+
   static const empty = DeskmateSettings();
 
   bool get isEmpty =>
@@ -67,7 +78,9 @@ class DeskmateSettings {
       lamp == null &&
       fan == null &&
       previewHost == null &&
-      !devModeDefault;
+      !devModeDefault &&
+      placement == null &&
+      !placementAsked;
 
   DeskmateSettings copyWith({
     String? mqttHost,
@@ -85,6 +98,9 @@ class DeskmateSettings {
     String? previewHost,
     bool clearPreviewHost = false,
     bool? devModeDefault,
+    String? placement,
+    bool clearPlacement = false,
+    bool? placementAsked,
   }) =>
       DeskmateSettings(
         mqttHost: clearMqttHost ? null : mqttHost ?? this.mqttHost,
@@ -95,6 +111,8 @@ class DeskmateSettings {
         fan: clearFan ? null : fan ?? this.fan,
         previewHost: clearPreviewHost ? null : previewHost ?? this.previewHost,
         devModeDefault: devModeDefault ?? this.devModeDefault,
+        placement: clearPlacement ? null : placement ?? this.placement,
+        placementAsked: placementAsked ?? this.placementAsked,
       );
 
   Map<String, Object?> toJson() {
@@ -123,6 +141,12 @@ class DeskmateSettings {
     if (devModeDefault) {
       json['dev_mode_default'] = true;
     }
+    if (placement != null) {
+      json['placement'] = placement;
+    }
+    if (placementAsked) {
+      json['placement_asked'] = true;
+    }
     return json;
   }
 
@@ -144,7 +168,16 @@ class DeskmateSettings {
       fan: SavedBluetoothDevice._from(json['fan']),
       previewHost: rawPreviewHost is String ? validHostName(rawPreviewHost) : null,
       devModeDefault: json['dev_mode_default'] == true,
+      placement: validPlacement(json['placement']),
+      placementAsked: json['placement_asked'] == true,
     );
+  }
+
+  /// left | center | right 만 받는다(대소문자·공백 무시). 아니면 null.
+  static String? validPlacement(Object? raw) {
+    if (raw is! String) return null;
+    final text = raw.trim().toLowerCase();
+    return placementOptions.contains(text) ? text : null;
   }
 
   /// IP 나 호스트 이름만 받는다(스킴·경로 없이). 모양이 아니면 null.

@@ -175,6 +175,7 @@ class TofPostureLabel {
     required this.present,
     required this.misplaced,
     required this.onlineSensors,
+    this.placement,
   });
 
   final bool valid;
@@ -185,6 +186,9 @@ class TofPostureLabel {
   final bool misplaced;
   final int onlineSensors;
 
+  /// 서비스가 지금 쓰는 장치 위치(`placement`: left|center|right|unknown). 옛 서비스는 안 준다 → null.
+  final String? placement;
+
   factory TofPostureLabel.fromJson(Map<Object?, Object?> j) => TofPostureLabel(
         valid: _bool(j['valid']),
         posture: _str(j['posture'], 'unknown'),
@@ -193,6 +197,7 @@ class TofPostureLabel {
         present: _bool(j['present']),
         misplaced: _bool(j['misplaced']),
         onlineSensors: _int(j['online_sensors']),
+        placement: j['placement'] is String ? j['placement'] as String : null,
       );
 
   /// 화면에 쓸 이름. 서비스가 한국어를 주면 그것, 아니면 표에서, 그것도 없으면 영문 키.
