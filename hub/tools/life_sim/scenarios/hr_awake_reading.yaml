@@ -1,0 +1,19 @@
+# (실험 10-23) 심박 모델 + 펌웨어 DrowsyDetector 를 켠 각본 — 'ToF 정지 ∧ mmWave 졸음 증거' 규칙(ingest mmwave.still_drowsy_and)의
+#  검출·오탐 측정용. 규칙은 --ingest-set mmwave.still_drowsy_and.enabled=true (mode·tof_still 은 같은 방식으로) 로 켠다.
+#  깨어 있는 정지(졸음 없음): 타이핑 10 분 뒤 책 읽기 30 분(책장 넘길 때만 움직임), 화면 보며 가만히 15 분, 다시 타이핑 5 분.
+#  여기서 나오는 졸음 증거·피로 개입은 전부 오탐이다. 깨어 가만히 있을 때 심박이 서서히 내려가는 가정(relax_bpm)이 오탐 쪽 위험.
+name: hr_awake_reading
+persona: student
+seed: 13
+start_clock: "14:00"
+l8_params: v5
+env: {co2_ppm: 800, temp_c: 23.5, humidity_pct: 45, lux: 420, pm25: 15}
+weather: {temp_c: 17.0, humidity: 50, wind_ms: 2.5, condition: clear, season: autumn}
+segments:
+  - {kind: away, seconds: 8}
+  - {kind: upright, seconds: 600, typing: true}
+  - {kind: reading, seconds: 1800, typing: false}
+  - {kind: upright, seconds: 900, typing: false}
+  - {kind: upright, seconds: 300, typing: true}
+  - {kind: away, seconds: 30, no_return: true}
+sensors: {mmwave: {hr_model: {enabled: true}}}

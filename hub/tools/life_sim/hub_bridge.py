@@ -36,14 +36,36 @@ class _PostureHook:
         self.model = model
         self.present: bool | None = None
         self.last: dict[str, Any] | None = None
+        self._prev: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+        self.motion_mm: float | None = None
+
+    def _tof_motion(self, sample: dict[str, Any]) -> None:
+        """(실험) 격자 움직임 — 센서마다 사람 zone(유효 상태 · 0.15~1.3 m)의 프레임 간 |Δ거리| 중앙값, 큰 쪽을 EMA(α 0.1, 10 Hz ≈ 1 s).
+        자세 서비스가 같은 값을 /api/state 에 낼 수 있다는 가정. mmwave.still_drowsy_and 의 "ToF 정지" 입력."""
+        diffs = []
+        for idx, f in (sample.get("sensors") or {}).items():
+            d = np.asarray(f["distance_mm"], dtype=float)
+            ok = np.isin(np.asarray(f["status"]), (5, 6, 9, 10)) & (d > 150) & (d < 1300)
+            prev = self._prev.get(idx)
+            if prev is not None:
+                both = ok & prev[1]
+                if int(both.sum()) >= 4:
+                    diffs.append(float(np.median(np.abs(d[both] - prev[0][both]))))
+            self._prev[idx] = (d, ok)
+        if diffs:
+            m = max(diffs)
+            self.motion_mm = m if self.motion_mm is None else self.motion_mm + 0.1 * (m - self.motion_mm)
 
     def update(self, sample: dict[str, Any], now: float) -> dict[str, Any] | None:
         if self.model is None:
             return None
+        self._tof_motion(sample)
         try:
             v = self.model.update(sample, now, present=self.present)
         except TypeError:
             v = self.model.update(sample, now)
+        if v is not None and self.motion_mm is not None:
+            v = dict(v, tof_motion_mm=round(self.motion_mm, 1))
         self.last = v
         return v
 
@@ -139,6 +161,10 @@ class HubBridge:
         ts_ms = int(round(t * 1000)) & 0xFFFFFFFF
         ingest_frame(self.cache, Frame(type=TYPE_MMWAVE, seq=self.seq["mmwave"], ts_ms=ts_ms,
                                        payload=encode_payload(TYPE_MMWAVE, data)), self.stats, received=t, node=self.node)
+        # (시뮬 전용) 펌웨어 DrowsyDetector 내부 증거 — 0x20 에 없는 필드. "증거 비트를 0x20 에 싣는다"는 제안을 흉내 낸다
+        extra = {k: data[k] for k in ("hr_down", "hr_drop", "fw_still", "resp_lost_ev") if k in data}
+        if extra and self.cache.mmwave is not None:
+            self.cache.mmwave.data.update(extra)
 
     def feed_env_uart(self, data: dict[str, Any], t: float) -> None:
         """ESP32 환경 센서(SCD41·DHT22·BH1750) → UART 0x10 payload → ingest_frame → cache.env (실기와 같은 디코더·valid 비트)."""
@@ -212,6 +238,7 @@ class HubBridge:
             "pending_request": (self.hub.pending_request or {}).get("data", {}).get("request_id"),
             "personalize": summary.get("personalize"),
             "asked_by_policy": "personalize:ask" in (d.get("reasons") or []),
+            "still_drowsy": getattr(self.hub.tracker, "sd_debug", None),     # (실험) ToF 정지 ∧ mmWave 졸음 증거
         }
         # 개입 이벤트: ACTION_* 에 새로 들어온 tick. auto 는 실행 후 알림(질문 없음), suggest 는 카드(request), none 은 로그만.
         events: list[dict[str, Any]] = []

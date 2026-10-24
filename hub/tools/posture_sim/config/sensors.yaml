@@ -26,6 +26,25 @@ mmwave:
   drowsy_lock_s: 180        # 졸음이 이만큼 이어지면 DROWSY 를 낼 수 있다
   drowsy_episode_p: 0.6     # 졸음 에피소드마다 DROWSY 를 잡을 확률(실측 없음 — 보수적으로)
   nod_spike_p: 0.08
+  # (실험, 기본 꺼짐) 심박 모델 + 펌웨어 DrowsyDetector 이식(mmwave.py FwDrowsyDetector·HeartModel). 켜면 drowsy_state 를
+  # 위 drowsy_lock 대역 대신 펌웨어 규칙으로 내고, heart_bpm 과 펌웨어 내부 증거(hr_down 등)를 함께 낸다. 숫자는 전부 가정.
+  hr_model:
+    enabled: false
+    rest_bpm: [60, 78]        # 사람마다 안정 심박
+    active_bpm: [3, 6]        # 타이핑 중 더해짐
+    drowsy_drop_bpm: [3, 9]   # 졸음·엎드림 에피소드마다 떨어지는 폭
+    drowsy_tau_s: 120
+    relax_bpm: [0, 3]         # 깨어 가만히(타이핑 없이) 있으면 서서히 내려가는 폭 — 오탐 위험
+    relax_tau_s: 300
+    tau_s: 60
+    meas_sd_bpm: 5.0          # C1001 추정 오차 AR(1) — 실측: 가만히 있어도 3 bpm 계단으로 크게 왕복
+    meas_phi: 0.9
+    excursion_p: 0.01         # 3 s 마다 큰 이탈 시작 확률(실측 86→126→81 을 90 s 에 걸쳐)
+    excursion_bpm: [10, 40]
+    excursion_s: [10, 90]
+    spike_every_s: {typing: [10, 30], reading: [60, 180], idle: [60, 240]}   # 체동 > 30 스파이크 간격(실측: 작업 중 10~30 s)
+    spike_level: {typing: [31, 82], other: [31, 60]}
+    face_down_resp_lost_p: 0.8
 
 # 0x03 규칙 특징 대역(ESP32 규칙 추정기의 단순 대역)
 rule_features:
