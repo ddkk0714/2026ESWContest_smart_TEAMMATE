@@ -11,17 +11,19 @@ undo_window_sec: 60      # 자동 실행 뒤 한 tick 이 지나도 이 시간 �
 cooldown_sec: 300        # 같은 target 에 같은 operation 을 다시 보내기까지 최소 간격 (fsm timers.cmd_cooldown_sec 와 맞춤)
 irreversible_operations: [set_power_off, power_cycle]   # 사용자 확인 없이는 실행하지 않는 동작
 
-# 제어 대상(target_id): vent_fan(보조 환기팬·선풍기, set_power on|off) · desk_lamp(iLink 무드등, set_brightness 0~255)
+# 제어 대상(target_id): vent_fan(보조 환기팬·선풍기, set_power on|off) · desk_lamp(iLink 무드등 — adjust_brightness {percent: ±정수}
+#     = 지금 밝기 대비 %(2026-10-25, 앱이 지금 밝기를 알고 계산·상하한 결정, 결과에 previous·actual), set_brightness 0~255 는 되돌리기용)
 #   · air_purifier(LG ThinQ 공기청정기, set_mode off|auto|low|mid|high — 2026-10-23. auto = 공기청정기 자체 PM 자동 운전,
 #     high = 3단계 고정. CO₂ 를 못 내리므로 ACTION_ENV 기본 명령에는 넣지 않고 개인화 arm air_fan_up 만 쓴다).
 # ACTION_ENV 진입 시 원인(cause)별로 내보낼 명령. 가역 동작만 둔다. undo_value 는 자동 실행 후 사용자가 거절했을 때 되돌리는 값.
+# `undo: previous` 는 앱 결과의 previous(바꾸기 전 원시 밝기)로 set_brightness 되돌림 — adjust_brightness 전용.
 actions:
   environment:
     - {target_id: vent_fan, operation: set_power, value: "on", undo_value: "off"}
-    - {target_id: desk_lamp, operation: set_brightness, value: 70, undo_value: 40}
+    - {target_id: desk_lamp, operation: adjust_brightness, value: {percent: 30}, undo: previous}   # 10-25: 절대값 70/undo 40 대체
   # ACTION_POSTURE(졸음 drowsy·face_down → 자세성 라우팅) 진입 시 깨우기 (2026-10-24). PC life_sim(devices.yaml) 의
-  # posture_auto → lamp_cool 과 같은 뜻. 색온도(cool)는 Pi 5 어댑터(feedback_policy.dart)가 아직 set_brightness·set_power 만
-  # 받아 밝기만 올린다. 개인화 정책이 기기 arm(spec)을 준 경우에는 그쪽이 우선이고, 이 묶음을 지우면 ACTION_POSTURE 는
-  # 예전처럼 명령 없이(화면 카드만) 지나간다. undo_value 110 = personalize.yaml 조명 arm 의 되돌림 밝기와 같다.
+  # posture_auto → lamp_cool 과 같은 뜻. 색온도(cool)는 Pi 5 어댑터(feedback_policy.dart)가 아직 받지 않아 밝기만 올린다.
+  # 10-25: 절대값(set_brightness 230, undo 110) 대신 지금 밝기 대비 +60 %(1.6 배) — 사용자 지시 "기존 대비 % 올리기".
+  # 개인화 정책이 기기 arm(spec)을 준 경우에는 그쪽이 우선이고, 이 묶음을 지우면 ACTION_POSTURE 는 예전처럼 명령 없이(화면 카드만) 지나간다.
   posture:
-    - {target_id: desk_lamp, operation: set_brightness, value: 230, undo_value: 110}
+    - {target_id: desk_lamp, operation: adjust_brightness, value: {percent: 60}, undo: previous}

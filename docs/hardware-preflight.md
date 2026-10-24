@@ -32,7 +32,7 @@ BLE GATT 서비스, A2DP 출력과 실제 조명 밝기·소리는 현장 확인
   → 허브 control/cmd → 앱 iLink GATT 쓰기 → control/result → MONITOR
 ```
 
-인지성·자세성 제안은 앱의 수락 뒤 로컬 조명·음악 피드백을 적용한다. 자세성(졸음)은 2026-10-24 부터 허브도 `control.yaml actions.posture` 의 `desk_lamp set_brightness 230` 명령을 `control/cmd` 로 보낸다(자동 게이트면 즉시, 제안이면 수락 뒤; 앱의 로컬 조명 피드백과 같은 램프를 건드리므로 시연 전에 둘 중 하나로 정한다). `ACTION_BREAK` 는 그대로 명령 없음.
+인지성·자세성 제안은 앱의 수락 뒤 로컬 조명·음악 피드백을 적용한다. 자세성(졸음)은 2026-10-24 부터 허브도 `control.yaml actions.posture` 의 `desk_lamp adjust_brightness {percent: 60}`(지금 밝기의 1.6 배, 10-25 부터 % 방식) 명령을 `control/cmd` 로 보낸다(자동 게이트면 즉시, 제안이면 수락 뒤; 앱의 로컬 조명 피드백과 같은 램프를 건드리므로 시연 전에 둘 중 하나로 정한다). `ACTION_BREAK` 는 그대로 명령 없음.
 `ACTION_BREAK` 수락은 REST로 진행한다. 거절·무응답은 제어하지 않고 MONITOR로 진행한다.
 
 ## 기본 설정에서 기다려야 하는 시간
@@ -65,7 +65,9 @@ BLE GATT 서비스, A2DP 출력과 실제 조명 밝기·소리는 현장 확인
    FOCUS → FATIGUE_SUSPECT → FATIGUE → CAUSE_ANALYSIS → ACTION_*를 확인한다.
 5. **수락**: 제안 게이트에서 최소 30초 기다린 뒤 수락한다. 대기 중 조명·음악이 실행되지 않아야 한다.
    환경 개입이면 feedback/user → control/cmd → control/result의 동일 command_id를 확인한다.
-   밝기 값은 iLink 원시 0~255다. 기본 환경 명령 70은 약 27%이고 70%가 아니다.
+   밝기 명령은 2026-10-25 부터 지금 밝기 대비 %(`adjust_brightness {percent}`: 환경 +30 %, 졸음 +60 %)다. 앱이 지금 원시 밝기(0~255)로
+   계산해 결과에 `previous`·`actual` 을 돌려주고, 되돌리기는 허브가 `set_brightness <previous>` 로 보낸다. 램프가 꺼져 있거나 0 이면 % 가
+   의미 없으니 앱의 하한 처리를 확인한다.
 6. **거절·만료·회복**: 다른 제안에서 거절하거나 180초 기다린다. 실행 없이 종료되어야 한다.
    휴식 수락은 REST, 300초 뒤 RECOVERY를 확인한다. 자동 조명 명령의 되돌리기도 별도 확인한다.
 

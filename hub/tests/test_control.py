@@ -14,7 +14,7 @@ CFG = {"enabled": True, "adapter": "mock", "result_timeout_sec": 15, "cooldown_s
        "irreversible_operations": ["set_power_off"],
        "actions": {"environment": [
            {"target_id": "vent_fan", "operation": "set_power", "value": "on", "undo_value": "off"},
-           {"target_id": "desk_lamp", "operation": "set_brightness", "value": 70, "undo_value": 40},
+           {"target_id": "desk_lamp", "operation": "adjust_brightness", "value": {"percent": 30}, "undo": "previous"},
        ]}}
 
 
@@ -79,10 +79,13 @@ def test_reject_after_auto_execution_sends_undo():
     d, sent, t = make()
     d.on_enter_action("ACTION_ENV", "environment", GateMode.AUTO)
     for c in list(sent):
-        d.on_result({"command_id": c["command_id"], "status": "succeeded"})
+        # 램프는 상대 명령이라 앱이 바꾸기 전(previous)·뒤(actual) 원시 밝기를 돌려준다 — 되돌리기는 previous 로 set_brightness
+        extra = {"previous": 90, "actual": 117} if c["target_id"] == "desk_lamp" else {}
+        d.on_result({"command_id": c["command_id"], "status": "succeeded", **extra})
     d.on_feedback("reject")
     undo = sent[2:]
-    assert {(c["target_id"], c["value"]) for c in undo} == {("vent_fan", "off"), ("desk_lamp", 40)}
+    assert {(c["target_id"], c["operation"], c["value"]) for c in undo} == \
+        {("vent_fan", "set_power", "off"), ("desk_lamp", "set_brightness", 90)}
     assert all(c["gate"] == "undo" for c in undo) and d.episode.outcome == "undone"
 
 
@@ -123,7 +126,10 @@ def test_default_config_is_reversible_only():
     cfg = load_control_config()
     ops = {a["operation"] for acts in cfg["actions"].values() for a in acts}
     assert not ops & set(cfg["irreversible_operations"])
-    assert all("undo_value" in a for acts in cfg["actions"].values() for a in acts)
+    assert all("undo_value" in a or a.get("undo") == "previous" for acts in cfg["actions"].values() for a in acts)
+    # 밝기는 절대값이 아니라 지금 대비 % (10-25)
+    lamps = [a for acts in cfg["actions"].values() for a in acts if a["target_id"] == "desk_lamp"]
+    assert lamps and all(a["operation"] == "adjust_brightness" and set(a["value"]) == {"percent"} and a["undo"] == "previous" for a in lamps)
 
 
 # ── LiveHub 연동: ACTION_ENV 진입 → mock 플러그 → 결과 → MONITOR ─────────

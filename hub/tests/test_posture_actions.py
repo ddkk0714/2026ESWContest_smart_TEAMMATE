@@ -1,7 +1,8 @@
 """ACTION_POSTURE → control.yaml `actions.posture`(졸음 → 무드등 깨우기, 2026-10-24).
 
 다섯 경우: 자동 실행 · 제안(수락 뒤 실행) · 되돌리기 창 · 개인화 spec 우선 · 설정에 묶음이 없으면 예전과 같음.
-끝에 LiveHub 전체 경로: 자세 서비스 drowsy → FATIGUE → ACTION_POSTURE → mock 플러그 desk_lamp 230 → MONITOR.
+끝에 LiveHub 전체 경로: 자세 서비스 drowsy → FATIGUE → ACTION_POSTURE → mock 플러그 desk_lamp +60 % → MONITOR.
+10-25 부터 밝기는 지금 대비 %(adjust_brightness {percent: 60}, 되돌리기는 결과의 previous) — test_adjust_brightness.py 가 그 계약을 따로 본다.
 """
 from __future__ import annotations
 
@@ -18,7 +19,8 @@ from deskmate_hub.live import LiveHub
 from test_ingest_mapping import env, mm
 from test_tof_service import svc
 
-LAMP = {"target_id": "desk_lamp", "operation": "set_brightness", "value": 230, "undo_value": 110}
+LAMP = {"target_id": "desk_lamp", "operation": "adjust_brightness", "value": {"percent": 60}, "undo": "previous"}
+PCT60 = {"percent": 60}
 CFG = {"enabled": True, "adapter": "mock", "result_timeout_sec": 15, "suggest_timeout_sec": 180, "undo_window_sec": 60,
        "cooldown_sec": 300, "irreversible_operations": ["set_power_off"],
        "actions": {"environment": [{"target_id": "vent_fan", "operation": "set_power", "value": "on", "undo_value": "off"}],
@@ -41,10 +43,10 @@ def test_posture_auto_dispatches_lamp_and_completes_on_result():
     assert ep.executed and ep.outcome == "executed" and len(sent) == 1
     cmd = sent[0]
     assert (cmd["target_id"], cmd["operation"], cmd["value"], cmd["origin_state"], cmd["cause"], cmd["gate"]) == \
-        ("desk_lamp", "set_brightness", 230, "ACTION_POSTURE", "posture", "auto")
+        ("desk_lamp", "adjust_brightness", PCT60, "ACTION_POSTURE", "posture", "auto")
     assert cmd["requires_confirmation"] is False
     assert not d.action_done()                                   # 결과 전
-    d.on_result({"command_id": cmd["command_id"], "status": "succeeded", "actual_value": 230})
+    d.on_result({"command_id": cmd["command_id"], "status": "succeeded", "previous": 110, "actual": 176, "actual_value": 176})
     assert d.action_done()
     # 같은 target/operation 은 쿨다운(300 s) 안에 다시 보내지 않는다
     d.close_episode(); t["now"] += 100
@@ -59,7 +61,7 @@ def test_posture_suggest_waits_for_accept():
     assert ep.awaiting_user and sent == [] and not d.action_done()
     t["now"] += 30
     d.on_feedback("accept")
-    assert ep.executed and len(sent) == 1 and sent[0]["value"] == 230 and sent[0]["gate"] == "suggest"
+    assert ep.executed and len(sent) == 1 and sent[0]["value"] == PCT60 and sent[0]["gate"] == "suggest"
     d.close_episode(); d._last_sent.clear()
     ep2 = d.on_enter_action("ACTION_POSTURE", "posture", GateMode.SUGGEST)
     d.on_feedback("reject")
@@ -71,14 +73,15 @@ def test_posture_suggest_waits_for_accept():
 def test_posture_auto_reject_undoes_within_window_only():
     d, sent, t = make()
     ep = d.on_enter_action("ACTION_POSTURE", "posture", GateMode.AUTO)
-    d.on_result({"command_id": sent[0]["command_id"], "status": "succeeded"})
+    d.on_result({"command_id": sent[0]["command_id"], "status": "succeeded", "previous": 110, "actual": 176})
     d.close_episode()
     t["now"] += 30
     d.on_feedback("reject")
-    assert ep.outcome == "undone" and len(sent) == 2 and sent[1]["gate"] == "undo" and sent[1]["value"] == 110
+    assert ep.outcome == "undone" and len(sent) == 2 and sent[1]["gate"] == "undo"
+    assert sent[1]["operation"] == "set_brightness" and sent[1]["value"] == 110      # 결과의 previous 로 되돌린다
     d2, sent2, t2 = make()
     ep2 = d2.on_enter_action("ACTION_POSTURE", "posture", GateMode.AUTO)
-    d2.on_result({"command_id": sent2[0]["command_id"], "status": "succeeded"})
+    d2.on_result({"command_id": sent2[0]["command_id"], "status": "succeeded", "previous": 110, "actual": 176})
     d2.close_episode()
     t2["now"] += 90                                              # 창이 지남
     d2.on_feedback("reject")
@@ -118,7 +121,7 @@ def test_shipped_control_yaml_has_reversible_posture_bundle():
     cfg = load_control_config()
     posture = cfg["actions"]["posture"]
     assert posture == [LAMP]
-    assert "set_brightness" not in cfg["irreversible_operations"]
+    assert "adjust_brightness" not in cfg["irreversible_operations"] and "set_brightness" not in cfg["irreversible_operations"]
 
 
 # ── LiveHub 전체 경로: 자세 서비스 drowsy → ACTION_POSTURE → mock 플러그 → MONITOR ──
@@ -163,8 +166,10 @@ def test_live_hub_drowsy_turns_desk_lamp_on_then_monitor(posture_configs, tmp_pa
     assert hub.control is not None and hub.mock_plug is not None
     seen, _ = _drive_to_monitor(hub, cache, co2=2000)
     assert State.ACTION_POSTURE in seen and State.MONITOR in seen, seen[-10:]
-    assert hub.mock_plug.state.get("desk_lamp") == {"set_brightness": 230}
+    # 모의 램프 110 → +60 % = 176. 명령은 % 만, 원시 밝기는 램프(앱) 쪽 계산
+    assert hub.mock_plug.state.get("desk_lamp") == {"adjust_brightness": PCT60, "brightness": 176}
     assert hub.control.episode is None and hub.control.history[-1].state == "ACTION_POSTURE"
+    assert hub.control.history[-1].commands[0].result["previous"] == 110
     assert hub.control.history[-1].outcome == "executed" and hub.control.history[-1].cause == "posture"
     ctrl = [s["data"]["sensor_summary"].get("control") for s in states if s["data"]["fsm_state"] == "ACTION_POSTURE"]
     assert ctrl and ctrl[0]["active"] is True and ctrl[0]["commands"][0]["target"] == "desk_lamp"
@@ -188,7 +193,7 @@ def test_demo_b_profile_keeps_policy_gate_auto_so_lamp_goes_on_without_a_card(tm
     assert accepted == 0, "카드(suggest)가 떴다 — 정책이 자동을 낮췄다"
     ep = hub.control.history[-1]
     assert ep.state == "ACTION_POSTURE" and ep.gate is GateMode.AUTO and ep.outcome == "executed"
-    assert hub.mock_plug.state.get("desk_lamp") == {"set_brightness": 230}
+    assert hub.mock_plug.state.get("desk_lamp") == {"adjust_brightness": PCT60, "brightness": 176}
     posture_states = [s["data"] for s in states if s["data"]["fsm_state"] == "ACTION_POSTURE"]
     assert posture_states and posture_states[0]["sensor_summary"]["control"]["gate"] == "auto"
     assert "personalize:ask" not in (posture_states[0].get("actions") or [])

@@ -74,7 +74,7 @@ python -m deskmate_hub run --broker <ip> --ingest-config my-ingest.yaml --log-di
 ```
 
 - 구독: `deskmate/sensor/#`(mmwave·env·keystroke — envelope(collector 포함) 또는 구버전 평면 payload), `deskmate/feedback/user`
-- 발행: `deskmate/state/phase`(retain, QoS 1, 10 s 주기), `deskmate/interaction/request`(제안 게이트로 ACTION_* 진입 시, retain 없음), `deskmate/control/cmd`(ACTION_ENV 와 ACTION_POSTURE, `control.yaml actions.<cause>` — 10-24 부터 자세성(졸음)도 `desk_lamp` 밝기 230 명령, 개인화 기기 arm 이 있으면 그쪽 우선), `deskmate/health/hub`(LWT). 구독에 `deskmate/control/result` 포함
+- 발행: `deskmate/state/phase`(retain, QoS 1, 10 s 주기), `deskmate/interaction/request`(제안 게이트로 ACTION_* 진입 시, retain 없음), `deskmate/control/cmd`(ACTION_ENV 와 ACTION_POSTURE, `control.yaml actions.<cause>` — 10-24 부터 자세성(졸음)도 `desk_lamp` 명령, 개인화 기기 arm 이 있으면 그쪽 우선. 밝기는 10-25 부터 `adjust_brightness {percent}` = 지금 밝기 대비 %(환경 +30·졸음 +60), 되돌리기는 결과의 previous 로 set_brightness), `deskmate/health/hub`(LWT). 구독에 `deskmate/control/result` 포함
 - 제어 어댑터가 없으면 명령은 `result_timeout_sec` 뒤 timeout 으로 닫히고 FSM 은 계속 진행한다. 리허설은 `python tools/mock_plug.py --broker <ip>`. `control.yaml adapter: mock` 이면 프로세스 안에서 즉시 성공 처리
 - 매핑은 `config/ingest.yaml`. `normalization: baseline`(기본)이면 START 보정 창에서 만든 개인 기준선(중앙값·MAD Modified z)을 우선 쓰고, 기준선이 없는 지표·보정 전에는 선형 램프로 폴백한다. `baseline.persist.enabled: true` 면 median·MAD·표본 수만 JSON 에 저장(opt-in).
 - `--config deskmate_hub/config/fsm.demo.yaml` 은 임계값은 같고 **타이머만 짧은 시연·리허설 프로파일**(baseline 30 s, 이탈 60 s 등). 운영 기본값이 아니다.

@@ -257,8 +257,12 @@ def test_arm_commands_translate_device_specs():
 
     assert arm_commands(None) == []
     lamp = {"target_id": "desk_lamp", "color_temperature": 1, "brightness": 200,
-            "undo": {"color_temperature": 2, "brightness": 110}}
+            "undo": {"color_temperature": 2, "brightness": 110}}                       # 예전 절대값 모양도 그대로 통한다
     assert arm_commands(lamp) == [{"target_id": "desk_lamp", "operation": "set_brightness", "value": 200, "undo_value": 110}]
+    # 10-25 부터 personalize.yaml 조명 arm 은 지금 밝기 대비 % — adjust_brightness, 되돌리기는 앱 결과의 previous
+    rel = {"target_id": "desk_lamp", "color_temperature": 1, "percent": 50, "undo": "previous"}
+    assert arm_commands(rel) == [{"target_id": "desk_lamp", "operation": "adjust_brightness", "value": {"percent": 50}, "undo": "previous"}]
+    assert arm_commands({"target_id": "desk_lamp", "percent": -50, "undo": "previous"})[0]["value"] == {"percent": -50}
     fan = {"target_id": "vent_fan", "operation": "set_power", "value": "on", "undo_value": "off"}
     assert arm_commands(fan) == [dict(fan)]
 

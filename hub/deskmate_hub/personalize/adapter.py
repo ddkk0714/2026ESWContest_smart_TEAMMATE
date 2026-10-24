@@ -102,8 +102,10 @@ def fsm_record(result: TickResult, *, retry: bool = False) -> dict[str, Any]:
 def arm_commands(device: dict[str, Any] | None) -> list[dict[str, Any]]:
     """arm 의 `device`(personalize.yaml) 를 control.yaml `actions` 와 같은 명령 spec 목록으로.
 
-    조명은 `{target_id, brightness, undo: {brightness}}` → set_brightness 하나(색온도는 Pi 5 조명 어댑터가 아직
-    set_color_temperature 를 받지 않아 보내지 않는다). 그 밖은 `{target_id, operation, value, undo_value}` 그대로.
+    조명은 `{target_id, percent: ±정수}` → adjust_brightness {percent} 하나, 되돌리기는 앱 결과의 previous(`undo: previous`,
+    2026-10-25 — 지금 밝기 대비 % 로 올리고 내린다). 예전 모양 `{target_id, brightness, undo: {brightness}}` 는 set_brightness 절대값.
+    색온도는 Pi 5 조명 어댑터가 아직 set_color_temperature 를 받지 않아 보내지 않는다.
+    그 밖은 `{target_id, operation, value, undo_value}` 그대로.
     device 가 없으면(화면·음성·휴식 arm) 빈 목록 — 제어 명령 없이 카드·안내만 나간다.
     """
     if not device:
@@ -112,7 +114,11 @@ def arm_commands(device: dict[str, Any] | None) -> list[dict[str, Any]]:
         return [{"target_id": device["target_id"], "operation": device["operation"],
                  "value": device.get("value"), "undo_value": device.get("undo_value")}]
     out: list[dict[str, Any]] = []
-    undo = device.get("undo") or {}
+    if "percent" in device:
+        out.append({"target_id": device["target_id"], "operation": "adjust_brightness",
+                    "value": {"percent": int(device["percent"])}, "undo": "previous"})
+        return out
+    undo = device.get("undo") if isinstance(device.get("undo"), dict) else {}
     if "brightness" in device:
         out.append({"target_id": device["target_id"], "operation": "set_brightness",
                     "value": device["brightness"], "undo_value": undo.get("brightness")})

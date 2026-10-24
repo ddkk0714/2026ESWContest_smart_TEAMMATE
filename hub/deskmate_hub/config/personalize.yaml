@@ -89,9 +89,9 @@ explain:
 # 개입 후보. causes 는 FSM cause 키. auto=false 면 FSM 게이트가 auto 여도 suggest 로 낸다.
 arms:
   - {id: light_cool_bright, label_ko: 조명 밝고 차갑게, causes: [environment, cognitive], channel: lamp, auto: true,
-     device: {target_id: desk_lamp, color_temperature: 1, brightness: 200, undo: {color_temperature: 2, brightness: 110}}}
+     device: {target_id: desk_lamp, color_temperature: 1, percent: 50, undo: previous}}   # 10-25: 지금 밝기 +50 %(절대값 200 대체), 되돌림 = 앱 결과 previous
   - {id: light_warm_dim, label_ko: 조명 따뜻하고 어둡게, causes: [cognitive], channel: lamp, auto: true,
-     device: {target_id: desk_lamp, color_temperature: 5, brightness: 60, undo: {color_temperature: 2, brightness: 110}}}
+     device: {target_id: desk_lamp, color_temperature: 5, percent: -50, undo: previous}}  # 10-25: 지금 밝기 −50 %(절대값 60 대체)
   - {id: air_fan_up, label_ko: 공기청정기 풍량 올리기, causes: [environment], channel: air, auto: true,
      device: {target_id: air_purifier, operation: set_mode, value: high, undo_value: auto}}
   - {id: fan_on, label_ko: 환기팬(선풍기) 켜기, causes: [environment], channel: fan, auto: true,
