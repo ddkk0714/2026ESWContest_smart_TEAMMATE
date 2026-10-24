@@ -41,7 +41,8 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 | `deskmate/interaction/request` | hub | display | 이벤트 | 불확실한 판정의 사용자 확인 질문 |
 | `deskmate/control/cmd` | hub | control 어댑터, Pi 5 앱(조명) | 이벤트, QoS 1, retain 없음 | 기기 제어 명령 (`control_command`, data-spec §10) |
 | `deskmate/control/result` | control 어댑터, Pi 5 앱(조명) | hub | 이벤트, QoS 1 | 명령 결과 (`control_result`). hub 는 `command_id` 로 매칭 |
-| `deskmate/feedback/user` | display | hub | 이벤트 | 사용자 수락 · 정정 |
+| `deskmate/feedback/user` | display | hub | 이벤트 | 사용자 수락 · 정정 · 조명 직접 조절 보고(`kind: manual_adjust`) |
+| `deskmate/profile/user` | Pi 5 앱 | hub(personalize) | 온보딩·설정 변경 시(retain, QoS 1) | 첫 설정 프로필. FSM 입력이 아니라 개입 선택의 기준(prior)·취침 시각에만 쓴다 |
 | `deskmate/health/<node>` | 전 장치 | hub | LWT/retain | `{ts,node,status:online|offline,reconnects}`. hub 는 `deskmate/health/hub` |
 
 ## 페이로드 예시
@@ -158,6 +159,31 @@ Pi 5의 **PC 키스트로크** 탭은 앱에 설정된 동일 MQTT 브로커에�
   retain 된 옛 표본이 재시작 뒤 들어와도 같은 규칙으로 걸러진다. `fetched_at` 이 없으면 envelope `ts` 를 쓴다.
 - 앱이 날씨를 못 받으면 발행하지 않는다(빈 값·추정값을 만들어 보내지 않는다). 선택 필드 `pm_bad: true`(미세먼지 나쁨)는 넣으면 환기 후보 제외에 쓴다.
 - 좌표·주소·API 키는 토픽에 싣지 않는다. 위치 설정은 앱 안에만 둔다.
+
+### `deskmate/profile/user` (2026-10-25: 첫 설정 → 개인화 기준)
+
+발행자 Pi 5 앱(`node: pi5-display`), **retain, QoS 1**, 온보딩을 마칠 때와 설정을 바꿀 때. 공통 envelope 를 쓴다. 허브는 보드 C++ 브리지·PC paho
+둘 다 이 토픽을 따로 구독한다(`deskmate/sensor/#` 밖). 필드는 모두 선택이고 모르는 키는 버린다 — 표·사용처는 [data-spec](data-spec.md#사용자-첫-설정직접-조절-보고-2026-10-25).
+
+```json
+{
+  "ts": 1792561200.0, "node": "pi5-display", "seq": 3,
+  "data": {
+    "profile_id": "u-7f3a",           // 불투명 id (이름·이메일 아님)
+    "age_band": "20s",                // 10s | 20s | 30s | 40s | 50s+ (허브는 지금 저장하지 않는다)
+    "sleep_hours": 6.5,
+    "bedtime": "00:30", "wake_time": "07:30",
+    "light_pref": "low",              // low | mid | high
+    "sound_pref": "off",              // off | low | mid | high — off 면 알림음·음성 안내 후보 제외
+    "wind_pref": "mid",               // off | low | mid | high
+    "focus_help": ["light", "break"], // light | sound | wind | break | voice 중 복수
+    "placement": "left"               // left | center | right
+  }
+}
+```
+
+- 허브는 받으면 `logs/profiles/<설정 profile_id>/user_profile.json` 에 저장하고(재시작·브로커 재시작 뒤에도 유지) 화면 `sensor_summary.personalize.signal` 에
+  "첫 설정 반영: …" 한 줄을 싣는다. 같은 내용을 다시 받으면(retain 재수신) 아무것도 바꾸지 않는다.
 
 ### `deskmate/state/phase`
 
@@ -367,6 +393,11 @@ retain으로 들어온 명령은 무시한다. 최근 128개 `command_id`의 처
 `corrected_state` 는 `FOCUS_PC`·`FATIGUE`·`REST`·`IDLE` 중 하나여야 한다. 정정은 평가용 라벨로만
 저장하고 FSM 판정이나 제어 명령을 바꾸지 않는다. 선택 필드 `response_ms` 는 응답까지 걸린 밀리초다.
 라벨은 hub 로컬 JSONL에 기록하며 별도 MQTT 토픽으로 발행하지 않는다.
+
+조명 직접 조절 보고(2026-10-25): 사용자가 앱의 조명 조절로 밝기를 바꾸면 앱이 `{"kind": "manual_adjust", "target_id": "desk_lamp",
+"from": 180, "to": 90, "input": "app"}`(원시 0~255)를 같은 토픽에 보낸다. 허브 명령으로 생긴 변화는 보내지 않는다. 허브는 이 보고를
+ESM·제어 승인에 쓰지 않고, 허브가 밝힌 뒤 `implicit.dim_window_min`(10 분) 안의 어둡게 하기를 그 개입의 음의 보상으로만 쓴다
+([data-spec](data-spec.md#사용자-첫-설정직접-조절-보고-2026-10-25)).
 
 ## QoS · 보존
 

@@ -158,6 +158,24 @@ score(a) = w_accept·(θ̃_a,accept · x) + w_effect·(θ̃_a,effect · x)
 (`adapter.arm_commands`, 조명은 `set_brightness` 만)을 디스패처에 넘겨 **ACTION_ENV 가 아닌 상태(ACTION_BREAK·ACTION_POSTURE)에서도** 실행·되돌리기가
 된다. 후보가 없거나 세션 상한이면 FSM 기본 동작이다. 정책 상태는 `logs/profiles/<profile_id>/policy.json` 에 피드백·결과마다 저장한다.
 
+### 5.3 첫 설정·묻지 않고 얻는 신호 (2026-10-25)
+
+사용자 설계: "응답은 많이 받지 않고, UI 처음 설정한 내용을 바탕으로 표준을 잡는다. 무드등을 밝혔는데 사용자가 그 반응을 보고
+다시 어둡게 하면 그 사용자는 밝음을 싫어하는 것 — 이런 식으로 맞춰 간다. 잠에서 잘 깨면 그걸 좋은 신호로 본다. 환기는 FSM."
+숫자는 전부 `personalize.yaml` 의 `onboarding:`·`implicit:`·`wake:` 절, 코드는 `personalize/onboarding.py`·`signals.py`·`record.py`.
+
+| 신호 | 입력 | 정책에 들어가는 곳 |
+|---|---|---|
+| 첫 설정 프로필 | `deskmate/profile/user`(retain, [mqtt-topics](mqtt-topics.md)) | `onboarding.mapping` 표대로 전역 prior θ⁰ 에 가산(`b` 의 λθ⁰ 만 교체 — 쌓인 학습 Σrx 는 그대로), `disable` arm 은 후보 제외(`excluded: user_profile`), bedtime→취침 규칙·after_bedtime, bedtime~wake_time→quiet_hours |
+| 밝힘 뒤 직접 어둡게(앱) | `feedback/user kind=manual_adjust` | 그 에피소드 맥락 x 로 밝힘 arm 수락 축 `implicit.app_reward`(−1, 거절과 같은 급). 명시 되돌리기(undo −2)와 따로 센다 |
+| 밝힘 뒤 직접 어둡게(조도) | env `lux`(BH1750) | 같은 자리, `implicit.lux_reward`(−0.5). 우리 밝힘이 조도를 `lux_rise_min_ratio`·`lux_rise_min_lx` 이상 올렸을 때만, 하락이 `lux_drop_hold_sec` 이어지고 그 사이 허브 무드등 명령이 없을 때만. 하락폭이 상승폭의 `lux_drop_max_factor` 배를 넘으면 방 조명으로 보고 무시 |
+| 깨우기 성공·실패 | 자세 라벨·키 입력·ToF 움직임·C_fatigue | 자세 원인 + 결정 tick 이 drowsy/face_down(또는 졸음 플래그·C_fatigue ≥ `wake.fatigue_min`)인 에피소드의 효과 축. `window_sec` 안에 깨어 있는 자세로 `hold_sec` 이어지고 (활동 재개 또는 C_fatigue −`fatigue_drop`) 이면 `reward_success`, 아니면 `reward_fail`. `effect_mode: replace` 면 10 분 C_fatigue 추세 대신(판정 즉시 갱신) |
+
+"밝힘" = 허브가 실행한 desk_lamp 명령 중 `adjust_brightness` percent > 0(결과 actual ≤ previous 면 아님) 또는 `set_brightness` 가
+결과의 previous 보다 큼(previous 를 모르면 `implicit.brighten_unknown_min` 이상). 갱신할 arm 은 그 에피소드 arm 이
+`implicit.brighten_arms` 중 하나면 그것, 아니면(FSM 기본 `actions.posture` 밝힘) 목록 전부. 화면에는 `sensor_summary.personalize.signal.text_ko`
+한 줄("밝힘 뒤 직접 어둡게 함 → 밝은 조명 덜 고름", "깨우기 성공 (엎드림→바른 자세 25 s)", "첫 설정 반영: …")이 실린다.
+
 ## 6. 취침 권유 — 밴딧 밖의 규칙
 
 밴딧은 "가능한 후보 중 최선"을 고를 뿐이라 "오늘은 그만하라"는 판단을 학습하게 두지 않는다. 다음 네 조건이 **모두** 성립하면

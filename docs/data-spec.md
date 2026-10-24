@@ -417,3 +417,37 @@ session/report.data.control_results는 forward·undo 각각 total, executing, su
 2026-10-08 온디바이스 학습 데이터: 동의 후 최신 16차원 embedding·정정 클래스·내부 tick/세션 번호를 제한된 RAM 표본으로 관리하며 MQTT나 디스크 표본 로그로 내보내지 않는다. 재부팅 시 이 표본은 사라진다. 검증 후 저장하는 `deskmate-personal-head/1` JSON은 backbone_sha256과 head(weights `[16,4]`, bias `[4]`)만 포함한다. 개인 head와 저장 임시 파일 모두 삭제 등록 대상이다. 공통 frozen CNN·입력/출력 계약은 [온디바이스 구현](ondevice-personalization.md)을 따른다. 기본 비활성·observe 전용이며 영구 표본 보존·사용자 분리 정책은 미정이다.
 
 정책 승인 후 활성화할 로컬 프로토타입은 privacy.yaml의 consent_file에 consented bool과 policy_version 문자열만 저장한다. 정책 버전 불일치·누락·손상은 미동의로 처리한다. baseline·개인 모델 삭제 대상은 서버 설정의 명시적 파일 목록이며 요청에서 경로를 받지 않는다. 사용자별 저장·조회·보존 기간과 ESM/PC 자료 삭제는 아직 확정하지 않는다. [개발 범위](personalization-privacy-flow.md)를 참고한다.
+
+## 사용자 첫 설정·직접 조절 보고 (2026-10-25)
+
+`user_profile` — Pi 5 앱 온보딩이 한 번 받는 짧은 설정. 토픽 `deskmate/profile/user`(retain, QoS 1, [mqtt-topics](mqtt-topics.md)).
+허브는 개입 선택의 기준(전역 prior)·취침 시각에만 쓰고 FSM 입력에는 넣지 않는다([personalization-spec §5.3](personalization-spec.md)).
+모든 필드는 선택이고 모르는 키·틀린 값은 버린다. 이름·연락처·위치 같은 식별 정보는 이 스키마에 없다.
+
+| 필드 | 값 | 허브 사용 |
+|---|---|---|
+| `profile_id` | 불투명 문자열(영숫자·`-_.`, 64자 이하) | 개인화 로그의 `profile_id` |
+| `age_band` | `10s`·`20s`·`30s`·`40s`·`50s+` | 지금은 쓰지 않아 저장하지 않는다(`onboarding.keep_fields`) |
+| `sleep_hours` | 0~24 실수 | `onboarding.sleep_short_hours` 미만이면 휴식 arm prior ↑ |
+| `bedtime`·`wake_time` | `"HH:MM"` | 취침 규칙·after_bedtime(`sleep.default_bedtime` 대신), quiet_hours, 새벽=전날 밤 경계 |
+| `light_pref` | `low`·`mid`·`high` | 조명 arm prior(어둡게 선호면 밝힘 ↓·따뜻하고 어둡게 ↑) |
+| `sound_pref` | `off`·`low`·`mid`·`high` | `off` 면 알림음·음성 안내 arm 후보 제외 |
+| `wind_pref` | `off`·`low`·`mid`·`high` | 선풍기 arm prior |
+| `focus_help` | `light`·`sound`·`wind`·`break`·`voice` 의 목록 | 고른 항목의 arm prior ↑ |
+| `placement` | `left`·`center`·`right` | 저장만(설치 위치) |
+
+허브는 `onboarding.keep_fields` 에 적힌 필드만 `logs/profiles/<설정 profile_id, 기본 default>/user_profile.json`(정책 `policy.json` 옆)에 원자적(tmp → rename)으로 저장해
+재시작 뒤에도 쓴다. 삭제 등록 대상에 넣을 파일이다.
+
+`manual_adjust` — 사용자가 앱의 조명 조절로 밝기를 직접 바꿨다는 보고. 기존 `deskmate/feedback/user` 에 `kind: "manual_adjust"` 로 싣는다.
+
+| 필드 | 값 |
+|---|---|
+| `kind` | `"manual_adjust"` (필수) |
+| `target_id` | `"desk_lamp"` |
+| `from`·`to` | 바꾸기 전·뒤 원시 밝기 0~255 (정수). `to < from` 이면 어둡게 |
+| `percent` | (선택) `from`·`to` 가 없을 때 바꾼 비율(음수 = 어둡게) |
+| `input` | (선택) `"app"` 등 입력 경로 |
+
+허브는 이 보고를 ESM 라벨·제어 승인으로 쓰지 않는다. 허브가 밝힌 뒤 `implicit.dim_window_min` 안의 어둡게 하기만 그 에피소드의 음의
+보상으로 쓰고, 그 밖(직전 허브 명령이 밝힘이 아님·창 밖·더 밝게)은 로그만 남긴다. 허브 명령으로 생긴 밝기 변화는 보고하지 않는다.

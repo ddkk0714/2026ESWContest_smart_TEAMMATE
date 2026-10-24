@@ -93,6 +93,7 @@
 | `reward_accept` | +1 / 0 / −1 / −2 |
 | `reward_effect` | `clip((before − after) / 0.30, −1, 1)`, `measured` 아니면 null |
 | `reward` | `w_accept·reward_accept + w_effect·reward_effect` (effect 가 null 이면 accept 축만) |
+| `wake` | (깨우기 에피소드만, 2026-10-25) 깨우기 판정 — §10. 판정이 나면 `reward_effect` 는 깨우기 보상 |
 
 ## 7. 예시 3줄
 
@@ -145,3 +146,18 @@
 - 합성 줄(`simulated: true`)과 실기 줄을 같은 파일에 섞지 않는다. 합성은 `logs/synth/` 아래.
 - 보존·삭제 범위는 `personalization-privacy-flow.md` 의 삭제 등록 목록에 이 파일을 넣는 것으로 결정한다(미결).
 - 시험: `hub/tests/test_personalize_record.py`(합성 MQTT 입력으로 피로→제안→수락/거절→10 분, 자리비움→세션 요약, numpy 없는 import).
+
+## 10. 첫 설정·암묵 신호 (2026-10-25)
+
+- 에피소드 줄에 선택 키 `signals`(목록)가 붙을 수 있다 — 그 에피소드에 붙은 암묵 신호
+  `{kind: manual_dim_app|manual_dim_lux, reward, ts_ms, reason, detail, policy_arms}`. 이 신호가 붙은 자동 에피소드는 피드백이 없어도
+  `auto_kept` 로 적지 않는다(`feedback: null`).
+- `outcome.wake`(깨우기 에피소드만): `{result: success|fail|pending, trigger, reward, to_awake_sec, hold_sec, awake_label, activity,
+  fatigue_drop | last_label}`. 판정이 나면 `outcome.reward_effect` 는 C_fatigue 추세 대신 깨우기 보상(`wake.effect_mode: replace`)
+  또는 둘의 섞음(`blend`)이다.
+- 새 줄 종류 `personalize_signal`: 암묵 신호마다 한 줄(에피소드가 이미 닫혀도 남는다). 키 `episode_id`, `session_id`, `profile_id`,
+  `kind`(manual_dim_app | manual_dim_lux | ignored), `reward`, `reason`(ignored 일 때: no_hub_command · unrelated_command ·
+  outside_window · no_lux_rise · room_light), `detail`, `policy_arms`, `text_ko`. `ignored` 는 정책에 넣지 않은 기록이다.
+- `profile_id` 는 첫 설정 프로필(`deskmate/profile/user`)의 `profile_id` 를 받으면 그 값(불투명 id, 이름 아님). 프로필 자체는
+  `logs/profiles/<설정 profile_id>/user_profile.json` 에 `onboarding.keep_fields` 만 원자적으로 저장한다(정책 `policy.json` 옆).
+- 시험: `hub/tests/test_personalize_signals.py`.
