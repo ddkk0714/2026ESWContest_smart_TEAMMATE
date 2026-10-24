@@ -103,6 +103,8 @@ arms:
      device: {target_id: vent_fan, operation: set_power, value: "on", undo_value: "off"}}
   - {id: ventilate_suggest, label_ko: 창문 환기, causes: [environment], channel: display, auto: false}
   - {id: posture_card, label_ko: 자세 안내 카드, causes: [posture], channel: display, auto: true}
+  - {id: wake_light, label_ko: 무드등 밝혀 깨우기, causes: [posture], channel: lamp, auto: true,       # 10-25: FSM 기본(actions.posture)과 같은 명령을 밴딧 arm 으로 — "직접 어둡게" 로 배울 수 있게
+     device: {target_id: desk_lamp, operation: adjust_brightness, value: {percent: 60, min_raw: 153}, undo: previous}}   # +60 %, 꺼져 있어도 최소 153/255
   - {id: posture_voice, label_ko: 자세 음성 안내, causes: [posture], channel: voice, auto: true}
   - {id: sound_cue, label_ko: 알림음, causes: [posture, cognitive], channel: sound, auto: true}
   - {id: break_short, label_ko: 5분 휴식, causes: [cognitive], channel: display, auto: false}
@@ -117,6 +119,7 @@ prior:
   air_fan_up:        {accept: {bias: 0.1, rain: 0.3}, effect: {bias: 0.1}}
   ventilate_suggest: {accept: {bias: 0.0, co2: 0.5, windy: 0.5}, effect: {bias: 0.1, co2: 0.6, windy: 0.3}}
   posture_card:      {accept: {bias: 0.3, slump_hold: 0.3}, effect: {bias: 0.2, slump_hold: 0.2}}
+  wake_light:        {accept: {bias: 0.1, drowsy: 0.3, after_bedtime: -0.3}, effect: {bias: 0.1, drowsy: 0.4}}   # 졸 때만 앞선다(안 졸면 자세 카드가 먼저)
   posture_voice:     {accept: {bias: 0.1, slump_hold: 0.3}, effect: {bias: 0.3, drowsy: 0.3}}
   sound_cue:         {accept: {bias: 0.0, drowsy: 0.5}, effect: {bias: 0.2, drowsy: 0.4}}
   break_short:       {accept: {bias: 0.3}, effect: {bias: 0.3}}
@@ -135,6 +138,8 @@ profile:
 
 onboarding:                     # 첫 설정 → 기준(prior). 입력 = deskmate/profile/user (Pi 5 앱, retain, QoS 1 — docs/mqtt-topics.md)
   enabled: true                 # 받은 프로필로 전역 prior·후보 제외·취침 시각을 바꾼다 (false 면 토픽을 받아도 무시)
+  per_profile: true             # 다른 profile_id 가 오면 그 사람의 profiles/<profile_id>/policy.json 으로 바꾼다(없으면 전역 prior + 그 프로필)
+  active_file: active_profile.json   # profiles/ 아래 지금 사용자(profile_id 만) — 재시작하면 그 사람으로 이어 간다
   file: user_profile.json       # profiles/<profile_id>/ 아래(policy.json 옆)에 원자적 JSON 으로 저장 — 재시작·브로커 재시작 뒤에도 유지
   keep_fields: [profile_id, sleep_hours, bedtime, wake_time, light_pref, sound_pref, wind_pref, focus_help, placement]
                                 # 저장·반영하는 필드. age_band 는 지금 prior 에 안 쓰므로 받자마자 버린다(필요한 것만, CLAUDE.md §2-5)
@@ -145,10 +150,12 @@ onboarding:                     # 첫 설정 → 기준(prior). 입력 = deskmat
   mapping:                      # 프로필 값 → {prior: {arm: {축: {특징: 가산}}}, disable: [arm], note_ko: 화면 문구}. 전역 prior 에 더한다
     light_pref:
       low:  {note_ko: "어두운 조명 선호 → 밝은 조명 덜 고름",
-             prior: {light_cool_bright: {accept: {bias: -0.5}}, light_warm_dim: {accept: {bias: 0.3}}}}   # 밝힘 수락 prior −0.5, 어둡게 +0.3
+             prior: {light_cool_bright: {accept: {bias: -0.5}}, light_warm_dim: {accept: {bias: 0.3}},
+                     wake_light: {accept: {bias: -0.3}}}}   # 밝힘 수락 prior −0.5, 어둡게 +0.3, 깨우기 무드등 −0.3
       mid:  {}
       high: {note_ko: "밝은 조명 선호 → 밝은 조명 먼저",
-             prior: {light_cool_bright: {accept: {bias: 0.3}}, light_warm_dim: {accept: {bias: -0.3}}}}
+             prior: {light_cool_bright: {accept: {bias: 0.3}}, light_warm_dim: {accept: {bias: -0.3}},
+                     wake_light: {accept: {bias: 0.2}}}}
     sound_pref:
       "off": {note_ko: "소리 끔 → 알림음·음성 안내 제외", disable: [sound_cue, posture_voice]}          # 후보에서 아예 뺀다
       low:  {note_ko: "소리 작게 → 알림음·음성 덜 고름",
@@ -161,7 +168,7 @@ onboarding:                     # 첫 설정 → 기준(prior). 입력 = deskmat
       mid:  {}
       high: {prior: {fan_on: {accept: {bias: 0.2}}}}
     focus_help:                 # "집중에 도움 되는 것"(복수 선택) — 고른 항목마다 더한다
-      light: {prior: {light_cool_bright: {accept: {bias: 0.2}}}}
+      light: {prior: {light_cool_bright: {accept: {bias: 0.2}}, wake_light: {accept: {bias: 0.2}}}}
       sound: {prior: {sound_cue: {accept: {bias: 0.2}}}}
       wind:  {prior: {fan_on: {accept: {bias: 0.2}}}}
       break: {prior: {break_short: {accept: {bias: 0.2}}, break_long: {accept: {bias: 0.1}}}}
@@ -173,7 +180,8 @@ implicit:                       # "무드등을 밝혔는데 사용자가 다시
   enabled: true
   lamp_target: desk_lamp        # 추적하는 기기
   dim_window_min: 10            # 허브가 밝힌 뒤 이 시간(분) 안의 직접 어둡게 하기만 그 밝힘의 반응으로 본다
-  brighten_arms: [light_cool_bright]   # 갱신할 밝힘 arm. 에피소드 arm 이 이 중 하나면 그것만, 아니면(FSM 기본 밝힘) 이 목록 전부
+  brighten_arms: [light_cool_bright, wake_light]   # 갱신할 밝힘 arm. 에피소드 arm 이 이 중 하나면 그것만
+  fsm_default_arms: {posture: [wake_light], environment: [light_cool_bright], cognitive: [light_cool_bright]}   # 밝힘 arm 이 아닌 에피소드(FSM 기본 밝힘 등)면 원인별로 이 arm. 없는 원인은 brighten_arms 전부
   brighten_unknown_min: 150     # 결과에 previous 가 없는 set_brightness(옛 앱)는 값이 이 이상(0~255)이면 밝힘으로 본다. null = 모르면 밝힘 아님
   app_report: true              # 증거 (a) 앱 보고 feedback/user kind=manual_adjust
   app_reward: -1.0              # 앱 보고 보상 — 명시 거절(reject −1)과 같은 급. 명시 되돌리기(undo −2)와는 따로 센다

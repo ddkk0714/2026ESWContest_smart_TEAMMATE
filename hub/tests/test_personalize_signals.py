@@ -64,12 +64,23 @@ def _sit(**kw):
 def test_parse_profile_keeps_schema_fields_only():
     p = parse_profile(PROFILE)
     assert "name" not in p and "email" not in p                       # 모르는 키(식별 정보)는 버린다
-    assert p["focus_help"] == ["light", "break"]                      # 모르는 항목 버림, 순서는 스키마 순
+    assert p["focus_help"] == ["break", "light"]                      # 모르는 항목 버림, 보낸 순서 유지
     assert p["light_pref"] == "low" and p["sound_pref"] == "off" and p["sleep_hours"] == 5.5
     bad = parse_profile({"profile_id": "a b/c", "light_pref": "bright", "bedtime": "25:00", "sleep_hours": "8"})
     assert bad is None                                                # 틀린 값만 있으면 아무것도 안 남는다
     assert parse_profile({"light_pref": "high", "bedtime": "7:5"}) == {"light_pref": "high"}
     assert parse_profile("nope") is None
+
+
+def test_focus_help_aliases_keep_order_and_any_node():
+    p = parse_profile({"focus_help": ["notify", "lamp", "break", "fan", "light", "music", 3, "voice"]})
+    assert p["focus_help"] == ["sound", "light", "break", "wind", "voice"]      # 별칭 → 표준, 중복·모르는 값 버림, 순서 유지
+    cache = SensorCache()                                                       # 제품 UI node "pi5-ui" 도 거르지 않는다
+    body = json.dumps({"ts": 1.0, "node": "pi5-ui", "seq": 1, "data": {"profile_id": "v18", "focus_help": ["lamp"]}})
+    assert route_mqtt_message(cache, "deskmate/profile/user", body.encode(), 1.0) == "user_profile"
+    fb = json.dumps({"ts": 1.0, "node": "pi5-ui", "data": {"kind": "manual_adjust", "target_id": "desk_lamp", "from": 9, "to": 3}})
+    assert route_mqtt_message(cache, "deskmate/feedback/user", fb.encode(), 1.0) == "feedback"
+    assert parse_profile(cache.user_profile.data)["focus_help"] == ["light"]
 
 
 def test_profile_shifts_prior_and_is_idempotent():
@@ -93,7 +104,7 @@ def test_profile_shifts_prior_and_is_idempotent():
 
 def test_profile_shift_keeps_learned_evidence():
     p = InterventionPolicy(_cfg())
-    d = p.decide(_sit(co2_ppm=1500), cause="environment", gate="suggest", session_id="s1")
+    d = p.decide(_sit(co2_ppm=1500), cause="cognitive", gate="suggest", session_id="s1")
     p.feedback(d, "accept")
     learned = [x - p.models[d.arm]["accept"].lam * t for x, t in zip(p.models[d.arm]["accept"].b,
                                                                      p.models[d.arm]["accept"].theta0)]
@@ -111,7 +122,7 @@ def test_sound_pref_off_removes_sound_and_voice_arms():
     p.reset_session()
     d = p.decide(_sit(), cause="posture", gate="suggest", session_id="s2")
     assert d.excluded.get("sound_cue") == "user_profile" and d.excluded.get("posture_voice") == "user_profile"
-    assert d.arm == "posture_card" and d.candidates == ["posture_card"]
+    assert d.candidates == ["posture_card", "wake_light"] and d.arm in d.candidates
     p.apply_user_profile({"sound_pref": "high"})                       # 다시 켜면 돌아온다
     p.reset_session()
     assert "sound_cue" in p.decide(_sit(), cause="posture", gate="suggest", session_id="s3").candidates
@@ -158,16 +169,21 @@ def test_profile_message_changes_prior_and_survives_restart(tmp_path):
     text = states[-1]["data"]["sensor_summary"]["personalize"]["signal"]["text_ko"]
     assert text.startswith("첫 설정 반영") and "취침 01:00" in text
 
-    path = tmp_path / "prof" / "user_profile.json"
+    # 다른 profile_id → 그 사람 폴더로 전환(policy.json·user_profile.json), 지금 사용자는 active_profile.json
+    assert hub.active_profile_id == "u-7f3a" and states[-1]["data"]["sensor_summary"]["personalize"]["active_profile_id"] == "u-7f3a"
+    assert rec.policy_path == str(tmp_path / "u-7f3a" / "policy.json") and (tmp_path / "u-7f3a" / "policy.json").exists()
+    assert json.loads((tmp_path / "active_profile.json").read_text(encoding="utf-8"))["profile_id"] == "u-7f3a"
+    path = tmp_path / "u-7f3a" / "user_profile.json"
     stored = json.loads(path.read_text(encoding="utf-8"))
     assert stored["profile"]["profile_id"] == "u-7f3a"
     assert "age_band" not in stored["profile"] and "홍길동" not in json.dumps(stored, ensure_ascii=False)
-    assert not (tmp_path / "prof" / "user_profile.json.tmp").exists()
+    assert not (tmp_path / "u-7f3a" / "user_profile.json.tmp").exists()
     b_saved = list(hub.personalize_policy.models["light_cool_bright"]["accept"].b)
 
     # 재시작: 브로커에 retain 이 없어도 파일에서 다시 반영 — prior 를 두 번 더하지 않는다
     hub2, cache2, states2 = _live(tmp_path)
     p2 = hub2.personalize_policy
+    assert hub2.active_profile_id == "u-7f3a" and hub2.personalize_recorder.logger.profile_id == "u-7f3a"
     assert hub2.personalize_recorder.user_profile == load_profile(str(path))
     assert p2.disabled == {"sound_cue", "posture_voice"}
     assert p2.models["light_cool_bright"]["accept"].b == pytest.approx(b_saved)
@@ -184,7 +200,7 @@ def test_onboarding_disabled_ignores_profile(tmp_path):
     route_mqtt_message(cache, "deskmate/profile/user", _envelope(PROFILE), 1000.0)
     hub.tick_once(1000.0)
     assert _mean(hub.personalize_policy, "light_cool_bright") == base
-    assert not (tmp_path / "prof" / "user_profile.json").exists()
+    assert not (tmp_path / "prof" / "user_profile.json").exists() and not (tmp_path / "u-7f3a").exists()
 
 
 # ── 2. 밝힘 뒤 직접 어둡게 ──────────────────────────────────────────
@@ -512,7 +528,8 @@ def test_live_hub_manual_adjust_after_posture_lamp(tmp_path):
         {"kind": "manual_adjust", "target_id": "desk_lamp", "from": 230, "to": 90, "input": "app"}, ts=t), t)
     hub.tick_once(t)
     pol = hub.personalize_policy
-    assert pol.stats["light_cool_bright"]["implicit"] == 1
+    assert pol.stats["wake_light"]["implicit"] == 1                       # 자세(깨우기) 밝힘 → wake_light 가 배운다
+    assert pol.stats["light_cool_bright"]["implicit"] == 0
     assert "[esm]" not in hub.out.getvalue()                             # ESM 라벨·verdict 경로로 가지 않는다
     sig = states[-1]["data"]["sensor_summary"]["personalize"]["signal"]
     assert sig["kind"] == "manual_dim_app" and "직접 어둡게" in sig["text_ko"]
@@ -546,3 +563,131 @@ def test_board_runtime_profile_and_signals_without_numpy_or_random():
     """)
     result = subprocess.run([sys.executable, "-c", code], cwd=HUB, capture_output=True, text=True)
     assert result.returncode == 0 and "ok" in result.stdout, result.stderr[-2000:]
+
+
+# ── 깨우기 무드등 arm (wake_light) ─────────────────────────────────
+
+def test_arm_commands_pass_value_dict_and_undo_through():
+    from deskmate_hub.personalize.adapter import arm_commands
+
+    cfg = load_personalize_config()
+    wake = next(a for a in cfg["arms"] if a["id"] == "wake_light")
+    (spec,) = arm_commands(wake["device"])
+    assert spec == {"target_id": "desk_lamp", "operation": "adjust_brightness", "value": {"percent": 60, "min_raw": 153},
+                    "undo_value": None, "undo": "previous"}
+    assert spec["value"] is not wake["device"]["value"]                   # 복사본(설정 dict 를 바꾸지 않게)
+    assert "wake_light" in cfg["implicit"]["brighten_arms"] and wake["causes"] == ["posture"]
+
+
+def test_profile_mapping_moves_wake_light():
+    p = InterventionPolicy(_cfg())
+    base = _mean(p, "wake_light")
+    p.apply_user_profile({"light_pref": "low"})
+    assert _mean(p, "wake_light") == pytest.approx(base - 0.3)
+    p.apply_user_profile({"light_pref": "high", "focus_help": ["light"]})
+    assert _mean(p, "wake_light") == pytest.approx(base + 0.4)
+
+
+def _drive_drowsy(hub, cache, *, until):
+    period, baseline = hub.period, float(hub.fsm_cfg["timers"]["baseline_sec"])
+    t = 0.0
+    while t <= baseline + 2 * period:
+        cache.put("mmwave", mm(t, level=40)); cache.put("env", env(t, co2=700)); hub.tick_once(t); t += period
+    for _ in range(int(3600 / period)):
+        cache.put("mmwave", mm(t, level=5)); cache.put("env", env(t, co2=2000))
+        cache.put("tof_service", svc(t, posture="drowsy", conf=0.92))
+        hub.tick_once(t)
+        if hub.engine.state is State.ACTION_POSTURE and hub.control.episode and hub.control.episode.awaiting_user:
+            cache.put_feedback({"verdict": "accept"})
+        t += period
+        if until(hub):
+            break
+    return t
+
+
+def test_live_hub_drowsy_picks_wake_light_and_manual_dim_lowers_it(tmp_path):
+    from deskmate_hub.control import load_control_config
+    from deskmate_hub.inference import load_config
+    from deskmate_hub.ingest import load_ingest_config
+
+    cfg = _cfg(log_dir=str(tmp_path))
+    cfg["bandit"] = dict(cfg["bandit"], algorithm="greedy")                # 평균만 — 결정적
+    cfg["prior"] = dict(cfg["prior"], wake_light={"accept": {"bias": 2.0}, "effect": {"bias": 2.0}})
+    cache, states = SensorCache(), []
+    hub = LiveHub(cache, fsm_cfg=copy.deepcopy(load_config()), ingest_cfg=dict(load_ingest_config(), normalization="linear"),
+                  control_cfg=dict(load_control_config(), adapter="mock"), publish=states.append, out=io.StringIO(),
+                  profile="", personalize_cfg=cfg, personalize_log_path=str(tmp_path / "p.jsonl"),
+                  personalize_policy_path=str(tmp_path / "default" / "policy.json"))
+    t = _drive_drowsy(hub, cache, until=lambda h: bool(h.mock_plug.state.get("desk_lamp")))
+    ep = hub.control.episode or hub.control.history[-1]
+    cmd = ep.commands[0]
+    assert ep.state == "ACTION_POSTURE" and (cmd.target_id, cmd.operation) == ("desk_lamp", "adjust_brightness")
+    assert cmd.value == {"percent": 60, "min_raw": 153} and cmd.undo_mode == "previous"
+    view = next(s["data"]["sensor_summary"]["personalize"] for s in reversed(states)
+                if (s["data"]["sensor_summary"].get("personalize") or {}).get("arm"))
+    assert view["arm"] == "wake_light" and view["arm_label"] == "무드등 밝혀 깨우기"
+    hub.tick_once(t)                                                        # 모의 램프 결과(previous·actual) 반영
+    t += hub.period
+    ev = hub.personalize_recorder.implicit.last
+    assert ev.brighten and ev.previous is not None and ev.actual >= 153
+    pol = hub.personalize_policy
+    before = _mean(pol, "wake_light")
+    route_mqtt_message(cache, "deskmate/feedback/user", _envelope(
+        {"kind": "manual_adjust", "target_id": "desk_lamp", "from": int(ev.actual), "to": 40}, ts=t), t)
+    hub.tick_once(t)
+    assert pol.stats["wake_light"]["implicit"] == 1 and _mean(pol, "wake_light") < before
+
+
+# ── 사람별 정책 ────────────────────────────────────────────────────
+
+def test_profile_switch_keeps_separate_policies_and_resumes_after_restart(tmp_path):
+    hub, cache, states = _live(tmp_path)
+    assert hub.active_profile_id == "prof"                                # 메시지 전 = 설정(정책 경로) 기본 사용자
+    first = hub.personalize_policy
+    route_mqtt_message(cache, "deskmate/profile/user", _envelope({"profile_id": "alice", "light_pref": "low"}), 1000.0)
+    hub.tick_once(1000.0)
+    alice = hub.personalize_policy
+    assert hub.active_profile_id == "alice" and alice is not first
+    d = alice.decide(_sit(), cause="cognitive", gate="suggest", session_id="x")
+    alice.feedback(d, "accept")
+    hub.personalize_recorder._save_policy()
+    assert alice.n_feedback == 1
+
+    route_mqtt_message(cache, "deskmate/profile/user", _envelope({"profile_id": "bob", "light_pref": "high"}, ts=1100.0),
+                       1100.0)
+    hub.tick_once(1100.0)
+    bob = hub.personalize_policy
+    assert hub.active_profile_id == "bob" and bob.n_feedback == 0         # 새 사람 = 전역 prior + 그 프로필
+    assert _mean(bob, "light_cool_bright") > _mean(alice, "light_cool_bright")
+    assert (tmp_path / "alice" / "policy.json").exists() and (tmp_path / "bob" / "user_profile.json").exists()
+    assert states[-1]["data"]["sensor_summary"]["personalize"]["active_profile_id"] == "bob"
+
+    route_mqtt_message(cache, "deskmate/profile/user", _envelope({"profile_id": "alice", "light_pref": "low"}, ts=1200.0),
+                       1200.0)
+    hub.tick_once(1200.0)
+    back = hub.personalize_policy
+    assert hub.active_profile_id == "alice" and back.n_feedback == 1      # alice 의 학습을 다시 불러온다
+    assert _mean(back, "light_cool_bright") == pytest.approx(_mean(alice, "light_cool_bright"))
+
+    hub2, _, _ = _live(tmp_path)                                          # 재시작 → 마지막 사용자(alice)로
+    assert hub2.active_profile_id == "alice" and hub2.personalize_policy.n_feedback == 1
+    assert hub2.personalize_recorder.user_profile == {"profile_id": "alice", "light_pref": "low"}
+    assert hub2.personalize_recorder.logger.profile_id == "alice"
+
+
+def test_profile_switch_closes_open_episodes_with_previous_policy(tmp_path):
+    rec, policy = _recorder(tmp_path / "default")
+    eid, d = _open(rec, policy, _sit(), "cognitive", gate="suggest")
+    rec._apply_profile({"profile_id": "carol"}, now=2000.0, save=True)
+    assert rec.active_profile_id == "carol" and rec.policy is not policy and not rec._episodes
+    ep = next(r for r in read_records(rec.path) if r["schema_name"] == "personalize_episode")
+    assert ep["episode_id"] == eid and ep["outcome"]["status"] == "profile_switched" and ep["profile_id"] == "default"
+    assert rec.policy_path == str(tmp_path / "carol" / "policy.json")
+
+
+def test_profile_without_id_keeps_active_profile(tmp_path):
+    hub, cache, _ = _live(tmp_path)
+    route_mqtt_message(cache, "deskmate/profile/user", _envelope({"light_pref": "low"}), 1000.0)
+    hub.tick_once(1000.0)
+    assert hub.active_profile_id == "prof" and (tmp_path / "prof" / "user_profile.json").exists()
+    assert not (tmp_path / "active_profile.json").exists()

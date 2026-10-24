@@ -111,8 +111,13 @@ def arm_commands(device: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not device:
         return []
     if "operation" in device:
-        return [{"target_id": device["target_id"], "operation": device["operation"],
-                 "value": device.get("value"), "undo_value": device.get("undo_value")}]
+        # value 는 그대로(dict 면 복사만) — 예: wake_light adjust_brightness {percent: 60, min_raw: 153}. undo: previous 도 넘긴다
+        value = device.get("value")
+        spec = {"target_id": device["target_id"], "operation": device["operation"],
+                "value": dict(value) if isinstance(value, dict) else value, "undo_value": device.get("undo_value")}
+        if isinstance(device.get("undo"), str):
+            spec["undo"] = device["undo"]
+        return [spec]
     out: list[dict[str, Any]] = []
     if "percent" in device:
         out.append({"target_id": device["target_id"], "operation": "adjust_brightness",

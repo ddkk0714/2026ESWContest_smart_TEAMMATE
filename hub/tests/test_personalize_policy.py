@@ -61,7 +61,9 @@ def test_personas_diverge_on_environment():
 def test_personas_diverge_on_cognitive():
     _, owl = train("night_owl")
     _, slumper = train("afternoon_slumper")
-    assert top(owl, "cognitive") == "break_short"
+    # 올빼미의 오라클 값은 break_short(수락 0.8, 제안이라 되돌림 없음)와 light_cool_bright(0.85 − 되돌림 0.05)가 0.80 으로 같다 —
+    # arm 이 하나 늘면(10-25 wake_light) Thompson 난수열이 달라져 둘 중 어느 쪽이든 나온다. 갈리는지는 오후 슬럼프(break_long)와 비교로 본다.
+    assert top(owl, "cognitive") in ("break_short", "light_cool_bright")
     assert top(slumper, "cognitive") == "break_long"
 
 
@@ -194,7 +196,7 @@ def test_gate_is_a_ceiling_never_escalates():
 def test_arms_stay_inside_fsm_cause_group():
     p = policy(6)
     for cause, allowed in (("environment", {"light_cool_bright", "fan_on", "air_fan_up", "ventilate_suggest"}),
-                           ("posture", {"posture_card", "posture_voice", "sound_cue"}),
+                           ("posture", {"posture_card", "posture_voice", "sound_cue", "wake_light"}),
                            ("cognitive", {"light_cool_bright", "light_warm_dim", "sound_cue", "break_short", "break_long"})):
         for i in range(10):
             d = p.decide(sit(ts=1_000_000.0 + i * 400), cause=cause, gate="suggest", session_id=f"{cause}{i}")

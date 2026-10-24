@@ -36,7 +36,7 @@ def test_default_config_restricts_policy_to_posture_and_cognitive():
     # 자세·인지 원인은 그대로 밴딧이 고른다
     dp = p.decide(sit(), cause="posture", gate="auto", session_id="s1")
     dc = p.decide(sit(), cause="cognitive", gate="auto", session_id="s1")
-    assert dp.source == "bandit" and dp.arm in ("posture_card", "posture_voice", "sound_cue")
+    assert dp.source == "bandit" and dp.arm in ("posture_card", "posture_voice", "sound_cue", "wake_light")
     assert dc.source == "bandit" and dc.arm in ("light_cool_bright", "light_warm_dim", "sound_cue", "break_short", "break_long")
     # 환경 결정은 세션 개입 횟수를 쓰지 않는다
     assert p._session_count == 2

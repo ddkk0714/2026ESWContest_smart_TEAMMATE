@@ -132,7 +132,7 @@ class LiveHub:
         # `enabled: true` 면 3층 정책(InterventionPolicy, 순수 Python — Pi 4 에서도 돈다)도 켜서 결정 tick 에
         # arm·전달 게이트를 고르고 profiles/<profile_id>/policy.json 에 학습 상태를 저장한다.
         self.personalize_recorder: EpisodeRecorder | None = None
-        self.personalize_policy = None
+        policy = None
         if EpisodeRecorder is not None and (self.personalize_cfg.get("record") or self.personalize_cfg.get("enabled")):
             log_dir = self.personalize_cfg.get("log_dir") or "logs"
             path = personalize_log_path or os.path.join(log_dir, f"personalize-{self.boot_id}.jsonl")
@@ -143,10 +143,10 @@ class LiveHub:
                 else:
                     policy_path = personalize_policy_path or os.path.join(
                         log_dir, "profiles", str(self.personalize_cfg.get("profile_id", "default")), "policy.json")
-                    self.personalize_policy = InterventionPolicy.load(policy_path, self.personalize_cfg)
+                    policy = InterventionPolicy.load(policy_path, self.personalize_cfg)
             self.personalize_recorder = EpisodeRecorder(
                 self.personalize_cfg, path, boot_id=self.boot_id, ingest_cfg=self.ingest_cfg,
-                on_log=lambda m: print(m, file=self.out), policy=self.personalize_policy, policy_path=policy_path)
+                on_log=lambda m: print(m, file=self.out), policy=policy, policy_path=policy_path)
         self.ondevice_cfg = ondevice_cfg if ondevice_cfg is not None else load_ondevice_config()
         self.ondevice = OnDeviceLearner(self.ondevice_cfg, self.privacy)
         # 피로 점수(공용 KSS 모델, docs/fatigue-dataset.md §6) — 관찰 전용, FSM 입력 아님. 모델 JSON 이 없으면 None.
@@ -318,6 +318,16 @@ class LiveHub:
         )
         return envelope
 
+
+    @property
+    def personalize_policy(self):
+        """지금 사용자의 개입 선택 정책. 프로필 메시지로 사람이 바뀌면 recorder 가 갈아 끼운다(사람별 policy.json)."""
+        return self.personalize_recorder.policy if self.personalize_recorder is not None else None
+
+    @property
+    def active_profile_id(self) -> str | None:
+        """지금 사용자의 불투명 profile_id(이름 아님). 사람별 상태를 두는 다른 모듈이 같은 값을 쓰도록 연다."""
+        return self.personalize_recorder.active_profile_id if self.personalize_recorder is not None else None
 
     def _control_owns(self, state: State) -> bool:
         """이 상태의 완료(action_done)를 제어 결과가 정하는가. ACTION_ENV 는 언제나, ACTION_POSTURE 는 이번 진입에

@@ -16,7 +16,8 @@ from typing import Any, Callable
 from .adapter import (SituationExtras, arm_commands, extras_from_cache, fsm_record, is_decision_tick, local_clock,
                       situation_from_tick)
 from .log import PersonalizeLogger, local_iso
-from .onboarding import kept, load_profile, parse_hhmm, parse_profile, profile_adjustments, save_profile
+from .onboarding import (kept, load_active_profile, load_profile, parse_hhmm, parse_profile, profile_adjustments,
+                         save_active_profile, save_profile)
 from .profile import ProfileSummary
 from .rewards import REWARD_ACCEPT, reward_effect
 from .signals import ImplicitDimTracker, WakeTracker
@@ -151,11 +152,20 @@ class EpisodeRecorder:
         self.profile_summary: ProfileSummary | None = None
         self._sit_cfg = cfg
         self._profile_seen: float | None = None
-        base = (os.path.dirname(policy_path) if policy_path else
-                os.path.join(os.path.dirname(path) or str(cfg.get("log_dir") or "logs"), "profiles",
-                             str(cfg.get("profile_id", "default"))))
-        self.user_profile_path = os.path.join(base, str(self.onboarding_cfg.get("file", "user_profile.json")))
+        # 사람별 저장(2026-10-25): profiles/<profile_id>/{policy.json, user_profile.json}, 지금 사용자는 profiles/active_profile.json.
+        # 프로필 메시지가 오기 전에는 설정 profile_id(정책 경로의 폴더 이름)가 기본 사용자다.
+        if policy_path:
+            self.profiles_root = os.path.dirname(os.path.dirname(policy_path)) or "."
+            self.default_profile_id = os.path.basename(os.path.dirname(policy_path)) or str(cfg.get("profile_id", "default"))
+        else:
+            self.profiles_root = os.path.join(os.path.dirname(path) or str(cfg.get("log_dir") or "logs"), "profiles")
+            self.default_profile_id = str(cfg.get("profile_id", "default"))
+        self.active_profile_id = self.default_profile_id
+        self.user_profile_path = self._profile_file(self.active_profile_id)
         if self.onboarding_cfg.get("enabled"):
+            active = load_active_profile(self._active_file()) if self.onboarding_cfg.get("per_profile", True) else None
+            if active is not None and active != self.active_profile_id:
+                self._switch_profile(active, now=None, persist=False)   # 재시작: 마지막 사용자로 이어 간다
             stored = load_profile(self.user_profile_path)
             if stored is not None:
                 self._apply_profile(stored, now=None, save=False)
@@ -311,7 +321,41 @@ class EpisodeRecorder:
                 "explanation": decision.get("explanation"), "fsm_gate": fsm.get("gate"), "delivered_gate": delivered,
                 "policy_mode": decision.get("policy_mode"), "n_personal": decision.get("n_personal"),
                 "auto_threshold": decision.get("auto_threshold"), "ventilate_minutes": decision.get("ventilate_minutes"),
-                "signal": self.last_signal}
+                "signal": self.last_signal, "active_profile_id": self.active_profile_id}
+
+    # ── 사람별 정책 ───────────────────────────────────────────
+    def _profile_file(self, profile_id: str) -> str:
+        return os.path.join(self.profiles_root, profile_id, str(self.onboarding_cfg.get("file", "user_profile.json")))
+
+    def _active_file(self) -> str:
+        return os.path.join(self.profiles_root, str(self.onboarding_cfg.get("active_file", "active_profile.json")))
+
+    def _switch_profile(self, profile_id: str, *, now: float | None, persist: bool = True) -> None:
+        """다른 사람(profile_id)으로 바꾼다. 열린 에피소드는 앞 사람 정책으로 닫고 저장한 뒤, 그 사람의 policy.json·user_profile.json
+        으로 갈아 끼운다(없으면 전역 prior 에서 — 곧이어 이 사람 프로필의 mapping 이 얹힌다). 지금 사용자는 active_profile.json 에."""
+        for eid in list(self._episodes):
+            self._close(eid, status="profile_switched", c_after=None, next_state=None)
+        self._save_policy()
+        previous = self.active_profile_id
+        self.active_profile_id = profile_id
+        self.user_profile_path = self._profile_file(profile_id)
+        if self.policy is not None:
+            from .policy import InterventionPolicy
+
+            self.policy_path = os.path.join(self.profiles_root, profile_id, "policy.json")
+            self.policy = InterventionPolicy.load(self.policy_path, self.policy.cfg, rng=self.policy.rng)
+        self.user_profile = None
+        self.profile_summary = None
+        self._sit_cfg = self.cfg
+        self.implicit.last = None            # 앞 사람의 밝힘에 다음 사람의 조절을 붙이지 않는다
+        self.wake.watches.clear()
+        self.logger.profile_id = profile_id
+        if persist:
+            try:
+                save_active_profile(self._active_file(), profile_id)
+            except OSError as exc:
+                self._log(f"[personalize] 지금 사용자 저장 실패: {exc}")
+        self._log(f"[personalize] 사용자 전환 {previous} → {profile_id}")
 
     # ── 첫 설정 프로필 ─────────────────────────────────────────
     def _maybe_apply_profile(self, view: Any, now: float) -> None:
@@ -328,6 +372,9 @@ class EpisodeRecorder:
     def _apply_profile(self, profile: dict[str, Any], *, now: float | None, save: bool) -> None:
         ocfg = self.onboarding_cfg
         prof = kept(profile, ocfg.get("keep_fields"))
+        pid = prof.get("profile_id")
+        if save and pid and pid != self.active_profile_id and ocfg.get("per_profile", True):
+            self._switch_profile(pid, now=now)
         if prof == self.user_profile:
             return          # retain 재수신·재시작 뒤 같은 값 — 이미 반영됨
         self.user_profile = prof
@@ -363,7 +410,7 @@ class EpisodeRecorder:
 
     def _set_signal(self, kind: str, text: str, now: float | None) -> None:
         self.last_signal = {"kind": kind, "text_ko": text, "ts": now}
-        self.last_view = dict(self.last_view or {}, signal=self.last_signal)
+        self.last_view = dict(self.last_view or {}, signal=self.last_signal, active_profile_id=self.active_profile_id)
         self._log(f"[personalize] {text}")
 
     # ── 묻지 않고 얻는 신호 ─────────────────────────────────────
@@ -410,9 +457,15 @@ class EpisodeRecorder:
         self._set_signal("wake", WakeTracker.text_ko(watch), now)
 
     def _dim_targets(self, decision: Any) -> list[str]:
-        arms = list((self.cfg.get("implicit") or {}).get("brighten_arms") or ["light_cool_bright"])
+        """갱신할 밝힘 arm. 에피소드 arm 이 밝힘 arm 이면 그것, 아니면(FSM 기본 밝힘) 원인별 표 `implicit.fsm_default_arms`,
+        표에 없으면 `brighten_arms` 전부."""
+        icfg = self.cfg.get("implicit") or {}
+        arms = list(icfg.get("brighten_arms") or ["light_cool_bright"])
         arm = getattr(decision, "arm", None)
-        return [arm] if arm in arms else arms
+        if arm in arms:
+            return [arm]
+        by_cause = (icfg.get("fsm_default_arms") or {}).get(str(getattr(decision, "cause", "")))
+        return list(by_cause) if by_cause else arms
 
     def _handle_signal(self, sig: dict[str, Any] | None, now: float) -> None:
         if sig is None:

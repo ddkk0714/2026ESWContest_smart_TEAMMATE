@@ -18,6 +18,7 @@ from typing import Any
 
 TOPIC_PROFILE = "deskmate/profile/user"
 SCHEMA_NAME = "deskmate_user_profile"
+ACTIVE_SCHEMA = "deskmate_active_profile"
 
 ENUMS: dict[str, tuple[str, ...]] = {
     "age_band": ("10s", "20s", "30s", "40s", "50s+"),
@@ -27,6 +28,7 @@ ENUMS: dict[str, tuple[str, ...]] = {
     "placement": ("left", "center", "right"),
 }
 FOCUS_HELP = ("light", "sound", "wind", "break", "voice")
+FOCUS_HELP_ALIASES = {"lamp": "light", "fan": "wind", "notify": "sound"}   # 제품 UI(V18) 별칭 → 표준 이름
 _ID_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
 _ID_MAX = 64
 
@@ -64,7 +66,12 @@ def parse_profile(data: Any) -> dict[str, Any] | None:
             out[key] = data[key].strip()
     helps = data.get("focus_help")
     if isinstance(helps, list):
-        seen = [h for h in FOCUS_HELP if h in helps]
+        # 앱이 고른 순서(몰입 도움 순위)를 지키고, 별칭은 표준 이름으로, 모르는 값·중복은 버린다
+        seen: list[str] = []
+        for item in helps:
+            name = FOCUS_HELP_ALIASES.get(item, item) if isinstance(item, str) else None
+            if name in FOCUS_HELP and name not in seen:
+                seen.append(name)
         out["focus_help"] = seen
     return out or None
 
@@ -146,6 +153,27 @@ def save_profile(path: str, profile: dict[str, Any], *, received_ts: float | Non
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(body, fh, ensure_ascii=False)
     os.replace(tmp, path)
+
+
+def save_active_profile(path: str, profile_id: str) -> None:
+    """지금 사용자(profile_id 만). 재시작하면 이 사람의 정책으로 이어 간다."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"schema_name": ACTIVE_SCHEMA, "schema_version": "1.0", "profile_id": profile_id}, fh)
+    os.replace(tmp, path)
+
+
+def load_active_profile(path: str) -> str | None:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            body = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(body, dict) or body.get("schema_name") != ACTIVE_SCHEMA:
+        return None
+    parsed = parse_profile({"profile_id": body.get("profile_id")})
+    return parsed.get("profile_id") if parsed else None
 
 
 def load_profile(path: str) -> dict[str, Any] | None:
