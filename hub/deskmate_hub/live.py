@@ -197,8 +197,9 @@ class LiveHub:
             # The MVP auto-completion flag is not a substitute for a person's
             # response. Keep BREAK/POSTURE suggestions alive too, not just ENV.
             frame.action_done = False
-        if self.control is not None and self.engine.state is State.ACTION_ENV:
-            # ACTION_ENV 완료 여부는 제어 결과가 결정한다 (ingest 의 auto_complete 를 덮어쓴다)
+        if self.control is not None and self._control_owns(self.engine.state):
+            # ACTION_ENV(그리고 제어 에피소드가 열린 ACTION_POSTURE) 완료 여부는 제어 결과가 결정한다
+            # (ingest 의 auto_complete 를 덮어쓴다). ACTION_BREAK 는 사람이 쉬는 일이라 그대로 둔다.
             frame.action_done = self.control.action_done(now)
             frame.break_accepted = None
         prev_state = self.engine.state
@@ -229,9 +230,15 @@ class LiveHub:
                 summary["personalize"] = self.personalize_recorder.last_view
         if self.control is not None:
             # 제어 에피소드: ACTION_ENV 는 control.yaml 기본 명령으로, 다른 ACTION_* 는 정책이 기기 arm(조명 등)을
-            # 골랐을 때만(specs 비어 있지 않음). 자동이면 바로 실행하고 되돌리기 창이 열린다.
+            # 골랐을 때만(specs 비어 있지 않음). ACTION_POSTURE 는 2026-10-24 부터 정책 spec 이 없어도 control.yaml
+            # `actions.posture`(졸음 → 무드등 밝게)가 있으면 그것으로 — 정책 spec 이 있으면 그쪽이 우선이고, 설정에
+            # `actions.posture` 가 없으면 예전과 같이 명령 없음. 자동이면 바로 실행하고 되돌리기 창이 열린다.
             entered = result.state in self._REQUEST_STATES and result.state is not prev_state
-            if entered and (result.state is State.ACTION_ENV or specs):
+            if (entered and result.state is State.ACTION_POSTURE and not specs
+                    and self.control.has_default_actions(result.state.value, result.cause)):
+                # 정책이 기기 arm 을 안 줬다(정책 없음, 또는 화면·음성 arm) → control.yaml 기본 명령으로
+                self.control.on_enter_action(result.state.value, result.cause, result.gate, now, specs=None)
+            elif entered and (result.state is State.ACTION_ENV or specs):
                 self.control.on_enter_action(result.state.value, result.cause, result.gate, now, specs=specs)
             elif (prev_state in self._REQUEST_STATES and result.state is not prev_state
                   and self.control.episode is not None):
@@ -277,6 +284,16 @@ class LiveHub:
         )
         return envelope
 
+
+    def _control_owns(self, state: State) -> bool:
+        """이 상태의 완료(action_done)를 제어 결과가 정하는가. ACTION_ENV 는 언제나, ACTION_POSTURE 는 이번 진입에
+        제어 에피소드가 열렸을 때만(control.yaml `actions.posture` 또는 정책 기기 arm). ACTION_BREAK 는 아니다."""
+        if state is State.ACTION_ENV:
+            return True
+        if state is State.ACTION_POSTURE and self.control is not None:
+            ep = self.control.episode
+            return ep is not None and ep.state == state.value
+        return False
 
     def report_envelope(self, now: float | None = None) -> dict[str, Any]:
         """지금까지의 세션 요약. 주기 발행과 세션 종료에 같은 모양을 쓴다."""
@@ -394,7 +411,8 @@ class LiveHub:
             return
         kind, prompt = self._REQUEST_STATES[result.state]
         expires = float(self.fsm_cfg["timers"].get("focus_break_poll_sec", 180))
-        if result.state is State.ACTION_ENV and self.control is not None:
+        if self.control is not None and self._control_owns(result.state):
+            # 제어가 맡은 제안(ENV, 기본 명령이 있는 POSTURE)은 카드 만료를 디스패처의 제안 시한과 맞춘다
             expires = min(expires, self.control.suggest_timeout)
         self.pending_request = {
             "schema_version": "1.0", "ts": now, "node": "hub", "boot_id": self.boot_id, "seq": self.seq,

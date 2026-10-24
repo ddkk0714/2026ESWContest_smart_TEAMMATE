@@ -19,3 +19,9 @@ actions:
   environment:
     - {target_id: vent_fan, operation: set_power, value: "on", undo_value: "off"}
     - {target_id: desk_lamp, operation: set_brightness, value: 70, undo_value: 40}
+  # ACTION_POSTURE(졸음 drowsy·face_down → 자세성 라우팅) 진입 시 깨우기 (2026-10-24). PC life_sim(devices.yaml) 의
+  # posture_auto → lamp_cool 과 같은 뜻. 색온도(cool)는 Pi 5 어댑터(feedback_policy.dart)가 아직 set_brightness·set_power 만
+  # 받아 밝기만 올린다. 개인화 정책이 기기 arm(spec)을 준 경우에는 그쪽이 우선이고, 이 묶음을 지우면 ACTION_POSTURE 는
+  # 예전처럼 명령 없이(화면 카드만) 지나간다. undo_value 110 = personalize.yaml 조명 arm 의 되돌림 밝기와 같다.
+  posture:
+    - {target_id: desk_lamp, operation: set_brightness, value: 230, undo_value: 110}

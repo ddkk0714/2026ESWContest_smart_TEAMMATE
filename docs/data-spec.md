@@ -282,6 +282,9 @@ USB 열거·xHCI 같은 하드웨어 진단 로그는 이 논리 스키마 밖�
 
 `command_id`는 멱등성을 보장한다. 오류 메시지에 비밀값을 포함하지 않는다.
 
+명령을 내는 상태(2026-10-24): `ACTION_ENV` 는 `control.yaml actions.environment`, `ACTION_POSTURE` 는 `actions.posture`(졸음 깨우기 — `desk_lamp set_brightness 230`, 되돌림 110; 개인화 정책이 기기 arm 을 주면 그쪽이 우선, 묶음이 없으면 명령 없음). `ACTION_BREAK` 는 기본 명령이 없다. 게이트·쿨다운·되돌리기 창은 상태와 무관하게 같다.
+시연 프로파일: 환경변수 `DESKMATE_PROFILE=demo-a|demo-b` 면 `config/profiles/<이름>.yaml` 의 `fsm:`·`ingest:` 절이 기본 설정 위에 깊은 병합된다(시연 전용·시뮬 근거, 실측 성공 기록에 쓰지 않는다).
+
 ## 11. 장치 상태·세션·ESM
 
 `device_health`:
