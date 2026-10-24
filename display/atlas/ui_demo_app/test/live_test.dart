@@ -17,6 +17,7 @@ import 'package:deskmate_ui_demo/live/profile_payload.dart';
 import 'package:deskmate_ui_demo/live/transport.dart';
 import 'package:deskmate_ui_demo/pr56/co2_grade.dart';
 import 'package:deskmate_ui_demo/pr56/display_state.dart';
+import 'package:deskmate_ui_demo/profile_store.dart';
 
 DemoModel model() => DemoModel(DemoConfig(
     jsonDecode(File('assets/config/demo.json').readAsStringSync())
@@ -213,7 +214,7 @@ void main() {
           expect(sent, hasLength(1));
           final envelope = sent.single;
           expect(envelope['schema_version'], '1.0');
-          expect(envelope['node'], 'display');
+          expect(envelope['node'], 'pi5-ui');
           expect(envelope['seq'], 1);
           expect(envelope['ts'], isA<num>());
           expect(envelope['boot_id'], isA<String>());
@@ -307,7 +308,7 @@ void main() {
       expect(sent.single.text, isNot(contains('꽃님')));
       expect(sent.single.text, isNot(contains('수험생')));
       final envelope = jsonDecode(sent.single.text) as Map<String, dynamic>;
-      expect(envelope['node'], 'pi5-display');
+      expect(envelope['node'], 'pi5-ui');
       expect(envelope['ts'], isA<num>());
       expect(envelope['seq'], 1);
       final data = envelope['data'] as Map<String, dynamic>;
@@ -320,7 +321,7 @@ void main() {
         'light_pref': 'high',
         'sound_pref': 'low',
         'wind_pref': 'mid',
-        'focus_help': ['fan', 'lamp', 'notify'],
+        'focus_help': ['wind', 'light', 'sound'],
         'placement': 'left',
       });
       expect(persona.profileId, matches(RegExp(r'^p[0-9a-f]{16}$')));
@@ -348,6 +349,78 @@ void main() {
       expect(seen, hasLength(3));
       expect(seen[0], seen[1]);
       expect(m.persona.profileId, seen[2]);
+    });
+  });
+
+  group('프로필 저장(Pi 5)', () {
+    late Directory dir;
+    late ProfileStore store;
+    setUp(() {
+      dir = Directory.systemTemp.createTempSync('v18-profiles');
+      store = ProfileStore(candidates: ['${dir.path}/deskmate_ui/profiles.json']);
+    });
+    tearDown(() => dir.deleteSync(recursive: true));
+    DemoConfig config() => DemoConfig(
+        jsonDecode(File('assets/config/demo.json').readAsStringSync())
+            as Map<String, dynamic>);
+
+    test('profile_id, answers and selection survive a restart', () {
+      final first = DemoModel(config(), store: store);
+      final seededId = first.profiles.first.profileId;
+      final created = Persona(
+          name: '꽃님',
+          job: '창작·독서',
+          rounds: 0,
+          age: 33,
+          sleep: 6,
+          sound: '무음',
+          order: ['선풍기', '알림', '조명'],
+          avatar: 'flower',
+          placement: 'right',
+          bedtimeMinutes: 60);
+      created.preferences
+        ..fanEnabled = true
+        ..fanSpeed = 3
+        ..brightness = .3;
+      first.saveProfile(created);
+      final restarted = DemoModel(config(), store: store);
+      expect(restarted.profiles.first.profileId, seededId);
+      expect(restarted.profileIndex, 3);
+      final p = restarted.persona;
+      expect(p.profileId, created.profileId);
+      expect(p.name, '꽃님');
+      expect(p.avatar, 'flower');
+      expect(profileData(p), profileData(created));
+      expect(profileData(p)['bedtime'], '01:00');
+      restarted.selectProfile(1);
+      expect(DemoModel(config(), store: store).profileIndex, 1);
+      // 임시 파일이 남지 않는다(rename 으로 바꿔 끼움)
+      expect(Directory('${dir.path}/deskmate_ui').listSync().map((e) => e.path.split('/').last),
+          ['profiles.json']);
+    });
+
+    test('first launch saves defaults; broken file falls back to defaults', () {
+      final a = DemoModel(config(), store: store);
+      final b = DemoModel(config(), store: store);
+      expect([for (final p in b.profiles) p.profileId],
+          [for (final p in a.profiles) p.profileId]);
+      File('${dir.path}/deskmate_ui/profiles.json').writeAsStringSync('{broken');
+      final c = DemoModel(config(), store: store);
+      expect(c.profiles.map((p) => p.name), ['지우', '민준', '새 사용자']);
+      // 항목 하나가 깨져도 나머지는 읽는다
+      store.save([...c.profiles], 0);
+      final raw = jsonDecode(File('${dir.path}/deskmate_ui/profiles.json').readAsStringSync())
+          as Map<String, dynamic>;
+      (raw['profiles'] as List).add({'profile_id': 'nope', 'name': 'x'});
+      File('${dir.path}/deskmate_ui/profiles.json').writeAsStringSync(jsonEncode(raw));
+      expect(store.load()!.profiles, hasLength(3));
+    });
+
+    test('model without store stays memory-only', () {
+      final m = model();
+      expect(m.store, isNull);
+      m.saveProfile(Persona(name: 'b', job: '수험생', rounds: 0));
+      expect(Directory('${dir.path}/deskmate_ui').existsSync(), isFalse);
     });
   });
 

@@ -14,8 +14,15 @@ V1~V18을 거치며 확정한 내용이다. 버전별 변경 이력은 [README.m
 - 기기 실행은 여전히 이 앱의 일이 아니다. 블루투스 무드등·선풍기는 `com.atlas.app.deskmate_display`(ui_env_app)가
   실행하고 Pi 5 에서 계속 켜 둔다. V18 은 `control/cmd`·`control/result` 를 **표시만** 하고 명령을 보내지 않는다.
   앱 권한은 여전히 비어 있다.
-- 연결 주소·포트만 기기 파일(`deskmate_ui/connection.json`)에 저장한다. 프로필·답변은 메모리에만 두고 파일·로그에 쓰지 않는다.
-  hub 로 가는 프로필은 난수 `profile_id` 와 선호 범주뿐이다(이름·이미지·직업 제외).
+- 연결 주소·포트는 `deskmate_ui/connection.json` 에 저장한다.
+- **V17 의 "프로필은 메모리에만" 결정도 V18 에서 바뀌었다.** 사용자 지시(10-25) "모든 게 보드에서 개인화" — hub 가 사람별 학습을
+  `profile_id` 로 묶으므로 실행마다 id 가 바뀌면 안 된다. 프로필(id·별명·이미지·답변·선호)과 고른 프로필을 Pi 5 의
+  `deskmate_ui/profiles.json` 에 원자적으로 저장한다. 별명·이미지는 이 파일에만 두고 MQTT 로 보내지 않는다. 로그에도 쓰지 않는다.
+  종료 요약의 컨디션 선택·화면 기록은 여전히 저장하지 않는다.
+- hub 로 가는 프로필은 난수 `profile_id` 와 선호 범주뿐이다(이름·이미지·직업 제외). `focus_help` 는 hub 어휘
+  `light·wind·sound·voice·break` 를 쓴다(조명 light, 선풍기 wind, 알림 sound).
+- V18 이 보내는 envelope 의 `node` 는 `pi5-ui` 다. 개발자 앱(ui_env_app)의 `display` 와 hub 로그에서 구분하려는 것이며,
+  hub(`ingest/mqtt_lines.py`·`live.py`)와 보드 C++ 브리지는 feedback 의 node 로 거르지 않는 것을 확인했다(feat/pi4-hub-1023, 10-25).
 - 제안 카드는 요청의 `kind`·`data` 로 띄운다. `checkin_suggest`·`vent_suggest` 는 FSM 상태와 무관하게 응답·만료까지 두고,
   나머지는 hub 가 ACTION_* 를 벗어나면 내린다. `explanation` 이 있으면 본문으로 쓴다(10-25 총괄).
 - ui_env_app 코드(UTF-8 해석·envelope·설정 저장·위치 클라이언트·피드백 모양)는 import 하지 않고 복사했다
@@ -29,7 +36,7 @@ V1~V18을 거치며 확정한 내용이다. 버전별 변경 이력은 [README.m
 
 - UI 전용 앱이다. 센서·MQTT·HTTP·블루투스·카메라·키 입력 수집·원시 ToF·파일 로깅·
   실제 조명/선풍기/음악 제어·모델 학습은 연결하지 않는다. 앱 권한은 비어 있다.
-- 프로필·설정·피드백·기록은 메모리에만 있고 앱을 종료하면 초기화된다.
+- 프로필·설정·피드백·기록은 메모리에만 있고 앱을 종료하면 초기화된다. (V18 에서 프로필은 저장으로 바뀜 — 위 V18 절)
 - 제품 FSM 설정(`hub/deskmate_hub/config/*.yaml`)은 바꾸지 않는다. UI 대기 시간 등은
   `assets/config/demo.json`에만 둔다.
 

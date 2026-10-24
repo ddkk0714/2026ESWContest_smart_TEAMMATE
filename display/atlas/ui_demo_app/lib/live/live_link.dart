@@ -76,10 +76,13 @@ class LiveLink extends ChangeNotifier {
         _store = store,
         _placementFactory = placementFactory ?? HttpPlacementClient.new,
         _clock = clock ?? DateTime.now {
-    _feedbackWriter = EnvelopeWriter(node: 'display', clock: _clock);
-    _profileWriter = EnvelopeWriter(node: 'pi5-display', clock: _clock);
+    // node 는 개발자 앱(ui_env_app, `display`)과 hub 로그에서 구분되게 `pi5-ui`.
+    // hub(mqtt_lines.route_mqtt_message → live.tick_once)·보드 C++ 브리지는 feedback 의 node 로 거르지 않는다(10-25 확인).
+    _feedbackWriter = EnvelopeWriter(node: nodeName, clock: _clock);
+    _profileWriter = EnvelopeWriter(node: nodeName, clock: _clock);
   }
 
+  static const nodeName = 'pi5-ui';
   static const stateTopic = 'deskmate/state/phase';
   static const requestTopic = 'deskmate/interaction/request';
   static const commandTopic = 'deskmate/control/cmd';

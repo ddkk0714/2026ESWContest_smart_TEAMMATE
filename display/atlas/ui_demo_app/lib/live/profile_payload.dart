@@ -44,12 +44,16 @@ String windPref(DeskPreferences p) {
   return switch (p.fanSpeed) { 1 => 'low', 2 => 'mid', _ => 'high' };
 }
 
-/// 도움 순서 항목 → hub 채널 이름(personalize.yaml 의 channel 과 맞춤, 알림은 소리·음성·카드를 묶은 notify).
-String helpId(String item) => switch (item) {
-      '조명' => 'lamp',
-      '선풍기' => 'fan',
-      '알림' => 'notify',
-      _ => item,
+/// 도움 순서 항목 → hub 의 focus_help 어휘(light · wind · sound · voice · break, 10-25 총괄 확정).
+/// 앱의 도움 순서는 조명·선풍기·알림 셋이라 light · wind · sound 만 나온다(알림 = 알림음).
+/// 음성 안내(voice)·휴식(break)은 앱에 따로 고르는 항목이 생기면 여기에 더한다.
+String? helpId(String item) => switch (item) {
+      '조명' => 'light',
+      '선풍기' || '바람' => 'wind',
+      '알림' || '알림음' => 'sound',
+      '음성 안내' => 'voice',
+      '휴식' => 'break',
+      _ => null,
     };
 
 Map<String, Object?> profileData(Persona persona) => {
@@ -61,6 +65,9 @@ Map<String, Object?> profileData(Persona persona) => {
       'light_pref': lightPref(persona.preferences),
       'sound_pref': soundPref(persona),
       'wind_pref': windPref(persona.preferences),
-      'focus_help': [for (final item in persona.order) helpId(item)],
+      'focus_help': [
+        for (final item in persona.order)
+          if (helpId(item) case final id?) id
+      ],
       'placement': persona.placement,
     };

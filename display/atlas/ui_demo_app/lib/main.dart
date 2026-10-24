@@ -15,6 +15,7 @@ import 'live/live_link.dart';
 import 'live/live_request.dart';
 import 'pr56/co2_grade.dart';
 import 'pr56/display_state.dart';
+import 'profile_store.dart';
 
 const ink = Color(0xFF263B37);
 const paper = Color(0xFFF4F2EB);
@@ -29,7 +30,9 @@ Future<void> main() async {
           as Map<String, dynamic>;
   // V18: 보드 주소가 저장돼 있으면 연결을 시작한다. 없거나 닿지 않으면 메모리 동작 그대로.
   final live = LiveLink(store: LinkSettingsStore())..start();
-  runApp(DemoApp(model: DemoModel(DemoConfig(values)), live: live));
+  // V18: 프로필은 Pi 5 에 저장한다(profile_id 가 실행마다 바뀌면 hub 의 사람별 학습이 처음부터 시작된다).
+  final model = DemoModel(DemoConfig(values), store: ProfileStore());
+  runApp(DemoApp(model: model, live: live));
 }
 
 void _exitDemo() => exit(0);

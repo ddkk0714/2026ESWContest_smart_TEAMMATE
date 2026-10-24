@@ -193,7 +193,7 @@ deskmate_display 가 나중에 보내는 `timeout` 은 질문 ID 가 이미 닫�
 | 받음 | `deskmate/health/hub` | 연결 점 색(offline 이면 노랑) |
 | 받음 | `deskmate/session/report` | 작업 종료 요약의 피로 횟수·조정 횟수 |
 | 받음 | `deskmate/sensor/weather` | 연결 탭에 바깥 기온·날씨 한 줄 |
-| 보냄 | `deskmate/feedback/user` | 카드 응답. ui_env_app 과 같은 envelope(`node: display`)·`data` 에 `kind` 를 더함: `{"request_id","verdict":"accept|reject|timeout","response_ms","kind"}` |
+| 보냄 | `deskmate/feedback/user` | 카드 응답. ui_env_app 과 같은 envelope·`data` 에 `kind` 를 더함: `{"request_id","verdict":"accept|reject|timeout","response_ms","kind"}`. `node` 는 `pi5-ui`(개발자 앱 `display` 와 hub 로그에서 구분) |
 | 보냄 | `deskmate/profile/user` (retain) | 프로필 선호(아래 대응표). 이름·이미지·직업은 싣지 않는다 |
 | 보냄 | `POST http://<보드 주소>:8771/api/placement` | 장치 위치 `{"placement":"left|center|right"}`. 실패는 잠깐 알리고 막지 않는다 |
 
@@ -233,7 +233,7 @@ ui_env_app 에서 한글이 `ì¡°ëª…` 처럼 깨졌던 옛 방식(`bytesTo
 
 ### 프로필 → hub (`deskmate/profile/user`, retain)
 
-envelope `{"schema_version":"1.0","ts","node":"pi5-display","boot_id","seq","data":{…}}`. 프로필을 만들거나(마지막 질문 뒤),
+envelope `{"schema_version":"1.0","ts","node":"pi5-ui","boot_id","seq","data":{…}}`. 프로필을 만들거나(마지막 질문 뒤),
 설정에서 저장하거나, 다른 프로필을 고를 때, 그리고 연결될 때마다 지금 프로필을 다시 보낸다.
 
 | `data` 키 | 앱에서 | 대응 |
@@ -246,11 +246,19 @@ envelope `{"schema_version":"1.0","ts","node":"pi5-display","boot_id","seq","dat
 | `light_pref` | 빛과 바람 탭 "집중 시작할 때 조명 켜기"·"원하는 밝기" | 조명 끔 또는 밝기 <40% `low` · <70% `mid` · 그 이상 `high` |
 | `sound_pref` | 질문 7 소리 · 소리 탭 "소리 함께 듣기"·볼륨 | 무음/끔 `off` · 볼륨 <34% `low` · <67% `mid` · 그 이상 `high` |
 | `wind_pref` | 빛과 바람 탭 "바람 켜기"·"바람 세기" | 끔 `off` · 1단계 `low` · 2 `mid` · 3 `high` |
-| `focus_help` | 질문 6 "졸릴 때 무엇부터" · 몰입 탭 도움 순서 | 순서대로 조명 `lamp` · 선풍기 `fan` · 알림 `notify` (hub personalize 채널 이름) |
+| `focus_help` | 질문 6 "졸릴 때 무엇부터" · 몰입 탭 도움 순서 | 순서대로 조명 `light` · 선풍기 `wind` · 알림 `sound`(알림음). hub 어휘는 `light·wind·sound·voice·break` — 앱에 음성 안내·휴식을 고르는 항목이 아직 없어 `voice`·`break` 는 나오지 않는다 |
 | `placement` | 질문 9 "장치를 보통 어디에 두나요?" · 나의 리듬 탭 "장치를 두는 곳" | `left` · `center`(기본) · `right` |
 
-이름·이미지·작업(직업)·오늘 컨디션은 보내지 않는다. 프로필과 답변은 여전히 메모리에만 있고 파일에 쓰지 않는다.
-앱을 다시 켜면 기본 프로필의 `profile_id` 도 새로 만들어진다(남은 일).
+이름·이미지·작업(직업)·오늘 컨디션은 보내지 않는다.
+
+### 프로필 저장(Pi 5)
+
+hub 는 사람별 학습을 `profile_id` 로 묶는다. 실행마다 id 가 바뀌면 학습이 처음부터 시작되므로 V18 은 프로필과 고른 프로필을
+Pi 5 에 저장한다: `$DESKMATE_CONFIG_DIR/ui_profiles.json` → `$XDG_CONFIG_HOME/deskmate_ui/profiles.json` →
+`$HOME/.config/deskmate_ui/profiles.json` → `/tmp/deskmate_ui/profiles.json` 중 처음 쓸 수 있는 곳, 임시 파일 → rename 으로 원자적으로.
+담는 것: `profile_id`·별명·이미지·작업·확인 횟수·나이·수면·잠드는 시각·소리·도움 순서·컨디션·장치 위치·4개 탭의 선호 값.
+첫 실행에는 기본 프로필을 바로 저장해 그 id 도 다음 실행에 같다. 파일이 깨졌으면 기본 프로필로 시작하고, 항목 하나가 깨지면 그 항목만 버린다.
+별명·이미지는 이 파일에만 있고 MQTT 로는 보내지 않는다. 종료 요약의 "오늘 피곤했나요?" 선택·화면 기록은 저장하지 않는다.
 
 ### 장치 위치 질문
 

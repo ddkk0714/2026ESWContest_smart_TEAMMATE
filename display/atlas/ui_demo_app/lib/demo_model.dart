@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'live/payload.dart' show newProfileId;
 import 'pr56/display_state.dart';
+import 'profile_store.dart';
 
 enum DemoPage { home, focus, details, widgets, report }
 
@@ -100,8 +101,24 @@ class Persona {
 }
 
 class DemoModel extends ChangeNotifier {
-  DemoModel(this.config);
+  DemoModel(this.config, {this.store}) : profiles = defaultProfiles() {
+    final saved = store?.load();
+    if (saved != null) {
+      profiles
+        ..clear()
+        ..addAll(saved.profiles);
+      profileIndex = saved.selected;
+    } else {
+      // 첫 실행: 기본 프로필의 profile_id 도 다음 실행에 같게 남긴다.
+      _persist();
+    }
+  }
   final DemoConfig config;
+
+  /// V18: 프로필을 Pi 5 에 저장하는 곳. null 이면 V17 처럼 메모리에만 둔다(시험).
+  final ProfileStore? store;
+
+  void _persist() => store?.save(profiles, profileIndex);
 
   /// 프로필이 만들어지거나 바뀌거나 골라질 때(보드에 선호를 알린다). 연결이 없으면 null.
   void Function(Persona persona)? onProfileChanged;
@@ -118,7 +135,8 @@ class DemoModel extends ChangeNotifier {
   /// hub 가 REST(휴식) 상태다. 집중 상세가 쉬는 중 문구로 바뀌고 경과 시간을 멈춘다.
   bool resting = false;
   String? _liveFsm;
-  final profiles = [
+  final List<Persona> profiles;
+  static List<Persona> defaultProfiles() => [
     Persona(name: '지우', job: '수험생', rounds: 12),
     Persona(
         name: '민준',
@@ -136,6 +154,7 @@ class DemoModel extends ChangeNotifier {
 
   void setAvatar(int index, String avatar) {
     profiles[index].avatar = avatar;
+    _persist();
     notifyListeners();
   }
 
@@ -246,6 +265,7 @@ class DemoModel extends ChangeNotifier {
     proposal = false;
     scenario = false;
     workTicks = 0;
+    _persist();
     onProfileChanged?.call(persona);
     notifyListeners();
   }
@@ -276,7 +296,10 @@ class DemoModel extends ChangeNotifier {
     feeling = '';
     events.clear();
     events.add(automatic ? '집중 자동 진입' : '집중 시작 · 사용자 확인');
-    if (proposal) persona.rounds++;
+    if (proposal) {
+      persona.rounds++;
+      _persist();
+    }
     proposal = false;
     _applyPreferences();
     page = DemoPage.focus;
@@ -318,7 +341,10 @@ class DemoModel extends ChangeNotifier {
     pendingAction = null;
     askingFeedback = false;
     events.add(helpful ? '개입 피드백 · 도움 됐어요' : '개입 피드백 · 다른 방법');
-    if (!trained) persona.rounds++;
+    if (!trained) {
+      persona.rounds++;
+      _persist();
+    }
     notice = helpful ? '고마워요. 선호에 반영할게요' : '다음 선호 방법을 제안할게요';
     noticeTicks = config.seconds('focusNoticeSeconds');
     notifyListeners();
@@ -397,6 +423,7 @@ class DemoModel extends ChangeNotifier {
   void updateProfile(Persona draft) {
     profiles[profileIndex] = draft;
     _applyPreferences();
+    _persist();
     onProfileChanged?.call(draft);
     touch();
     notifyListeners();
@@ -405,6 +432,7 @@ class DemoModel extends ChangeNotifier {
   void saveProfile(Persona draft) {
     profiles.add(draft);
     profileIndex = profiles.length - 1;
+    _persist();
     onProfileChanged?.call(draft);
     scenario = false;
     workTicks = 0;
@@ -478,7 +506,10 @@ class DemoModel extends ChangeNotifier {
   void liveAnswered(bool accepted) {
     events.add(accepted ? '제안 피드백 · 좋아요' : '제안 피드백 · 다른 방법');
     if (events.length > 30) events.removeAt(0);
-    if (!trained) persona.rounds++;
+    if (!trained) {
+      persona.rounds++;
+      _persist();
+    }
     notice = accepted ? '고마워요. 선호에 반영할게요' : '다음 선호 방법을 제안할게요';
     noticeTicks = config.seconds('focusNoticeSeconds');
     touch();

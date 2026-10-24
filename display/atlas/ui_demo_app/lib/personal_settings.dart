@@ -112,9 +112,12 @@ class _PersonalSettingsState extends State<PersonalSettings> {
                       ])),
                   const SizedBox(height: 16),
                   Row(children: [
-                    const Expanded(
-                        child: Text('프로필별로 기억하며, 앱을 닫으면 초기화돼요.',
-                            style: TextStyle(color: muted, fontSize: 12))),
+                    Expanded(
+                        child: Text(
+                            widget.model.store == null
+                                ? '프로필별로 기억하며, 앱을 닫으면 초기화돼요.'
+                                : '프로필별로 이 기기에 기억해요.',
+                            style: const TextStyle(color: muted, fontSize: 12))),
                     TextButton(
                         onPressed: () => Navigator.pop(context),
                         child: const Text('취소')),
