@@ -154,6 +154,11 @@ class LiveHub:
             if feedback.get("kind") == "personalization":
                 self.privacy.handle(feedback)
                 continue
+            if feedback.get("kind") == "manual_adjust":
+                # 앱에서 사용자가 직접 조명을 바꿨다는 보고 — 개인화 암묵 신호 전용(ESM·제어 승인 아님, personalize/signals.py)
+                if self.personalize_recorder is not None:
+                    self.personalize_recorder.on_manual_adjust(feedback, ts=now if received is None else min(now, received))
+                continue
             feedback_now = now if received is None else min(now, received)
             self._expire_pending_request(feedback_now)
             if feedback:
@@ -189,6 +194,8 @@ class LiveHub:
                 self.mock_plug.tick()
             for res, received in self.cache.pop_control_result_events():
                 self.control.on_result(res, now if received is None else min(now, received))
+                if self.personalize_recorder is not None:      # 무드등 결과의 previous·actual → 밝힘 여부
+                    self.personalize_recorder.on_control_result(res, now if received is None else min(now, received))
             self.control.tick(now)
 
         frame = build_frame(view, now, self.ingest_cfg, self.tracker, fsm_state=self.engine.state)
@@ -247,6 +254,8 @@ class LiveHub:
                 self.control.close_episode()
         if self.control is not None:
             summary["control"] = self.control.summary()
+            if self.personalize_recorder is not None:          # 이번 tick 에 나간 무드등 명령 → '밝힘 뒤 직접 어둡게' 추적
+                self.personalize_recorder.observe_control(self.control, now)
         if self.tracker.baseline is not None:
             snap = self.tracker.baseline.snapshot()
             summary["baseline"] = {"calibrating": snap["calibrating"], "ready": sorted(snap["session"]),

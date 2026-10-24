@@ -124,3 +124,75 @@ profile:
   bedtime_sample_after_hour: 21
   night_end_hour: 6             # 이 시각 전의 새벽은 전날 밤의 연장으로 본다 (취침 뒤 판정)
   co2_sensitivity_percentile: 25
+
+# ── 2026-10-25 사용자 설계: "응답은 많이 받지 않고, 첫 설정으로 표준을 잡고, 묻지 않고 얻는 반응으로 맞춰 간다" ──
+# 환기는 FSM 이 맡는다(여기서 다루지 않는다). 코드: personalize/onboarding.py · personalize/signals.py · record.py
+
+onboarding:                     # 첫 설정 → 기준(prior). 입력 = deskmate/profile/user (Pi 5 앱, retain, QoS 1 — docs/mqtt-topics.md)
+  enabled: true                 # 받은 프로필로 전역 prior·후보 제외·취침 시각을 바꾼다 (false 면 토픽을 받아도 무시)
+  file: user_profile.json       # profiles/<profile_id>/ 아래(policy.json 옆)에 원자적 JSON 으로 저장 — 재시작·브로커 재시작 뒤에도 유지
+  keep_fields: [profile_id, sleep_hours, bedtime, wake_time, light_pref, sound_pref, wind_pref, focus_help, placement]
+                                # 저장·반영하는 필드. age_band 는 지금 prior 에 안 쓰므로 받자마자 버린다(필요한 것만, CLAUDE.md §2-5)
+  bedtime_from_profile: true    # bedtime 을 취침 규칙·after_bedtime 의 기준으로 (없으면 sleep.default_bedtime)
+  quiet_from_sleep: true        # bedtime~wake_time 을 소리·음성 제외 시간으로 (bandit.quiet_hours 23~7 대신)
+  wake_sets_night_end: true     # wake_time 전 새벽은 전날 밤의 연장 (profile.night_end_hour 6 대신)
+  sleep_short_hours: 6.0        # sleep_hours 가 이보다 적으면 mapping.sleep_short 표를 더한다
+  mapping:                      # 프로필 값 → {prior: {arm: {축: {특징: 가산}}}, disable: [arm], note_ko: 화면 문구}. 전역 prior 에 더한다
+    light_pref:
+      low:  {note_ko: "어두운 조명 선호 → 밝은 조명 덜 고름",
+             prior: {light_cool_bright: {accept: {bias: -0.5}}, light_warm_dim: {accept: {bias: 0.3}}}}   # 밝힘 수락 prior −0.5, 어둡게 +0.3
+      mid:  {}
+      high: {note_ko: "밝은 조명 선호 → 밝은 조명 먼저",
+             prior: {light_cool_bright: {accept: {bias: 0.3}}, light_warm_dim: {accept: {bias: -0.3}}}}
+    sound_pref:
+      "off": {note_ko: "소리 끔 → 알림음·음성 안내 제외", disable: [sound_cue, posture_voice]}          # 후보에서 아예 뺀다
+      low:  {note_ko: "소리 작게 → 알림음·음성 덜 고름",
+             prior: {sound_cue: {accept: {bias: -0.4}}, posture_voice: {accept: {bias: -0.3}}}}
+      mid:  {}
+      high: {prior: {sound_cue: {accept: {bias: 0.2}}, posture_voice: {accept: {bias: 0.2}}}}
+    wind_pref:
+      "off": {note_ko: "바람 싫음 → 선풍기 거의 안 고름", prior: {fan_on: {accept: {bias: -0.8}}}}   # 환기(CO₂)는 FSM 이 맡으므로 제외 대신 크게 낮춤
+      low:  {prior: {fan_on: {accept: {bias: -0.4}}}}
+      mid:  {}
+      high: {prior: {fan_on: {accept: {bias: 0.2}}}}
+    focus_help:                 # "집중에 도움 되는 것"(복수 선택) — 고른 항목마다 더한다
+      light: {prior: {light_cool_bright: {accept: {bias: 0.2}}}}
+      sound: {prior: {sound_cue: {accept: {bias: 0.2}}}}
+      wind:  {prior: {fan_on: {accept: {bias: 0.2}}}}
+      break: {prior: {break_short: {accept: {bias: 0.2}}, break_long: {accept: {bias: 0.1}}}}
+      voice: {prior: {posture_voice: {accept: {bias: 0.2}}}}
+    sleep_short: {note_ko: "수면 부족 → 휴식 먼저",
+                  prior: {break_short: {accept: {bias: 0.2}}, break_long: {accept: {bias: 0.2}}}}
+
+implicit:                       # "무드등을 밝혔는데 사용자가 다시 어둡게 하면 밝음을 싫어하는 것" — 밝힘 뒤 직접 어둡게 함 = 음의 보상
+  enabled: true
+  lamp_target: desk_lamp        # 추적하는 기기
+  dim_window_min: 10            # 허브가 밝힌 뒤 이 시간(분) 안의 직접 어둡게 하기만 그 밝힘의 반응으로 본다
+  brighten_arms: [light_cool_bright]   # 갱신할 밝힘 arm. 에피소드 arm 이 이 중 하나면 그것만, 아니면(FSM 기본 밝힘) 이 목록 전부
+  brighten_unknown_min: 150     # 결과에 previous 가 없는 set_brightness(옛 앱)는 값이 이 이상(0~255)이면 밝힘으로 본다. null = 모르면 밝힘 아님
+  app_report: true              # 증거 (a) 앱 보고 feedback/user kind=manual_adjust
+  app_reward: -1.0              # 앱 보고 보상 — 명시 거절(reject −1)과 같은 급. 명시 되돌리기(undo −2)와는 따로 센다
+  lux_heuristic: true           # 증거 (b) 책상 조도(BH1750) 휴리스틱
+  lux_reward: -0.5              # 조도 휴리스틱 보상 — 추정이라 앱 보고의 절반
+  lux_fresh_sec: 30             # 명령 직전 조도로 인정하는 최대 나이(s)
+  lux_settle_sec: 20            # 명령 뒤 이 시간(s) 동안의 최대 조도를 "밝힌 뒤 조도"로 잡는다
+  lux_rise_min_ratio: 0.15      # 밝힌 뒤 조도가 명령 전보다 15 % 이상 올라야 조도 신호를 믿는다(아니면 로그만)
+  lux_rise_min_lx: 15           # …그리고 15 lx 이상 (어두운 방에서 2→3 lx 같은 잡음 배제)
+  lux_drop_ratio: 0.4           # 밝힌 뒤 조도 대비 40 % 넘게 떨어지면 어둡게 한 후보
+  lux_drop_hold_sec: 30         # 그 하락이 30 s 이어져야 신호 (그 사이 허브 무드등 명령이 오면 새 사건으로 바뀐다)
+  lux_drop_max_factor: 1.5      # 하락폭이 우리 밝힘 상승폭의 1.5 배를 넘으면 방 조명 변화로 보고 무시. null = 이 검사 끔
+
+wake:                           # "잠에서 잘 깨면 그걸 좋은 신호로 본다" — 졸음·엎드림 자세 개입의 효과 축 보상
+  enabled: true
+  trigger_labels: [drowsy, face_down]   # 결정 tick 자세가 이것이면 깨우기 에피소드 (또는 졸음 플래그·아래 fatigue_min)
+  fatigue_min: 0.70             # 자세 원인 라우팅에서 C_fatigue 가 이 이상이어도 깨우기 에피소드 (fsm thresholds.fatigue_confirm). null = 끔
+  awake_labels: [upright, lean_forward, forward_head, recline, chin_rest]   # 깨어 있는 자세
+  window_sec: 120               # 개입 뒤 이 시간(s) 안에 깨야 성공, 넘기면 실패
+  hold_sec: 20                  # 깨어 있는 자세가 이 시간(s) 이어져야 한다
+  fatigue_drop: 0.10            # 활동 재개가 없으면 C_fatigue 가 이만큼 내려가야 성공
+  motion_score_min: 0.2         # 활동 재개: ToF 0x03 motion_score 이 이상
+  motion_mm_min: 8.0            # 활동 재개: 자세 판정 표본 tof_motion_mm 이 이상(mm) — 키 입력도 활동 재개
+  reward_success: 1.0           # 깨우기 성공 효과 보상(최대)
+  reward_fail: -0.5             # 깨우기 실패 효과 보상
+  effect_mode: replace          # replace = 10 분 C_fatigue 추세 대신 깨우기 결과(판정 즉시 갱신) · blend = 닫을 때 섞음
+  blend: 0.5                    # effect_mode blend 일 때 깨우기 결과의 비중

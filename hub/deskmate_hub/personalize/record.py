@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import os
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -15,7 +16,10 @@ from typing import Any, Callable
 from .adapter import (SituationExtras, arm_commands, extras_from_cache, fsm_record, is_decision_tick, local_clock,
                       situation_from_tick)
 from .log import PersonalizeLogger, local_iso
-from .rewards import REWARD_ACCEPT
+from .onboarding import kept, load_profile, parse_hhmm, parse_profile, profile_adjustments, save_profile
+from .profile import ProfileSummary
+from .rewards import REWARD_ACCEPT, reward_effect
+from .signals import ImplicitDimTracker, WakeTracker
 
 SESSION_END_STATES = ("END", "IDLE")
 SLUMP_MIN_HOLD_SEC = 120.0          # 로그 스키마 §8: 2 분 이상 지속돼야 슬럼프 구간
@@ -135,6 +139,26 @@ class EpisodeRecorder:
         self._by_request: dict[str, str] = {}
         self.last_episode_id: str | None = None
         self.last_posture_label = "unknown"
+        # 묻지 않고 얻는 신호(signals.py, 2026-10-25): 밝힘 뒤 직접 어둡게 함 · 깨우기 성공
+        self.implicit = ImplicitDimTracker(cfg.get("implicit"))
+        self.wake = WakeTracker(cfg.get("wake"))
+        self.last_signal: dict[str, Any] | None = None     # 화면 설명 한 줄(sensor_summary.personalize.signal)
+        self._ctl_links: list[tuple[Any, str | None]] = []  # (제어 Episode, 개인화 에피소드 id) — 최근 8개
+        self._seen_cmds: deque[str] = deque(maxlen=128)
+        # 첫 설정 프로필(onboarding.py): deskmate/profile/user → prior·취침 시각. profiles/<id>/user_profile.json 에 유지
+        self.onboarding_cfg = cfg.get("onboarding") or {}
+        self.user_profile: dict[str, Any] | None = None
+        self.profile_summary: ProfileSummary | None = None
+        self._sit_cfg = cfg
+        self._profile_seen: float | None = None
+        base = (os.path.dirname(policy_path) if policy_path else
+                os.path.join(os.path.dirname(path) or str(cfg.get("log_dir") or "logs"), "profiles",
+                             str(cfg.get("profile_id", "default"))))
+        self.user_profile_path = os.path.join(base, str(self.onboarding_cfg.get("file", "user_profile.json")))
+        if self.onboarding_cfg.get("enabled"):
+            stored = load_profile(self.user_profile_path)
+            if stored is not None:
+                self._apply_profile(stored, now=None, save=False)
 
     @property
     def path(self) -> str:
@@ -146,11 +170,12 @@ class EpisodeRecorder:
 
     # ── 프레임 밖 입력 ─────────────────────────────────────────
     def _posture_label(self, view: Any, now: float) -> tuple[str, bool]:
-        """(자세 라벨, 졸음). ToF 0x03 이 신선하면 그 라벨(MLP 덮어쓰기 포함), 아니면 unknown. 자리비움은 away."""
-        from ..ingest.mapping import _tof_with_mlp
+        """(자세 라벨, 졸음). ToF 0x03(또는 자세 서비스 판정)이 신선하면 그 라벨(모델 덮어쓰기 포함), 아니면 unknown. 자리비움은 away."""
+        from ..ingest.mapping import _tof_sample, _tof_with_mlp
 
         fresh = self.ingest_cfg.get("freshness_sec") or {}
-        tof = view.fresh("tof", now, fresh.get("tof", 3)) if "tof" in self.ingest_cfg else None
+        # 0x03 이 없고 자세 서비스(GRU) 판정만 신선해도 그 라벨을 쓴다(FSM 과 같은 규칙, mapping._tof_sample) — 깨우기 판정이 본다
+        tof = _tof_sample(view, now, self.ingest_cfg) if "tof" in self.ingest_cfg and "freshness_sec" in self.ingest_cfg else None
         drowsy = False
         label = "unknown"
         if tof is not None:
@@ -207,6 +232,8 @@ class EpisodeRecorder:
         state, prev = _state_name(result.state), _state_name(prev_state)
         label, drowsy = self._observe_inputs(view, now)
         hour, _, _ = local_clock(now, self.offset)
+        self._maybe_apply_profile(view, now)
+        self._observe_signals(view, now, label, float(result.scores.c_fatigue))
 
         if state == "START" and prev != "START":
             self._end_session(now, hour, next_state=state)
@@ -238,7 +265,8 @@ class EpisodeRecorder:
         if gate == "none":
             return None
         fsm = fsm_record(result, retry=retry)
-        situation = situation_from_tick(frame, result, self._extras(view, now, label, drowsy), self.cfg)
+        situation = situation_from_tick(frame, result, self._extras(view, now, label, drowsy), self._sit_cfg,
+                                        profile=self.profile_summary)
         if decision is None and self.policy is not None and fsm["cause"]:
             try:
                 decision = self.policy.decide(situation, cause=fsm["cause"], gate=result.gate,
@@ -256,6 +284,10 @@ class EpisodeRecorder:
             ts=now)
         delivered = self.last_decision.delivered_gate if self.last_decision is not None else gate
         self._episodes[eid] = {"cause": fsm["cause"], "gate": delivered, "upright_seen": False}
+        trigger = self.wake.wants(fsm["cause"], label, drowsy, float(result.scores.c_fatigue))
+        if trigger is not None:
+            self.wake.start(eid, now, trigger, float(result.scores.c_fatigue))
+            self._episodes[eid]["wake"] = True
         self.last_intervention_ts = now
         self.last_episode_id = eid
         self.last_view = self._view(eid, self.logger._open[eid]["decision"], fsm, delivered)
@@ -272,7 +304,168 @@ class EpisodeRecorder:
         return {"episode_id": eid, "arm": decision.get("arm"), "arm_label": label, "source": decision.get("source"),
                 "explanation": decision.get("explanation"), "fsm_gate": fsm.get("gate"), "delivered_gate": delivered,
                 "policy_mode": decision.get("policy_mode"), "n_personal": decision.get("n_personal"),
-                "auto_threshold": decision.get("auto_threshold"), "ventilate_minutes": decision.get("ventilate_minutes")}
+                "auto_threshold": decision.get("auto_threshold"), "ventilate_minutes": decision.get("ventilate_minutes"),
+                "signal": self.last_signal}
+
+    # ── 첫 설정 프로필 ─────────────────────────────────────────
+    def _maybe_apply_profile(self, view: Any, now: float) -> None:
+        sample = getattr(view, "user_profile", None)
+        if sample is None or not self.onboarding_cfg.get("enabled") or sample.received == self._profile_seen:
+            return
+        self._profile_seen = sample.received
+        profile = parse_profile(sample.data)
+        if profile is None:
+            self._log("[personalize] profile/user: 아는 필드가 없어 무시")
+            return
+        self._apply_profile(profile, now=now, save=True)
+
+    def _apply_profile(self, profile: dict[str, Any], *, now: float | None, save: bool) -> None:
+        ocfg = self.onboarding_cfg
+        prof = kept(profile, ocfg.get("keep_fields"))
+        if prof == self.user_profile:
+            return          # retain 재수신·재시작 뒤 같은 값 — 이미 반영됨
+        self.user_profile = prof
+        if save:
+            try:
+                save_profile(self.user_profile_path, prof, received_ts=now)
+            except OSError as exc:
+                self._log(f"[personalize] 프로필 저장 실패: {exc}")
+        if prof.get("profile_id"):
+            self.logger.profile_id = prof["profile_id"]
+        if self.policy is not None:
+            try:
+                notes = self.policy.apply_user_profile(prof)
+            except (KeyError, TypeError, ValueError) as exc:   # mapping 표 오류가 허브를 멈추면 안 된다 — prior 는 그대로
+                self._log(f"[personalize] 프로필 prior 반영 실패: {exc}")
+                notes = []
+            self._save_policy()
+        else:
+            notes = profile_adjustments(prof, ocfg)[2]
+        bed = prof.get("bedtime") if ocfg.get("bedtime_from_profile", True) else None
+        if bed:
+            self.profile_summary = ProfileSummary(usual_bedtime=bed)
+            if self.policy is not None:
+                if self.policy.profile is None:
+                    self.policy.profile = self.profile_summary
+                elif getattr(self.policy.profile, "usual_bedtime", None) is None:
+                    self.policy.profile.usual_bedtime = bed
+            notes.append(f"취침 {bed} 기준")
+        wake = parse_hhmm(prof.get("wake_time")) if ocfg.get("wake_sets_night_end", True) else None
+        if wake is not None:
+            self._sit_cfg = dict(self.cfg, profile=dict(self.cfg.get("profile") or {}, night_end_hour=wake))
+        self._set_signal("profile", "첫 설정 반영: " + (" · ".join(notes) if notes else "기본 기준 유지"), now)
+
+    def _set_signal(self, kind: str, text: str, now: float | None) -> None:
+        self.last_signal = {"kind": kind, "text_ko": text, "ts": now}
+        self.last_view = dict(self.last_view or {}, signal=self.last_signal)
+        self._log(f"[personalize] {text}")
+
+    # ── 묻지 않고 얻는 신호 ─────────────────────────────────────
+    def _activity(self, view: Any, now: float) -> bool:
+        """깨우기 판정의 '활동 재개': 키 입력, ToF 움직임(0x03 motion_score·자세 판정 tof_motion_mm)."""
+        w = self.cfg.get("wake") or {}
+        fresh = self.ingest_cfg.get("freshness_sec") or {}
+        ks = view.fresh("keystroke", now, fresh.get("keystroke", 5))
+        if ks is not None and (ks.data.get("typing_active") or ks.data.get("input_active")):
+            return True
+        tof = view.fresh("tof", now, fresh.get("tof", 3))
+        score = tof.data.get("motion_score") if tof is not None else None
+        if isinstance(score, (int, float)) and float(score) >= float(w.get("motion_score_min", 0.2)):
+            return True
+        for kind in ("tof_mlp", "tof_service"):
+            sample = view.fresh(kind, now, fresh.get("tof", 3))
+            mm = sample.data.get("tof_motion_mm") if sample is not None else None
+            if isinstance(mm, (int, float)) and float(mm) >= float(w.get("motion_mm_min", 8.0)):
+                return True
+        return False
+
+    def _observe_signals(self, view: Any, now: float, label: str, c_fatigue: float) -> None:
+        env = view.fresh("env", now, (self.ingest_cfg.get("freshness_sec") or {}).get("env", 30))
+        if env is not None and env.data.get("lux_valid") is True and env.data.get("lux") is not None:
+            self._handle_signal(self.implicit.on_lux(float(env.data["lux"]), now), now)
+        if self.wake.watches:
+            for watch, reward in self.wake.observe(now, label, c_fatigue, self._activity(view, now)):
+                self._wake_done(watch, reward, now)
+
+    def _wake_done(self, watch: Any, reward: float, now: float) -> None:
+        eid = watch.episode_id
+        info = {"result": watch.result, "trigger": watch.trigger, "reward": reward, **watch.detail}
+        meta = self._episodes.get(eid)
+        if meta is not None:
+            meta["wake_info"] = info
+        mode = str((self.cfg.get("wake") or {}).get("effect_mode", "replace"))
+        d = self.logger.decision_of(eid)
+        if mode == "replace" and d is not None and self.policy is not None:
+            # 10 분 C_fatigue 추세 대신 깨우기 결과로 효과 축을 바로 갱신한다(닫을 때 다시 갱신하지 않는다)
+            self.policy.outcome(d, None, effect_override=reward)
+            self._save_policy()
+            if meta is not None:
+                meta["effect_done"] = True
+        self._set_signal("wake", WakeTracker.text_ko(watch), now)
+
+    def _dim_targets(self, decision: Any) -> list[str]:
+        arms = list((self.cfg.get("implicit") or {}).get("brighten_arms") or ["light_cool_bright"])
+        arm = getattr(decision, "arm", None)
+        return [arm] if arm in arms else arms
+
+    def _handle_signal(self, sig: dict[str, Any] | None, now: float) -> None:
+        if sig is None:
+            return
+        eid = sig.get("episode_id")
+        entry = {"kind": sig["kind"], "reward": sig.get("reward"), "ts_ms": int(now * 1000),
+                 "reason": sig.get("reason"), "detail": sig.get("detail")}
+        if sig["kind"] != "ignored":
+            rec = self.logger._open.get(eid or "")
+            if rec is not None:
+                rec.setdefault("signals", []).append(entry)
+            meta = self._episodes.get(eid or "")
+            if meta is not None:
+                meta["implicit_neg"] = True
+            d = sig.get("decision")
+            updated: list[str] = []
+            if self.policy is not None and d is not None and not isinstance(d, dict):
+                updated = self.policy.implicit_feedback(d, float(sig["reward"]), arms=self._dim_targets(d))
+                self._save_policy()
+            entry["policy_arms"] = updated
+            self._set_signal(sig["kind"], sig["text_ko"], now)
+        else:
+            self._log(f"[personalize] {sig['text_ko']}")
+        self.logger.signal({"episode_id": eid, "session_id": self.session_id, "text_ko": sig["text_ko"], **entry})
+
+    def on_manual_adjust(self, data: dict[str, Any], *, ts: float) -> dict[str, Any] | None:
+        """feedback/user kind=manual_adjust(앱 조명 조절). 밝힘 뒤 창 안의 어둡게 하기면 음의 보상."""
+        sig = self.implicit.on_manual_adjust(data, ts)
+        self._handle_signal(sig, ts)
+        return sig
+
+    def on_control_result(self, payload: dict[str, Any], ts: float) -> None:
+        self.implicit.on_result(payload, ts)
+
+    def observe_control(self, control: Any, now: float) -> None:
+        """제어 디스패처가 낸 명령을 본다(디스패처는 건드리지 않는다). 무드등 명령 → ImplicitDimTracker."""
+        if control is None:
+            return
+        episodes = list(control.history[-5:]) + ([control.episode] if control.episode is not None else [])
+        for ep in episodes:
+            eid = self._eid_for(ep, now)
+            for c in ep.commands:
+                if c.sent_ts is None or c.command_id in self._seen_cmds:
+                    continue
+                self._seen_cmds.append(c.command_id)
+                payload = {"command_id": c.command_id, "target_id": c.target_id, "operation": c.operation,
+                           "value": c.value, "gate": c.gate}
+                self.implicit.on_command(payload, float(c.sent_ts), episode_id=eid,
+                                         decision=self.logger.decision_of(eid) if eid else None)
+
+    def _eid_for(self, ep: Any, now: float) -> str | None:
+        for known, eid in self._ctl_links:
+            if known is ep:
+                return eid
+        # 제어 에피소드는 개인화 에피소드와 같은 tick 에 열린다(live: on_tick → on_enter_action)
+        eid = self.last_episode_id if abs(float(getattr(ep, "started_ts", -1.0)) - now) < 1e-6 else None
+        self._ctl_links.append((ep, eid))
+        del self._ctl_links[:-8]
+        return eid
 
     def commands_for(self, decision: Any) -> list[dict[str, Any]] | None:
         """정책이 고른 arm 의 기기 명령 spec(control.yaml actions 형식). 정책이 없거나 arm 이 없으면 None(= FSM 기본)."""
@@ -319,19 +512,35 @@ class EpisodeRecorder:
         rec = self.logger._open.get(eid)
         if rec is None:
             return
-        if rec.get("feedback") is None and meta.get("gate") == "auto":
+        wake_info = meta.get("wake_info")
+        if meta.get("wake") and wake_info is None:
+            self.wake.drop(eid)
+            wake_info = {"result": "pending"}
+        override = None
+        if wake_info and wake_info.get("result") in ("success", "fail"):
+            wcfg = self.cfg.get("wake") or {}
+            if str(wcfg.get("effect_mode", "replace")) == "replace":
+                override = float(wake_info["reward"])
+            elif status == "measured" and c_after is not None:
+                fat = reward_effect(float(rec["features"]["c_fatigue"]), float(c_after),
+                                    float(self.cfg["bandit"]["effect_full_drop"]))
+                b = float(wcfg.get("blend", 0.5))
+                override = (1.0 - b) * fat + b * float(wake_info["reward"])
+        if rec.get("feedback") is None and meta.get("gate") == "auto" and not meta.get("implicit_neg"):
             rec["feedback"] = {"verdict": "auto_kept", "response_ms": None, "feedback_ts_ms": None, "request_id": None}
         verdict = (rec.get("feedback") or {}).get("verdict")
         d = self.logger.decision_of(eid)
         if d is not None and self.policy is not None:
             if verdict == "auto_kept":
                 self.policy.feedback(d, "auto_kept", now=None)
-            self.policy.outcome(d, c_after, status=status)
+            if not meta.get("effect_done"):
+                self.policy.outcome(d, c_after, status=status, effect_override=override)
             self._save_policy()
         self.logger.close(
             eid, status=status, c_fatigue_after=c_after, reward_accept=REWARD_ACCEPT.get(verdict, 0.0),
             posture_recovered=bool(meta.get("upright_seen")) if meta.get("cause") == "posture" else None,
-            next_state=next_state)
+            next_state=next_state, reward_effect_override=override,
+            extra={"wake": wake_info} if wake_info is not None else None)
         if self.last_view is not None and self.last_view.get("episode_id") == eid:
             self.last_view = dict(self.last_view, closed=True, outcome=status)
         for rid, e in list(self._by_request.items()):

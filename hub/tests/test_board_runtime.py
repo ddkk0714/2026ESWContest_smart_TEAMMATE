@@ -33,6 +33,9 @@ BOARD_MODULES = (
     "deskmate_hub.personalization.self_check",
     "deskmate_hub.personalize",                    # 개입 선택 정책도 보드에서 돈다(2026-10-23 순수 Python 이식)
     "deskmate_hub.personalize.policy",
+    "deskmate_hub.personalize.record",
+    "deskmate_hub.personalize.onboarding",         # 첫 설정 프로필 → prior (2026-10-25)
+    "deskmate_hub.personalize.signals",            # 밝힘 뒤 직접 어둡게 함 · 깨우기 성공 (2026-10-25)
 )
 
 

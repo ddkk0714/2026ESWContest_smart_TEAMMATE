@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 EPISODE_SCHEMA = "personalize_episode"
 SESSION_SCHEMA = "personalize_session"
+SIGNAL_SCHEMA = "personalize_signal"       # 암묵 신호(직접 어둡게 함 등) — 2026-10-25
 SCHEMA_VERSION = "1.0"
 
 
@@ -44,9 +45,13 @@ def build_episode(*, episode_id: str, session_id: str, profile_id: str, ts: floa
 
 def build_outcome(*, status: str, c_before: float, c_after: float | None, reward_accept: float,
                   full_drop: float, weight_accept: float, weight_effect: float,
-                  posture_recovered: bool | None = None, next_state: str | None = None) -> dict[str, Any]:
+                  posture_recovered: bool | None = None, next_state: str | None = None,
+                  reward_effect_override: float | None = None) -> dict[str, Any]:
+    """reward_effect_override: C_fatigue 추세 대신 쓰는 효과 보상(깨우기 성공·실패, signals.WakeTracker)."""
     measured = status == "measured" and c_after is not None
     r_eff = reward_effect(c_before, c_after, full_drop) if measured else None
+    if reward_effect_override is not None:
+        r_eff = float(max(-1.0, min(1.0, reward_effect_override)))
     reward = weight_accept * reward_accept + (weight_effect * r_eff if r_eff is not None else 0.0)
     return {
         "status": status, "c_fatigue_before": round(c_before, 4),
@@ -97,7 +102,8 @@ class PersonalizeLogger:
 
     def close(self, episode_id: str, *, status: str, c_fatigue_after: float | None = None,
               reward_accept: float = 0.0, posture_recovered: bool | None = None,
-              next_state: str | None = None) -> dict[str, Any] | None:
+              next_state: str | None = None, reward_effect_override: float | None = None,
+              extra: dict[str, Any] | None = None) -> dict[str, Any] | None:
         rec = self._open.pop(episode_id, None)
         self._decisions.pop(episode_id, None)
         if rec is None:
@@ -107,7 +113,17 @@ class PersonalizeLogger:
             status=status, c_before=float(rec["features"]["c_fatigue"]), c_after=c_fatigue_after,
             reward_accept=reward_accept, full_drop=float(b["effect_full_drop"]),
             weight_accept=float(b["weight_accept"]), weight_effect=float(b["weight_effect"]),
-            posture_recovered=posture_recovered, next_state=next_state)
+            posture_recovered=posture_recovered, next_state=next_state,
+            reward_effect_override=reward_effect_override)
+        if extra:
+            rec["outcome"].update(extra)        # 예: wake {result, trigger, to_awake_sec, …}
+        self._write(rec)
+        return rec
+
+    def signal(self, record: dict[str, Any]) -> dict[str, Any]:
+        """암묵 신호 한 줄(personalize_signal). 에피소드가 이미 닫혔어도 남는다."""
+        rec = {"schema_name": SIGNAL_SCHEMA, "schema_version": SCHEMA_VERSION, "simulated": self.simulated,
+               "profile_id": self.profile_id, **record}
         self._write(rec)
         return rec
 

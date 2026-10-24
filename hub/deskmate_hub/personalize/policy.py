@@ -75,6 +75,15 @@ class BayesLinReg:
         z = standard_normals(rng, DIM)
         return [m + s * dot(row[: i + 1], z[: i + 1]) for i, (m, row) in enumerate(zip(self.mean(), self._chol))]
 
+    def set_prior(self, theta0: Any) -> None:
+        """prior 평균만 바꾼다(첫 설정 프로필, 2026-10-25). b = λθ⁰ + Σrx 에서 λθ⁰ 만 갈아 끼우므로 쌓인 학습(Σrx)은 그대로다.
+        같은 θ⁰ 로 다시 불러도 변화 없음(재시작 때 저장된 프로필을 또 적용해도 안전)."""
+        new = [float(v) for v in theta0]
+        for i, (old, val) in enumerate(zip(self.theta0, new)):
+            self.b[i] += self.lam * (val - old)
+        self.theta0 = new
+        self._inv = self._chol = None
+
     def update(self, x: Any, r: float) -> None:
         add_outer(self.A, x)
         axpy(self.b, float(r), x)
@@ -82,7 +91,7 @@ class BayesLinReg:
         self._inv = self._chol = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"A": [list(row) for row in self.A], "b": list(self.b), "n": self.n}
+        return {"A": [list(row) for row in self.A], "b": list(self.b), "n": self.n, "theta0": list(self.theta0)}
 
     def load(self, data: dict[str, Any]) -> None:
         A = [[float(v) for v in row] for row in data["A"]]
@@ -90,6 +99,9 @@ class BayesLinReg:
         if len(A) != DIM or any(len(row) != DIM for row in A) or len(b) != DIM:
             raise ValueError("posterior 차원이 FEATURE_NAMES 와 다르다")
         self.A, self.b, self.n = A, b, int(data.get("n", 0))
+        theta0 = data.get("theta0")     # b 안에 든 prior(프로필이 바꿨을 수 있다). 옛 파일엔 없다 → 설정 prior 그대로
+        if isinstance(theta0, list) and len(theta0) == DIM:
+            self.theta0 = [float(v) for v in theta0]
         self._inv = self._chol = None
 
 
@@ -154,7 +166,7 @@ class InterventionPolicy:
         # 개인 통계 (arm 별)
         self.stats: dict[str, dict[str, float]] = {
             a: {"n": 0, "accept": 0, "reject": 0, "timeout": 0, "undo": 0, "auto_kept": 0,
-                "effect_sum": 0.0, "effect_n": 0}
+                "effect_sum": 0.0, "effect_n": 0, "implicit": 0}
             for a in self.arms}
         self.undo_penalty: dict[str, float] = {a: 0.0 for a in self.arms}
         self.last_exec: dict[str, float] = {}
@@ -167,6 +179,10 @@ class InterventionPolicy:
         self._sleep_done = False
         self._pending_effect: dict[int, bool] = {}
         self._undone: set[str] = set()      # 이 세션에서 되돌린 arm — 다시 자동으로 내지 않고 묻는다(gate.undo_blocks_auto_in_session)
+        # 첫 설정 프로필(onboarding.py, 2026-10-25): 후보에서 뺀 arm(소리 끔 등)·취침~기상 quiet_hours
+        self.user_profile: dict[str, Any] | None = None
+        self.disabled: set[str] = set()
+        self._quiet_override: dict[str, float] | None = None
 
     # ── 상태 ─────────────────────────────────────────────────
     @property
@@ -197,7 +213,7 @@ class InterventionPolicy:
 
     # ── 결정 ─────────────────────────────────────────────────
     def _in_quiet_hours(self, hour: float) -> bool:
-        q = self.cfg["bandit"].get("quiet_hours")
+        q = self._quiet_override or self.cfg["bandit"].get("quiet_hours")
         if not q:
             return False
         start, end = float(q["start"]), float(q["end"])
@@ -263,7 +279,9 @@ class InterventionPolicy:
         for arm in self.arms.values():
             if arm.rule_only or cause not in arm.causes:
                 continue
-            if arm.id in self._rejected:
+            if arm.id in self.disabled:
+                excluded[arm.id] = "user_profile"
+            elif arm.id in self._rejected:
                 excluded[arm.id] = "rejected_in_session"
             elif arm.id in self.last_exec and now - self.last_exec[arm.id] < cooldown:
                 excluded[arm.id] = "cooldown"
@@ -383,11 +401,19 @@ class InterventionPolicy:
             self.models[arm]["accept"].update(decision.x, r)
         return r
 
-    def outcome(self, decision: Decision, c_fatigue_after: float | None, *, status: str = "measured") -> float | None:
-        """효과 축 갱신. status != measured 면 축은 건드리지 않고 None."""
-        if decision.arm is None or status != "measured" or c_fatigue_after is None:
+    def outcome(self, decision: Decision, c_fatigue_after: float | None, *, status: str = "measured",
+                effect_override: float | None = None) -> float | None:
+        """효과 축 갱신. status != measured 면 축은 건드리지 않고 None.
+
+        effect_override 를 주면 C_fatigue 추세 대신 그 값을 효과 보상으로 쓴다(깨우기 성공·실패, signals.WakeTracker)."""
+        if decision.arm is None:
             return None
-        r = reward_effect(decision.c_fatigue_before, float(c_fatigue_after), float(self.cfg["bandit"]["effect_full_drop"]))
+        if effect_override is not None:
+            r = float(max(-1.0, min(1.0, effect_override)))
+        elif status != "measured" or c_fatigue_after is None:
+            return None
+        else:
+            r = reward_effect(decision.c_fatigue_before, float(c_fatigue_after), float(self.cfg["bandit"]["effect_full_drop"]))
         st = self.stats[decision.arm]
         st["effect_sum"] += r
         st["effect_n"] += 1
@@ -398,6 +424,38 @@ class InterventionPolicy:
         if decision.source == "bandit":
             self.models[decision.arm]["effect"].update(decision.x, r)
         return r
+
+    def implicit_feedback(self, decision: Decision | None, reward: float, *, arms: list[str] | tuple[str, ...] = ()) -> list[str]:
+        """암묵 신호(밝힘 뒤 사용자가 직접 어둡게 함, signals.ImplicitDimTracker) → 수용도 축 갱신. 명시 피드백(verdict)과
+        따로 센다(stats implicit). 갱신 대상 = arms(그 에피소드 arm 이 밝히는 arm 이면 그것, 아니면 설정의 밝힘 arm 들).
+        결정 맥락 x 는 그 에피소드의 것. 갱신한 arm 목록을 돌려준다."""
+        if decision is None:
+            return []
+        targets = [a for a in arms if a in self.models]
+        for arm in targets:
+            self.models[arm]["accept"].update(decision.x, float(reward))
+            self.stats[arm]["implicit"] = self.stats[arm].get("implicit", 0) + 1
+        if targets:
+            self.n_feedback += 1
+        return targets
+
+    def apply_user_profile(self, profile: dict[str, Any] | None) -> list[str]:
+        """첫 설정 프로필 → prior 평균·후보 제외·quiet_hours. 설정 `onboarding` 표(onboarding.py). 설명 문구 목록을 돌려준다.
+        여러 번 불러도 결과는 마지막 프로필 하나만 반영된다(전역 prior + 그 프로필 가산)."""
+        from .onboarding import merged_prior, profile_adjustments, quiet_hours_of
+
+        ocfg = self.cfg.get("onboarding") or {}
+        if not profile or not ocfg.get("enabled", True):
+            return []
+        deltas, disabled, notes = profile_adjustments(profile, ocfg)
+        target = merged_prior(self.cfg.get("prior") or {}, deltas)
+        for arm, axes in self.models.items():
+            for axis, model in axes.items():
+                model.set_prior(prior_vector((target.get(arm) or {}).get(axis)))
+        self.disabled = {a for a in disabled if a in self.arms}
+        self._quiet_override = quiet_hours_of(profile) if ocfg.get("quiet_from_sleep", True) else None
+        self.user_profile = dict(profile)
+        return notes
 
     def combined_reward(self, r_accept: float, r_effect: float | None) -> float:
         b = self.cfg["bandit"]
