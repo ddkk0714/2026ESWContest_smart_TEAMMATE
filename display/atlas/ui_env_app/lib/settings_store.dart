@@ -44,6 +44,7 @@ class DeskmateSettings {
     this.devModeDefault = false,
     this.placement,
     this.placementAsked = false,
+    this.lampBrightnessFloor,
   });
 
   final String? mqttHost;
@@ -68,6 +69,9 @@ class DeskmateSettings {
 
   static const placementOptions = ['left', 'center', 'right'];
 
+  /// adjust_brightness 의 하한(원시 0~255). null 이면 lamp_defaults 의 기본값.
+  final int? lampBrightnessFloor;
+
   static const empty = DeskmateSettings();
 
   bool get isEmpty =>
@@ -80,7 +84,8 @@ class DeskmateSettings {
       previewHost == null &&
       !devModeDefault &&
       placement == null &&
-      !placementAsked;
+      !placementAsked &&
+      lampBrightnessFloor == null;
 
   DeskmateSettings copyWith({
     String? mqttHost,
@@ -101,6 +106,8 @@ class DeskmateSettings {
     String? placement,
     bool clearPlacement = false,
     bool? placementAsked,
+    int? lampBrightnessFloor,
+    bool clearLampBrightnessFloor = false,
   }) =>
       DeskmateSettings(
         mqttHost: clearMqttHost ? null : mqttHost ?? this.mqttHost,
@@ -113,6 +120,9 @@ class DeskmateSettings {
         devModeDefault: devModeDefault ?? this.devModeDefault,
         placement: clearPlacement ? null : placement ?? this.placement,
         placementAsked: placementAsked ?? this.placementAsked,
+        lampBrightnessFloor: clearLampBrightnessFloor
+            ? null
+            : lampBrightnessFloor ?? this.lampBrightnessFloor,
       );
 
   Map<String, Object?> toJson() {
@@ -147,6 +157,9 @@ class DeskmateSettings {
     if (placementAsked) {
       json['placement_asked'] = true;
     }
+    if (lampBrightnessFloor != null) {
+      json['lamp_brightness_floor'] = lampBrightnessFloor;
+    }
     return json;
   }
 
@@ -170,8 +183,12 @@ class DeskmateSettings {
       devModeDefault: json['dev_mode_default'] == true,
       placement: validPlacement(json['placement']),
       placementAsked: json['placement_asked'] == true,
+      lampBrightnessFloor: _byte(json['lamp_brightness_floor']),
     );
   }
+
+  static int? _byte(Object? raw) =>
+      raw is int && raw >= 0 && raw <= 255 ? raw : null;
 
   /// left | center | right 만 받는다(대소문자·공백 무시). 아니면 null.
   static String? validPlacement(Object? raw) {

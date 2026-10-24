@@ -4,6 +4,7 @@ import 'package:deskmate_display/bluetooth_link.dart';
 import 'package:deskmate_display/settings_store.dart';
 import 'package:deskmate_display/display_state.dart';
 import 'package:deskmate_display/feedback_policy.dart';
+import 'package:deskmate_display/lamp_defaults.dart';
 import 'package:deskmate_display/music_playback.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
@@ -324,6 +325,165 @@ void main() {
     expect(coordinator.speakerAddress, isNull);
     coordinator.selectSpeaker(firstAddress);
     expect(coordinator.speakerAddress, firstAddress);
+  });
+
+  group('adjust_brightness', () {
+    Map<String, dynamic> adjust(String id, num percent, {String gate = 'auto'}) => {
+          ..._command(id),
+          'operation': 'adjust_brightness',
+          'value': {'percent': percent},
+          'gate': gate,
+        };
+
+    test('computes relative brightness with floor, ceiling and a minimum step', () {
+      expect(adjustBrightness(current: 110, percent: 60, floor: 30),
+          (previous: 110, actual: 176));
+      expect(adjustBrightness(current: 110, percent: -50, floor: 30),
+          (previous: 110, actual: 55));
+      // 하한
+      expect(adjustBrightness(current: 110, percent: -90, floor: 30),
+          (previous: 110, actual: 30));
+      // 상한
+      expect(adjustBrightness(current: 200, percent: 60, floor: 30),
+          (previous: 200, actual: 255));
+      // 꺼짐·모름 → 기준 = 하한
+      expect(adjustBrightness(current: null, percent: 60, floor: 30),
+          (previous: 30, actual: 48));
+      // 올리는데 반올림이 기준과 같으면 최소 단계(+10)
+      expect(adjustBrightness(current: 30, percent: 1, floor: 30),
+          (previous: 30, actual: 40));
+      // 반올림이 이미 기준과 다르면 최소 단계 없이 그 값(250 × 1.01 = 252.5 → 253)
+      expect(adjustBrightness(current: 250, percent: 1, floor: 30),
+          (previous: 250, actual: 253));
+      // 254 에서 +1 % 는 256.5 → 상한 255
+      expect(adjustBrightness(current: 254, percent: 1, floor: 30),
+          (previous: 254, actual: 255));
+      // 255 는 더 못 올린다
+      expect(adjustBrightness(current: 255, percent: 10, floor: 30),
+          (previous: 255, actual: 255));
+      // 내릴 때 기준이 하한이면 그대로
+      expect(adjustBrightness(current: 30, percent: -20, floor: 30),
+          (previous: 30, actual: 30));
+      // 0 % 는 그대로
+      expect(adjustBrightness(current: 90, percent: 0, floor: 30),
+          (previous: 90, actual: 90));
+      // 기준이 하한보다 낮으면 하한으로 올려 잡는다
+      expect(adjustBrightness(current: 10, percent: 50, floor: 30),
+          (previous: 30, actual: 45));
+    });
+
+    test('lamp tracks the last written brightness from phase lighting and commands',
+        () async {
+      final bluetooth = _FakeBluetooth();
+      final lamp = IlinkLampFeedback(bluetooth)..select(firstAddress);
+      expect(lamp.currentBrightness, isNull);
+      await lamp.apply('focus');
+      expect(lamp.currentBrightness, 110);
+      await lamp.apply('fatigue');
+      expect(lamp.currentBrightness, 180);
+      // 끄면 모름(null) — 기준은 하한이 된다
+      await lamp.apply('idle');
+      expect(lamp.currentBrightness, isNull);
+      expect(lamp.poweredOn, isFalse);
+      await lamp.setBrightness(70);
+      expect(lamp.currentBrightness, 70);
+      // 실패한 쓰기는 기준을 바꾸지 않는다
+      bluetooth.writeFailuresRemaining = 2;
+      expect(await lamp.setBrightness(200), isFalse);
+      expect(lamp.currentBrightness, 70);
+      // 다른 램프를 고르면 모름
+      lamp.select('AA:BB:CC:DD:EE:09');
+      expect(lamp.currentBrightness, isNull);
+    });
+
+    test('hub adjust_brightness uses the tracked baseline and reports previous/actual',
+        () async {
+      final bluetooth = _FakeBluetooth();
+      final coordinator = FeedbackCoordinator(
+          music: _FakeMusic(),
+          lamp: IlinkLampFeedback(bluetooth)..select(firstAddress),
+          bluetooth: bluetooth)
+        ..enabled = true;
+      // 국면 조명으로 110 을 쓴 뒤 +60 %
+      await coordinator.lamp.apply('focus');
+      final up = await coordinator.handleControlCommand(adjust('a1', 60));
+      expect(up?['status'], 'succeeded');
+      expect(up?['previous'], 110);
+      expect(up?['actual'], 176);
+      expect(up?['actual_value'], 176);
+      expect(bluetooth.frames.sublist(bluetooth.frames.length - 2), [
+        ilinkFrame([1, 8, 5, 1]),
+        ilinkFrame([1, 8, 1, 176]),
+      ]);
+      expect(coordinator.lamp.currentBrightness, 176);
+      // 이어서 −50 % 는 176 기준
+      final down = await coordinator.handleControlCommand(adjust('a2', -50));
+      expect(down?['previous'], 176);
+      expect(down?['actual'], 88);
+      // hub set_brightness 뒤에는 그 값이 기준
+      await coordinator.handleControlCommand({..._command('s1'), 'value': 40});
+      final fromSet = await coordinator.handleControlCommand(adjust('a3', 50));
+      expect(fromSet?['previous'], 40);
+      expect(fromSet?['actual'], 60);
+      // 되돌리기는 hub 가 set_brightness <previous> 로 보낸다(기존 경로)
+      final undo = await coordinator.handleControlCommand(
+          {..._command('u1'), 'gate': 'undo', 'value': 40});
+      expect(undo?['status'], 'succeeded');
+      expect(coordinator.lamp.currentBrightness, 40);
+    });
+
+    test('off or unknown lamp uses the floor; the floor comes from settings',
+        () async {
+      final bluetooth = _FakeBluetooth();
+      final coordinator = FeedbackCoordinator(
+          music: _FakeMusic(),
+          lamp: IlinkLampFeedback(bluetooth)..select(firstAddress),
+          bluetooth: bluetooth)
+        ..enabled = true;
+      expect(coordinator.brightnessFloor, kLampBrightnessFloorDefault);
+      final unknown = await coordinator.handleControlCommand(adjust('f1', 60));
+      expect(unknown?['previous'], 30);
+      expect(unknown?['actual'], 48);
+      await coordinator.lamp.apply('idle');
+      coordinator.brightnessFloor = 50;
+      final off = await coordinator.handleControlCommand(adjust('f2', 20));
+      expect(off?['previous'], 50);
+      expect(off?['actual'], 60);
+      // 전원 켜기 프레임이 먼저
+      expect(bluetooth.frames[bluetooth.frames.length - 2], ilinkFrame([1, 8, 5, 1]));
+    });
+
+    test('adjust_brightness is refused like set_brightness when disabled, expired, unconfigured or malformed',
+        () async {
+      final bluetooth = _FakeBluetooth();
+      final coordinator = FeedbackCoordinator(
+          music: _FakeMusic(),
+          lamp: IlinkLampFeedback(bluetooth)..select(firstAddress),
+          bluetooth: bluetooth);
+      expect((await coordinator.handleControlCommand(adjust('d1', 60)))?['error_code'],
+          'feedback_disabled');
+      coordinator.enabled = true;
+      expect(
+          (await coordinator.handleControlCommand(
+              {...adjust('e1', 60), 'expires_ts_ms': 1}))?['error_code'],
+          'expired');
+      expect(
+          (await coordinator.handleControlCommand(
+              {...adjust('b1', 60), 'value': 60}))?['error_code'],
+          'unsupported_operation_or_value');
+      expect(
+          (await coordinator.handleControlCommand(
+              {...adjust('b2', 60), 'value': {'percent': 'x'}}))?['error_code'],
+          'unsupported_operation_or_value');
+      expect(bluetooth.writeCount, 0);
+      final none = FeedbackCoordinator(
+          music: _FakeMusic(),
+          lamp: IlinkLampFeedback(bluetooth),
+          bluetooth: bluetooth)
+        ..enabled = true;
+      expect((await none.handleControlCommand(adjust('n1', 60)))?['error_code'],
+          'lamp_not_configured');
+    });
   });
 }
 

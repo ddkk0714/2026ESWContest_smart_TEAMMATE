@@ -1,6 +1,9 @@
+import 'dart:math' show min;
+
 import 'bluetooth_service.dart';
 import 'display_state.dart';
 import 'fan_control.dart';
+import 'lamp_defaults.dart';
 import 'music_playback.dart';
 
 const ilinkServiceUuid = '0000a032-0000-1000-8000-00805f9b34fb';
@@ -62,6 +65,8 @@ class IlinkLampFeedback {
   DateTime? _lastOkAt;
   Object? _lastError;
   Future<void> _writes = Future.value();
+  int? _lastBrightness;
+  bool? _poweredOn;
 
   bool get configured => _address?.isNotEmpty ?? false;
   String? get address => _address;
@@ -69,12 +74,31 @@ class IlinkLampFeedback {
   DateTime? get lastOkAt => _lastOkAt;
   Object? get lastError => _lastError;
 
+  /// 램프에 마지막으로 **성공적으로 쓴** 원시 밝기(0~255). 국면 조명(ilinkFramesForPhase)·hub set_brightness·
+  /// adjust_brightness 모두 포함. 아직 안 썼거나 마지막 전원 프레임이 끔(0x05 0x00)이면 null — "꺼졌거나 모름".
+  int? get currentBrightness => _poweredOn == false ? null : _lastBrightness;
+  bool? get poweredOn => _poweredOn;
+
   void select(String address) {
     if (_address == address) return;
     _address = address;
     _connection = null;
     _lastOkAt = null;
     _lastError = null;
+    _lastBrightness = null;
+    _poweredOn = null;
+  }
+
+  /// iLink 0x01 프레임에서 전원·밝기를 읽어 기준값을 갱신한다(쓰기가 성공한 프레임만).
+  void _track(List<int> frame) {
+    if (frame.length < 6 || frame[0] != 0x55 || frame[1] != 0xaa) return;
+    if (frame[2] != 0x01 || frame[3] != 0x08) return;
+    switch (frame[4]) {
+      case 0x05:
+        _poweredOn = frame[5] != 0;
+      case 0x01:
+        _lastBrightness = frame[5];
+    }
   }
 
   /// Concurrent callers (restore, selection, phase retries) share one attempt:
@@ -131,6 +155,7 @@ class IlinkLampFeedback {
               serviceId: ilinkServiceUuid,
               characteristicId: ilinkWriteUuid,
               value: frame);
+          _track(frame);
         }
         _lastOkAt = DateTime.now();
         _lastError = null;
@@ -142,6 +167,24 @@ class IlinkLampFeedback {
     }
     return false;
   }
+}
+
+/// hub 의 `adjust_brightness {"percent": p}`: 지금 밝기 대비 p % 만큼. [current] 가 null(꺼짐·모름)이면 기준은 [floor].
+/// 새 값 = clamp(round(기준 × (1 + p/100)), floor, 255). 올리는데 결과가 기준과 같으면(반올림·상한 전) 최소 [minStep] 만큼 올려
+/// 체감되게 한다(255 면 더 못 올림). 기준(previous)과 새 값(actual)을 함께 돌려준다.
+({int previous, int actual}) adjustBrightness({
+  required int? current,
+  required int percent,
+  required int floor,
+  int minStep = kLampAdjustMinStep,
+}) {
+  final lo = floor.clamp(0, 255);
+  final base = (current ?? lo).clamp(lo, 255);
+  var next = (base * (1 + percent / 100)).round().clamp(lo, 255);
+  if (percent > 0 && next <= base && base < 255) {
+    next = min(255, base + minStep);
+  }
+  return (previous: base, actual: next);
 }
 
 /// The FSM authorizes interventions through its gate and control commands.
@@ -159,6 +202,9 @@ class FeedbackCoordinator {
 
   /// `vent_fan` 실물(블루투스 선풍기). 고르지 않았으면 vent_fan 명령에 대답하지 않는다.
   final BleFanControl? fan;
+
+  /// adjust_brightness 의 하한(원시 0~255). 설정 `lamp_brightness_floor`, 없으면 [kLampBrightnessFloorDefault].
+  int brightnessFloor = kLampBrightnessFloorDefault;
   String? _speakerAddress;
   String? get speakerAddress => _speakerAddress;
   bool _enabled = false;
@@ -288,13 +334,14 @@ class FeedbackCoordinator {
   }
 
   Map<String, dynamic> _result(Map<String, dynamic> command, String status,
-      {Object? actual, String? error}) {
+      {Object? actual, String? error, Map<String, Object?> extra = const {}}) {
     lastControlError = error;
     return {
       'command_id': command['command_id'],
       'status': status,
       if (status == 'succeeded' || actual != null) 'actual_value': actual,
       if (error != null) 'error_code': error,
+      ...extra,
       'completed_ts_ms': DateTime.now().millisecondsSinceEpoch,
     };
   }
@@ -323,6 +370,9 @@ class FeedbackCoordinator {
     }
     final value = command['value'];
     final List<List<int>> frames;
+    // adjust_brightness: 결과에 previous(기준)·actual(새 값)을 싣는다. actual_value 도 새 값.
+    var actual = value;
+    var extra = const <String, Object?>{};
     if (command['operation'] == 'set_brightness' &&
         value is int &&
         value >= 0 &&
@@ -330,6 +380,21 @@ class FeedbackCoordinator {
       frames = [
         ilinkFrame([0x01, 0x08, 0x05, 0x01]),
         ilinkFrame([0x01, 0x08, 0x01, value])
+      ];
+    } else if (command['operation'] == 'adjust_brightness' &&
+        value is Map &&
+        value['percent'] is num &&
+        (value['percent'] as num).isFinite) {
+      final adjusted = adjustBrightness(
+        current: lamp.currentBrightness,
+        percent: (value['percent'] as num).round(),
+        floor: brightnessFloor,
+      );
+      actual = adjusted.actual;
+      extra = {'previous': adjusted.previous, 'actual': adjusted.actual};
+      frames = [
+        ilinkFrame([0x01, 0x08, 0x05, 0x01]),
+        ilinkFrame([0x01, 0x08, 0x01, adjusted.actual])
       ];
     } else if (command['operation'] == 'set_power' &&
         (value == 'on' || value == 'off')) {
@@ -353,7 +418,7 @@ class FeedbackCoordinator {
         lastAudioError = error;
       }
     }
-    return _result(command, 'succeeded', actual: value);
+    return _result(command, 'succeeded', actual: actual, extra: extra);
   }
 
   /// set_power on|off · set_level 0~3 · set_speed 0~100 · set_mode normal|natural · set_timer 초.

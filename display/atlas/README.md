@@ -147,6 +147,15 @@ hub 가 내린 **마지막 명령 기준**이라 블루투스가 안 붙어도 h
 화면 안의 **'시작 시 이 화면' 스위치**는 `settings.json` 에 `"dev_mode_default": true` 를 저장해 다음 실행부터 이 화면으로 켜진다
 (보드에서 파일을 직접 고쳐도 된다: `~/.config/deskmate/settings.json`, 없으면 `/tmp/deskmate/settings.json`).
 
+**밝기는 "지금 대비 %" 로(`adjust_brightness`).** hub 가 무드등 밝기를 절대값 대신 `control/cmd` operation `adjust_brightness`,
+value `{"percent": <부호 있는 정수>}` 로 보내면 앱이 **램프에 마지막으로 성공적으로 쓴 원시 밝기(0~255)** 를 기준으로 계산한다
+(국면 조명 idle/end 끔 · start 48 · focus 110 · fatigue 180 · recovery 90 과 hub `set_brightness` 모두 추적). 램프가 꺼졌거나 모르면 기준 = 하한.
+새 값 = clamp(round(기준 × (1 + percent/100)), 하한, 255). 올리는데 결과가 기준과 같으면 최소 +10 올려 체감되게 한다. 전원 켜기 프레임이 먼저 나간다.
+하한 기본 30(약 12 %)은 `lib/lamp_defaults.dart`, 보드에서는 `settings.json` `"lamp_brightness_floor": <0~255>` 로 바꾼다.
+게이트·만료·자동 피드백 스위치 규칙은 `set_brightness` 와 같다(feedback_disabled · expired · invalid_command · lamp_not_configured).
+`control/result` 에 기존 필드 + `previous`(기준) · `actual`(새 값)을 싣고, 되돌리기는 hub 가 `set_brightness <previous>` 로 보낸다.
+개발자 모드에는 `CMD desk_lamp adjust_brightness +60%` · `RESULT … succeeded 110→176` · 기기 상태 `램프 밝기 110→176 ✓` 로 보인다.
+
 **장치 위치(왼쪽·가운데·오른쪽)와 Pi 4 자세 모델 교체(`lib/placement_page.dart`·`placement_controller.dart`·`placement_client.dart`).**
 장치를 보통 두는 위치를 **앉은 자리 기준**으로 고르면(`settings.json` `"placement": "left|center|right"`) 앱이 Pi 4 자세 서비스
 `http://<pi4>:8771/api/placement` 에 `POST {"placement": "..."}` 를 보내고, 서비스가 재시작 없이 그 위치용 모델로 바꾼다(GRU 리셋·Pi 4 에 저장).

@@ -113,6 +113,43 @@ void main() {
     expect(privacy.line, '12:03:41 FEEDBACK personalization grant');
   });
 
+  test('adjust_brightness shows the percent, and its result shows previous→actual', () {
+    final cmd = CommandLog.entryFor(
+        CommandLog.topicCmd,
+        _env({
+          'command_id': 'adj001',
+          'target_id': 'desk_lamp',
+          'operation': 'adjust_brightness',
+          'value': {'percent': 60},
+          'gate': 'auto',
+        }),
+        now: at)!;
+    expect(cmd.line, '12:03:41 CMD desk_lamp adjust_brightness +60% (auto, id adj001)');
+    final minus = CommandLog.entryFor(
+        CommandLog.topicCmd,
+        _env({
+          'command_id': 'adj002',
+          'target_id': 'desk_lamp',
+          'operation': 'adjust_brightness',
+          'value': {'percent': -50},
+          'gate': 'undo',
+        }),
+        now: at)!;
+    expect(minus.text, 'desk_lamp adjust_brightness -50% (undo, id adj002)');
+    final res = CommandLog.entryFor(
+        CommandLog.topicResult,
+        _env({
+          'command_id': 'adj001',
+          'status': 'succeeded',
+          'actual_value': 176,
+          'previous': 110,
+          'actual': 176,
+        }, node: 'display-control'),
+        now: at)!;
+    expect(res.line, '12:03:41 RESULT adj001 succeeded 110→176 (display-control)');
+    expect(res.ok, isTrue);
+  });
+
   test('unknown topics and messages without data are ignored', () {
     expect(CommandLog.entryFor('deskmate/state/phase', _env({'fsm_state': 'IDLE'})),
         isNull);

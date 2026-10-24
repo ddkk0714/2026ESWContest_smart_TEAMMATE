@@ -70,6 +70,21 @@ void main() {
     expect(DeskmateSettings.validPlacement('back'), isNull);
   });
 
+  test('lamp_brightness_floor round-trips and only accepts 0..255 integers', () {
+    const on = DeskmateSettings(lampBrightnessFloor: 45);
+    expect(on.toJson()['lamp_brightness_floor'], 45);
+    expect(on.isEmpty, isFalse);
+    expect(DeskmateSettings.empty.toJson().containsKey('lamp_brightness_floor'), isFalse);
+    expect(SettingsStore(candidates: [path('floor')]).save(on), isTrue);
+    final loaded = SettingsStore(candidates: [path('floor')]).load();
+    expect(loaded.lampBrightnessFloor, 45);
+    expect(loaded.copyWith(clearLampBrightnessFloor: true).lampBrightnessFloor, isNull);
+    expect(DeskmateSettings.fromJson({'lamp_brightness_floor': 300}).lampBrightnessFloor, isNull);
+    expect(DeskmateSettings.fromJson({'lamp_brightness_floor': -1}).lampBrightnessFloor, isNull);
+    expect(DeskmateSettings.fromJson({'lamp_brightness_floor': '30'}).lampBrightnessFloor, isNull);
+    expect(DeskmateSettings.fromJson({'lamp_brightness_floor': 0}).lampBrightnessFloor, 0);
+  });
+
   test('missing and malformed files return empty without throwing', () {
     final missing = SettingsStore(candidates: [path('missing')]);
     expect(missing.load().isEmpty, isTrue);

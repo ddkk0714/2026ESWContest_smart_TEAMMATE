@@ -94,7 +94,7 @@ class CommandLog extends ChangeNotifier {
       case topicCmd:
         final target = _s(data['target_id']);
         final op = _s(data['operation']);
-        final value = data['value'] == null ? '' : ' ${data['value']}';
+        final value = _valueText(op, data['value']);
         final gate = _s(data['gate']);
         final id = _shortId(data['command_id']);
         final cause = data['cause'];
@@ -106,11 +106,14 @@ class CommandLog extends ChangeNotifier {
         final status = _s(data['status']);
         final error = data['error_code'];
         final actual = data['actual_value'];
+        final previous = data['previous'];
         final detail = error != null
             ? ' $error'
-            : actual != null
-                ? ' $actual'
-                : '';
+            : previous != null && data['actual'] != null
+                ? ' $previous→${data['actual']}'
+                : actual != null
+                    ? ' $actual'
+                    : '';
         final who = node == null || node.isEmpty ? '' : ' ($node)';
         final bool? ok = switch (status) {
           'succeeded' => true,
@@ -159,6 +162,16 @@ class CommandLog extends ChangeNotifier {
   }
 
   static String _s(Object? v) => v == null ? '?' : v.toString();
+
+  /// 값 글자. adjust_brightness 의 `{"percent": 60}` 은 ` +60%`, 없으면 빈 문자열.
+  static String _valueText(String op, Object? value) {
+    if (value == null) return '';
+    if (op == 'adjust_brightness' && value is Map) {
+      final p = value['percent'];
+      if (p is num) return ' ${p >= 0 ? '+' : ''}${p.round()}%';
+    }
+    return ' $value';
+  }
 
   /// command_id·request_id 는 길어서 앞 6 자만. 짧으면 그대로.
   static String _shortId(Object? v) {

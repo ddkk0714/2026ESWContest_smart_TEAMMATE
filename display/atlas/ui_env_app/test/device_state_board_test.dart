@@ -83,6 +83,36 @@ void main() {
     expect(board['vent_fan']!.line(), '선풍기 OFF ✗ 제어 못함');
   });
 
+  test('adjust_brightness shows the percent until the result, then 기준→새 값', () {
+    final board = DeviceStateBoard();
+    board.addMessage(CommandLog.topicCmd, _cmd('b0', 'desk_lamp', 'set_brightness', 110));
+    board.addMessage(CommandLog.topicResult, _result('b0', 'succeeded'));
+    board.addMessage(
+        CommandLog.topicCmd, _cmd('b1', 'desk_lamp', 'adjust_brightness', {'percent': 60}));
+    expect(board['desk_lamp']!.line(), '램프 밝기 +60% … 결과 없음');
+    board.addMessage(CommandLog.topicResult, {
+      'schema_version': '1.0',
+      'node': 'display-control',
+      'data': {
+        'command_id': 'b1',
+        'status': 'succeeded',
+        'actual_value': 176,
+        'previous': 110,
+        'actual': 176,
+      }
+    });
+    expect(board['desk_lamp']!.line(), '램프 밝기 110→176 ✓');
+    // 다음 명령이 오면 기준 표시는 사라진다
+    board.addMessage(CommandLog.topicCmd, _cmd('b2', 'desk_lamp', 'set_brightness', 90));
+    expect(board['desk_lamp']!.line(), '램프 밝기 90 … 결과 없음');
+    // 실패하면 % 그대로 남고 제어 못함
+    board.addMessage(
+        CommandLog.topicCmd, _cmd('b3', 'desk_lamp', 'adjust_brightness', {'percent': -30}));
+    board.addMessage(CommandLog.topicResult,
+        _result('b3', 'failed', error: 'lamp_not_configured'));
+    expect(board['desk_lamp']!.line(), '램프 밝기 -30% ✗ 제어 못함(lamp_not_configured)');
+  });
+
   test('unknown targets are appended; other topics and bad data are ignored', () {
     final board = DeviceStateBoard();
     board.addMessage(CommandLog.topicCmd, _cmd('p1', 'plug_1', 'set_power', 'on'));

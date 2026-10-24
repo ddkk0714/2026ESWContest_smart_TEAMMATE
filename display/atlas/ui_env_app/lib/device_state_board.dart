@@ -21,6 +21,9 @@ class DeviceState {
   String? lastGate;
   DateTime? lastAt;
 
+  /// adjust_brightness 결과의 기준값(previous). 다음 명령이 오면 지운다. 있으면 "밝기 110→176".
+  int? brightnessFrom;
+
   /// 마지막 명령의 결과 status(succeeded·failed·…). 아직 없으면 null.
   String? resultStatus;
   String? resultError;
@@ -35,7 +38,9 @@ class DeviceState {
         'set_power' => v.toString().toUpperCase(),
         'set_level' => '풍량 $v',
         'set_speed' => '속도 $v',
-        'set_brightness' => '밝기 $v',
+        'set_brightness' =>
+          brightnessFrom == null ? '밝기 $v' : '밝기 $brightnessFrom→$v',
+        'adjust_brightness' => '밝기 $v',
         'set_mode' => '모드 $v',
         'set_timer' => '타이머 $v s',
         _ => '${e.key} $v',
@@ -109,7 +114,17 @@ class DeviceStateBoard extends ChangeNotifier {
       return;
     }
     final device = _devices.putIfAbsent(target, () => DeviceState(target));
-    device.values[op] = data['value'];
+    device.brightnessFrom = null;
+    if (op == 'adjust_brightness') {
+      // 결과가 오기 전에는 "+60%" 로. 결과의 actual 이 오면 set_brightness 값으로 바뀐다.
+      final v = data['value'];
+      final p = v is Map ? v['percent'] : null;
+      device.values.remove('set_brightness');
+      device.values[op] = p is num ? '${p >= 0 ? '+' : ''}${p.round()}%' : '?';
+    } else {
+      device.values.remove('adjust_brightness');
+      device.values[op] = data['value'];
+    }
     device.lastGate = data['gate']?.toString();
     device.lastAt = at;
     device.resultStatus = null;
@@ -134,6 +149,13 @@ class DeviceStateBoard extends ChangeNotifier {
     if (device == null || device.lastCommandId != id) return;
     device.resultStatus = data['status']?.toString();
     device.resultError = data['error_code']?.toString();
+    final actual = data['actual'];
+    if (device.values.containsKey('adjust_brightness') && actual is num) {
+      device.values.remove('adjust_brightness');
+      device.values['set_brightness'] = actual.round();
+      final previous = data['previous'];
+      device.brightnessFrom = previous is num ? previous.round() : null;
+    }
     notifyListeners();
   }
 

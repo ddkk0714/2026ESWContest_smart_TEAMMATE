@@ -28,6 +28,7 @@ import 'preview_page.dart';
 import 'command_log.dart';
 import 'dev_mode_page.dart';
 import 'device_state_board.dart';
+import 'lamp_defaults.dart';
 import 'placement_client.dart' show placementKo;
 import 'placement_controller.dart';
 import 'placement_page.dart';
@@ -199,6 +200,8 @@ class _DashboardPageState extends State<DashboardPage> {
       });
     _startupCheck = MqttStartupCheck(prober: widget.prober);
     _source = _initialSource();
+    _feedbackController.brightnessFloor =
+        _settings.lampBrightnessFloor ?? kLampBrightnessFloorDefault;
     _connectPlacement();
     // 설정 dev_mode_default: 켜자마자 개발자 모드 화면(ToF 열지도·판정·명령 로그).
     if (_settings.devModeDefault) _view = _AppView.devMode;
