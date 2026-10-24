@@ -9,6 +9,11 @@ import 'display_state.dart';
 import 'session_report.dart';
 import 'privacy_state.dart';
 
+/// MQTT payload 바이트 → 문자열. hub 는 UTF-8 JSON 을 보낸다.
+/// `MqttPublishPayload.bytesToStringAsString` 은 바이트 하나를 글자 하나로 읽어(Latin-1)
+/// 한글이 `ì¡°ëª…` 처럼 깨진다(10-24 실기). 깨진 바이트가 섞여 있어도 화면은 멈추지 않게 대체 문자로 둔다.
+String mqttPayloadText(List<int> bytes) => utf8.decode(bytes, allowMalformed: true);
+
 abstract interface class StateSource {
   String get label;
   bool get isConnected;
@@ -287,7 +292,7 @@ class MqttStateSource implements StateSource, PrivacySource {
           'hub_boot_id': state.hubBootId
         }
       });
-      final builder = MqttClientPayloadBuilder()..addString(payload);
+      final builder = MqttClientPayloadBuilder()..addUTF8String(payload);
       _client.publishMessage(
           _feedbackTopic, MqttQos.atLeastOnce, builder.payload!);
       return await completion.future.timeout(const Duration(seconds: 35));
@@ -392,9 +397,7 @@ class MqttStateSource implements StateSource, PrivacySource {
       final publish = received.payload;
       if (publish is! MqttPublishMessage) continue;
       try {
-        final text = MqttPublishPayload.bytesToStringAsString(
-          publish.payload.message,
-        );
+        final text = mqttPayloadText(publish.payload.message);
         if (text.isEmpty && received.topic == _reportTopic) {
           // 빈 retain = 브로커에서 리포트를 지웠다. 지난 숫자를 계속 보여 주지 않는다.
           _sessionReport = null;
@@ -482,7 +485,7 @@ class MqttStateSource implements StateSource, PrivacySource {
       final result = await handler(command);
       if (result == null || _closed || !isConnected) return;
       final builder = MqttClientPayloadBuilder()
-        ..addString(jsonEncode({
+        ..addUTF8String(jsonEncode({
           'schema_version': '1.0',
           'ts': DateTime.now().millisecondsSinceEpoch / 1000,
           'node': 'display-control',
@@ -515,7 +518,7 @@ class MqttStateSource implements StateSource, PrivacySource {
         note: note,
       ),
     });
-    final builder = MqttClientPayloadBuilder()..addString(payload);
+    final builder = MqttClientPayloadBuilder()..addUTF8String(payload);
     _client.publishMessage(
       _feedbackTopic,
       MqttQos.atLeastOnce,
