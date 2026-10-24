@@ -14,6 +14,7 @@
   자동 실행하지 않는다.
 - 밝기는 절대값이 아니라 지금 밝기 대비 % 다(2026-10-25): operation `adjust_brightness`, value {"percent": ±정수}. 지금 밝기는
   램프를 쓰는 Pi 5 앱만 알므로 hub 는 % 만 보내고 앱이 계산해 결과에 `previous`(바꾸기 전 원시 0~255)·`actual`(바꾼 뒤)을 준다.
+  value 에 선택 키 `min_raw` 가 있으면 앱은 결과를 max(계산값, min_raw) 로 한다(깨우기 묶음만 — 꺼진 램프도 켜지게).
   되돌리기(spec `undo: previous`)는 그 결과의 previous 로 `set_brightness <previous>` 를 보낸다 — 결과가 없거나 previous 가 없으면
   되돌리기 생략(로그만). 그 밖(set_brightness·set_power·set_mode)은 지금처럼 undo_value.
 표준 라이브러리만 사용한다.
@@ -337,7 +338,10 @@ class MockPlugAdapter:
             # 앱과 같은 계약: 지금 밝기 × (1 + percent/100), 0~255 로 자른 뒤 previous·actual 을 결과에 싣는다
             previous = int(self.brightness.get(target, self.DEFAULT_BRIGHTNESS))
             percent = float((value or {}).get("percent", 0))
-            actual = max(0, min(255, int(round(previous * (1.0 + percent / 100.0)))))
+            actual = int(round(previous * (1.0 + percent / 100.0)))
+            if (value or {}).get("min_raw") is not None:          # 깨우기 최소 밝기: 결과 = max(계산값, min_raw)
+                actual = max(actual, int((value or {})["min_raw"]))
+            actual = max(0, min(255, actual))
             self.brightness[target] = actual
             self.state[target] = {operation: value, "brightness": actual}
             result.update(previous=previous, actual=actual, actual_value=actual)

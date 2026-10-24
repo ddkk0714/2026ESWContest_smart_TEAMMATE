@@ -25,5 +25,6 @@ actions:
   # posture_auto → lamp_cool 과 같은 뜻. 색온도(cool)는 Pi 5 어댑터(feedback_policy.dart)가 아직 받지 않아 밝기만 올린다.
   # 10-25: 절대값(set_brightness 230, undo 110) 대신 지금 밝기 대비 +60 %(1.6 배) — 사용자 지시 "기존 대비 % 올리기".
   # 개인화 정책이 기기 arm(spec)을 준 경우에는 그쪽이 우선이고, 이 묶음을 지우면 ACTION_POSTURE 는 예전처럼 명령 없이(화면 카드만) 지나간다.
+  # min_raw(선택, 깨우기만): 계산 결과가 이보다 낮으면 min_raw 까지 올린다 — 꺼진 램프(0)도 60 %(153/255)로 켜진다. 다른 묶음·개인화 arm 에는 없다.
   posture:
-    - {target_id: desk_lamp, operation: adjust_brightness, value: {percent: 60}, undo: previous}
+    - {target_id: desk_lamp, operation: adjust_brightness, value: {percent: 60, min_raw: 153}, undo: previous}

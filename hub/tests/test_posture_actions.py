@@ -19,8 +19,8 @@ from deskmate_hub.live import LiveHub
 from test_ingest_mapping import env, mm
 from test_tof_service import svc
 
-LAMP = {"target_id": "desk_lamp", "operation": "adjust_brightness", "value": {"percent": 60}, "undo": "previous"}
-PCT60 = {"percent": 60}
+LAMP = {"target_id": "desk_lamp", "operation": "adjust_brightness", "value": {"percent": 60, "min_raw": 153}, "undo": "previous"}
+PCT60 = {"percent": 60, "min_raw": 153}     # 깨우기: 지금의 1.6 배, 최소 153(60 %)
 CFG = {"enabled": True, "adapter": "mock", "result_timeout_sec": 15, "suggest_timeout_sec": 180, "undo_window_sec": 60,
        "cooldown_sec": 300, "irreversible_operations": ["set_power_off"],
        "actions": {"environment": [{"target_id": "vent_fan", "operation": "set_power", "value": "on", "undo_value": "off"}],

@@ -129,7 +129,10 @@ def test_default_config_is_reversible_only():
     assert all("undo_value" in a or a.get("undo") == "previous" for acts in cfg["actions"].values() for a in acts)
     # 밝기는 절대값이 아니라 지금 대비 % (10-25)
     lamps = [a for acts in cfg["actions"].values() for a in acts if a["target_id"] == "desk_lamp"]
-    assert lamps and all(a["operation"] == "adjust_brightness" and set(a["value"]) == {"percent"} and a["undo"] == "previous" for a in lamps)
+    assert lamps and all(a["operation"] == "adjust_brightness" and {"percent"} <= set(a["value"]) <= {"percent", "min_raw"}
+                         and a["undo"] == "previous" for a in lamps)
+    assert cfg["actions"]["posture"][0]["value"]["min_raw"] == 153                  # 깨우기만 최소 밝기
+    assert all("min_raw" not in a["value"] for a in cfg["actions"]["environment"] if a["target_id"] == "desk_lamp")
 
 
 # ── LiveHub 연동: ACTION_ENV 진입 → mock 플러그 → 결과 → MONITOR ─────────

@@ -332,7 +332,7 @@ FSM 을 MONITOR 로 보낸다. `state/phase.sensor_summary.control` 에 진행 �
 어댑터가 없을 때의 리허설: `python tools/mock_plug.py --broker <ip>` (결과 응답 + `deskmate/control/state/<target>` retain).
 
 Pi 5 앱은 `desk_lamp`의 `adjust_brightness`(`value: {"percent": ±정수}` — **지금 밝기 대비 %**, 2026-10-25. 앱이 지금 원시 밝기로
-계산·상하한을 정하고 결과에 `previous`·`actual`(원시 0~255)을 싣는다), `set_brightness`(iLink 원시 밝기 정수 **0~255**, 허브의
+계산·상하한을 정하고 결과에 `previous`·`actual`(원시 0~255)을 싣는다; value 에 `min_raw` 가 있으면 결과 = max(계산값, min_raw)), `set_brightness`(iLink 원시 밝기 정수 **0~255**, 허브의
 되돌리기가 `previous` 로 보낸다)와 `set_power`(`on`/`off`)를 실행하고 `display-control` 노드의 결과를 QoS 1·retain 없음으로
 돌려준다. 기본 설정은 환경 +30 %, 졸음 +60 %, 개인화 arm ±50 % 다. 다른 대상은 해당 어댑터가
 처리하며, 앱이 환기팬 등의 성공 응답을 대신 만들지 않는다.

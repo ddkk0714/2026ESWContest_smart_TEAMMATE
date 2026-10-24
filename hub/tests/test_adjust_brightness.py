@@ -128,6 +128,22 @@ def test_mock_plug_computes_relative_brightness_and_reports_previous_actual():
     assert plug.brightness["desk_lamp"] == 110 and plug.state["desk_lamp"] == {"set_brightness": 110}
 
 
+def test_mock_plug_applies_min_raw_for_wake_up():
+    """min_raw(깨우기만): 결과 = max(계산값, min_raw). 꺼짐 0 → 153, 120 → 192(1.6 배가 더 크다). PC life_sim 과 같은 정의."""
+    results = []
+    plug = MockPlugAdapter(results.append)
+    plug.handle_command({"command_id": "off", "target_id": "desk_lamp", "operation": "set_brightness", "value": 0})
+    plug.handle_command({"command_id": "w1", "target_id": "desk_lamp", "operation": "adjust_brightness", "value": {"percent": 60, "min_raw": 153}})
+    assert (results[-1]["previous"], results[-1]["actual"]) == (0, 153)
+    plug.handle_command({"command_id": "set", "target_id": "desk_lamp", "operation": "set_brightness", "value": 120})
+    plug.handle_command({"command_id": "w2", "target_id": "desk_lamp", "operation": "adjust_brightness", "value": {"percent": 60, "min_raw": 153}})
+    assert (results[-1]["previous"], results[-1]["actual"]) == (120, 192)
+    # min_raw 없는 묶음(환경 +30 %)은 꺼진 램프를 켜지 않는다
+    plug.handle_command({"command_id": "off2", "target_id": "desk_lamp", "operation": "set_brightness", "value": 0})
+    plug.handle_command({"command_id": "e", "target_id": "desk_lamp", "operation": "adjust_brightness", "value": {"percent": 30}})
+    assert results[-1]["actual"] == 0
+
+
 # ── adapter · shipped config ───────────────────────────────────────────────────
 
 def test_personalize_lamp_arms_are_relative_percent():
@@ -143,7 +159,7 @@ def test_shipped_control_yaml_lamp_commands_are_relative():
     cfg = load_control_config()
     env_lamp = [a for a in cfg["actions"]["environment"] if a["target_id"] == "desk_lamp"]
     assert env_lamp == [{"target_id": "desk_lamp", "operation": "adjust_brightness", "value": {"percent": 30}, "undo": "previous"}]
-    assert cfg["actions"]["posture"] == [LAMP_UP]
+    assert cfg["actions"]["posture"] == [dict(LAMP_UP, value={"percent": 60, "min_raw": 153})]   # 깨우기만 min_raw
     assert "adjust_brightness" not in cfg["irreversible_operations"]
 
 
