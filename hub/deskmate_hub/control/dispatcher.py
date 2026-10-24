@@ -168,6 +168,14 @@ class ControlDispatcher:
         cid = payload.get("command_id")
         for ep in ([self.episode] if self.episode else []) + self.history[-5:]:
             for c in ep.commands:
+                if c.command_id == cid and c.terminal:
+                    # 이미 끝난 명령에 같은 command_id 결과가 다시 오면 상태는 그대로 두고 previous·actual 만 보충한다 —
+                    # PC life_sim 의 모의 어댑터는 succeeded 를 먼저 보내고 previous·actual 을 한 번 더 보낸다(실기 앱은 한 번).
+                    late = {k: payload[k] for k in ("previous", "actual") if k in payload}
+                    if late:
+                        c.result = dict(c.result or {}, **late)
+                        self._log(f"[control] {c.target_id}.{c.operation} 늦은 결과로 previous/actual 보충 {late}")
+                    continue
                 if c.command_id == cid and not c.terminal:
                     if c.sent_ts is not None and now >= c.expires_ts:
                         c.status, c.completed_ts = "timeout", now

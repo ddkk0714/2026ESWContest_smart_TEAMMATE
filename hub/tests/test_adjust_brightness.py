@@ -59,6 +59,23 @@ def test_undo_of_adjust_sends_set_brightness_previous():
     assert len(sent) == 2
 
 
+def test_late_duplicate_result_fills_previous_without_changing_status():
+    """PC life_sim 모의 어댑터: succeeded(actual_value={percent}) 먼저, 같은 command_id 로 previous·actual 이 한 번 더 온다.
+    끝난 명령이라도 previous·actual 은 받아 두고(상태는 그대로) 되돌리기에 쓴다. 꺼져 있던 램프는 previous 0 → set_brightness 0."""
+    d, sent, t = make()
+    ep = d.on_enter_action("ACTION_POSTURE", "posture", GateMode.AUTO)
+    cid = sent[0]["command_id"]
+    assert d.on_result({"command_id": cid, "status": "succeeded"}, t["now"] + 1)
+    c = ep.commands[0]
+    assert c.status == "succeeded" and not (c.result or {}).get("previous")
+    assert d.on_result({"command_id": cid, "status": "succeeded", "previous": 0, "actual": 60}, t["now"] + 2) is False
+    assert c.status == "succeeded" and c.completed_ts == t["now"] + 1 and c.result["previous"] == 0 and c.result["actual"] == 60
+    assert d.on_result({"command_id": cid, "status": "failed"}, t["now"] + 3) is False and c.status == "succeeded"   # 상태는 안 바뀐다
+    d.close_episode()
+    d.on_feedback("reject", t["now"] + 10)
+    assert ep.outcome == "undone" and sent[-1]["operation"] == "set_brightness" and sent[-1]["value"] == 0
+
+
 def test_undo_is_skipped_without_result_or_previous():
     log = []
     d, sent, t = make()
