@@ -6,8 +6,14 @@
 // 2) PostureNet: export.py 의 golden.txt (PyTorch logits) 와 비교, 프레임당 시간
 // 3) GRU 리셋 규칙 (device_posture.h "리셋"): (a) 주기 리셋이 N s 뒤 h·EMA 를 비우고 시각을 갱신, (b) coverage 미달이
 //    N s 이어지면 반복 리셋·재실 한 프레임에 타이머 해제, (c) 둘 다 0 이면 DevicePosture 경로가 golden 과 같다(회귀 없음)
-// 4) 리플레이(있으면): 시뮬 세션을 두 센서 파일로 넣어 DevicePosture 전체 경로를 가상 시계로 돌리고
-//    파일의 "label" 과 비교 (dataset/tof_sim_v5/tools/sim_to_toflines.py 가 만든 파일). 기본 설정과 리셋 끔 두 번
+// 4) GET /raw: uart_relay_board 스키마(두 센서 64칸·have·id=물리 번호·받은 그대로), HttpServer 리스너로 실제 GET
+// 5) 리플레이(있으면): 시뮬 세션을 두 센서 파일로 넣어 DevicePosture 전체 경로를 가상 시계로 돌리고
+//    파일의 "label" 과 비교 (dataset/tof_sim_v5/tools/sim_to_toflines.py 가 만든 파일). 기본 설정과 리셋 끔 두 번. 끝에 /raw 확인
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -18,6 +24,7 @@
 #include <vector>
 
 #include "device_posture.h"
+#include "http_server.h"
 #include "posture_net.h"
 #include "tof_line.h"
 
@@ -529,6 +536,121 @@ void testDevicePathMatchesGolden(const std::string& bin, const std::string& gold
           "defaults: 910 s seated -> no periodic reset (off), no away reset (present)");
 }
 
+// UART 0x05 v1 줄: 거리 base+i (i==7 은 0xFFFF, i==9 는 0 → 없음), 상태 i%8==1 이면 4 아니면 5
+std::string uartV1Line(int sensor_id, int flags, int frame_seq, unsigned ts, unsigned envelope_seq, int base = 600) {
+    std::vector<uint8_t> p = {1, (uint8_t)sensor_id, (uint8_t)flags, 8, 8, 0, (uint8_t)(frame_seq & 255), (uint8_t)(frame_seq >> 8)};
+    for (int i = 0; i < 64; ++i) {
+        const unsigned dmm = i == 7 ? 0xFFFF : i == 9 ? 0 : (unsigned)(base + i);
+        p.push_back(dmm & 255); p.push_back(dmm >> 8);
+    }
+    for (int i = 0; i < 64; ++i) p.push_back(i % 8 == 1 ? 4 : 5);
+    std::string hex;
+    char b[3];
+    for (uint8_t v : p) { std::snprintf(b, sizeof b, "%02x", v); hex += b; }
+    return "UART\t{\"type\":5,\"seq\":" + std::to_string(envelope_seq) + ",\"ts_ms\":" + std::to_string(ts) +
+           ",\"payload_hex\":\"" + hex + "\"}";
+}
+
+// JSON 문자열에서 "key":[...] 의 원소 개수와 첫 원소 (라이브러리 없이)
+int jsonArrayCount(const std::string& j, const std::string& key, size_t from, long* first = nullptr) {
+    const size_t k = j.find("\"" + key + "\":[", from);
+    if (k == std::string::npos) return -1;
+    const size_t a = j.find('[', k), b = j.find(']', a);
+    if (a == std::string::npos || b == std::string::npos) return -1;
+    const std::string body = j.substr(a + 1, b - a - 1);
+    if (body.empty()) return 0;
+    if (first) *first = std::atol(body.c_str());
+    return (int)std::count(body.begin(), body.end(), ',') + 1;
+}
+
+// 4) /raw JSON: 중계기 스키마, 센서 id = 물리 번호, 격자는 받은 그대로(뒤집기 전), 없는 센서 have=false
+void testRawJson(const std::string& bin) {
+    tof::DeviceConfig cfg;
+    cfg.flip_cols = 1;                                       // 모델 입력은 좌우 뒤집되 /raw 는 받은 그대로여야 한다
+    tof::DevicePosture d(cfg);
+    std::string err;
+    d.loadModel(bin, &err);
+    d.setDeviceLabel("tcp:9100");
+    const int slot = d.addSensor("tcp:9100");                // main.cpp 처럼 한 입력에 두 센서: 두 번째는 자리를 새로 만든다
+    const std::string j0 = d.rawJson(0);
+    check(j0.find("\"dev\":\"tcp:9100\",\"frames\":0") != std::string::npos &&
+              j0.find("{\"id\":0,\"have\":false}") != std::string::npos && j0.find("{\"id\":1,\"have\":false}") != std::string::npos,
+          "raw: before any frame both sensors have=false, relay-style header");
+    tof::TofLine l1, l0;
+    tof::parseTofLine(uartV1Line(1, 3 | 8, 300, 5000, 77, 700), l1);   // 물리 센서 1 (B) 이 먼저 온다 → 자리 0
+    d.feed(slot, l1, 1000);
+    const int slot2 = d.addSensor("tcp:9100#s0");
+    tof::parseTofLine(uartV1Line(0, 3, 41, 5100, 78, 600), l0);        // 물리 센서 0 (A) → 자리 1
+    d.feed(slot2, l0, 1100);
+    const std::string j = d.rawJson(1300);
+    const size_t i0 = j.find("{\"id\":0,"), i1 = j.find("{\"id\":1,");
+    check(i0 != std::string::npos && i1 != std::string::npos && i0 < i1, "raw: sensors listed as id 0 then id 1");
+    long first_d = 0, first_s = 0;
+    const int n_d0 = jsonArrayCount(j, "dist_mm", i0, &first_d), n_s0 = jsonArrayCount(j, "status", i0, &first_s);
+    check(n_d0 == 64 && n_s0 == 64 && first_d == 600 && first_s == 5, "raw: id 0 = physical sensor 0 (A), 64 dist + 64 status, as received");
+    long first_d1 = 0;
+    const int n_d1 = jsonArrayCount(j, "dist_mm", i1, &first_d1);
+    check(n_d1 == 64 && first_d1 == 700, "raw: id 1 = physical sensor 1 (B) even though it arrived first (slot 0)");
+    check(j.find("\"id\":0,\"have\":true,\"age_ms\":200,\"uart_seq\":78,\"ts_ms\":5100,\"frame_id\":0,\"frame_seq\":41,\"mask\":0,\"flags\":3,") != std::string::npos,
+          "raw: id 0 header fields (age from last frame, envelope seq, ts_ms, frame_seq, flags byte)");
+    check(j.find("\"frames\":2,\"type5\":2,\"sent\":2,\"bad\":0") != std::string::npos, "raw: frames/type5/sent count received frames");
+    // 받은 그대로: 0xFFFF·0 은 -1 (중계기와 같게), 상태는 그대로 4/5. 모델 입력(sensors[].flip_cols) 은 뒤집혀 있어도 raw 는 안 뒤집힘
+    const size_t d0 = j.find("\"dist_mm\":[", i0);
+    const std::string arr = j.substr(d0, j.find(']', d0) - d0);
+    check(arr.find("606,-1,608,-1,610") != std::string::npos, "raw: 0xFFFF and 0 distances are -1 like the relay, order as received (not flipped)");
+    check(d.sensors(1300)[0].flip_cols, "raw: model input is still flipped by TOFPOSTURE_FLIP_COLS");
+    // 표준 배치(펌웨어 TofPayload) 도: i16 -1 그대로, frame_id·mask·flags 채워짐
+    const std::string g0 =
+        "080800022a030200ffffc501c801cb01ce01d101d401d701da01dd01e001ffffe601e901ec01ef01f201f501f801fb01fe010102"
+        "ffff07020a020d0210021302160219021c021f022202ffff28022b022e023102340237023a023d0240024302ffff49024c024f02"
+        "5202550258025b025e0261026402ffff6a026d0270027302760279027c027f02ff09060005090600050906ff0509060005090600"
+        "0509ff00050906000509060005ff06000509060005090600ff09060005090600050906ff0509060005090600";
+    tof::TofLine sl;
+    tof::parseTofLine("UART\t{\"type\":5,\"seq\":9,\"ts_ms\":1234,\"payload_hex\":\"" + g0 + "\"}", sl);
+    tof::DevicePosture e;
+    e.loadModel(bin, &err);
+    e.feed(e.addSensor("std"), sl, 10);
+    const std::string js = e.rawJson(20);
+    check(js.find("\"id\":0,\"have\":true,\"age_ms\":10,\"uart_seq\":9,\"ts_ms\":1234,\"frame_id\":42,\"frame_seq\":42,\"mask\":3,\"flags\":2,\"flip_rows\":false,\"flip_cols\":true,\"w\":8,\"h\":8,\"dist_mm\":[-1,453,456") != std::string::npos,
+          "raw: standard layout keeps i16 -1, frame_id 0x2A, mask 3, flags 2 -> flip_cols like the relay");
+    check(js.find("{\"id\":1,\"have\":false}") != std::string::npos, "raw: missing physical sensor 1 -> have=false");
+}
+
+// 4') HttpServer 로 실제 GET /raw (raw 전용 리스너: / 도 raw, /api/state 는 404). 포트가 막혀 있으면 건너뛴다
+void testRawHttp(const std::string& bin) {
+    tof::DevicePosture d;
+    std::string err;
+    d.loadModel(bin, &err);
+    tof::TofLine l0;
+    tof::parseTofLine(uartV1Line(0, 3, 1, 10, 1), l0);
+    d.feed(d.addSensor("x"), l0, 0);
+    const int port = 38772;
+    tof::HttpServer srv("127.0.0.1", port, tof::HttpHandlers{nullptr, nullptr, nullptr, [&d] { return d.rawJson(100); }});
+    if (!srv.start(&err)) { std::printf("skip raw http test (port %d: %s)\n", port, err.c_str()); return; }
+    auto get = [&](const char* path) {
+        const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        sockaddr_in a{};
+        a.sin_family = AF_INET; a.sin_port = htons((uint16_t)port); ::inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
+        std::string out;
+        if (::connect(fd, (sockaddr*)&a, sizeof a) == 0) {
+            const std::string req = std::string("GET ") + path + " HTTP/1.0\r\nHost: x\r\n\r\n";
+            ::send(fd, req.data(), req.size(), 0);
+            char buf[4096];
+            ssize_t n;
+            while ((n = ::recv(fd, buf, sizeof buf, 0)) > 0) out.append(buf, (size_t)n);
+        }
+        ::close(fd);
+        return out;
+    };
+    const std::string r1 = get("/raw"), r2 = get("/"), r3 = get("/api/state");
+    srv.stop();
+    check(r1.rfind("HTTP/1.0 200", 0) == 0 && r1.find("Access-Control-Allow-Origin: *") != std::string::npos &&
+              r1.find("\"sensors\":[{\"id\":0,\"have\":true") != std::string::npos && jsonArrayCount(r1, "dist_mm", 0) == 64,
+          "raw http: GET /raw -> 200, CORS *, relay-shaped JSON with 64 zones");
+    check(r2.rfind("HTTP/1.0 200", 0) == 0 && r2.find("\"dev\":") != std::string::npos, "raw http: GET / on the raw-only listener is /raw too");
+    check(r3.rfind("HTTP/1.0 404", 0) == 0, "raw http: raw-only listener has no /api/state");
+}
+
 struct ReplayLine { uint32_t ms; int sensor; tof::TofLine line; };
 
 void testReplay(const std::string& bin, const std::vector<std::string>& files, tof::DeviceConfig cfg, const char* tag) {
@@ -594,6 +716,18 @@ void testReplay(const std::string& bin, const std::vector<std::string>& files, t
                 (unsigned long long)fin.resets.away, (unsigned long long)fin.resets.manual);
     check(scored > 0, "replay produced scored ticks");
     std::printf("  state: %s\n", device.stateJson(end_ms).substr(0, 400).c_str());
+    const std::string raw = device.rawJson(end_ms);
+    const size_t i0 = raw.find("{\"id\":0,\"have\":true"), i1 = raw.find("{\"id\":1,\"have\":true");
+    long d0 = 0, d1 = 0;
+    check(files.size() >= 2 && i0 != std::string::npos && i1 != std::string::npos &&
+              jsonArrayCount(raw, "dist_mm", i0, &d0) == 64 && jsonArrayCount(raw, "status", i0) == 64 &&
+              jsonArrayCount(raw, "dist_mm", i1, &d1) == 64 && jsonArrayCount(raw, "status", i1) == 64,
+          "replay: /raw has both sensors have=true with 64 dist_mm + 64 status");
+    const std::vector<tof::SensorStatus> fin_ss = device.sensors(end_ms);
+    (void)fin_ss;
+    check(d0 != 0 && d1 != 0 && raw.find("\"dist_mm\":[0,0,0,0") == std::string::npos,
+          "replay: /raw grids carry the tof_logger JSON values (not zeros)");
+    std::printf("  raw: %s\n", raw.substr(0, 200).c_str());
 }
 
 }  // namespace
@@ -609,6 +743,8 @@ int main(int argc, char** argv) {
     testPeriodicReset(argv[1]);
     testAwayReset(argv[1]);
     testDevicePathMatchesGolden(argv[1], argv[2]);
+    testRawJson(argv[1]);
+    testRawHttp(argv[1]);
     if (argc > 3) {
         const std::vector<std::string> files(argv + 3, argv + argc);
         testReplay(argv[1], files, tof::DeviceConfig{}, "defaults 0/60");

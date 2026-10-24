@@ -81,6 +81,7 @@ struct SensorStatus {
     bool alive = false;             // 최근 stale_ms 안에 이 센서의 줄(valid 든 아니든)이 왔다
     bool stale = false;             // 살아 있지만 유효 프레임이 stale_ms 넘게 없다 → 판정에서 빠지고 GRU 리셋
     float coverage = 0.f;           // 마지막 프레임의 재실 coverage (status 5·6·9·10 ∧ [present_min_mm, present_max_mm] 인 zone / 전체)
+    int sensor_id = -1;             // 물리 센서 번호 (UART 0x05 의 sensor 필드: 0 = A 왼쪽, 1 = B 오른쪽). 다른 형식은 -1 = 자리 번호
 };
 
 struct ResetStats {
@@ -127,6 +128,10 @@ public:
     std::vector<SensorStatus> sensors(int64_t now_ms) const;
     std::string stateJson(int64_t now_ms) const;            // GET /api/state
     std::string healthJson(int64_t now_ms) const;           // GET /health
+    // GET /raw — uart_relay_board 가 내던 것과 같은 스키마(Pi 5 개발자 화면 ToF 열지도 소스). 센서 id 0·1 은 물리 번호,
+    // 격자는 받은 그대로(모델 입력용 뒤집기 전). hub 가 /dev/ttyUSB0 을 직접 읽어 중계기가 못 뜰 때 서비스가 대신 낸다.
+    std::string rawJson(int64_t now_ms) const;
+    void setDeviceLabel(const std::string& dev);            // rawJson 의 "dev" (입력 목록)
 
     static const char* labelName(int idx) { return idx >= 0 && idx < kMaxClasses ? kLabels[idx] : "unknown"; }
     static const char* labelKo(int idx) { return idx >= 0 && idx < kMaxClasses ? kLabelsKo[idx] : "모름"; }
@@ -136,6 +141,7 @@ private:
         SensorStatus st;
         PostureNet net;
         TofFrame last;
+        TofFrame raw;                   // 받은 그대로(뒤집기 전) — /raw 용
         bool has_frame = false;
         int64_t last_rx_ms = -1;
         int64_t first_rx_ms = -1;
@@ -151,6 +157,8 @@ private:
     };
 
     std::string modelPath_;
+    std::string devLabel_;
+    uint64_t frames_total_ = 0;
     DeviceConfig cfg_;
     int net_classes_ = 0;
     void resetLocked(const char* why, int64_t now_ms);     // mutex_ 를 잡은 채로

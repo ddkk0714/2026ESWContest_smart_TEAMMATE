@@ -95,15 +95,21 @@ void HttpServer::handle(int client) {
     const size_t q = path.find('?');
     if (q != std::string::npos) path.erase(q);
 
-    if (method == "GET" && path == "/health") {
-        sendAll(client, response(200, "OK", handlers_.health ? handlers_.health() : "{}"));
-    } else if (method == "GET" && path == "/api/state") {
-        sendAll(client, response(200, "OK", handlers_.state ? handlers_.state() : "{}"));
-    } else if ((method == "POST" || method == "GET") && path == "/api/reset") {
-        if (handlers_.reset) handlers_.reset();
+    if (method == "OPTIONS") {
+        sendAll(client, response(200, "OK", "", "text/plain"));                 // CORS preflight (앱 WebView)
+    } else if (method == "GET" && path == "/raw" && handlers_.raw) {
+        sendAll(client, response(200, "OK", handlers_.raw()));
+    } else if (method == "GET" && path == "/" && handlers_.raw && !handlers_.state) {
+        sendAll(client, response(200, "OK", handlers_.raw()));                  // raw 전용 리스너: 중계기처럼 / 도 raw
+    } else if (method == "GET" && path == "/health" && handlers_.health) {
+        sendAll(client, response(200, "OK", handlers_.health()));
+    } else if (method == "GET" && path == "/api/state" && handlers_.state) {
+        sendAll(client, response(200, "OK", handlers_.state()));
+    } else if ((method == "POST" || method == "GET") && path == "/api/reset" && handlers_.reset) {
+        handlers_.reset();
         sendAll(client, response(200, "OK", "{\"ok\":true}"));
-    } else if (method == "GET" && path == "/") {
-        sendAll(client, response(200, "OK", "deskmate tof posture: GET /health, GET /api/state, POST /api/reset\n", "text/plain"));
+    } else if (method == "GET" && path == "/" && handlers_.state) {
+        sendAll(client, response(200, "OK", "deskmate tof posture: GET /health, GET /api/state, POST /api/reset, GET /raw\n", "text/plain"));
     } else {
         sendAll(client, response(404, "Not Found", "{\"error\":\"not found\"}"));
     }

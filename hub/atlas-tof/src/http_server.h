@@ -2,6 +2,7 @@
 //   GET  /health       서비스·센서 상태
 //   GET  /api/state    현재 자세 (device_posture.h 의 stateJson)
 //   POST /api/reset    모든 GRU 상태 0 (센서를 옮겨 놓은 뒤 등)
+//   GET  /raw          센서 원본 격자 (uart_relay_board 와 같은 스키마). TOFPOSTURE_RAW_HTTP 포트의 두 번째 리스너는 이것만 낸다
 #ifndef DESKMATE_TOF_HTTP_SERVER_H
 #define DESKMATE_TOF_HTTP_SERVER_H
 
@@ -16,6 +17,7 @@ struct HttpHandlers {
     std::function<std::string()> health;
     std::function<std::string()> state;
     std::function<void()> reset;
+    std::function<std::string()> raw;      // 비우면 /raw 는 404
 };
 
 class HttpServer {

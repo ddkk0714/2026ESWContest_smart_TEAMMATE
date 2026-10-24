@@ -80,6 +80,7 @@ arc build hub/atlas-tof          # -> hub/atlas-tof/build/arm64/ipk/com.deskmate
 | `TOFPOSTURE_MODEL` | `<exe>/models/posture_net.bin` | 가중치 (클래스 수·은닉 폭은 파일 헤더에서 읽음) |
 | `TOFPOSTURE_FLIP_ROWS` / `_COLS` | 비움 | 1 이면 받은 격자를 위아래/좌우로 뒤집는다. **UART 0x05 표준 배치는 펌웨어가 이미 장면 방향으로 보내므로 비워 둔다**(flags 는 적용한 변환 기록). USB·PC 경로에서 장착 방향을 바꿀 때만 쓴다(`tof_live.py --show` 로 정함) |
 | `TOFPOSTURE_HTTP` / `TOFPOSTURE_BIND` | 8771 / 0.0.0.0 | HTTP. 8765(hub)·8770(camsvc)과 겹치지 않게. 0 이면 끔 |
+| `TOFPOSTURE_RAW_HTTP` | 0 (끔) | 보드에서는 8772: 두 번째 리스너를 열고 `GET /raw` 에 `uart_relay_board` 와 같은 스키마로 센서 원본 격자를 낸다(Pi 5 개발자 화면 ToF 열지도 소스). hub 가 `/dev/ttyUSB0` 을 직접 읽어 중계기가 못 뜰 때 서비스가 대신 낸다. 포트가 이미 쓰이면 경고만 내고 계속 |
 | `TOFPOSTURE_RATE_HZ` | 10 | 모델 스텝 주기 = 학습 프레임률. **바꾸면 안 된다** |
 | `TOFPOSTURE_STALE_MS` | 1000 | 이보다 오래 조용한 센서는 offline(융합 제외, 돌아오면 GRU 리셋) |
 | `TOFPOSTURE_FUSION` | logprob | `logprob`(log-softmax 합) 또는 `mean`(softmax 평균). 아래 "두 센서 합치기" |
@@ -102,6 +103,12 @@ arc build hub/atlas-tof          # -> hub/atlas-tof/build/arm64/ipk/com.deskmate
   `present_rule`·`coverage` 는 모델과 무관한 ToF 규칙 재실(아래 "GRU 리셋"), `resets` 는 리셋 계기별 횟수와 마지막 리셋 시각(`ts_ms` 와 같은 단조 시계).
   `sensors[].rule` 은 펌웨어 온보드 규칙 판정(bring-up `P,` 줄 / tof_logger `rule.posture`)으로, 모델과 비교용이다.
 - `POST /api/reset` — 모든 GRU 상태 0 + EMA 비움 (장치를 옮겨 놓은 뒤). `resets.manual` 이 늘고 마지막 리셋 시각이 갱신된다.
+- `GET /raw` (주 포트와 `TOFPOSTURE_RAW_HTTP` 포트) — `uart_relay_board` 의 `/raw` 와 같은 스키마:
+  `{"dev","frames","type5","sent","bad":0,"sensors":[{"id":0,"have":true,"age_ms","uart_seq","ts_ms","frame_id","frame_seq","mask",
+  "flags","flip_rows","flip_cols","w":8,"h":8,"dist_mm":[64],"status":[64]},{"id":1,…}]}`. `id` 는 물리 센서 번호(0x05 의 sensor,
+  0 = A 왼쪽·1 = B 오른쪽; USB·파일 입력은 자리 번호), 격자는 **받은 그대로**(모델 입력용 뒤집기 전, 표준 배치는 -1 = 없음),
+  없는 센서는 `{"id":n,"have":false}`. `other`(mmWave 등) 는 없다. 앱 파서(`display/atlas/ui_env_app/lib/tof_raw_client.dart`)는
+  have·id·w·h·dist_mm·status·age_ms 만 읽는다.
 
 ## GRU 리셋 (10-24)
 
@@ -164,7 +171,7 @@ cd hub/atlas-tof
 # export 산출물을 test/ 에 (커밋 안 함): posture_net.bin, golden.txt, 선택 replay_s0.jsonl replay_s1.jsonl
 cmake -S . -B build/host -DBUILD_TESTING=ON && cmake --build build/host && (cd build/host && ctest --output-on-failure)
 # cmake 가 없으면
-g++ -O2 -std=c++17 -o build/host_test src/host_test.cpp src/tof_line.cpp src/device_posture.cpp
+g++ -O2 -std=c++17 -pthread -o build/host_test src/host_test.cpp src/http_server.cpp src/tof_line.cpp src/device_posture.cpp
 build/host_test test/posture_net.bin test/golden.txt test/replay_s0.jsonl test/replay_s1.jsonl
 # 서비스 자체를 파일 입력으로
 TOFPOSTURE_PORTS=test/replay_s0.jsonl,test/replay_s1.jsonl TOFPOSTURE_MODEL=test/posture_net.bin \
@@ -184,9 +191,9 @@ TOFPOSTURE_EXIT_ON_EOF=1 build/deskmate_tofposture
 | `src/tof_line.{h,cpp}` | 펌웨어 줄 파서 — tof_logger JSON, bring-up CSV (라이브러리 없음) |
 | `src/line_source.{h,cpp}` | tty(raw, 보드율 자동)·TCP(`tcp:<port>`)·파일 읽기 스레드, 끊기면 다시 연결 |
 | `src/device_posture.{h,cpp}` | 센서 N개 × 모델, 10 Hz 스텝, 방향 보정, offline 처리, 융합, EMA, 상태 JSON |
-| `src/http_server.{h,cpp}` | `/health` `/api/state` `/api/reset` |
+| `src/http_server.{h,cpp}` | `/health` `/api/state` `/api/reset` `/raw` (두 번째 포트는 `/raw` 만) |
 | `src/main.cpp` | 설정(`tofposture.env`)·포트 자동 탐색(5초마다)·루프·stdout. sdbus-c++ 가 있으면 D-Bus 이름 소유 |
-| `src/host_test.cpp` | 파서·골든·리셋 규칙(주기·자리 비움·끔=골든과 일치)·리플레이 테스트 (보드에서는 `tofposture_selftest`) |
+| `src/host_test.cpp` | 파서·골든·리셋 규칙(주기·자리 비움·끔=골든과 일치)·`/raw` JSON·HTTP 리스너·리플레이 테스트 (보드에서는 `tofposture_selftest`) |
 | `board/start.sh` `stop.sh` `status.sh` `selftest.sh` `tofposture.env.example` | A 경로에서 보드에 함께 올리는 스크립트(BusyBox sh) |
 | `tools/build_static_aarch64.sh` | A 경로 정적 빌드(Zig) |
 | `tools/deploy-pi4.ps1` / `deploy-pi4.sh` | A 경로: PC → 보드 복사·자가 시험·시작 |

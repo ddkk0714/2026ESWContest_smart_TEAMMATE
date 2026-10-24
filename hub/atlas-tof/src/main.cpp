@@ -13,6 +13,9 @@
 //   TOFPOSTURE_MODEL   posture_net.bin 경로. 기본 <실행파일 폴더>/models/posture_net.bin
 //   TOFPOSTURE_HTTP    HTTP 포트. 기본 8771 (8765 hub, 8770 camsvc 와 겹치지 않게). 0 이면 끔
 //   TOFPOSTURE_BIND    0.0.0.0 (개발 PC 에서 curl). 보드 안에서만 쓰면 127.0.0.1
+//   TOFPOSTURE_RAW_HTTP 0(끔). 보드에서는 8772: 그 포트에 두 번째 리스너를 열고 GET /raw 에 uart_relay_board 와 같은 스키마로
+//                      센서 원본 격자를 낸다(Pi 5 개발자 화면 ToF 열지도). hub 가 USB 를 직접 읽어 중계기가 못 뜰 때 대신.
+//                      주 포트(8771)에도 GET /raw 가 있다. 포트가 이미 쓰이면(옛 중계기) 경고만 내고 계속 돈다
 //   TOFPOSTURE_RATE_HZ 10. 모델 학습 프레임률. 바꾸면 안 된다
 //   TOFPOSTURE_STALE_MS 1000. 이보다 오래 프레임이 없는 센서는 offline
 //   TOFPOSTURE_SMOOTH_S 1.0. 화면용 확률 EMA 시간상수(초)
@@ -185,6 +188,7 @@ int main() {
     const int baud = baud_env == "auto" ? 0 : std::atoi(baud_env.c_str());
     const int http_port = envInt("TOFPOSTURE_HTTP", 8771);
     const std::string bind_addr = envOr("TOFPOSTURE_BIND", "0.0.0.0");
+    const int raw_port = envInt("TOFPOSTURE_RAW_HTTP", 0);
     const std::string model_path = envOr("TOFPOSTURE_MODEL", exe_dir + "/models/posture_net.bin");
     const std::string stdout_mode = envOr("TOFPOSTURE_STDOUT", "change");
     const bool exit_on_eof = envInt("TOFPOSTURE_EXIT_ON_EOF", 0) != 0;
@@ -244,18 +248,29 @@ int main() {
     };
     if (ports_env.empty()) attachNew(scanPorts(4));
     else for (const std::string& p : split(ports_env, ',')) attach(p);
+    device.setDeviceLabel(ports_env.empty() ? "auto" : ports_env);
     if (sources.empty()) std::cerr << "tofposture: no serial port yet; scanning /dev/ttyUSB* /dev/ttyACM* every 5 s\n";
 
+    auto rawHandler = [&device] { return device.rawJson(nowMs()); };
     tof::HttpServer http(bind_addr, http_port,
                          tof::HttpHandlers{[&device] { return device.healthJson(nowMs()); },
                                            [&device] { return device.stateJson(nowMs()); },
-                                           [&device] { device.reset(nowMs()); }});
+                                           [&device] { device.reset(nowMs()); }, rawHandler});
     if (http_port > 0) {
         if (!http.start(&err)) {
             std::cerr << "tofposture: HTTP listen failed on " << bind_addr << ":" << http_port << " (" << err << ")\n";
             return 1;
         }
-        std::cerr << "tofposture: HTTP on " << bind_addr << ":" << http_port << "  (GET /api/state, /health, POST /api/reset)\n";
+        std::cerr << "tofposture: HTTP on " << bind_addr << ":" << http_port << "  (GET /api/state, /health, /raw, POST /api/reset)\n";
+    }
+    // 두 번째 리스너: /raw 만 (uart_relay_board 의 8772 자리). 실패해도 서비스는 계속 — 옛 중계기가 아직 그 포트를 쥐고 있을 수 있다.
+    tof::HttpServer raw_http(bind_addr, raw_port, tof::HttpHandlers{nullptr, nullptr, nullptr, rawHandler});
+    if (raw_port > 0) {
+        if (raw_http.start(&err))
+            std::cerr << "tofposture: raw HTTP on " << bind_addr << ":" << raw_port << "  (GET /raw)\n";
+        else
+            std::cerr << "tofposture: raw HTTP listen failed on " << bind_addr << ":" << raw_port << " (" << err
+                      << "); /raw is still on the main port\n";
     }
 
     int last_label = -2;
@@ -299,6 +314,7 @@ int main() {
     std::cerr << "tofposture: stopping\n";
     for (auto& s : sources) s->stop();
     http.stop();
+    raw_http.stop();
 #ifdef TOFPOSTURE_HAVE_SDBUS
     if (dbus) dbus->leaveEventLoop();
 #endif

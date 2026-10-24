@@ -121,6 +121,9 @@ void DevicePosture::feed(int sensor, const TofLine& line, int64_t now_ms) {
     }
     s.last_alive_ms = now_ms;
     if (idle) { ++s.st.idle_frames; return; }
+    if (line.sensor_id >= 0) s.st.sensor_id = line.sensor_id;
+    s.raw = f;
+    ++frames_total_;
     s.last = f;
     // 장착 방향 보정: row 0 = 위, col 0 = 센서 기준 왼쪽으로. 설정(TOFPOSTURE_FLIP_*)이 있으면 그것, 없으면 프레임의 b2/b3.
     const bool fr = cfg_.flip_rows >= 0 ? cfg_.flip_rows != 0 : f.flip_rows_hint > 0;
@@ -326,6 +329,50 @@ std::string DevicePosture::stateJson(int64_t now_ms) const {
     for (int i = 0; i < C; ++i) o << (i ? "," : "") << "\"" << kLabels[i] << "\"";
     o << "]}}";
     return o.str();
+}
+
+void DevicePosture::setDeviceLabel(const std::string& dev) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    devLabel_ = dev;
+}
+
+// uart_relay_board.cpp rawJson 과 같은 모양. 센서 2개 자리(id 0·1)를 항상 낸다 — 앱 파서(tof_raw_client.dart)는
+// have·id·w·h·dist_mm·status·age_ms 만 읽는다. frames/type5/sent 는 받은 유효 프레임 수, bad 는 0(파서가 버린 줄은 세지 않음).
+std::string DevicePosture::rawJson(int64_t now_ms) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::string j = "{\"dev\":\"" + jsonEscape(devLabel_) + "\",\"frames\":" + std::to_string(frames_total_) +
+                    ",\"type5\":" + std::to_string(frames_total_) + ",\"sent\":" + std::to_string(frames_total_) +
+                    ",\"bad\":0,\"sensors\":[";
+    int ids = 2;
+    for (const Slot& s : slots_) if (s.st.sensor_id + 1 > ids) ids = s.st.sensor_id + 1;
+    if (static_cast<int>(slots_.size()) > ids) ids = static_cast<int>(slots_.size());
+    for (int id = 0; id < ids; ++id) {
+        const Slot* found = nullptr;
+        for (const Slot& s : slots_) if (s.st.sensor_id == id && s.has_frame) { found = &s; break; }
+        if (!found && id < static_cast<int>(slots_.size())) {         // 센서 번호가 없는 형식(USB 포트·파일)은 자리 번호 = id
+            const Slot& s = slots_[static_cast<size_t>(id)];
+            if (s.st.sensor_id < 0 && s.has_frame) found = &s;
+        }
+        if (id) j += ",";
+        j += "{\"id\":" + std::to_string(id) + ",\"have\":" + (found ? "true" : "false");
+        if (found) {
+            const TofFrame& f = found->raw;
+            j += ",\"age_ms\":" + std::to_string(now_ms - found->last_rx_ms) + ",\"uart_seq\":" + std::to_string(f.uart_seq) +
+                 ",\"ts_ms\":" + std::to_string(f.ms) + ",\"frame_id\":" + std::to_string(f.frame_id) +
+                 ",\"frame_seq\":" + std::to_string(f.seq) + ",\"mask\":" + std::to_string(f.sensor_mask) +
+                 ",\"flags\":" + std::to_string(f.raw_flags) + ",\"flip_rows\":" + ((f.raw_flags & 1) ? "true" : "false") +
+                 ",\"flip_cols\":" + ((f.raw_flags & 2) ? "true" : "false") +
+                 ",\"w\":" + std::to_string(f.w) + ",\"h\":" + std::to_string(f.h) + ",\"dist_mm\":[";
+            const int z = f.w * f.h;
+            for (int i = 0; i < z; ++i) { if (i) j += ","; j += std::to_string(f.raw_d[i]); }
+            j += "],\"status\":[";
+            for (int i = 0; i < z; ++i) { if (i) j += ","; j += std::to_string(f.raw_st[i]); }
+            j += "]";
+        }
+        j += "}";
+    }
+    j += "]}";
+    return j;
 }
 
 std::string DevicePosture::healthJson(int64_t now_ms) const {

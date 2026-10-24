@@ -31,7 +31,7 @@ endif()
 # test/ 에 export 산출물(posture_net.bin, golden.txt, 선택: replay_*.jsonl)을 복사해 둔 뒤 ctest.
 include(CTest)
 if(BUILD_TESTING)
-    add_executable(tofposture_host_test src/host_test.cpp ${TOFPOSTURE_CORE})
+    add_executable(tofposture_host_test src/host_test.cpp src/http_server.cpp ${TOFPOSTURE_CORE})
     target_link_libraries(tofposture_host_test PRIVATE Threads::Threads)
     set(TOFPOSTURE_TEST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/test)
     file(GLOB TOFPOSTURE_REPLAY ${TOFPOSTURE_TEST_DIR}/replay_*.jsonl)
