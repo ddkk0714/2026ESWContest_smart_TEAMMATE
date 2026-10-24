@@ -84,7 +84,7 @@ arc build hub/atlas-tof          # -> hub/atlas-tof/build/arm64/ipk/com.deskmate
 | `TOFPOSTURE_STALE_MS` | 1000 | 이보다 오래 조용한 센서는 offline(융합 제외, 돌아오면 GRU 리셋) |
 | `TOFPOSTURE_FUSION` | logprob | `logprob`(log-softmax 합) 또는 `mean`(softmax 평균). 아래 "두 센서 합치기" |
 | `TOFPOSTURE_SMOOTH_S` | 1.0 | 화면용 확률 EMA 시간상수 |
-| `TOFPOSTURE_RESET_PERIOD_S` | 900 | 마지막 리셋(또는 시작)으로부터 이 시간이 지나면 추론 전에 GRU h·EMA 를 비운다. 0 이면 끔. 아래 "GRU 리셋" |
+| `TOFPOSTURE_RESET_PERIOD_S` | 0 (끔) | N 이면 마지막 리셋(또는 시작)으로부터 N s 지나면 추론 전에 GRU h·EMA 를 비운다. 시뮬 36개에서 900 은 전체 효과가 없어 기본 끔. 아래 "GRU 리셋" |
 | `TOFPOSTURE_AWAY_RESET_S` | 60 | ToF 규칙 재실(coverage)이 이 시간 동안 계속 false 면 리셋, 비어 있는 동안 반복. 재실 한 프레임이면 타이머 해제. 0 이면 끔 |
 | `TOFPOSTURE_PRESENT_MIN_MM` / `_MAX_MM` | 150 / 1300 | 재실 coverage 에 세는 zone 의 거리 범위(mm) |
 | `TOFPOSTURE_PRESENT_MIN_COVERAGE` | 0.06 | 두 센서 중 큰 coverage(status 5·6·9·10 이고 거리 범위 안인 zone / 64)가 이 이상이면 재실(64칸 중 4칸) |
@@ -110,18 +110,20 @@ GRU h 와 융합 EMA 를 비운다(워밍업 없음, 다음 스텝은 그 스텝
 
 | 계기 | 조건 | 설정 |
 |---|---|---|
-| 주기 | 매 스텝 추론 전에 "지금 − 마지막 리셋 ≥ N s" (사람이 앉아 있어도, 자세 중간이어도) | `TOFPOSTURE_RESET_PERIOD_S` 900 |
+| 주기 | 매 스텝 추론 전에 "지금 − 마지막 리셋 ≥ N s" (사람이 앉아 있어도, 자세 중간이어도) | `TOFPOSTURE_RESET_PERIOD_S` **0 = 끔(기본)**, 켤 때 900 |
 | 자리 비움 | ToF 규칙 재실이 N s 동안 계속 false. 비어 있는 동안 N s 마다 반복. 재실 한 프레임이면 타이머 해제 | `TOFPOSTURE_AWAY_RESET_S` 60 |
 | 수동 | `POST /api/reset` | — |
 
 - **왜**: PC 시뮬(MuJoCo + GRU, 10-24, 시뮬 근거·실측 전)에서 보드와 같은 융합·EMA 를 넣어 보니 배치가 나쁜 장면(시드 1)에서
-  GRU 가 거북목(forward_head)에 갇혀 못 빠져나왔다(0.308→0.269). 900 s 주기 + 자리 비움 60 s 리셋을 넣으면 0.334 로 회복,
-  21개 장면 평균 0.510→0.521. 서비스는 그 시뮬 정의(PC `GruPosture`)를 그대로 따른다.
+  GRU 가 거북목(forward_head)에 갇혀 못 빠져나왔다(0.308→0.269). 900 s 주기 + 자리 비움 60 s 리셋을 넣으면 그 장면은 0.334(+0.065) 로 회복.
+  서비스는 그 시뮬 정의(PC `GruPosture`)를 그대로 따른다.
+- **주기 리셋 기본값이 0(끔)인 이유**: 최종 36개 장면에서는 900 s 주기 리셋이 좋은 배치(시드 2·3)에서 −0.038 손해라 전체 효과가
+  없었다(0.595→0.592). 옵션은 남기고 실측에서 고착이 보이면 켠다. 자리 비움 리셋은 60 s 유지(단독 효과는 PC 시뮬이 따로 재는 중).
 - **자리 비움 근거가 모델 출력 `away` 가 아니라 coverage 인 이유**: 융합 결과 `away` 를 쓰면 GRU 가 빈 의자를 사람으로 보는
   배치에서 리셋이 영영 안 걸린다. coverage = 센서별로 target_status 5·6·9·10 이면서 거리 150~1300 mm 인 zone 비율,
   두 센서 중 큰 값이 0.06(64칸 중 4칸) 이상이면 재실. 프레임마다 판정. 센서가 전부 offline 이면 상태는 이미 비어 있으므로
   자리 비움 타이머는 돌지 않는다(기존 동작: online 0 → EMA 전부 0, valid false).
-- 리셋 때 stderr 에 한 줄(`tofposture: reset (periodic|away|manual) after … s`). 끄려면 두 값을 0 으로 — 그러면 동작은 이전과 같다
+- 리셋 때 stderr 에 한 줄(`tofposture: reset (periodic|away|manual) after … s`). 둘 다 0 이면 동작은 이전과 같다
   (호스트 테스트가 골든 240 프레임으로 확인).
 
 hub FSM 연동은 `hub/deskmate_hub/ingest` 가 이 `/api/state` 를 읽거나(`tof_feature.posture`, `data-spec.md` §6.1),

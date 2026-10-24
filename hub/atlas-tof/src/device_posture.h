@@ -36,7 +36,7 @@ struct DeviceConfig {
     int flip_rows = -1;             // 받은 격자를 위아래로 뒤집기: 1 = 뒤집음, 0 = 안 뒤집음, -1 = 자동(UART 0x05 flags b2, 없으면 안 뒤집음)
     int flip_cols = -1;             // 좌우: 같은 규칙(b3)
     // GRU 은닉 상태 리셋 (PC 시뮬 2026-10-24 정의와 같다. 아래 "리셋" 주석)
-    int reset_period_s = 900;       // 마지막 리셋(또는 시작)으로부터 이 시간이 지나면 매 스텝 추론 전에 리셋. 0 = 끔
+    int reset_period_s = 0;         // 마지막 리셋(또는 시작)으로부터 이 시간이 지나면 매 스텝 추론 전에 리셋. 0 = 끔(기본, 아래 "왜")
     int away_reset_s = 60;          // ToF 규칙 재실(coverage)이 이 시간 동안 계속 false 면 리셋, 비어 있는 동안 반복. 0 = 끔
     int present_min_mm = 150;       // 재실 coverage 에 세는 zone: status 5·6·9·10 이고 거리 [min, max] mm
     int present_max_mm = 1300;
@@ -49,8 +49,10 @@ struct DeviceConfig {
 //   away      재실 규칙이 away_reset_s 동안 false — 재실 근거는 모델 출력 away 가 아니라 ToF coverage.
 //             융합 결과 away 를 쓰면 GRU 가 빈 의자를 사람으로 보는 배치에서 리셋이 영영 안 걸린다
 //   manual    POST /api/reset
-// 왜: PC 시뮬(MuJoCo+GRU, 2026-10-24, 실측 전)에서 배치가 나쁜 장면의 GRU 가 거북목에 갇혀 못 나왔다(0.308→0.269).
-//     900 s 주기 + 자리 비움 60 s 리셋으로 0.334 회복, 21개 장면 평균 0.510→0.521.
+// 왜: PC 시뮬(MuJoCo+GRU, 2026-10-24, 실측 전)에서 배치가 나쁜 장면의 GRU 가 거북목에 갇혀 못 나왔다(시드 1: 0.308→0.269).
+//     주기 900 s + 자리 비움 60 s 리셋으로 그 장면은 0.334(+0.065) 회복. 그러나 최종 36개 장면에서는 주기 리셋이 좋은 배치에서
+//     −0.038(시드 2·3) 손해라 전체 효과가 없었다(0.595→0.592) → 주기 리셋 기본값은 0(끔), 실측에서 고착이 보이면 켠다.
+//     자리 비움 리셋은 60 s 유지(단독 효과는 PC 가 따로 재는 중).
 
 inline const char* fusionName(FusionRule r) { return r == FusionRule::LogProb ? "logprob" : "mean"; }
 

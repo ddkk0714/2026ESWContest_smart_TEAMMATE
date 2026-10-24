@@ -461,7 +461,8 @@ void testAwayReset(const std::string& bin) {
           "away: one more reset while the last frame is reused (<= stale_ms), none once all sensors are offline");
 }
 
-// (c) 둘 다 0: DevicePosture(센서 1개) 경로의 센서별 확률이 golden 의 softmax(logits) 와 같다. 기본값(900/60)도 240 프레임(24 s)에서는 같다
+// (c) 둘 다 0: DevicePosture(센서 1개) 경로의 센서별 확률이 golden 의 softmax(logits) 와 같다. 기본값(주기 0 / 자리 비움 60)도
+//     240 프레임(24 s, 사람 있음)에서는 같다. 기본값 자체도 검사한다(주기 0 = 끔, 자리 비움 60 s)
 void testDevicePathMatchesGolden(const std::string& bin, const std::string& golden_path) {
     tof::PostureNet probe;
     std::string err;
@@ -504,12 +505,28 @@ void testDevicePathMatchesGolden(const std::string& bin, const std::string& gold
         }
         const auto r = d.result();
         std::printf("device-golden (%s): max |prob diff| %.3g, argmax mismatches %d, resets periodic %llu away %llu\n",
-                    pass == 0 ? "resets off" : "defaults 900/60", max_diff, mism,
+                    pass == 0 ? "resets off" : "defaults 0/60", max_diff, mism,
                     (unsigned long long)r.resets.periodic, (unsigned long long)r.resets.away);
         check(max_diff < 1e-4 && mism == 0 && r.resets.periodic == 0 && r.resets.away == 0 && r.resets.manual == 0,
               pass == 0 ? "resets off: DevicePosture path matches golden (no regression)"
                         : "defaults: DevicePosture path matches golden over 24 s (no reset fired)");
     }
+    const tof::DeviceConfig def;
+    check(def.reset_period_s == 0 && def.away_reset_s == 60 && def.present_min_mm == 150 && def.present_max_mm == 1300 &&
+              std::fabs(def.present_min_coverage - 0.06f) < 1e-6f,
+          "defaults: periodic reset off (0), away reset 60 s, presence 150-1300 mm, coverage 0.06");
+    // 기본값으로 15 분 이상 앉아 있어도 주기 리셋은 걸리지 않는다 (자리 비움 리셋만 켜져 있음)
+    tof::DevicePosture d(def);
+    d.loadModel(bin, &err);
+    const int s = d.addSensor("long");
+    for (int k = 0; k <= 9100; ++k) {                      // 910 s
+        const int64_t now = 100 * k;
+        d.feed(s, makeFrame(k + 1, (uint32_t)now, 20), now);
+        d.tick(now);
+    }
+    const auto r = d.result();
+    check(r.resets.periodic == 0 && r.resets.away == 0 && r.resets.last_reset_ms == 0,
+          "defaults: 910 s seated -> no periodic reset (off), no away reset (present)");
 }
 
 struct ReplayLine { uint32_t ms; int sensor; tof::TofLine line; };
@@ -594,7 +611,7 @@ int main(int argc, char** argv) {
     testDevicePathMatchesGolden(argv[1], argv[2]);
     if (argc > 3) {
         const std::vector<std::string> files(argv + 3, argv + argc);
-        testReplay(argv[1], files, tof::DeviceConfig{}, "defaults 900/60");
+        testReplay(argv[1], files, tof::DeviceConfig{}, "defaults 0/60");
         tof::DeviceConfig off;
         off.reset_period_s = 0; off.away_reset_s = 0;
         testReplay(argv[1], files, off, "resets off");

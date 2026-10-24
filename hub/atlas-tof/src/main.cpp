@@ -22,7 +22,8 @@
 //                      맞는 값은 tof_live.py --show 로 손을 센서 위쪽·왼쪽에 대 보고 정한다
 //   포트 목록에 "tcp:9001" 을 주면 그 포트에서 PC 가 보내는 센서 줄을 받는다(tof_live.py --forward). USB 직결이 안 될 때
 //   운영(UART2): hub/atlas 가 TYPE 0x05 줄을 tcp:9100 으로 넘긴다 → TOFPOSTURE_PORTS=tcp:9100 하나에 두 센서(번호로 나눔)
-//   TOFPOSTURE_RESET_PERIOD_S 900. 마지막 리셋(또는 시작)으로부터 이 시간이 지나면 추론 전에 GRU h·EMA 리셋. 0 = 끔
+//   TOFPOSTURE_RESET_PERIOD_S 0(끔). N 이면 마지막 리셋(또는 시작)으로부터 N s 지나면 추론 전에 GRU h·EMA 리셋.
+//                      PC 시뮬 36개에서 900 s 는 좋은 배치 −0.038 로 전체 효과 없음(0.595→0.592) → 기본 끔, 실측 고착 때 켬
 //   TOFPOSTURE_AWAY_RESET_S   60. ToF 규칙 재실(coverage)이 이 시간 동안 false 면 리셋, 비어 있는 동안 반복. 0 = 끔.
 //                      재실 한 프레임이면 타이머를 지운다. 모델 출력 away 는 근거로 쓰지 않는다(device_posture.h "리셋")
 //   TOFPOSTURE_PRESENT_MIN_MM / TOFPOSTURE_PRESENT_MAX_MM  150 / 1300. 재실 coverage 에 세는 zone 의 거리 범위(mm)
@@ -175,7 +176,7 @@ int main() {
     cfg.flip_cols = envInt("TOFPOSTURE_FLIP_COLS", -1);
     if (cfg.flip_rows > 1) cfg.flip_rows = 1;
     if (cfg.flip_cols > 1) cfg.flip_cols = 1;
-    cfg.reset_period_s = std::max(0, envInt("TOFPOSTURE_RESET_PERIOD_S", 900));
+    cfg.reset_period_s = std::max(0, envInt("TOFPOSTURE_RESET_PERIOD_S", 0));
     cfg.away_reset_s = std::max(0, envInt("TOFPOSTURE_AWAY_RESET_S", 60));
     cfg.present_min_mm = envInt("TOFPOSTURE_PRESENT_MIN_MM", 150);
     cfg.present_max_mm = envInt("TOFPOSTURE_PRESENT_MAX_MM", 1300);
