@@ -61,6 +61,9 @@ class FSMEngine:
         # timers.fatigue_hold_min_frac < 1 이면 피로 유지(elevated·confirm)를 "지난 hold 초 tick 중 이 비율 이상이 임계 위"로 본다.
         # 1(기본)이면 지금처럼 한 tick 만 내려가도 처음부터 다시 잰다.
         self._hold_frac: float = float(self.tm.get("fatigue_hold_min_frac", 1.0))
+        # 점수 보정 훅(learning/reaction.py ReactionLearner.adjust): compute_scores 직후 (scores, frame) → scores.
+        # None(기본)이면 FSM 점수를 그대로 쓴다.
+        self.score_adjust = None
         self._hold_win: dict[str, dict[str, Any]] = {"elevated": {"t0": None, "hist": []}, "high": {"t0": None, "hist": []}}
 
     # ── 내부 헬퍼 ──────────────────────────────────────────────
@@ -119,6 +122,8 @@ class FSMEngine:
         now = frame.now
         self.context = detect_context(frame.pc_ratio, self.cfg)
         self.scores = compute_scores(frame, self.context, self.cfg)
+        if self.score_adjust is not None:
+            self.scores = self.score_adjust(self.scores, frame)
         actions: list[str] = []
         gate = GateMode.NONE
         cause: str | None = None

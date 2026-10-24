@@ -1,0 +1,46 @@
+# 사용자 반응으로 배우는 피로 판단(deskmate_hub/learning/reaction.py). 기본 꺼짐 — 꺼져 있으면 hub 는 규칙 FSM 그대로다.
+# 처음엔 FSM 판단(α = 0)으로 시작하고, 개입·확인 카드에 대한 반응이 라벨로 쌓이면 사람마다 배운 모델이 판단을 넘겨받는다.
+# FSM 은 "지나친 개인화"만 막는 울타리: 모델이 바꿀 수 있는 폭(up_max·down_max)과 강한 증거 보호(keep_floor). 숫자는 전부 가정값.
+enabled: false
+state_path: null            # 사람마다 배운 상태(JSON). null 이면 저장하지 않는다(세션이 끝나면 잊음)
+
+# 모델(순수 Python 온라인 로지스틱 회귀)
+residual: true              # p = σ(logit(c_fsm) + w·x): 처음엔 FSM 그대로, 라벨이 FSM 과 다를 때만 배운다(false = 0 에서 배움)
+lr: 0.3                     # AdaGrad 학습률
+l2: 0.001
+
+# 판단 넘겨받기: c = c_fsm + clip(α·(p − c_fsm), −down_max, +up_max)
+alpha_max: 0.8              # 다 배웠을 때 모델 몫의 상한
+n_min: 8                    # 라벨이 이만큼 쌓이기 전에는 α = 0 (FSM 그대로)
+n_full: 40                  # 이만큼이면 라벨 수로 인한 제한이 풀린다
+common_alpha: 0.3           # 공통모델(life_sim common)에서 출발하면 라벨 전에도 이만큼 쓴다. 이 사람 라벨에서 FSM 보다 못하면 걷는다
+                            # (10-24 PC 합성 공통 v0: 0.5 면 수험생 놓침 12/64 → 17/70 — 공통 데이터가 적을 때 너무 컸다)
+acc_window: 40              # 최근 라벨 이만큼으로 모델·FSM 맞힘을 비교
+acc_scale: 0.2              # 모델이 FSM 보다 이만큼 더 맞히면 몫이 최대(같으면 절반)
+fsm_hat_at: 0.5             # FSM 이 "피로"라고 본 것으로 치는 C_fatigue
+up_max: 0.25                # 울타리: 모델이 FSM 보다 높일 수 있는 폭
+down_max: 0.10              # 울타리: 낮출 수 있는 폭 — 졸음을 놓치는 쪽이 더 위험해 올리는 폭보다 좁게(10-23 learnfix: 0.25 면 놓침 30 → 49 %)
+keep_floor: 0.85            # FSM 이 이만큼 이상이면(엎드림·강한 졸음) 모델이 낮추지 못한다
+
+# 라벨(사람 반응)
+kss_label: true             # 피로 기록 앱 KSS 응답(deskmate/fatigue/label, 15 분마다)을 라벨로 — FSM 상태와 상관없이 들어온다
+kss_label_at: 7             # KSS ≥ 이 값이면 1(졸림), 아니면 0
+kss_weight: 1.0
+pos_weight: 1.0             # 졸림(1) 라벨에 곱하는 무게. v10·v11 시뮬에서 AI 가 놓침을 늘려서(라벨 74 % 가 '괜찮음') v13 에서 2 를 잰다
+missed_label: true          # 앱 질문 무응답(prompt_missed) + 자리에 있음 + 타이핑 안 함 = 1 — 졸 때는 답을 못 하니 KSS 응답만 쓰면 깨어 있을 때로 치우친다
+missed_weight: 0.5          # 안 봤을 뿐일 수도 있어 KSS 응답보다 약하게
+effect_weight: 0.0          # 아래 effect·no_effect_awake 라벨(C_fsm 이 떨어졌나로 정함 = FSM 점수로 만든 정답). 0 이면 안 씀
+effect_s: 180               # 개입 뒤 이 안에 C_fsm 이 recover_drop 이상 떨어지면 1(깨어남·자세 회복)
+recover_drop: 0.25
+resolve_s: 600              # 이 시간까지 결과가 없으면: 개입 때 타이핑 중·C_fsm < awake_c_max 였으면 0(필요 없던 개입), 아니면 버림
+awake_c_max: 0.75
+undo_s: 120                 # 자동 실행 뒤 이 안의 거절 = 되돌리기 = 0
+undo_weight: 1.0            # 되돌리기 라벨 무게 — 기기가 싫어서 끈 것과 안 피곤한 것을 못 가른다. 기기 선택을 정책이 따로 배우면 0
+
+# 확인 카드(checkin_suggest "지금 피곤하세요?") — FSM 이 개입하지 않는 순간의 라벨
+probe: true
+probe_band: 0.25            # 모델이 애매할 때만(|p − 0.5| < 이 값)
+probe_gap_s: 900            # 카드·개입 사이 최소 간격
+probe_max: 6                # 세션당 상한
+probe_expires_s: 120
+probe_weight: 1.0
