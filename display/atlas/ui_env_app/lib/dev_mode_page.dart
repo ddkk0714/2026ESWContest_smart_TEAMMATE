@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 
 import 'command_log.dart';
 import 'command_log_panel.dart';
+import 'device_state_board.dart';
 import 'deskmate_theme.dart';
 import 'display_state.dart';
 import 'judgment_panel.dart';
@@ -27,6 +28,8 @@ class DevModePage extends StatefulWidget {
     required this.host,
     required this.onHostChanged,
     required this.log,
+    this.board,
+    this.deviceAvailable = const {},
     required this.defaultOnStart,
     required this.onDefaultOnStartChanged,
     this.connectionLabel,
@@ -40,6 +43,12 @@ class DevModePage extends StatefulWidget {
   final String? host;
   final ValueChanged<String> onHostChanged;
   final CommandLog log;
+
+  /// 기기별 "현재 상태"(hub 마지막 명령 기준, 블루투스 실행 여부 무관). null 이면 줄을 그리지 않는다.
+  final DeviceStateBoard? board;
+
+  /// target_id → 앱에 등록된 기기인지. false 면 "기기 없음 · 제어 못함" 을 덧붙인다.
+  final Map<String, bool> deviceAvailable;
 
   /// 설정 `dev_mode_default` — 앱을 켤 때 이 화면으로.
   final bool defaultOnStart;
@@ -169,6 +178,21 @@ class _DevModePageState extends State<DevModePage> {
           ]),
         ),
         const SizedBox(height: 6),
+        // ── 기기 현재 상태(hub 명령 기준) ─────────────────────────────────────
+        if (widget.board != null) ...[
+          ListenableBuilder(
+            listenable: widget.board!,
+            builder: (context, _) => Text(
+              '${widget.board!.summary(available: widget.deviceAvailable)}'
+              '  — hub 마지막 명령 기준, 블루투스 실행과 무관',
+              key: const ValueKey('devmode-device-state'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: _mono.copyWith(fontSize: 13, color: DeskmateColors.ink),
+            ),
+          ),
+          const SizedBox(height: 4),
+        ],
         // ── 아래: 명령 로그 ───────────────────────────────────────────────────
         Expanded(child: _Box(child: CommandLogPanel(log: widget.log))),
       ],

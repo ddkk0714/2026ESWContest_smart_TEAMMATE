@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:deskmate_display/command_log.dart';
 import 'package:deskmate_display/dev_mode_page.dart';
+import 'package:deskmate_display/device_state_board.dart';
 import 'package:deskmate_display/main.dart';
 import 'package:deskmate_display/settings_store.dart';
 import 'package:deskmate_display/tof_heatmap.dart';
@@ -56,6 +57,7 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     final log = CommandLog();
+    final board = DeviceStateBoard();
     _FakeTofSource? source;
     bool? switched;
     await tester.pumpWidget(MaterialApp(
@@ -67,6 +69,8 @@ void main() {
             host: '172.20.10.3',
             onHostChanged: (_) {},
             log: log,
+            board: board,
+            deviceAvailable: const {'desk_lamp': false, 'vent_fan': false},
             defaultOnStart: false,
             onDefaultOnStartChanged: (v) => switched = v,
             connectionLabel: 'MQTT 연결됨',
@@ -89,7 +93,26 @@ void main() {
     expect(tester.widget<Text>(find.byKey(const ValueKey('judge-state'))).data, '-');
     // 로그 패널은 비어 있고, 줄이 오면 보인다 — 블루투스 연결과 무관.
     expect(find.byKey(const ValueKey('cmdlog-empty')), findsOneWidget);
-    log.addMessage(CommandLog.topicCmd, {
+    // 기기 현재 상태 줄: 아직 명령 없음
+    expect(
+        tester
+            .widget<Text>(find.byKey(const ValueKey('devmode-device-state')))
+            .data,
+        startsWith('현재: 선풍기 - (기기 없음 · 제어 못함) / 램프 - (기기 없음 · 제어 못함) / 공기청정기 -'));
+    final fanCmd = {
+      'schema_version': '1.0',
+      'node': 'hub',
+      'data': {
+        'command_id': 'fan001',
+        'target_id': 'vent_fan',
+        'operation': 'set_power',
+        'value': 'on',
+        'gate': 'auto',
+      }
+    };
+    log.addMessage(CommandLog.topicCmd, fanCmd);
+    board.addMessage(CommandLog.topicCmd, fanCmd);
+    final lampCmd = {
       'schema_version': '1.0',
       'node': 'hub',
       'data': {
@@ -99,14 +122,28 @@ void main() {
         'value': 230,
         'gate': 'auto',
       }
-    });
+    };
+    log.addMessage(CommandLog.topicCmd, lampCmd);
+    board.addMessage(CommandLog.topicCmd, lampCmd);
     log.addMessage(CommandLog.topicResult, {
+      'schema_version': '1.0',
+      'node': 'display-control',
+      'data': {'command_id': 'ab12cd', 'status': 'failed', 'error_code': 'lamp_not_configured'}
+    });
+    board.addMessage(CommandLog.topicResult, {
       'schema_version': '1.0',
       'node': 'display-control',
       'data': {'command_id': 'ab12cd', 'status': 'failed', 'error_code': 'lamp_not_configured'}
     });
     await tester.pump();
     await tester.pump();
+    // 블루투스가 없어도 "현재: 선풍기 ON" 으로 표기되고, 제어 못함이 뒤에 붙는다.
+    expect(
+        tester
+            .widget<Text>(find.byKey(const ValueKey('devmode-device-state')))
+            .data,
+        startsWith('현재: 선풍기 ON … 결과 없음 (기기 없음 · 제어 못함) / '
+            '램프 밝기 230 ✗ 제어 못함(lamp_not_configured) (기기 없음 · 제어 못함) / 공기청정기 -'));
     expect(find.textContaining('CMD desk_lamp set_brightness 230 (auto, id ab12cd)'),
         findsOneWidget);
     expect(find.textContaining('RESULT ab12cd failed lamp_not_configured'),

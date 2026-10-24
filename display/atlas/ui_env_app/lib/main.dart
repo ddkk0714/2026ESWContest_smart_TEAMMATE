@@ -27,6 +27,7 @@ import 'posture_screen.dart';
 import 'preview_page.dart';
 import 'command_log.dart';
 import 'dev_mode_page.dart';
+import 'device_state_board.dart';
 import 'placement_client.dart' show placementKo;
 import 'placement_controller.dart';
 import 'placement_page.dart';
@@ -128,6 +129,8 @@ class _DashboardPageState extends State<DashboardPage> {
   _AppView _view = _AppView.dashboard;
   // 개발자 모드의 명령 로그. MQTT 소스가 네 토픽의 envelope 를 넘기면 줄로 쌓는다(최근 200줄).
   final _commandLog = CommandLog();
+  // 기기별 현재 상태(hub 마지막 명령 기준). 블루투스가 안 붙어도 "선풍기 ON" 처럼 표기한다.
+  final _deviceBoard = DeviceStateBoard();
   // 장치 위치(왼쪽·가운데·오른쪽): 저장값과 Pi 4 자세 서비스(:8771 /api/placement) 동기화.
   late final PlacementController _placement;
   late final MusicPlayback _music;
@@ -472,7 +475,10 @@ class _DashboardPageState extends State<DashboardPage> {
       MqttStateSource(host,
           port: port,
           onControlCommand: _feedbackController.handleControlCommand,
-          onTopicEvent: _commandLog.addMessage);
+          onTopicEvent: (topic, envelope) {
+            _commandLog.addMessage(topic, envelope);
+            _deviceBoard.addMessage(topic, envelope);
+          });
 
   /// MQTT 로 붙을 때만 시작 점검을 돌린다. 결과는 대기 화면의 가이드가 그린다.
   void _startMqttCheck() {
@@ -854,6 +860,7 @@ class _DashboardPageState extends State<DashboardPage> {
   void dispose() {
     _timer?.cancel();
     _commandLog.dispose();
+    _deviceBoard.dispose();
     _placement.dispose();
     _screenCycleTimer?.cancel();
     _linkBadgeTimer?.cancel();
@@ -1012,6 +1019,11 @@ class _DashboardPageState extends State<DashboardPage> {
         host: _previewHost,
         onHostChanged: _setPreviewHost,
         log: _commandLog,
+        board: _deviceBoard,
+        deviceAvailable: {
+          'desk_lamp': _feedbackController.lamp.configured,
+          'vent_fan': _feedbackController.fan?.configured ?? false,
+        },
         defaultOnStart: _settings.devModeDefault,
         onDefaultOnStartChanged: _setDevModeDefault,
         connectionLabel: _source.connectionLabel,

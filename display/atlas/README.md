@@ -141,6 +141,9 @@ hub 가 FSM 입력으로 실제 쓴 자세·출처(`sensor_summary.tof.posture`�
 `12:03:41 CMD desk_lamp set_brightness 230 (auto, id 9f3c1a)` / `12:03:42 RESULT 9f3c1a failed lamp_not_configured (display-control)` /
 `12:05:10 REQUEST posture_suggest fix_posture "졸음 2회…" 180 s` / `12:05:30 FEEDBACK accept`. 제어 동작은 바꾸지 않는다 — 블루투스가 안 붙어 있으면
 앱은 전처럼 `failed lamp_not_configured` 를 내고, 그 결과도 로그에 같이 보인다(앱이 낸 결과는 브로커를 거쳐 돌아온다). hub 상태가 아직 안 와도 이 화면은 뜬다.
+열지도와 로그 사이에 **기기 현재 상태** 한 줄 — `현재: 선풍기 ON · 풍량 2 ✓ / 램프 밝기 230 ✗ 제어 못함(lamp_not_configured) / 공기청정기 -`.
+hub 가 내린 **마지막 명령 기준**이라 블루투스가 안 붙어도 hub 가 원하는 상태가 보이고, 결과(✓ 성공 · ✗ 제어 못함 · … 결과 없음)와
+앱에 그 기기가 등록돼 있지 않으면 "(기기 없음 · 제어 못함)" 을 뒤에 붙인다.
 화면 안의 **'시작 시 이 화면' 스위치**는 `settings.json` 에 `"dev_mode_default": true` 를 저장해 다음 실행부터 이 화면으로 켜진다
 (보드에서 파일을 직접 고쳐도 된다: `~/.config/deskmate/settings.json`, 없으면 `/tmp/deskmate/settings.json`).
 
