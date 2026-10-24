@@ -1,12 +1,14 @@
 name: deskmate_ui_demo
-description: Standalone, synthetic DESKMATE UI walkthrough for Atlas Pi 5.
+description: DESKMATE V18 display UI for Atlas Pi 5 — follows the board over MQTT, in-memory when unreachable.
 publish_to: none
-version: 0.17.0+17
+version: 0.18.0+18
 environment:
   sdk: ^3.6.2
 dependencies:
   flutter:
     sdk: flutter
+  # V18 보드 연결. ui_env_app 과 같은 버전으로 고정한다(Atlas Dart 3.6.2 호환 상한, 10.8.1+ 는 Dart 3.8 요구).
+  mqtt_client: 10.5.1
 dev_dependencies:
   flutter_test:
     sdk: flutter

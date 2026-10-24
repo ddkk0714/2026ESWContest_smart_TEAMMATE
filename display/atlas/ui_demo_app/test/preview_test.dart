@@ -8,6 +8,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:deskmate_ui_demo/demo_model.dart';
 import 'package:deskmate_ui_demo/main.dart';
 import 'package:deskmate_ui_demo/profile_avatars.dart';
+import 'live_test.dart' show FakeTransport, phase, request;
+import 'package:deskmate_ui_demo/live/live_link.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -142,12 +144,73 @@ void main() {
         .controller!
         .text = '하늘';
     await tester.pump();
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 9; i++) {
       await tester.tap(find.byKey(const ValueKey('profile-next')));
       await tester.pumpAndSettle();
       if (i == 1) await capture('profile-question');
+      if (i == 7) await capture('profile-placement');
     }
     await capture('profile-welcome');
     await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('render the board-connected home and card for visual review',
+      (tester) async {
+    tester.view.physicalSize = const Size(1024, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final model = DemoModel(DemoConfig(
+        jsonDecode(File('assets/config/demo.json').readAsStringSync())
+            as Map<String, dynamic>));
+    model.now = DateTime(2026, 10, 25, 14, 5);
+    late FakeTransport transport;
+    final link = LiveLink(
+        transportFactory: (h, p) => transport = FakeTransport(),
+        retryDelay: const Duration(hours: 1));
+    final key = GlobalKey();
+    await tester.pumpWidget(RepaintBoundary(
+        key: key, child: DemoApp(model: model, ticking: false, live: link)));
+    link.configure('192.168.0.10', 1883);
+    await tester.pump();
+    Future<void> capture(String name) async {
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(tester.takeException(), isNull, reason: name);
+      await tester.runAsync(() async {
+        final boundary =
+            key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+        final image = await boundary.toImage();
+        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+        final file = File('build/qa/$name.png');
+        await file.parent.create(recursive: true);
+        await file.writeAsBytes(bytes!.buffer.asUint8List());
+        image.dispose();
+      });
+    }
+
+    transport.deliver(
+        LiveLink.stateTopic,
+        phase('IDLE', phaseName: 'idle', fatigue: .5, summary: {
+          'co2_ppm': 1180,
+          'temp_c': 24.4,
+          'humidity_pct': 51,
+          'lux': 320,
+          'present': true,
+          'tof': {'posture': 'lean_forward'},
+          'personalization': {'status': 'predicted', 'label': 'fatigue'},
+        }));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await capture('live-home');
+    transport.deliver(
+        LiveLink.requestTopic,
+        request('vent_suggest', {
+          'minutes': 15,
+          'why': ['co2_rule', 'co2_avg=1180'],
+          'explanation': 'CO₂ 1180 ppm 이 5 분째 높아요 — 창문을 15 분만 열어 주세요 (가을)',
+        }));
+    await capture('live-card');
+    await tester.pumpWidget(const SizedBox());
+    link.dispose();
   });
 }

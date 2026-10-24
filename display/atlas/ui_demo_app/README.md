@@ -1,11 +1,12 @@
-# DESKMATE V17
+# DESKMATE V18
 
 `UI에 대한 이모저모.md`를 화면과 조작으로 확인하는 독립 Atlas Flutter 앱이다.
 원문은 [brief.md](brief.md)에 보관한다. 기존 화면의 집중·환경 흐름과 새 UI의
 차분한 서체·타일을 조합했다. 기준 해상도는 Pi 5의 1024×600이다.
 
-앱 ID: `com.atlas.app.deskmate_ui_demo_v17`, 표시 이름: **DESKMATE V17**.
+앱 ID: `com.atlas.app.deskmate_ui_v18`, 표시 이름: **DESKMATE V18**.
 기존 `DESKMATE`, `DESKMATE UI Test`와 별도로 설치된다.
+V18 부터 보드에 이어지면 실제 책상 상태를 보여 준다 — 아래 [V18 책상(보드) 연결](#v18-책상보드-연결--2026-10-25).
 
 ## 실행해 보기
 
@@ -32,7 +33,8 @@
 
 ## 시연 범위
 
-모든 값·히트맵·파형·타임라인·신뢰도·학습 횟수는 **합성 예시**다.
+(V17 까지의 범위. V18 은 보드에 이어지면 아래 'V18 책상(보드) 연결' 이 우선한다.)
+보드에 이어지지 않았을 때 모든 값·히트맵·파형·타임라인·신뢰도·학습 횟수는 **합성 예시**다.
 센서, MQTT, HTTP, 블루투스, 카메라, 키 입력 수집, 원시 ToF, 파일 로깅,
 실제 기기 제어·음악 재생·모델 학습은 연결하지 않는다. 앱 권한은 비어 있다.
 ToF 8×8은 원문을 설명하는 합성 시각화이며 실제 VL53L9CX 해상도를 뜻하지 않는다.
@@ -66,14 +68,14 @@ flutter test --no-pub --reporter expanded
 flutter-atlas build atlas --no-pub --ipk --release
 ```
 
-IPK: `build/atlas/arm64/release/ipk/com.atlas.app.deskmate_ui_demo_v17.ipk`.
+IPK: `build/atlas/arm64/release/ipk/com.atlas.app.deskmate_ui_v18.ipk`.
 화면 검토 PNG: `build/qa/{home,focus,details,widgets,report,profile}.png`.
 SDK·생성물은 커밋하지 않는다. `preview_test.dart`는 실제 폰트로 여섯 화면을 렌더한다.
 
 Pi 실행:
 
 ```sh
-abusctl call com.atlas.AppManager1 Start com.atlas.app.deskmate_ui_demo_v17
+abusctl call com.atlas.AppManager1 Start com.atlas.app.deskmate_ui_v18
 ```
 
 되돌리기: 데모를 Stop 하고 기존 `com.atlas.app.deskmate_display`를 Start 한다.
@@ -149,3 +151,130 @@ V15의 제안 카드 수정은 그대로 두고 공통 화면 전환만 가로 �
 ## V17 밝기 디졸브 전환
 
 움직임·크기 변화 없이 화면이 스르륵 바뀌도록 공통 전환을 디졸브로 바꿨다. 이전 화면은 500ms 동안 서서히 흐려지고 새 화면은 같은 시간 동안 서서히 나타난다. 둘 다 시작과 끝이 부드러운 easeInOut 곡선을 쓴다. V16의 방향용 `order` 값은 제거했다. V15의 제안 카드 수정, 터치·접근성 차단, 애니메이션 최소화 설정은 유지한다.
+
+## V18 책상(보드) 연결 — 2026-10-25
+
+V17 의 화면·글꼴·전환·카드 규칙은 그대로 두고, 보드에 이어지면 화면이 **실제 책상 상태**를 따라가게 했다.
+사용자 지시(10-25): "배포판이 지금 UI 에 들어가고, 제어하는 모든 것이 맞춰지게". 그래서 V17 까지의
+"UI 전용, MQTT·HTTP 미연결" 결정은 V18 에서 바뀌었다([DECISIONS.md](DECISIONS.md) 첫 절).
+
+앱 ID: `com.atlas.app.deskmate_ui_v18`, 표시 이름: **DESKMATE V18**, 실행 파일 `deskmate_ui_v18`.
+V18 부터 ID 에서 `demo` 를 뺐다(보드에 이어지는 제품 화면이라). V17 이하 ID 는 그대로 보존한다.
+
+### 두 앱 구성: 화면은 V18, 블루투스 실행은 deskmate_display
+
+| 앱 | 하는 일 |
+|---|---|
+| **DESKMATE V18** (`com.atlas.app.deskmate_ui_v18`) | 사용자가 보는 화면. 상태·제안 카드·프로필·장치 위치. 기기 제어 명령은 보내지 않는다 |
+| **DESKMATE** (`com.atlas.app.deskmate_display`, `ui_env_app`) | 블루투스 무드등·선풍기 실행(`control/cmd` → GATT → `control/result`). **Pi 5 에서 계속 켜 둔다** |
+
+V18 은 블루투스·오디오 권한이 없다(`required_permissions` 비어 있음). 무드등·선풍기가 실제로 움직이려면
+deskmate_display 가 실행 중이어야 하고 그 앱 블루투스 탭에서 기기가 골라져 있어야 한다. 화면 앞에는 V18 을 띄운다.
+두 앱 모두 같은 질문(`interaction/request`)을 받는다. V18 에서 답하면 hub 는 그 질문을 닫고, 뒤에 있는
+deskmate_display 가 나중에 보내는 `timeout` 은 질문 ID 가 이미 닫혀 hub 가 무시한다.
+
+### 연결 설정
+
+톱니바퀴(나의 책상 설정) → **연결** 탭에서 보드(Pi 4 Mosquitto) 주소와 포트(기본 1883)를 적고 **연결하기**.
+주소 입력은 앱 내부 키보드(숫자·점·영문 소문자, `name_keyboard.dart` 의 `HostKeyboard`)를 쓴다 — Pi 5 에서
+시스템 키보드가 열리자마자 닫히는 문제(V11) 때문이다. 연결 정보만 기기에 저장한다
+(`$DESKMATE_CONFIG_DIR/ui_connection.json` → `$XDG_CONFIG_HOME/deskmate_ui/connection.json` →
+`$HOME/.config/deskmate_ui/connection.json` → `/tmp/deskmate_ui/connection.json` 중 처음 쓸 수 있는 곳).
+기본은 빈 주소 = 연결하지 않음. 상단 프로필 버튼 왼쪽의 작은 점이 연결 상태다(초록 = 이어짐, 회색 = 찾는 중,
+노랑 = hub 가 offline 을 알림). 주소가 비어 있으면 점도 없다.
+
+### 받는 것 · 보내는 것
+
+| 방향 | 토픽 / 주소 | 화면에서 |
+|---|---|---|
+| 받음 | `deskmate/state/phase` | 홈 하단 공기·실내·자세·컨디션, 집중 상세 '책상 주변', FSM 흐름(아래) |
+| 받음 | `deskmate/interaction/request` | 화면 중앙 제안 카드(아래). retain 으로 다시 온 지난 질문은 띄우지 않는다 |
+| 받음 | `deskmate/control/cmd` · `deskmate/control/result` | 멀티 위젯 기기 카드 상태("밝기 176", 선풍기 "2단"), 집중 상세·종료 요약 한 줄. **표시만** |
+| 받음 | `deskmate/health/hub` | 연결 점 색(offline 이면 노랑) |
+| 받음 | `deskmate/session/report` | 작업 종료 요약의 피로 횟수·조정 횟수 |
+| 받음 | `deskmate/sensor/weather` | 연결 탭에 바깥 기온·날씨 한 줄 |
+| 보냄 | `deskmate/feedback/user` | 카드 응답. ui_env_app 과 같은 envelope(`node: display`)·`data` 에 `kind` 를 더함: `{"request_id","verdict":"accept|reject|timeout","response_ms","kind"}` |
+| 보냄 | `deskmate/profile/user` (retain) | 프로필 선호(아래 대응표). 이름·이미지·직업은 싣지 않는다 |
+| 보냄 | `POST http://<보드 주소>:8771/api/placement` | 장치 위치 `{"placement":"left|center|right"}`. 실패는 잠깐 알리고 막지 않는다 |
+
+메시지 해석은 UTF-8(`mqttPayloadText` = `utf8.decode(allowMalformed: true)`), 보낼 때는 `addUTF8String` —
+ui_env_app 에서 한글이 `ì¡°ëª…` 처럼 깨졌던 옛 방식(`bytesToStringAsString`·`addString`)을 쓰지 않는다.
+`state/phase` 해석은 `lib/pr56/display_state.dart`(ui_env_app 복사본), 연결 방식은 ui_env_app `state_source.dart` 와 같다
+(keepAlive 30 s·자동 재연결·재구독). 앱끼리 import 하지 않고 복사했다.
+
+### 홈 하단 · FSM 흐름 대응
+
+| 화면 | 보드 값 | 규칙 |
+|---|---|---|
+| 공기 | `sensor_summary.co2_ppm` | `assets/config/co2_bands.json` 등급 · ppm (예: "나쁨 · 1180 ppm") |
+| 실내 | `temp_c` · `humidity_pct` · `lux` | 받은 것만 "24.4° · 51% · 320 lx" |
+| 자세 | `sensor_summary.tof.posture` | upright 바른 자세 · lean_forward 앞으로 기울어짐 · forward_head 고개가 앞으로 나옴 · head_down 고개 숙임 · recline 뒤로 기댐 · face_down 엎드림 · chin_rest 턱 괴기 · lean_left/right 왼쪽/오른쪽으로 기울어짐 · drowsy 졸린 자세 · misplaced 장치 방향 확인. `present=false` 면 자리 비움 |
+| 컨디션 | `c_fatigue` · `c_focus` · `personalization` | 피로 ≥0.70 환기해요, ≥0.45 또는 C_focus ≥0.70 조금 피곤해요, 그 밖 편안해요. 2단계 관찰이 `status: predicted` 면 뒤에 한 단어(몰입·피로·휴식·쉼) |
+| 집중 시작 | `FOCUS_*` 로 들어옴 | 자동 시작이 켜져 있으면 집중 화면, 꺼져 있으면 기존 시작 제안 카드 |
+| 쉬는 중 | `REST` | 집중 상세가 "잠깐 쉬어가는 중이에요", 경과 시간 멈춤, 멀티 위젯 캐릭터는 쉬는 표정 |
+| 자리 비움 | `present=false` | 일시정지 표시. 종료는 화면이 아니라 hub(`END`)가 정한다 |
+| 작업 종료 | `END` · `IDLE` | 종료 요약 화면 |
+| 피로 횟수 | `FATIGUE` 진입 | 요약 카드. 보드 리포트가 있으면 그 값 |
+
+값이 없으면 숫자를 지어내지 않고 "살펴보는 중" 으로 둔다. 보드 상태를 따라 시작한 집중의 경과 시간은 실제 시간(1초=1초)이다.
+
+### 제안 카드
+
+`interaction/request` 의 `kind` 와 `data` 로만 띄운다(FSM 상태로 거르지 않는다). 답하면 바로 닫히고 답변 문구만 위에 5초(V15 규칙).
+`data.explanation` 이 있으면 카드 본문이 된다. `expires_in_s` 가 지나면 닫고 `timeout` 을 보낸다(ui_env_app 과 같음).
+
+| kind | 제목 | 버튼(reject / accept) | 닫힘 |
+|---|---|---|---|
+| `posture_suggest` | 자세를 가볍게 바로잡아 볼까요? | 나중에 / 해볼게요 | 응답·만료, 또는 hub 가 ACTION_* 를 벗어날 때 |
+| `env_suggest` | 환경 플래그에 따라(잠깐 환기해 볼까요? 등). 정책이 창문 환기를 골랐으면 창문 문구 | 괜찮아요 / 좋아요 | 위와 같음 |
+| `break_suggest` | 잠깐 쉬어 가는 건 어떨까요? | 조금 더 할게요 / 쉬어 갈게요 | 위와 같음 |
+| `checkin_suggest` | 지금 피곤하세요? | 아니오 / 예 | 응답·만료만(FSM 상태와 무관) |
+| `vent_suggest` | 창문을 N분 열어 주세요(`minutes`, 없으면 `ventilate_minutes`) | 괜찮아요 / 열게요 | 응답·만료만. `explanation` 이 없으면 `why[]` 를 문장으로(모르는 코드는 숨김) |
+
+### 프로필 → hub (`deskmate/profile/user`, retain)
+
+envelope `{"schema_version":"1.0","ts","node":"pi5-display","boot_id","seq","data":{…}}`. 프로필을 만들거나(마지막 질문 뒤),
+설정에서 저장하거나, 다른 프로필을 고를 때, 그리고 연결될 때마다 지금 프로필을 다시 보낸다.
+
+| `data` 키 | 앱에서 | 대응 |
+|---|---|---|
+| `profile_id` | 프로필 생성 시 난수 | `p` + 16 hex. 이름과 무관. 복사본·수정본도 같은 값 |
+| `age_band` | 프로필 질문 4 "몇 살" · 나의 리듬 탭 나이 | <20 `10s` · 20대 `20s` · 30대 `30s` · 40대 `40s` · 50+ `50s+` |
+| `sleep_hours` | 질문 5 "얼마나 잠을" · 나의 리듬 탭 수면 시간 | 정수 시간 |
+| `bedtime` | 나의 리듬 탭 "보통 잠드는 시각"(21:00~03:00, 30분 단위) | `HH:MM`, 기본 `23:30`(hub `sleep.default_bedtime`) |
+| `wake_time` | 계산 | `bedtime + sleep_hours` |
+| `light_pref` | 빛과 바람 탭 "집중 시작할 때 조명 켜기"·"원하는 밝기" | 조명 끔 또는 밝기 <40% `low` · <70% `mid` · 그 이상 `high` |
+| `sound_pref` | 질문 7 소리 · 소리 탭 "소리 함께 듣기"·볼륨 | 무음/끔 `off` · 볼륨 <34% `low` · <67% `mid` · 그 이상 `high` |
+| `wind_pref` | 빛과 바람 탭 "바람 켜기"·"바람 세기" | 끔 `off` · 1단계 `low` · 2 `mid` · 3 `high` |
+| `focus_help` | 질문 6 "졸릴 때 무엇부터" · 몰입 탭 도움 순서 | 순서대로 조명 `lamp` · 선풍기 `fan` · 알림 `notify` (hub personalize 채널 이름) |
+| `placement` | 질문 9 "장치를 보통 어디에 두나요?" · 나의 리듬 탭 "장치를 두는 곳" | `left` · `center`(기본) · `right` |
+
+이름·이미지·작업(직업)·오늘 컨디션은 보내지 않는다. 프로필과 답변은 여전히 메모리에만 있고 파일에 쓰지 않는다.
+앱을 다시 켜면 기본 프로필의 `profile_id` 도 새로 만들어진다(남은 일).
+
+### 장치 위치 질문
+
+프로필 등록의 마지막(9/9) 질문 "장치를 보통 어디에 두나요? / 앉은 자리에서 봤을 때". 위에서 본 책상 그림(모니터·사람·
+세 자리, 양옆은 모니터 끝 근처 정면에서 약 40°)과 1 왼쪽 · 2 가운데 · 3 오른쪽. 답하면 프로필에 넣고
+`POST http://<보드 주소>:8771/api/placement` 를 보낸다. 결과("장치 위치를 왼쪽으로 맞췄어요." 또는 실패 한 줄)는
+환영 화면에 4초 보인다. 연결 주소가 없으면 보내지 않는다. 설정 나의 리듬 탭에서 바꿔 저장해도 같은 요청을 보낸다.
+
+### 보드에 닿지 않을 때
+
+주소가 비었거나, 브로커에 닿지 않거나, `state/phase` 가 45초 넘게 없으면 V17 과 같은 메모리 동작으로 돌아간다
+(5초마다 재연결). 화면에 "연결 안 됨" 같은 큰 표시는 하지 않고 상단 점만 회색이 된다. 진행 중인 집중은 그대로 이어진다.
+
+### 이번 버전에서 하지 않은 것
+
+- V18 은 `control/cmd` 를 보내지 않는다. 멀티 위젯 조명 슬라이더는 화면 안의 값만 바뀐다(다음 버전 후보).
+- 날씨 타일은 아직 기존 그림을 쓴다. 받은 날씨는 연결 탭 한 줄에만 보인다.
+- 종료 요약의 "오늘 피곤했나요?" 선택은 hub 로 보내지 않는다(대응 토픽 없음).
+
+### 설치
+
+```sh
+bash display/atlas/deploy/install-to-pi.sh <Pi5 IP> display/atlas/ui_demo_app/build/atlas/arm64/release/ipk/com.atlas.app.deskmate_ui_v18.ipk
+```
+
+스크립트가 업로드·`abusctl` 설치·실행을 한다(앱 ID 는 파일 이름에서). 설치 뒤 `sync`. deskmate_display 는 Stop 하지 않는다.
+처음 켜면 톱니바퀴 → 연결 탭에서 Pi 4 주소를 넣는다.

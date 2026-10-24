@@ -332,13 +332,16 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('profile-next')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('creation-avatar-flower')));
-    for (int i = 1; i < 8; i++) {
+    for (int i = 1; i < 9; i++) {
       if (i == 2) await tester.tap(find.text('창작·독서'));
       if (i == 3) await tester.tap(find.byTooltip('늘리기'));
       if (i == 4) await tester.tap(find.byTooltip('줄이기'));
       if (i == 5) await tester.tap(find.byTooltip('선풍기 우선순위 올리기'));
       if (i == 6) await tester.tap(find.text('무음'));
       if (i == 7) await tester.tap(find.text('피곤'));
+      if (i == 8) {
+        await tester.tap(find.byKey(const ValueKey('placement-right')));
+      }
       await tester.pump();
       expect(find.byKey(const ValueKey('profile-question')), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('profile-next')));
@@ -356,6 +359,7 @@ void main() {
     expect(m.persona.order.first, '선풍기');
     expect(m.persona.sound, '무음');
     expect(m.persona.mood, '피곤');
+    expect(m.persona.placement, 'right');
     expect(m.profiles.length, 4);
     expect(m.profileSlotCount, 6);
     await tester.tap(find.text('꽃님 · 창작·독서'));

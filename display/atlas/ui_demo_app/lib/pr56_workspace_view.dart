@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'demo_model.dart';
+import 'live/live_link.dart';
 import 'pr56/feedback_policy.dart';
 import 'pr56/music_playback.dart';
 import 'pr56/workspace_shell.dart';
@@ -41,8 +42,12 @@ class Pr56WorkspaceView extends StatelessWidget {
       required this.model,
       required this.session,
       required this.onExit,
-      required this.onPreferences});
+      required this.onPreferences,
+      this.live});
   final DemoModel model;
+
+  /// 보드 연결. 이어져 있으면 실내 값·기기 상태를 보드에서 받아 보여 준다.
+  final LiveLink? live;
   final WorkspaceDemoSession session;
   final VoidCallback onExit;
   final VoidCallback onPreferences;
@@ -51,7 +56,12 @@ class Pr56WorkspaceView extends StatelessWidget {
         onPointerDown: (_) => model.touch(),
         onPointerMove: (_) => model.touch(),
         child: DeskmateWorkspace(
-          state: null,
+          state: live?.live == true ? live!.state : null,
+          deviceStatus: live?.live == true
+              ? Map.unmodifiable(live!.devices.states)
+              : const {},
+          // demo=true 는 '보드 상태가 없을 때의 화면 기본값'과 메모리 전용 조작을 뜻한다.
+          // 보드 값은 state 로 넘기고, 조명 단계 조작은 V18 에서도 화면 안에서만 바뀐다(제어 명령 미발행).
           demo: true,
           music: session.music,
           feedback: session.feedback,

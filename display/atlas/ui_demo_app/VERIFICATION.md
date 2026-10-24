@@ -1,3 +1,15 @@
+# V18 verification (2026-10-25)
+
+- flutter analyze --no-pub: No issues found.
+- flutter test --no-pub: 56 passed (V17 25 + live_test 30 + preview 1). demo_test·preview_test 의
+  프로필 등록 반복 횟수만 9 질문에 맞췄다.
+- 새 시험(test/live_test.dart): UTF-8 해석, state/phase → 홈 항목(빠진 키 포함), 카드 kind 5종 × accept/reject →
+  feedback/user, 만료 timeout, 상태 무관 카드, 프로필 발행 스키마·retain·이름 없음, 장치 위치 POST 성공·500·404·닿지 않음
+  (로컬 HttpServer), 기기 상태 표시, 연결 실패·상태 오래됨·끊김 fallback, FSM 흐름, 설정 연결 탭 키보드.
+- 화면 검토 PNG: build/qa/live-home.png, live-card.png, profile-placement.png.
+- flutter-atlas build atlas --no-pub --ipk --release: exit 0.
+- 실기(Pi 5) 설치·연결 확인은 아직 하지 않았다.
+
 # V17 verification (2026-10-25)
 
 - flutter analyze --no-pub: no issues, exit 0.

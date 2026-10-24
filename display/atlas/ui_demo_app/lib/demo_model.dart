@@ -1,4 +1,6 @@
 import 'package:flutter/foundation.dart';
+import 'live/payload.dart' show newProfileId;
+import 'pr56/display_state.dart';
 
 enum DemoPage { home, focus, details, widgets, report }
 
@@ -52,8 +54,12 @@ class Persona {
       this.order = const ['조명', '선풍기', '알림'],
       this.mood = '보통',
       this.avatar = 'cat',
+      String? profileId,
+      this.placement = 'center',
+      this.bedtimeMinutes = defaultBedtime,
       DeskPreferences? preferences})
-      : preferences = preferences ??
+      : profileId = profileId ?? newProfileId(),
+        preferences = preferences ??
             DeskPreferences(
                 brightness: job == '수험생' ? .85 : .45,
                 musicEnabled: sound != '무음');
@@ -66,6 +72,16 @@ class Persona {
   List<String> order;
   String mood;
   String avatar;
+
+  /// hub 에 보내는 식별자. 이름과 무관한 난수이며 복사본도 같은 값을 쓴다.
+  final String profileId;
+
+  /// 장치를 보통 두는 곳(앉은 자리 기준): left | center | right.
+  String placement;
+
+  /// 잠드는 시각(자정부터 분). 일어나는 시각 = 이 값 + 수면 시간.
+  int bedtimeMinutes;
+  static const defaultBedtime = 23 * 60 + 30; // hub personalize.yaml sleep.default_bedtime
   final DeskPreferences preferences;
   Persona copy() => Persona(
       name: name,
@@ -77,12 +93,31 @@ class Persona {
       order: List.of(order),
       mood: mood,
       avatar: avatar,
+      profileId: profileId,
+      placement: placement,
+      bedtimeMinutes: bedtimeMinutes,
       preferences: preferences.copy());
 }
 
 class DemoModel extends ChangeNotifier {
   DemoModel(this.config);
   final DemoConfig config;
+
+  /// 프로필이 만들어지거나 바뀌거나 골라질 때(보드에 선호를 알린다). 연결이 없으면 null.
+  void Function(Persona persona)? onProfileChanged;
+
+  /// 장치 위치를 보드에 보낸다. 화면에 잠깐 보일 한 줄을 돌려준다(보낼 곳이 없으면 null).
+  Future<String?> Function(String placement)? onPlacement;
+
+  /// 보드의 state/phase 를 따라가는 중인가. 끊기면 V17 과 같은 메모리 흐름으로 돌아간다.
+  bool liveDriven = false;
+
+  /// 이번 집중이 보드를 따라 시작됐는가. 그러면 경과 시간은 실제 시간(1초=1초)으로 센다.
+  bool liveSession = false;
+
+  /// hub 가 REST(휴식) 상태다. 집중 상세가 쉬는 중 문구로 바뀌고 경과 시간을 멈춘다.
+  bool resting = false;
+  String? _liveFsm;
   final profiles = [
     Persona(name: '지우', job: '수험생', rounds: 12),
     Persona(
@@ -149,11 +184,14 @@ class DemoModel extends ChangeNotifier {
       notice = '';
       askingFeedback = false;
     }
-    if (active && !absent) {
-      sessionSeconds += config.seconds('simulatedSecondsPerTick');
+    if (active && !absent && !resting) {
+      sessionSeconds +=
+          liveSession ? 1 : config.seconds('simulatedSecondsPerTick');
     }
+    // 보드를 따라갈 때 자리 비움의 종료는 hub(END)가 정한다. 화면이 따로 끝내지 않는다.
     if (active &&
         absent &&
+        !liveDriven &&
         ++absentTicks >= config.seconds('absenceGraceSeconds')) {
       finish();
       return;
@@ -208,6 +246,7 @@ class DemoModel extends ChangeNotifier {
     proposal = false;
     scenario = false;
     workTicks = 0;
+    onProfileChanged?.call(persona);
     notifyListeners();
   }
 
@@ -223,6 +262,8 @@ class DemoModel extends ChangeNotifier {
   void start({bool automatic = false}) {
     if (active) return;
     active = true;
+    liveSession = liveDriven;
+    resting = false;
     scenario = false;
     absent = false;
     absentTicks = 0;
@@ -314,6 +355,8 @@ class DemoModel extends ChangeNotifier {
   void finish() {
     if (!active) return;
     active = false;
+    liveSession = false;
+    resting = false;
     scenario = false;
     completedSessions++;
     completedSeconds += sessionSeconds;
@@ -354,6 +397,7 @@ class DemoModel extends ChangeNotifier {
   void updateProfile(Persona draft) {
     profiles[profileIndex] = draft;
     _applyPreferences();
+    onProfileChanged?.call(draft);
     touch();
     notifyListeners();
   }
@@ -361,9 +405,83 @@ class DemoModel extends ChangeNotifier {
   void saveProfile(Persona draft) {
     profiles.add(draft);
     profileIndex = profiles.length - 1;
+    onProfileChanged?.call(draft);
     scenario = false;
     workTicks = 0;
     proposal = false;
     show(DemoPage.home);
+  }
+
+  /// 보드의 state/phase 한 건을 화면 흐름에 반영한다. 화면에 이미 있는 흐름만 쓴다:
+  /// 몰입(FOCUS_*) 진입 → 집중 시작(자동 시작을 껐으면 시작 제안 카드), REST → 쉬는 중,
+  /// 자리 비움 → 일시정지, END·IDLE → 작업 종료 요약. 피로(FATIGUE) 진입은 리포트의 횟수로 센다.
+  void followLive(DisplayState s, {String? postureLabel}) {
+    liveDriven = true;
+    final previous = _liveFsm;
+    _liveFsm = s.fsmState;
+    if (postureLabel != null) posture = postureLabel;
+    final focus = s.fsmState.startsWith('FOCUS_');
+    final enteredFocus =
+        focus && (previous == null || !previous.startsWith('FOCUS_'));
+    if (!active) {
+      if (enteredFocus && !preferencesOpen) {
+        if (persona.preferences.autoStart) {
+          start(automatic: true);
+          return;
+        }
+        proposal = true;
+      }
+      if (!focus && proposal && s.fsmState == 'IDLE') proposal = false;
+      notifyListeners();
+      return;
+    }
+    if (s.fsmState == 'END' || s.fsmState == 'IDLE') {
+      finish();
+      return;
+    }
+    if (s.fsmState == 'FATIGUE' && previous != 'FATIGUE') {
+      fatigueEvents++;
+      events.add('피로 감지 · 보드');
+    }
+    final rest = s.fsmState == 'REST';
+    if (rest != resting) {
+      resting = rest;
+      events.add(rest ? '휴식 · 보드' : '휴식 끝 · 보드');
+      if (rest && page == DemoPage.focus) {
+        page = DemoPage.details;
+        pageTicks = 0;
+      }
+    }
+    final away = s.present == false;
+    if (away != absent) {
+      absent = away;
+      absentTicks = 0;
+      events.add(away ? '부재 · 일시정지' : '복귀');
+      if (away && page == DemoPage.focus) {
+        page = DemoPage.details;
+        pageTicks = 0;
+      }
+    }
+    notifyListeners();
+  }
+
+  /// 보드 연결이 끊겼거나 상태가 오래됐다. 진행 중인 집중은 그대로 두고 메모리 흐름으로 돌아간다.
+  void leaveLive() {
+    if (!liveDriven) return;
+    liveDriven = false;
+    _liveFsm = null;
+    resting = false;
+    notifyListeners();
+  }
+
+  /// 보드에서 온 제안 카드에 답했다. 답변 문구는 기존 피로 카드와 같다.
+  void liveAnswered(bool accepted) {
+    events.add(accepted ? '제안 피드백 · 좋아요' : '제안 피드백 · 다른 방법');
+    if (events.length > 30) events.removeAt(0);
+    if (!trained) persona.rounds++;
+    notice = accepted ? '고마워요. 선호에 반영할게요' : '다음 선호 방법을 제안할게요';
+    noticeTicks = config.seconds('focusNoticeSeconds');
+    touch();
+    notifyListeners();
   }
 }

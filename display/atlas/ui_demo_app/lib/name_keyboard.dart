@@ -187,3 +187,84 @@ class _NameKeyboardState extends State<NameKeyboard> {
             ]));
   }
 }
+
+/// 보드 주소 한 글자 편집. 주소에 쓰는 글자(영문 소문자·숫자·점·하이픈)만 받고 64자까지.
+String editHostText(String text, String key, {int maxLength = 64}) {
+  if (key == 'backspace') {
+    return text.isEmpty ? text : text.substring(0, text.length - 1);
+  }
+  if (text.length >= maxLength || !RegExp(r'^[a-z0-9.\-]$').hasMatch(key)) {
+    return text;
+  }
+  return text + key;
+}
+
+/// 보드 주소·포트 입력용 앱 내부 키보드. 이름 키보드와 같은 단추 모양이며,
+/// Pi 5 에서 시스템 키보드가 열리자마자 닫히는 문제(V11)를 같은 방식으로 피한다.
+class HostKeyboard extends StatefulWidget {
+  const HostKeyboard(
+      {super.key,
+      required this.onKey,
+      required this.onDone,
+      this.digitsOnly = false});
+  final ValueChanged<String> onKey;
+  final VoidCallback onDone;
+
+  /// 포트처럼 숫자만 받는 칸.
+  final bool digitsOnly;
+  @override
+  State<HostKeyboard> createState() => _HostKeyboardState();
+}
+
+class _HostKeyboardState extends State<HostKeyboard> {
+  bool letters = false;
+  @override
+  Widget build(BuildContext context) {
+    final showLetters = letters && !widget.digitsOnly;
+    final rows = showLetters
+        ? ['qwertyuiop', 'asdfghjkl', 'zxcvbnm']
+        : ['1234567890'];
+    Widget button(String label, VoidCallback action, {int flex = 1}) =>
+        Expanded(
+            flex: flex,
+            child: Padding(
+                padding: const EdgeInsets.all(3),
+                child: TextButton(
+                    style: TextButton.styleFrom(
+                        backgroundColor: const Color(0xFFFFFEF8),
+                        foregroundColor: const Color(0xFF263B37),
+                        padding: EdgeInsets.zero,
+                        minimumSize: const Size(0, 36),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10))),
+                    onPressed: action,
+                    child: Text(label, style: const TextStyle(fontSize: 21)))));
+    return Focus(
+        canRequestFocus: false,
+        descendantsAreFocusable: false,
+        child: Column(
+            key: const ValueKey('host-keyboard'),
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final row in rows)
+                SizedBox(
+                    height: 42,
+                    child: Row(children: [
+                      for (final key in row.split(''))
+                        button(key, () => widget.onKey(key)),
+                    ])),
+              SizedBox(
+                  height: 42,
+                  child: Row(children: [
+                    if (!widget.digitsOnly)
+                      button(showLetters ? '123' : 'abc',
+                          () => setState(() => letters = !letters),
+                          flex: 2),
+                    if (!widget.digitsOnly) button('.', () => widget.onKey('.')),
+                    if (!widget.digitsOnly) button('-', () => widget.onKey('-')),
+                    button('⌫', () => widget.onKey('backspace'), flex: 2),
+                    button('입력 완료', widget.onDone, flex: 3),
+                  ])),
+            ]));
+  }
+}

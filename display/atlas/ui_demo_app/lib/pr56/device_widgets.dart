@@ -169,11 +169,17 @@ class DevicePreviewCard extends StatelessWidget {
       required this.music,
       required this.nickname,
       required this.status,
-      required this.onTap});
+      required this.onTap,
+      this.icon,
+      this.kindLabel});
   final bool music;
   final String nickname;
   final String status;
   final VoidCallback onTap;
+
+  /// V18: 그림 대신 쓸 아이콘(선풍기처럼 전용 그림이 없는 기기).
+  final IconData? icon;
+  final String? kindLabel;
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -181,7 +187,7 @@ class DevicePreviewCard extends StatelessWidget {
         aspectRatio: 1,
         child: HomeTile(
             onTap: onTap,
-            label: '$nickname ${music ? '스피커' : '조명'} $status',
+            label: '$nickname ${kindLabel ?? (music ? '스피커' : '조명')} $status',
             padding: 15,
             child:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -189,14 +195,16 @@ class DevicePreviewCard extends StatelessWidget {
                   child: Center(
                       child: FittedBox(
                           fit: BoxFit.scaleDown,
-                          child: ApplianceArt(music: music, size: 115)))),
+                          child: icon == null
+                              ? ApplianceArt(music: music, size: 115)
+                              : Icon(icon, size: 96, color: scheme.primary)))),
               Text(nickname,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                       fontSize: 19, fontWeight: FontWeight.w600)),
               const SizedBox(height: 3),
-              Text(music ? '블루투스 스피커' : '블루투스 조명',
+              Text(kindLabel ?? (music ? '블루투스 스피커' : '블루투스 조명'),
                   style:
                       TextStyle(fontSize: 11, color: scheme.onSurfaceVariant)),
               const SizedBox(height: 7),

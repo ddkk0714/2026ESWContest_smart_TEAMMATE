@@ -22,18 +22,22 @@ UI를 변경할 때마다 V 번호를 올리고, 이전 앱은 별도 ID와 소�
 | V14 | 제품 문구 정리, 자연스러운 화면·탭·팝업 전환 | `ui_demo_versions/v14` | `com.atlas.app.deskmate_ui_demo_v14` |
 | V15 | 페이드 스루 화면 전환, 피로 제안 카드 응답 후 바로 닫힘 | `ui_demo_versions/v15` | `com.atlas.app.deskmate_ui_demo_v15` |
 | V16 | 앞/뒤 방향 가로 슬라이드 화면 전환, V15 카드 수정 유지 | `ui_demo_versions/v16` | `com.atlas.app.deskmate_ui_demo_v16` |
-| V17 | 움직임 없는 500ms 밝기 디졸브 화면 전환, V15 카드 수정 유지 | `ui_demo_app` | `com.atlas.app.deskmate_ui_demo_v17` |
+| V17 | 움직임 없는 500ms 밝기 디졸브 화면 전환, V15 카드 수정 유지 | git `4e48466` | `com.atlas.app.deskmate_ui_demo_v17` |
+| V18 | 보드(MQTT) 연결: 실제 상태·제안 카드·기기 상태 표시·프로필 hub 발행·장치 위치 질문, 닿지 않으면 V17 동작 | `ui_demo_app` | `com.atlas.app.deskmate_ui_v18` |
 
 모든 버전은 우측 상단 X 버튼으로 앱을 종료한다. 어두운 집중 시계에도 같은 버튼이 있다.
 종료하면 메모리에만 있던 프로필·시연 기록은 초기화된다.
 
 ## 다음 변경
 
-1. 현재 V17 `ui_demo_app`을 생성물 없이 `ui_demo_versions/v17`에 보관한다.
+V18 은 블루투스 실행 앱 `com.atlas.app.deskmate_display` 와 함께 쓴다(화면은 V18, 블루투스는 deskmate_display).
+V18 부터 앱 ID 에서 `demo` 를 뺐다(`deskmate_ui_vNN`).
+
+1. 현재 V18 `ui_demo_app`을 생성물 없이 `ui_demo_versions/v18`에 보관한다.
    `build/`, `.dart_tool/`, ephemeral, SDK, 로그는 복사하지 않는다.
-2. 새 UI는 `ui_demo_app`에서 개발하고 표시 이름을 `DESKMATE V18`로 올린다.
+2. 새 UI는 `ui_demo_app`에서 개발하고 표시 이름을 `DESKMATE V19`로 올린다.
 3. `appinfo.json`의 id·entry·version, CMake의 ATLAS_APP_ID·BINARY_NAME,
-   pubspec version을 함께 올린다. 화면에는 버전 배지를 표시하지 않는다. V18 ID는 `com.atlas.app.deskmate_ui_demo_v18`다.
+   pubspec version을 함께 올린다. 화면에는 버전 배지를 표시하지 않는다. V19 ID는 `com.atlas.app.deskmate_ui_v19`다.
 4. 각 버전을 분석·테스트·release 빌드하고 Pi에 별도 설치한다.
 5. 이전 버전은 명시적인 삭제 요청이 있을 때만 제거한다. 화면 비교 시 현재 앱을 Stop 하고 비교할 앱을 Start 한다.
 

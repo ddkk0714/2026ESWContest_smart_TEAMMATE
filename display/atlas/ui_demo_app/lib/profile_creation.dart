@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'demo_model.dart';
 import 'profile_avatars.dart';
 import 'name_keyboard.dart';
+import 'placement_sketch.dart';
 
 class ProfileCreation extends StatefulWidget {
   const ProfileCreation({super.key, required this.model, required this.onBack});
@@ -51,6 +52,10 @@ class _ProfileCreationState extends State<ProfileCreation> {
   int sleep = 7;
   String sound = '백색 소음';
   String mood = '보통';
+  String placement = 'center';
+
+  /// 장치 위치를 보드에 보낸 결과 한 줄(환영 화면에 잠깐). 보낼 곳이 없으면 null.
+  String? placementNote;
   final order = ['조명', '선풍기', '알림'];
   static const questions = [
     ('어떤 이름으로 불러드릴까요?', '이 책상에서 편하게 불리고 싶은 이름을 알려주세요.'),
@@ -61,6 +66,7 @@ class _ProfileCreationState extends State<ProfileCreation> {
     ('졸릴 때, 무엇부터 도와드릴까요?', '화살표로 먼저 받고 싶은 도움을 위에 놓아주세요.'),
     ('어떤 소리와 함께 집중하나요?', '고요함도, 작은 소리도 당신의 취향이에요.'),
     ('오늘의 당신은 어떤가요?', '잘하려고 애쓰지 않아도 괜찮아요. 지금 그대로 알려주세요.'),
+    ('장치를 보통 어디에 두나요?', '앉은 자리에서 봤을 때'),
   ];
 
   @override
@@ -84,7 +90,19 @@ class _ProfileCreationState extends State<ProfileCreation> {
         mood: mood,
         avatar: avatar,
         order: List.of(order),
+        placement: placement,
       ));
+      final send = widget.model.onPlacement;
+      if (send != null) {
+        // 보드에 장치 위치를 알린다. 결과는 환영 화면에 잠깐 보이고, 실패해도 등록은 끝난다.
+        send(placement).then((note) {
+          if (!mounted || note == null) return;
+          setState(() => placementNote = note);
+          Future<void>.delayed(const Duration(seconds: 4), () {
+            if (mounted) setState(() => placementNote = null);
+          });
+        });
+      }
     }
     setState(() => step++);
   }
@@ -320,7 +338,10 @@ class _ProfileCreationState extends State<ProfileCreation> {
                 ]),
             ])),
         6 => _choices(['백색 소음', '카페 음악', '무음'], sound, (v) => sound = v),
-        _ => _choices(['좋음', '보통', '피곤'], mood, (v) => mood = v),
+        7 => _choices(['좋음', '보통', '피곤'], mood, (v) => mood = v),
+        _ => PlacementChoice(
+            value: placement,
+            onChanged: (v) => setState(() => placement = v)),
       };
 
   Widget _choices(

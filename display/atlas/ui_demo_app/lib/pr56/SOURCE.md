@@ -32,3 +32,10 @@ The referenced school/High1/LG font files and mascot PNG are copied unmodified.
 V8: demo palette changed to the clock screen cream/green colours; text uses High1, LGText and LGClock. Widget layout and interactions are retained.
 
 V9: removed side/bottom navigation; tiles open details and a header Home button returns to the grid. The initial workspace page remains home.
+
+V18 (2026-10-25): the app now links to the board over MQTT (`../live/`), so the earlier
+"No MQTT dependency" note applies only up to V17. Changes in this folder:
+`display_state.dart` replaced by the ui_env_app copy (ToF posture, 2nd-stage observation,
+personalization explanation); `workspace_shell.dart` prefers the board `state` for indoor
+values and shows board-reported lamp/fan status via `deviceStatus` (display only, no control);
+`device_widgets.dart` `DevicePreviewCard` accepts an icon/label for the fan card.

@@ -1,10 +1,10 @@
 {
-    "id":  "com.atlas.app.deskmate_ui_demo_v17",
+    "id":  "com.atlas.app.deskmate_ui_v18",
     "type":  "flutter",
-    "name":  "DESKMATE V17",
+    "name":  "DESKMATE V18",
     "description":  "A personal workspace for your daily focus.",
-    "entry":  "deskmate_ui_demo_v17 --bundle=./ --fullscreen --onscreen-keyboard -a com.atlas.app.deskmate_ui_demo_v17",
-    "version":  "0.17.0",
+    "entry":  "deskmate_ui_v18 --bundle=./ --fullscreen --onscreen-keyboard -a com.atlas.app.deskmate_ui_v18",
+    "version":  "0.18.0",
     "required_permissions":  {
                                  "privileged":  [
 

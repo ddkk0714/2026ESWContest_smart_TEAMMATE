@@ -2,10 +2,17 @@ import 'package:flutter/material.dart';
 import 'demo_model.dart';
 import 'profile_avatars.dart';
 import 'page_transition.dart';
+import 'placement_sketch.dart';
+import 'live/connection_panel.dart';
+import 'live/live_link.dart';
+import 'live/profile_payload.dart' show clockText;
 
 class PersonalSettings extends StatefulWidget {
-  const PersonalSettings({super.key, required this.model});
+  const PersonalSettings({super.key, required this.model, this.live});
   final DemoModel model;
+
+  /// 보드 연결. 있으면 '연결' 탭이 보인다.
+  final LiveLink? live;
   @override
   State<PersonalSettings> createState() => _PersonalSettingsState();
 }
@@ -60,12 +67,19 @@ class _PersonalSettingsState extends State<PersonalSettings> {
                                 (Icons.music_note_outlined, '소리'),
                                 (Icons.spa_outlined, '몰입'),
                                 (Icons.favorite_outline, '나의 리듬'),
+                                if (widget.live != null)
+                                  (Icons.settings_ethernet_rounded, '연결'),
                               ].indexed)
                                 Padding(
-                                    padding: const EdgeInsets.only(bottom: 8),
+                                    // 연결 탭까지 5개면 같은 높이에 들어가게 간격만 조금 줄인다.
+                                    padding: EdgeInsets.only(
+                                        bottom: widget.live == null ? 8 : 4),
                                     child: ListTile(
                                         key:
                                             ValueKey('settings-tab-${item.$1}'),
+                                        visualDensity: widget.live == null
+                                            ? null
+                                            : VisualDensity.compact,
                                         shape: RoundedRectangleBorder(
                                             borderRadius:
                                                 BorderRadius.circular(18)),
@@ -92,7 +106,8 @@ class _PersonalSettingsState extends State<PersonalSettings> {
                                       0 => _environment(),
                                       1 => _sound(),
                                       2 => _focus(),
-                                      _ => _rhythm()
+                                      3 => _rhythm(),
+                                      _ => ConnectionPanel(live: widget.live!)
                                     }))),
                       ])),
                   const SizedBox(height: 16),
@@ -107,8 +122,22 @@ class _PersonalSettingsState extends State<PersonalSettings> {
                     FilledButton(
                         key: const ValueKey('save-personal-settings'),
                         onPressed: () {
+                          final placementChanged =
+                              draft.placement != widget.model.persona.placement;
+                          final messenger = ScaffoldMessenger.maybeOf(context);
                           widget.model.updateProfile(draft);
                           Navigator.pop(context);
+                          final send = widget.model.onPlacement;
+                          if (placementChanged && send != null) {
+                            // 보내기 실패는 잠깐 알리기만 한다. 저장은 이미 끝났다.
+                            send(draft.placement).then((note) {
+                              if (note != null) {
+                                messenger?.showSnackBar(SnackBar(
+                                    content: Text(note),
+                                    duration: const Duration(seconds: 3)));
+                              }
+                            });
+                          }
                         },
                         child: const Text('이대로 맞춰둘게요')),
                   ]),
@@ -314,8 +343,26 @@ class _PersonalSettingsState extends State<PersonalSettings> {
           _slider('sleep', '평균 수면 시간', '${draft.sleep}시간',
               draft.sleep.toDouble(), (v) => draft.sleep = v.round(),
               min: 1, max: 12, divisions: 11),
+          // 21:00 ~ 다음 날 03:00, 30분 단위. 일어나는 시각은 수면 시간으로 계산한다.
+          _slider(
+              'bedtime',
+              '보통 잠드는 시각',
+              '${clockText(draft.bedtimeMinutes)} → ${clockText(draft.bedtimeMinutes + draft.sleep * 60)} 기상',
+              (((draft.bedtimeMinutes - 21 * 60) % (24 * 60)) / 30)
+                  .clamp(0, 12)
+                  .toDouble(),
+              (v) => draft.bedtimeMinutes = (21 * 60 + v.round() * 30) % (24 * 60),
+              min: 0,
+              max: 12,
+              divisions: 12),
           const SizedBox(height: 8),
           _choices(['좋음', '보통', '피곤'], draft.mood, (v) => draft.mood = v),
+        ]),
+        _card('장치를 두는 곳', '앉은 자리에서 봤을 때 장치가 있는 쪽이에요. 자세를 읽는 기준이 돼요.', [
+          PlacementChoice(
+              value: draft.placement,
+              compact: true,
+              onChanged: (v) => setState(() => draft.placement = v)),
         ]),
       ]);
 }

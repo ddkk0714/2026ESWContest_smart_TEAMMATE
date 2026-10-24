@@ -43,8 +43,12 @@ class DeskmateWorkspace extends StatefulWidget {
       this.onExit,
       this.onPreferences,
       this.store,
-      this.now});
+      this.now,
+      this.deviceStatus = const {}});
   final DisplayState? state;
+
+  /// V18: 보드가 알려 준 기기 상태(target_id → '밝기 176' 같은 한 줄). 표시 전용.
+  final Map<String, String> deviceStatus;
   final bool demo;
   final MusicPlayback music;
   final FeedbackCoordinator feedback;
@@ -296,7 +300,18 @@ class _WorkspaceState extends State<DeskmateWorkspace> {
     if (mounted) setState(() => _speakerConnected = connected);
   }
 
-  String get _lampStatus => widget.feedback.lamp.connected
+  // V18: 보드 상태(state)가 있으면 그 값을, 없을 때만 화면 기본값을 쓴다.
+  double? get _temperature => widget.state != null
+      ? widget.state!.temperatureC
+      : (widget.demo ? 24.6 : null);
+  double? get _humidity => widget.state != null
+      ? widget.state!.humidityPct
+      : (widget.demo ? 48 : null);
+  int? get _co2 =>
+      widget.state != null ? widget.state!.co2Ppm : (widget.demo ? 720 : null);
+
+  String get _lampStatus => widget.deviceStatus['desk_lamp'] ?? _lampLink;
+  String get _lampLink => widget.feedback.lamp.connected
       ? '연결됨'
       : widget.feedback.lamp.configured
           ? '연결 확인 전'
@@ -868,9 +883,9 @@ class _WorkspaceState extends State<DeskmateWorkspace> {
     if (id == 'environment') {
       return EnvironmentTile(
           onOpen: () => _goPage('environment'),
-          temperature: widget.demo ? 24.6 : widget.state?.temperatureC,
-          humidity: widget.demo ? 48 : widget.state?.humidityPct,
-          grade: _grades?.forValue(widget.demo ? 720 : widget.state?.co2Ppm));
+          temperature: _temperature,
+          humidity: _humidity,
+          grade: _grades?.forValue(_co2));
     }
     if (id == 'focus') {
       return FocusCountdownTile(
@@ -945,10 +960,10 @@ class _WorkspaceState extends State<DeskmateWorkspace> {
             width: 460,
             height: 350,
             child: EnvironmentTile(
-                temperature: widget.demo ? 24.6 : widget.state?.temperatureC,
-                humidity: widget.demo ? 48 : widget.state?.humidityPct,
+                temperature: _temperature,
+                humidity: _humidity,
                 grade: _grades
-                    ?.forValue(widget.demo ? 720 : widget.state?.co2Ppm))),
+                    ?.forValue(_co2))),
       ]);
 
   void _update(VoidCallback change) => setState(change);
@@ -1518,7 +1533,17 @@ class _WorkspaceState extends State<DeskmateWorkspace> {
                             music: true,
                             nickname: _prefs.musicNickname,
                             status: _musicStatus,
-                            onTap: () => _goPage('devices', device: 'music'))
+                            onTap: () => _goPage('devices', device: 'music')),
+                        // V18: 보드가 선풍기 상태를 알려 줬을 때만. 조작은 deskmate_display 가 맡는다.
+                        if (widget.deviceStatus['vent_fan'] case final fan?)
+                          DevicePreviewCard(
+                              key: const ValueKey('device-card-fan'),
+                              music: false,
+                              icon: Icons.air_rounded,
+                              kindLabel: '블루투스 선풍기',
+                              nickname: '선풍기',
+                              status: fan,
+                              onTap: () => _message('선풍기는 책상 상태에 맞춰 자동으로 움직여요.')),
                       ]))),
       Align(
           alignment: Alignment.centerLeft,

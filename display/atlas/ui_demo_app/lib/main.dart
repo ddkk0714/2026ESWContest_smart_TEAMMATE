@@ -9,6 +9,12 @@ import 'profile_picker.dart';
 import 'personal_settings.dart';
 import 'page_transition.dart';
 import 'pr56_workspace_view.dart';
+import 'live/home_items.dart';
+import 'live/link_settings.dart';
+import 'live/live_link.dart';
+import 'live/live_request.dart';
+import 'pr56/co2_grade.dart';
+import 'pr56/display_state.dart';
 
 const ink = Color(0xFF263B37);
 const paper = Color(0xFFF4F2EB);
@@ -21,7 +27,9 @@ Future<void> main() async {
   final values =
       jsonDecode(await rootBundle.loadString('assets/config/demo.json'))
           as Map<String, dynamic>;
-  runApp(DemoApp(model: DemoModel(DemoConfig(values))));
+  // V18: 보드 주소가 저장돼 있으면 연결을 시작한다. 없거나 닿지 않으면 메모리 동작 그대로.
+  final live = LiveLink(store: LinkSettingsStore())..start();
+  runApp(DemoApp(model: DemoModel(DemoConfig(values)), live: live));
 }
 
 void _exitDemo() => exit(0);
@@ -31,9 +39,13 @@ class DemoApp extends StatefulWidget {
       {super.key,
       required this.model,
       this.ticking = true,
-      this.onExit = _exitDemo});
+      this.onExit = _exitDemo,
+      this.live});
   final DemoModel model;
   final bool ticking;
+
+  /// 보드 연결(V18). null 이면 V17 과 같은 메모리 전용 화면.
+  final LiveLink? live;
   final VoidCallback onExit;
   @override
   State<DemoApp> createState() => _DemoAppState();
@@ -44,9 +56,21 @@ class _DemoAppState extends State<DemoApp> {
   @override
   void initState() {
     super.initState();
+    final live = widget.live;
+    final model = widget.model;
+    if (live != null) {
+      live.onState =
+          (state) => model.followLive(state, postureLabel: postureText(state));
+      model.onProfileChanged = live.publishProfile;
+      model.onPlacement = live.sendPlacement;
+      live.publishProfile(model.persona);
+    }
     if (widget.ticking) {
-      timer = Timer.periodic(
-          const Duration(seconds: 1), (_) => widget.model.tick());
+      timer = Timer.periodic(const Duration(seconds: 1), (_) {
+        model.tick();
+        // 연결이 끊기거나 상태가 오래되면 화면은 메모리 흐름으로 돌아간다.
+        if (live != null && !live.live) model.leaveLive();
+      });
     }
   }
 
@@ -93,21 +117,39 @@ class _DemoAppState extends State<DemoApp> {
                       width: 1024,
                       height: 600,
                       child: DemoShell(
-                          model: widget.model, onExit: widget.onExit)),
+                          model: widget.model,
+                          onExit: widget.onExit,
+                          live: widget.live)),
                 )))),
       );
 }
 
 class DemoShell extends StatefulWidget {
   final VoidCallback onExit;
-  const DemoShell({super.key, required this.model, required this.onExit});
+  const DemoShell(
+      {super.key, required this.model, required this.onExit, this.live});
   final DemoModel model;
+  final LiveLink? live;
   @override
   State<DemoShell> createState() => _DemoShellState();
 }
 
 class _DemoShellState extends State<DemoShell> {
   final workspaceSession = WorkspaceDemoSession();
+  Co2Grades? _grades;
+
+  @override
+  void initState() {
+    super.initState();
+    Co2Grades.load().then((grades) {
+      if (mounted) setState(() => _grades = grades);
+    }, onError: (Object _) {});
+  }
+
+  /// 보드 값을 쓸 수 있으면 그 상태, 아니면 null(메모리 값으로 그린다).
+  DisplayState? get _live =>
+      widget.live?.live == true ? widget.live!.state : null;
+
   @override
   void dispose() {
     workspaceSession.dispose();
@@ -118,11 +160,59 @@ class _DemoShellState extends State<DemoShell> {
   String two(int n) => n.toString().padLeft(2, '0');
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-      animation: m,
+      animation: widget.live == null ? m : Listenable.merge([m, widget.live]),
       builder: (context, _) {
         workspaceSession.syncPreferences(m);
-        return PageTransitionView(pageKey: m.page, child: _page());
+        final live = widget.live;
+        final request =
+            live?.status == LinkStatus.connected ? live!.request : null;
+        return Stack(children: [
+          Positioned.fill(
+              child: PageTransitionView(pageKey: m.page, child: _page())),
+          if (request != null)
+            Positioned.fill(
+                child: KeyedSubtree(
+                    key: ValueKey('live-card-${request.requestId}'),
+                    child: _liveCard(request))),
+        ]);
       });
+
+  /// 보드가 보낸 확인 질문. 답하면 바로 닫히고 답변 문구만 상단에 잠깐 남는다(V15 카드 규칙).
+  Widget _liveCard(LiveRequest request) {
+    final card = request.card(widget.live!.state);
+    return _suggestionCard(title: card.title, subtitle: card.body, actions: [
+      OutlinedButton(
+          key: const ValueKey('live-reject'),
+          onPressed: () => _answerLive(false),
+          child: Text(card.reject)),
+      const SizedBox(width: 16),
+      FilledButton(
+          key: const ValueKey('live-accept'),
+          onPressed: () => _answerLive(true),
+          child: Text(card.accept)),
+    ]);
+  }
+
+  void _answerLive(bool accepted) {
+    unawaited(widget.live!.answer(accepted ? 'accept' : 'reject'));
+    m.liveAnswered(accepted);
+  }
+
+  Widget _linkDot(LiveLink live) {
+    final (color, text) = live.live
+        ? live.hubHealth == 'offline'
+            ? (const Color(0xFFC9A15A), '책상 응답을 기다려요')
+            : (green.withValues(alpha: .7), '책상과 이어져 있어요')
+        : (muted.withValues(alpha: .45), '책상을 찾는 중이에요');
+    return Tooltip(
+        message: text,
+        child: Container(
+            key: const ValueKey('link-dot'),
+            width: 8,
+            height: 8,
+            margin: const EdgeInsets.only(right: 10),
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle)));
+  }
 
   Widget _page() {
     if (m.page == DemoPage.focus) return _focus();
@@ -131,7 +221,8 @@ class _DemoShellState extends State<DemoShell> {
           model: m,
           session: workspaceSession,
           onExit: widget.onExit,
-          onPreferences: _openPreferences);
+          onPreferences: _openPreferences,
+          live: widget.live);
     }
     return Listener(
         onPointerDown: (_) => m.touch(),
@@ -158,6 +249,7 @@ class _DemoShellState extends State<DemoShell> {
       height: 44,
       child: Row(children: [
         const Spacer(),
+        if (widget.live case final live? when live.configured) _linkDot(live),
         if (m.page != DemoPage.home)
           TextButton.icon(
               onPressed: () =>
@@ -354,30 +446,51 @@ class _DemoShellState extends State<DemoShell> {
                 onPressed: () => m.start(), child: const Text('시작할게요')),
           ]);
 
-  Widget _statusStrip() => Container(
-      height: 64,
-      decoration: BoxDecoration(
-          border: Border(top: BorderSide(color: ink.withValues(alpha: .12)))),
-      child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-        _status(Icons.air_rounded, '공기', '${m.config.seconds('co2')} ppm'),
-        _status(Icons.thermostat_rounded, '실내',
-            '${m.config.number('temperature')}° · ${m.config.seconds('humidity')}%'),
-        _status(Icons.accessibility_new_rounded, '자세', m.posture),
-        _status(
-            Icons.spa_outlined, '컨디션', m.fatigueEvents > 0 ? '환기해요' : '편안해요'),
-      ]));
+  Widget _statusStrip() {
+    final s = _live;
+    return Container(
+        height: 64,
+        decoration: BoxDecoration(
+            border:
+                Border(top: BorderSide(color: ink.withValues(alpha: .12)))),
+        child:
+            Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+          _status(Icons.air_rounded, '공기',
+              s == null ? '${m.config.seconds('co2')} ppm' : airText(s, _grades)),
+          _status(
+              Icons.thermostat_rounded,
+              '실내',
+              s == null
+                  ? '${m.config.number('temperature')}° · ${m.config.seconds('humidity')}%'
+                  : roomText(s)),
+          _status(Icons.accessibility_new_rounded, '자세', m.posture),
+          _status(
+              Icons.spa_outlined,
+              '컨디션',
+              s == null
+                  ? (m.fatigueEvents > 0 ? '환기해요' : '편안해요')
+                  : conditionText(s)),
+        ]));
+  }
 
-  Widget _status(IconData icon, String name, String value) => InkWell(
-      onTap: () => m.show(DemoPage.widgets),
-      borderRadius: BorderRadius.circular(14),
-      child: Padding(
-          padding: const EdgeInsets.all(10),
-          child: Row(children: [
-            Icon(icon, size: 23, color: green),
-            const SizedBox(width: 10),
-            Text('$name  ', style: const TextStyle(color: muted, fontSize: 13)),
-            Text(value, style: const TextStyle(fontSize: 14))
-          ])));
+  Widget _status(IconData icon, String name, String value) => Flexible(
+      child: InkWell(
+          onTap: () => m.show(DemoPage.widgets),
+          borderRadius: BorderRadius.circular(14),
+          child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(icon, size: 23, color: green),
+                const SizedBox(width: 10),
+                Text('$name  ',
+                    style: const TextStyle(color: muted, fontSize: 13)),
+                Flexible(
+                    child: Text(value,
+                        key: ValueKey('status-$name'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 14)))
+              ]))));
 
   Widget _focus() => GestureDetector(
         behavior: HitTestBehavior.opaque,
@@ -430,19 +543,32 @@ class _DemoShellState extends State<DemoShell> {
               child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                Text(m.absent ? '잠깐 자리를 비우셨네요' : '당신의 몰입을 지키는 중',
+                Text(
+                    m.absent
+                        ? '잠깐 자리를 비우셨네요'
+                        : m.resting
+                            ? '잠깐 쉬어가는 중이에요'
+                            : '당신의 몰입을 지키는 중',
                     style: const TextStyle(fontSize: 28)),
                 const SizedBox(height: 8),
                 Text(
                     m.absent
-                        ? '${m.config.seconds('absenceGraceSeconds') - m.absentTicks}초 후 세션 종료 · 경과 시간 일시정지'
-                        : '화면을 건드리지 않으면 조용한 시계로 돌아가요.',
+                        ? m.liveDriven
+                            ? '돌아오면 이어서 함께해요 · 경과 시간 일시정지'
+                            : '${m.config.seconds('absenceGraceSeconds') - m.absentTicks}초 후 세션 종료 · 경과 시간 일시정지'
+                        : m.resting
+                            ? '쉬는 동안은 함께한 시간을 멈춰 둘게요.'
+                            : '화면을 건드리지 않으면 조용한 시계로 돌아가요.',
                     style: const TextStyle(color: muted, fontSize: 14)),
               ])),
           _pill(
               m.absent
                   ? '일시정지'
-                  : '목표 ${m.persona.preferences.focusMinutes}분 · 60배속',
+                  : m.resting
+                      ? '쉬는 중'
+                      : m.liveSession
+                          ? '목표 ${m.persona.preferences.focusMinutes}분'
+                          : '목표 ${m.persona.preferences.focusMinutes}분 · 60배속',
               green),
         ]),
         const SizedBox(height: 22),
@@ -474,7 +600,7 @@ class _DemoShellState extends State<DemoShell> {
                           size: 18, color: green),
                       const SizedBox(width: 9),
                       Text(
-                          '${m.persona.job} · 조명 ${(m.brightness * 100).round()}% · ${m.persona.preferences.musicEnabled ? m.persona.sound : '고요한 집중'}',
+                          '${m.persona.job} · ${(_live == null ? null : widget.live!.devices.summary) ?? '조명 ${(m.brightness * 100).round()}%'} · ${m.persona.preferences.musicEnabled ? m.persona.sound : '고요한 집중'}',
                           style: const TextStyle(fontSize: 13)),
                     ])),
               ]))),
@@ -497,11 +623,15 @@ class _DemoShellState extends State<DemoShell> {
                             const Text('책상 주변', style: TextStyle(color: muted)),
                             const SizedBox(height: 8),
                             Text(
-                                '${m.config.number('temperature')}° · ${m.config.seconds('humidity')}%',
+                                _live == null
+                                    ? '${m.config.number('temperature')}° · ${m.config.seconds('humidity')}%'
+                                    : deskText(_live!).main,
                                 style: const TextStyle(fontSize: 20)),
                             const SizedBox(height: 6),
                             Text(
-                                'CO₂ ${m.config.seconds('co2')} ppm · ${m.config.seconds('lux')} lx',
+                                _live == null
+                                    ? 'CO₂ ${m.config.seconds('co2')} ppm · ${m.config.seconds('lux')} lx'
+                                    : deskText(_live!).sub,
                                 style: const TextStyle(
                                     color: muted, fontSize: 12)),
                           ])),
@@ -555,6 +685,17 @@ class _DemoShellState extends State<DemoShell> {
         const SizedBox(height: 10),
       ]);
 
+  /// 리포트의 피로 횟수. 보드 리포트가 있으면 그 값(hub 기준), 없으면 화면이 센 값.
+  int get _fatigueCount => _live == null
+      ? m.fatigueEvents
+      : (widget.live!.report?.fatigueEpisodes ?? m.fatigueEvents);
+
+  /// 마무리 카드의 기기 상태. 보드가 알려 준 상태가 있으면 그것, 없으면 기존 'OFF'.
+  String _deviceAfter(String target, String fallbackName) {
+    final known = _live == null ? null : widget.live!.devices.text(target);
+    return known == null ? '$fallbackName OFF' : '$fallbackName $known';
+  }
+
   Widget _tile(
           {required Widget child,
           Color color = Colors.white,
@@ -584,7 +725,7 @@ class _DemoShellState extends State<DemoShell> {
           context: context,
           barrierDismissible: false,
           barrierColor: Colors.black.withValues(alpha: .32),
-          builder: (_) => PersonalSettings(model: m));
+          builder: (_) => PersonalSettings(model: m, live: widget.live));
     } finally {
       m.preferencesOpen = false;
       m.touch();
@@ -630,9 +771,9 @@ class _DemoShellState extends State<DemoShell> {
                           children: [
                     const Text('잠깐의 피로', style: TextStyle(color: muted)),
                     const Spacer(),
-                    Text('${m.fatigueEvents}회',
+                    Text('$_fatigueCount회',
                         style: const TextStyle(fontSize: 36)),
-                    Text(m.fatigueEvents == 0 ? '이번에는 없었어요' : '선호 순서에 맞춰 반응했어요',
+                    Text(_fatigueCount == 0 ? '이번에는 없었어요' : '선호 순서에 맞춰 반응했어요',
                         style: const TextStyle(color: muted, fontSize: 12)),
                   ]))),
               const SizedBox(width: 16),
@@ -643,9 +784,11 @@ class _DemoShellState extends State<DemoShell> {
                           children: [
                     const Text('환경 · 마무리', style: TextStyle(color: muted)),
                     const Spacer(),
-                    const Text('조명 OFF', style: TextStyle(fontSize: 27)),
+                    Text(_deviceAfter('desk_lamp', '조명'),
+                        style: const TextStyle(fontSize: 27)),
                     const SizedBox(height: 7),
-                    Text('선풍기 OFF · 조정 ${m.interventionStep}회',
+                    Text(
+                        '${_deviceAfter('vent_fan', '선풍기')} · 조정 ${_live == null ? m.interventionStep : (widget.live!.report?.interventions ?? m.interventionStep)}회',
                         style: const TextStyle(color: muted, fontSize: 13)),
                   ]))),
             ])),
@@ -701,7 +844,9 @@ class _DemoShellState extends State<DemoShell> {
                       const Text('발표 조작창', style: TextStyle(fontSize: 26)),
                       const SizedBox(height: 8),
                       Text(
-                          '실제 센서·기기 연결 없음 · 1초 = ${m.config.seconds('simulatedSecondsPerTick')}초 · 작업 진입 ${m.config.seconds('workCueSeconds')}초',
+                          _live != null
+                              ? '책상과 이어져 있어요 · 화면은 책상 상태를 따라가요'
+                              : '실제 센서·기기 연결 없음 · 1초 = ${m.config.seconds('simulatedSecondsPerTick')}초 · 작업 진입 ${m.config.seconds('workCueSeconds')}초',
                           style: const TextStyle(color: muted, fontSize: 13)),
                       const SizedBox(height: 20),
                       Wrap(spacing: 10, children: [
