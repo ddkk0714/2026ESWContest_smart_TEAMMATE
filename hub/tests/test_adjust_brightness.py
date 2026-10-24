@@ -178,7 +178,7 @@ def test_live_posture_default_command_is_relative_and_undo_uses_previous(tmp_pat
     assert State.ACTION_POSTURE in seen and State.MONITOR in seen
     ep = hub.control.history[-1]
     cmd = ep.commands[0]
-    assert cmd.operation == "adjust_brightness" and cmd.value == {"percent": 60} and cmd.result["previous"] == 110
+    assert cmd.operation == "adjust_brightness" and cmd.value == {"percent": 60, "min_raw": 153} and cmd.result["previous"] == 110
     assert hub.mock_plug.brightness["desk_lamp"] == 176
     # 자동 실행 뒤 거절(되돌리기 창 안) → set_brightness previous → 모의 램프가 110 으로 돌아간다
     cache.put_feedback({"verdict": "reject"})
