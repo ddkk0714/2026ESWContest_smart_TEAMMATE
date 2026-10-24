@@ -110,6 +110,8 @@ PC 주소(`http://<PC IP>:8000`)를 넣는다.
 ## GATT 규격
 
 광고 이름 `DESKMATE-FAN`(광고 패킷), 서비스 UUID 는 스캔 응답에 있다. 페어링 없음.
+주소는 **랜덤 정적 주소**다 — 보드 공용 주소의 앞 두 비트를 1 로 바꾼 값이라 재부팅해도 같다(예: 공용 `2C:CF:67:C3:FC:2B` → `EC:CF:67:C3:FC:2B`).
+Pi 5 ATLAS 가 공용 주소 기기에는 GATT 연결을 BlueZ 에 넘기지도 않아서 바꿨다(10-24, 아래).
 
 | 특성 | UUID | 속성 |
 |---|---|---|
@@ -144,6 +146,19 @@ Pi 4 hub ── MQTT control/cmd (vent_fan) ──▶ Pi 5 앱 ── 블루투�
 ```
 
 hub 의 환경 개입 대상 `vent_fan`(`config/control.yaml`)이 이 선풍기다. Pi 5 앱이 램프와 같은 Atlas 블루투스 경로로 명령을 쓴다.
+
+> **⚠ 10-24 Pi 5 실기: 아직 연결되지 않는다.** 같은 선풍기가 노트북(Windows, bleak·Edge)과는 매번 붙는데,
+> Pi 5 ATLAS 의 `com.atlas.Bluetooth1.Gatt.Connect` 는 client id 를 한 번도 돌려주지 않았다.
+> - 공용 주소일 때: Atlas SIL(`bluez5profilegatt::connectGatt`)이 BlueZ 를 부르기 전에 즉시 "Failed to connect with remote device".
+>   BlueZ `Device1.ConnectGatt` 를 root 로 직접 부르면 약 절반 성공(나머지 `le-connection-abort-by-local`).
+> - 랜덤 정적 주소로 바꾼 뒤: SIL 이 BlueZ 까지 연결을 넘기고 링크가 잠깐 올라오지만 곧 끊기고, 여전히 client id 가 없다.
+> - 앱은 실패하면 잠깐 검색해 다시 붙도록 5회까지 재시도한다(`BleFanControl`) — 이것으로도 붙지 않았다.
+> - 원인은 Atlas 블루투스 계층 안쪽으로 보이고 확인하지 못했다. 그때까지 Pi 4 명령은 노트북 `tools/ble_fan.py bridge` 로 선풍기에 보낸다.
+>
+> Pi 5 에서 시험할 때 걸리는 것: 앱을 다시 설치하면 저장된 기기(스피커·램프·선풍기)가 지워지고 **블루투스 권한 동의 창**이 뜬다(화면에서 Ok).
+> 블루투스 연결이 끊길 때마다 시스템 "Bluetooth device disconnected" 창이 뜨는데, 멈춰서 안 눌리면
+> `abusctl call com.atlas.AppManager1 Stop "com.atlas.app.notification"` 뒤 Start 로 치운다. 기기는 시스템 설정의 Bluetooth 가 아니라
+> DESKMATE 앱 블루투스 탭에서 고른다(시스템 설정은 OS 페어링을 시도해 "Pairing failed").
 
 1. Pi 5 앱 → 블루투스 탭 → **기기 검색** → `DESKMATE-FAN` 의 **선풍기 선택**. 저장돼서 앱을 다시 켜도 검색 없이 붙는다.
 2. 같은 화면의 **상태 기반 피드백 스위치를 켠다**(꺼져 있으면 허브 명령을 `feedback_disabled` 로 거절한다).

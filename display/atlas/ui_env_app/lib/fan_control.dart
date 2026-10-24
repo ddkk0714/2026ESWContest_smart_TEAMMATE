@@ -86,8 +86,18 @@ class FanState {
 }
 
 class BleFanControl {
-  BleFanControl(this._bluetooth);
+  BleFanControl(this._bluetooth,
+      {this.connectAttempts = 5,
+      this.retryDelay = const Duration(milliseconds: 1500),
+      this.rescanFor = const Duration(seconds: 6)});
   final AtlasBluetoothService _bluetooth;
+
+  /// 10-24 Pi 5 실기: Pi 5 → Pico 2 W 링크는 두세 번에 한 번만 맺어지고
+  /// (`le-connection-abort-by-local`, 노트북은 매번 성공), 페어링하지 않은 기기는 BlueZ 가 곧 잊어서
+  /// 저장된 주소로 바로 붙으면 실패한다. 그래서 실패하면 잠깐 검색해 다시 찾은 뒤 다시 붙는다.
+  final int connectAttempts;
+  final Duration retryDelay;
+  final Duration rescanFor;
   String? _address;
   GattConnection? _connection;
   Future<bool>? _connecting;
@@ -127,15 +137,30 @@ class BleFanControl {
   }
 
   Future<bool> _connect() async {
-    try {
-      _connection = await _bluetooth.connectLamp(_address!); // 이름과 달리 일반 GATT 연결이다
-      _lastError = null;
-      return true;
-    } catch (error) {
-      _connection = null;
-      _lastError = error;
-      return false;
+    for (var attempt = 1;; attempt++) {
+      try {
+        _connection = await _bluetooth.connectLamp(_address!); // 이름과 달리 일반 GATT 연결이다
+        _lastError = null;
+        return true;
+      } catch (error) {
+        _connection = null;
+        _lastError = error;
+        if (attempt >= connectAttempts) return false;
+      }
+      await _rediscover();
+      await Future<void>.delayed(retryDelay);
     }
+  }
+
+  /// 선풍기가 다시 보일 때까지(최대 [rescanFor]) 검색한다. 검색 실패는 다음 연결 시도가 판정한다.
+  Future<void> _rediscover() async {
+    final wanted = _address!.toLowerCase();
+    try {
+      await for (final devices
+          in _bluetooth.scanProgressive(duration: rescanFor)) {
+        if (devices.any((d) => d.address.toLowerCase() == wanted)) break;
+      }
+    } catch (_) {}
   }
 
   /// 명령 하나를 쓰고 상태를 읽는다. 쓰기는 순서대로, 끊긴 연결은 한 번만 다시 붙는다.
