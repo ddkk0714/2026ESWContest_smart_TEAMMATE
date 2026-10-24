@@ -9,6 +9,11 @@ import 'display_state.dart';
 import 'session_report.dart';
 import 'privacy_state.dart';
 
+/// MQTT payload 바이트 → 문자열. hub 는 UTF-8 JSON 을 보낸다.
+/// `MqttPublishPayload.bytesToStringAsString` 은 바이트 하나를 글자 하나로 읽어(Latin-1)
+/// 한글이 `ì¡°ëª…` 처럼 깨진다(10-24 실기). 깨진 바이트가 섞여 있어도 화면은 멈추지 않게 대체 문자로 둔다.
+String mqttPayloadText(List<int> bytes) => utf8.decode(bytes, allowMalformed: true);
+
 abstract interface class StateSource {
   String get label;
   bool get isConnected;
@@ -24,8 +29,9 @@ abstract interface class StateSource {
 
   /// [verdict] = accept | reject | correct | timeout (mqtt-topics.md `feedback/user`).
   /// correct 면 [correctedState](FSM 상태 이름), [responseMs] 는 카드를 띄운 뒤 응답까지 걸린 시간.
+  /// [note] 는 프리뷰 탭의 짧은 메모(선택, `data.note`). 키 값·원시 센서는 싣지 않는다.
   Future<void> feedback(String verdict,
-      {String? correctedState, int? responseMs});
+      {String? correctedState, int? responseMs, String? note});
   Future<void> sendTestFrame(TestSensorInput input,
       {required String command, int advanceSeconds = 30, String? event});
   void close();
@@ -63,6 +69,32 @@ class TestSensorInput {
         'signals': signals.map((key, value) => MapEntry(key, value.toJson())),
       };
 }
+
+/// `deskmate/feedback/user` 의 `data`. MQTT·HTTP 두 경로가 같은 모양을 쓰게 한곳에 둔다.
+///
+/// `note` 는 프리뷰 탭의 메모(선택). 비어 있으면 키를 넣지 않고, 길이는 [kFeedbackNoteMaxChars] 로
+/// 자른다 — 토픽 계약에 없던 필드라 짧은 문자열 하나로만 둔다.
+Map<String, Object> buildFeedbackData({
+  required String requestId,
+  required String verdict,
+  String? correctedState,
+  int? responseMs,
+  String? note,
+}) {
+  final trimmed = note?.trim() ?? '';
+  final clipped = trimmed.length > kFeedbackNoteMaxChars
+      ? trimmed.substring(0, kFeedbackNoteMaxChars)
+      : trimmed;
+  return {
+    'request_id': requestId,
+    'verdict': verdict,
+    if (correctedState != null) 'corrected_state': correctedState,
+    'response_ms': responseMs ?? 0,
+    if (clipped.isNotEmpty) 'note': clipped,
+  };
+}
+
+const kFeedbackNoteMaxChars = 200;
 
 class HttpStateSource implements StateSource {
   HttpStateSource(String hubUrl)
@@ -110,18 +142,19 @@ class HttpStateSource implements StateSource {
 
   @override
   Future<void> feedback(String verdict,
-      {String? correctedState, int? responseMs}) async {
+      {String? correctedState, int? responseMs, String? note}) async {
     // HTTP 미리보기 API 는 accept·reject·correct 만 받는다(개발용 경로). 무응답은
     // 보낼 곳이 없어 버린다 — 제품 경로(MQTT)에서만 기록된다.
     if (verdict == 'timeout') return;
     final request = await _client.postUrl(_base.resolve('/api/feedback'));
     request.headers.contentType = ContentType.json;
-    final payload = utf8.encode(jsonEncode({
-      'request_id': 'atlas-display',
-      'verdict': verdict,
-      if (correctedState != null) 'corrected_state': correctedState,
-      'response_ms': responseMs ?? 0,
-    }));
+    final payload = utf8.encode(jsonEncode(buildFeedbackData(
+      requestId: 'atlas-display',
+      verdict: verdict,
+      correctedState: correctedState,
+      responseMs: responseMs,
+      note: note,
+    )));
     // contentLength 를 안 정하면 Dart 는 chunked 로 보낸다. 허브의 preview_api 는
     // Content-Length 를 필수로 읽어서 없으면 400 invalid_feedback 으로 떨어진다.
     // 실기에서 '진행' 을 눌러도 hub 가 못 받던 원인이라 명시적으로 지정한다.
@@ -167,7 +200,8 @@ class HttpStateSource implements StateSource {
 /// 남겨 둔다. MQTT가 끊겨도 display는 재연결할 뿐, Pi 4의 FSM에는 영향을
 /// 주지 않는다.
 class MqttStateSource implements StateSource, PrivacySource {
-  MqttStateSource(this._host, {required this.port, this.onControlCommand})
+  MqttStateSource(this._host,
+      {required this.port, this.onControlCommand, this.onTopicEvent})
       : _bootId = 'display-${DateTime.now().microsecondsSinceEpoch}',
         _client = MqttServerClient.withPort(
           _host,
@@ -199,6 +233,18 @@ class MqttStateSource implements StateSource, PrivacySource {
   final int port;
   final Future<Map<String, dynamic>?> Function(Map<String, dynamic>)?
       onControlCommand;
+
+  /// 개발자 모드의 명령 로그가 받는 콜백 — `control/cmd`·`control/result`·`interaction/request`·
+  /// `feedback/user` 의 envelope 를 받은 그대로(retain 제외) 넘긴다. 해석·실행은 바꾸지 않는다.
+  /// 이 콜백이 있으면 result·feedback 토픽도 구독한다(앱이 낸 결과도 브로커를 거쳐 돌아온다).
+  final void Function(String topic, Map<String, dynamic> envelope)?
+      onTopicEvent;
+  static const _loggedTopics = {
+    _controlTopic,
+    _controlResultTopic,
+    _requestTopic,
+    _feedbackTopic,
+  };
   bool _closed = false;
   final String _bootId;
   final MqttServerClient _client;
@@ -246,7 +292,7 @@ class MqttStateSource implements StateSource, PrivacySource {
           'hub_boot_id': state.hubBootId
         }
       });
-      final builder = MqttClientPayloadBuilder()..addString(payload);
+      final builder = MqttClientPayloadBuilder()..addUTF8String(payload);
       _client.publishMessage(
           _feedbackTopic, MqttQos.atLeastOnce, builder.payload!);
       return await completion.future.timeout(const Duration(seconds: 35));
@@ -333,8 +379,12 @@ class MqttStateSource implements StateSource, PrivacySource {
       _client.subscribe(_reportTopic, MqttQos.atLeastOnce);
       _client.subscribe(_hubHealthTopic, MqttQos.atLeastOnce);
       _client.subscribe(_keystrokeTopic, MqttQos.atMostOnce);
-      if (onControlCommand != null) {
+      if (onControlCommand != null || onTopicEvent != null) {
         _client.subscribe(_controlTopic, MqttQos.atLeastOnce);
+      }
+      if (onTopicEvent != null) {
+        _client.subscribe(_controlResultTopic, MqttQos.atLeastOnce);
+        _client.subscribe(_feedbackTopic, MqttQos.atLeastOnce);
       }
     } catch (_) {
       _client.disconnect();
@@ -347,15 +397,19 @@ class MqttStateSource implements StateSource, PrivacySource {
       final publish = received.payload;
       if (publish is! MqttPublishMessage) continue;
       try {
-        final text = MqttPublishPayload.bytesToStringAsString(
-          publish.payload.message,
-        );
+        final text = mqttPayloadText(publish.payload.message);
         if (text.isEmpty && received.topic == _reportTopic) {
           // 빈 retain = 브로커에서 리포트를 지웠다. 지난 숫자를 계속 보여 주지 않는다.
           _sessionReport = null;
           continue;
         }
         final envelope = jsonDecode(text) as Map<String, dynamic>;
+        final logger = onTopicEvent;
+        if (logger != null &&
+            _loggedTopics.contains(received.topic) &&
+            publish.header?.retain != true) {
+          logger(received.topic, envelope);
+        }
         if (received.topic == _stateTopic) {
           _latest = DisplayState.fromEnvelope(envelope);
           if (!_latest!.fsmState.startsWith('ACTION_')) {
@@ -431,7 +485,7 @@ class MqttStateSource implements StateSource, PrivacySource {
       final result = await handler(command);
       if (result == null || _closed || !isConnected) return;
       final builder = MqttClientPayloadBuilder()
-        ..addString(jsonEncode({
+        ..addUTF8String(jsonEncode({
           'schema_version': '1.0',
           'ts': DateTime.now().millisecondsSinceEpoch / 1000,
           'node': 'display-control',
@@ -448,7 +502,7 @@ class MqttStateSource implements StateSource, PrivacySource {
 
   @override
   Future<void> feedback(String verdict,
-      {String? correctedState, int? responseMs}) async {
+      {String? correctedState, int? responseMs, String? note}) async {
     await _ensureConnected();
     final payload = jsonEncode({
       'schema_version': '1.0',
@@ -456,14 +510,15 @@ class MqttStateSource implements StateSource, PrivacySource {
       'node': 'display',
       'boot_id': _bootId,
       'seq': ++_sequence,
-      'data': {
-        'request_id': _pendingRequestId ?? 'atlas-display',
-        'verdict': verdict,
-        if (correctedState != null) 'corrected_state': correctedState,
-        'response_ms': responseMs ?? 0,
-      },
+      'data': buildFeedbackData(
+        requestId: _pendingRequestId ?? 'atlas-display',
+        verdict: verdict,
+        correctedState: correctedState,
+        responseMs: responseMs,
+        note: note,
+      ),
     });
-    final builder = MqttClientPayloadBuilder()..addString(payload);
+    final builder = MqttClientPayloadBuilder()..addUTF8String(payload);
     _client.publishMessage(
       _feedbackTopic,
       MqttQos.atLeastOnce,
@@ -677,7 +732,7 @@ class DemoStateSource implements StateSource {
 
   @override
   Future<void> feedback(String verdict,
-      {String? correctedState, int? responseMs}) async {}
+      {String? correctedState, int? responseMs, String? note}) async {}
 
   @override
   Future<void> sendTestFrame(TestSensorInput input,
