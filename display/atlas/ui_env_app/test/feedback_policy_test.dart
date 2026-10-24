@@ -12,6 +12,48 @@ void main() {
   const firstAddress = 'AA:BB:CC:DD:EE:01';
   const secondAddress = 'AA:BB:CC:DD:EE:02';
 
+  test('excluded lamp never receives phase frames or explicit hub commands',
+      () async {
+    final bluetooth = _FakeBluetooth();
+    final music = _FakeMusic();
+    final coordinator = FeedbackCoordinator(
+        music: music,
+        lamp: IlinkLampFeedback(bluetooth)..select(firstAddress),
+        bluetooth: bluetooth)
+      ..enabled = true;
+    coordinator.configureTargets(lamp: false, speaker: false);
+    await coordinator.apply(_state('ACTION_BREAK', gate: 'auto'));
+    final result = await coordinator.handleControlCommand(_command('excluded'));
+    expect(bluetooth.writeCount, 0);
+    expect(music.isPlaying, isFalse);
+    expect(result?['error_code'], 'lamp_automation_disabled');
+    // The same lamp remains available to an explicit manual adjustment.
+    expect(await coordinator.lamp.setBrightness(128), isTrue);
+    expect(bluetooth.writeCount, 2);
+    await coordinator.dispose();
+  });
+
+  test(
+      'control history reports actual success and does not duplicate QoS retries',
+      () async {
+    final bluetooth = _FakeBluetooth();
+    final coordinator = FeedbackCoordinator(
+        music: _FakeMusic(),
+        lamp: IlinkLampFeedback(bluetooth)..select(firstAddress),
+        bluetooth: bluetooth)
+      ..enabled = true;
+    final records = <ControlRecord>[];
+    final subscription = coordinator.records.listen(records.add);
+    await coordinator.handleControlCommand(_command('record-once'));
+    await coordinator.handleControlCommand(_command('record-once'));
+    await Future<void>.delayed(Duration.zero);
+    expect(records.length, 1);
+    expect(records.single.succeeded, isTrue);
+    expect(records.single.device, 'lamp');
+    await subscription.cancel();
+    await coordinator.dispose();
+  });
+
   testWidgets(
       'manual brightness and music tests work with automatic feedback off',
       (tester) async {

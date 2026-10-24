@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'bluetooth_service.dart';
 import 'display_state.dart';
 import 'music_playback.dart';
@@ -145,6 +147,16 @@ class IlinkLampFeedback {
 
 /// The FSM authorizes interventions through its gate and control commands.
 /// Suggestions require acceptance; raw fatigue phases only update the UI.
+class ControlRecord {
+  ControlRecord(this.device, this.title, this.detail, this.succeeded)
+      : time = DateTime.now();
+  final String device;
+  final String title;
+  final String detail;
+  final bool succeeded;
+  final DateTime time;
+}
+
 class FeedbackCoordinator {
   FeedbackCoordinator({
     required this.music,
@@ -157,6 +169,24 @@ class FeedbackCoordinator {
   String? _speakerAddress;
   String? get speakerAddress => _speakerAddress;
   bool _enabled = false;
+  bool lampAutomatic = true;
+  bool speakerAutomatic = true;
+  final _records = StreamController<ControlRecord>.broadcast();
+  Stream<ControlRecord> get records => _records.stream;
+  void configureTargets({required bool lamp, required bool speaker}) {
+    if (lampAutomatic != lamp) _lastLampKey = null;
+    if (speakerAutomatic != speaker) _lastMusicKey = null;
+    lampAutomatic = lamp;
+    speakerAutomatic = speaker;
+  }
+
+  void _record(String device, String title, String detail, bool succeeded) {
+    if (!_records.isClosed) {
+      _records.add(ControlRecord(device, title, detail, succeeded));
+    }
+  }
+
+  Future<void> dispose() => _records.close();
   bool get enabled => _enabled;
   set enabled(bool value) {
     if (_enabled == value) return;
@@ -228,17 +258,26 @@ class FeedbackCoordinator {
     _applying = true;
     try {
       final key = '${state.phase}:${lamp.address}';
-      if (key != _lastLampKey &&
-          await lamp.writeFrames(ilinkFramesForPhase(state.phase))) {
-        _lastLampKey = key;
+      if (lampAutomatic &&
+          key != _lastLampKey &&
+          lamp.configured &&
+          ilinkFramesForPhase(state.phase).isNotEmpty) {
+        final ok = await lamp.writeFrames(ilinkFramesForPhase(state.phase));
+        if (ok) _lastLampKey = key;
+        _record('lamp', ok ? '책상 조명을 조절했어요' : '조명 제어에 실패했어요',
+            ok ? '책상 상태에 맞춰 조명을 조절했어요.' : '조명 연결을 확인해주세요.', ok);
       }
+      if (!speakerAutomatic) return;
       if (state.phase == 'fatigue') {
         await _playFatigueMusic();
       } else if (state.phase == 'recovery' ||
           state.phase == 'idle' ||
           state.phase == 'end') {
         if (_lastMusicKey != state.phase) {
-          if (music.isPlaying) await music.toggle();
+          if (music.isPlaying) {
+            await music.toggle();
+            _record('speaker', '사운드를 일시정지했어요', '휴식 상태에 맞춰 재생을 멈췄어요.', true);
+          }
           _lastMusicKey = state.phase;
         }
       } else {
@@ -246,16 +285,23 @@ class FeedbackCoordinator {
       }
     } catch (error) {
       lastAudioError = error;
+      _record('speaker', '사운드 제어에 실패했어요', '스피커 연결을 확인해주세요.', false);
     } finally {
       _applying = false;
     }
   }
 
   Future<void> _playFatigueMusic() async {
+    if (!speakerAutomatic) return;
     if (_lastMusicKey == 'fatigue') return;
     final address = _speakerAddress;
     if (address != null && !await bluetooth.isA2dpConnected(address)) return;
-    if (!music.isPlaying) await music.toggle();
+    if (!music.isPlaying) {
+      await music.toggle();
+      if (music.isPlaying) {
+        _record('speaker', '사운드를 재생했어요', '책상 스피커', true);
+      }
+    }
     lastAudioError = null;
     if (music.isPlaying) _lastMusicKey = 'fatigue';
   }
@@ -281,6 +327,13 @@ class FeedbackCoordinator {
       Map<String, dynamic> command) async {
     Map<String, dynamic> result(String status, [String? error]) {
       lastControlError = error;
+      _record(
+          'lamp',
+          status == 'succeeded' ? '책상 조명을 조절했어요' : '조명 제어에 실패했어요',
+          status == 'succeeded'
+              ? '${command['operation']} · ${command['value']}'
+              : '조명 연결 또는 자동 제어 설정을 확인해주세요.',
+          status == 'succeeded');
       return {
         'command_id': command['command_id'],
         'status': status,
@@ -291,6 +344,7 @@ class FeedbackCoordinator {
     }
 
     if (!enabled) return result('failed', 'feedback_disabled');
+    if (!lampAutomatic) return result('failed', 'lamp_automation_disabled');
     final expires = command['expires_ts_ms'];
     if (expires is! num ||
         !expires.isFinite ||

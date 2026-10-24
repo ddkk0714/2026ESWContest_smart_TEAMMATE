@@ -23,6 +23,7 @@ import 'link_status.dart';
 import 'music_playback.dart';
 import 'mqtt_watchdog.dart';
 import 'posture_screen.dart';
+import 'preview_page.dart';
 import 'sensor_overview_page.dart';
 import 'developer_page.dart';
 import 'session_report.dart';
@@ -30,6 +31,7 @@ import 'settings_store.dart';
 import 'state_source.dart';
 import 'privacy_page.dart';
 import 'privacy_state.dart';
+import 'workspace_shell.dart';
 
 const _hubUrl = String.fromEnvironment('DESKMATE_HUB_URL');
 const _mqttHost = String.fromEnvironment('DESKMATE_MQTT_HOST');
@@ -636,6 +638,52 @@ class _DashboardPageState extends State<DashboardPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  // ── 프리뷰 탭(개발 도구 안) ───────────────────────────────────────────────
+
+  /// 프리뷰 탭이 ToF 격자·자세 라벨을 읽을 Pi 4 주소. 설정에 적은 값 → MQTT 브로커 호스트
+  /// → 빌드 HUB_URL 의 호스트 순. 전부 없으면 null 이고 탭이 입력칸을 띄운다.
+  String? get _previewHost {
+    final saved = _settings.previewHost;
+    if (saved != null && saved.isNotEmpty) return saved;
+    final source = _source;
+    if (source is MqttStateSource) return source.host;
+    final hub = Uri.tryParse(_hubUrl.trim());
+    if (hub != null && hub.host.isNotEmpty) return hub.host;
+    return null;
+  }
+
+  void _setPreviewHost(String host) {
+    final next = _settingsStore.load().copyWith(previewHost: host);
+    final saved = _settingsStore.save(next);
+    setState(() => _settings = next);
+    _notify(saved
+        ? 'ToF 주소를 $host 로 저장했습니다.'
+        : '$host 로 읽습니다 — 저장할 곳이 없어 이번 실행에만 적용됩니다.');
+  }
+
+  /// 프리뷰 탭의 "지금 판정이 맞나요?". 기존 `feedback/user` 경로 그대로 — request_id 는
+  /// 현재 질문이 있으면 그것, 없으면 atlas-display(소스가 정한다). 메모는 `data.note`.
+  Future<void> _previewFeedback(PreviewFeedback feedback) async {
+    if (_override != null) {
+      _devAnswer('프리뷰 ${feedback.verdict}'
+          '${feedback.correctedState == null ? '' : ' → ${feedback.correctedState}'}');
+      return;
+    }
+    try {
+      await _source.feedback(feedback.verdict,
+          correctedState: feedback.correctedState,
+          responseMs: _intervention.responseMs(DateTime.now()),
+          note: feedback.note);
+      _notify(switch (feedback.verdict) {
+        'accept' => '판정이 맞다고 기록했어요.',
+        'reject' => '판정이 틀렸다고 기록했어요.',
+        _ => '정정(${feedback.correctedState})을 기록했어요. 판정은 바꾸지 않아요.',
+      });
+    } catch (error) {
+      _notify('전송 실패: $error');
+    }
+  }
+
   Future<void> _toggleMusic() async {
     if (_musicBusy) return;
     setState(() => _musicBusy = true);
@@ -765,12 +813,31 @@ class _DashboardPageState extends State<DashboardPage> {
     unawaited(_musicChanges.cancel());
     unawaited(_musicVolumeChanges.cancel());
     unawaited(_music.dispose());
+    unawaited(_feedbackController.dispose());
     unawaited(_bluetooth.close());
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    return DeskmateWorkspace(
+      state: _override ?? _state,
+      demo: _source is DemoStateSource,
+      music: _music,
+      feedback: _feedbackController,
+      developerBuilder: (context) => Theme(
+        data: buildDeskmateTheme(),
+        child: _buildDeveloperTools(context),
+      ),
+      onConnections: () => setState(() => _view = _AppView.bluetooth),
+      pendingRequest: _hasPendingRequest,
+      onAccept: () => unawaited(_feedback('accept')),
+      onReject: () => unawaited(_feedback('reject')),
+      onUndo: () => unawaited(_undoAuto()),
+    );
+  }
+
+  Widget _buildDeveloperTools(BuildContext context) {
     final state = _override ?? _state;
     return Scaffold(
       body: SafeArea(
@@ -855,6 +922,8 @@ class _DashboardPageState extends State<DashboardPage> {
                           onClear: _clearDev,
                           preview: _buildDashboard(state),
                         ),
+                      // 카메라 자세 탭(ESP32-CAM/camsvc)은 개발용. 탭은 숨겨 두고(kShowCameraPostureTab)
+                      // 그 자리에 ToF 프리뷰가 온다 — 카메라 미사용 원칙(열린 결정 I7). 코드는 남긴다.
                       _AppView.posture => PostureScreen(
                           // 전체 리로드·연결 탭의 '다시 찾기' 가 이 값을 올린다.
                           reconnectSignal: _postureReloadToken,
@@ -864,6 +933,7 @@ class _DashboardPageState extends State<DashboardPage> {
                             }
                           },
                         ),
+                      _AppView.preview => _buildPreview(state),
                       _AppView.fsmGraph =>
                         FsmGraphPage(currentState: state.fsmState),
                       _AppView.bluetooth => BluetoothControlPage(
@@ -893,6 +963,15 @@ class _DashboardPageState extends State<DashboardPage> {
       ),
     );
   }
+
+  Widget _buildPreview(DisplayState state) => PreviewPage(
+        state: state,
+        host: _previewHost,
+        onHostChanged: _setPreviewHost,
+        onFeedback: _previewFeedback,
+        // 개발자 화면으로 고정 중이면 가짜 상태에 대한 라벨을 hub 에 남기지 않는다.
+        feedbackEnabled: _override == null,
+      );
 }
 
 class _MusicVolumeDialog extends StatefulWidget {
@@ -956,8 +1035,15 @@ enum _AppView {
   bluetooth,
   sessionReport,
   privacy,
-  connection
+  connection,
+  // 개발 도구의 프리뷰 탭(ToF 열지도·전 센서·피드백). posture(카메라) 탭 자리에 온다.
+  preview,
 }
+
+/// 카메라 자세 탭(ESP32-CAM/camsvc, `posture_screen.dart`)을 개발 도구 헤더에 보일지.
+/// "카메라 미사용" 원칙과 충돌하는 열린 결정(I7)이라 탭만 숨기고 코드는 지우지 않는다 —
+/// 팀이 채택하면 true 로.
+const kShowCameraPostureTab = false;
 
 class _Header extends StatelessWidget {
   const _Header(
@@ -1070,11 +1156,18 @@ class _Header extends StatelessWidget {
               icon: Icons.developer_mode,
               label: '\uAC1C\uBC1C\uC790',
               onTap: () => onViewChanged(_AppView.sensorTest)),
+          // \uD504\uB9AC\uBDF0(ToF \uC5F4\uC9C0\uB3C4\u00B7\uC804 \uC13C\uC11C\u00B7\uD53C\uB4DC\uBC31). \uC815\uC2DD \uAE30\uB2A5\uC774 \uC544\uB2C8\uB77C \uAC1C\uBC1C \uB3C4\uAD6C \uC548\uC5D0\uB9CC \uC788\uB2E4.
           _HeaderNav(
-              selected: view == _AppView.posture,
-              icon: Icons.chair_alt,
-              label: '\uC790\uC138',
-              onTap: () => onViewChanged(_AppView.posture)),
+              selected: view == _AppView.preview,
+              icon: Icons.science_outlined,
+              label: '\uD504\uB9AC\uBDF0',
+              onTap: () => onViewChanged(_AppView.preview)),
+          if (kShowCameraPostureTab)
+            _HeaderNav(
+                selected: view == _AppView.posture,
+                icon: Icons.chair_alt,
+                label: '\uC790\uC138',
+                onTap: () => onViewChanged(_AppView.posture)),
           _HeaderNav(
               selected: view == _AppView.fsmGraph,
               icon: Icons.account_tree_outlined,

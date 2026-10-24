@@ -1,3 +1,4 @@
+import 'workspace_test_helpers.dart';
 import 'package:deskmate_display/display_state.dart';
 import 'package:deskmate_display/main.dart';
 import 'package:flutter/material.dart';
@@ -10,7 +11,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(const DeskmateApp());
+    await pumpDeveloperApp(tester, const DeskmateApp());
     await tester.pump();
 
     // 자동 순환이 꺼져 있으면 상태 탭은 시계 화면에 고정된다. 키스트로크 패널은

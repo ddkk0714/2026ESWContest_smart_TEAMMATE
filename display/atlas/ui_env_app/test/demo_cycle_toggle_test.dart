@@ -1,3 +1,4 @@
+import 'workspace_test_helpers.dart';
 import 'package:deskmate_display/main.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -5,7 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   testWidgets('demo cycling is OFF by default and can be enabled',
       (tester) async {
-    await tester.pumpWidget(const DeskmateApp());
+    await pumpDeveloperApp(tester, const DeskmateApp());
     await tester.pump();
     expect(find.text('#1'), findsOneWidget);
     expect(find.textContaining('OFF'), findsWidgets);

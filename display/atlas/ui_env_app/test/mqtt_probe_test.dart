@@ -1,3 +1,4 @@
+import 'workspace_test_helpers.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -50,11 +51,13 @@ void main() {
     settings
         .save(DeskmateSettings(mqttHost: '127.0.0.1', mqttPort: broker!.port));
     try {
-      await tester.pumpWidget(DeskmateApp(
-        settings: settings,
-        prober: (host, port, {onStep}) async => const MqttProbeResult(
-            ok: true, cause: LinkCause.none, elapsed: Duration.zero),
-      ));
+      await pumpDeveloperApp(
+          tester,
+          DeskmateApp(
+            settings: settings,
+            prober: (host, port, {onStep}) async => const MqttProbeResult(
+                ok: true, cause: LinkCause.none, elapsed: Duration.zero),
+          ));
       for (var i = 0; i < 10; i++) {
         await tester.runAsync(
             () => Future<void>.delayed(const Duration(milliseconds: 50)));
