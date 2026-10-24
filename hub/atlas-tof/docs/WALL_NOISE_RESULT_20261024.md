@@ -5,9 +5,9 @@ HW(렌즈 앞 커버·센서 모듈·펌웨어 측정 설정)가 바뀌면 벽 6
 
 - 조건: 흰 콘크리트 벽, 천장 형광등, 지그 위로 약 25°(정면은 벽을 똑바로, 시야엔 벽만), 벽 45 / 50 / 60 cm 각 5분.
 - 보드: Pi 4 자세 서비스(모델 `opt_l8_c256`) + 중계기(`relay.sh`), ESP32 USB 직결. 0x05 flags=3.
-- 원본: GitHub Release [`tof-wall-noise-20261024`](https://github.com/ddkk0714/2026ESWContest_smart_TEAMMATE/releases/tag/tof-wall-noise-20261024).
-  - `session_20261024_230205` 폴더 zip: `frames.jsonl`(센서 원본 8×8 전부), `state.jsonl`(1 s `/api/state`), 녹화별 `report.json`·`summary.md`, `SESSION.md`·`fit.md`.
-  - 팀 규칙(데이터 커밋 금지)대로 레포에는 이 요약만 둔다.
+- 원본: [`dataset/tof_wall_noise/session_20261024_230205/`](../../../dataset/tof_wall_noise/README.md).
+  - `frames.jsonl`(센서 원본 8×8 전부), `state.jsonl`(1 s `/api/state`), 녹화별 `report.json`·`summary.md`, `SESSION.md`·`fit.md`.
+  - 같은 내용의 zip 이 Release [`tof-wall-noise-20261024`](https://github.com/ddkk0714/2026ESWContest_smart_TEAMMATE/releases/tag/tof-wall-noise-20261024) 에도 있다.
 
 ## 결론
 
@@ -66,10 +66,57 @@ HW(렌즈 앞 커버·센서 모듈·펌웨어 측정 설정)가 바뀌면 벽 6
 - `PLACEMENT_BASELINE_NOISE_PROCESS.md` §1-3 의 장치 이동 문턱 `max(80 mm, 4·σ_noise)` 는 4σ ≈ 8 mm 라서 최소값 80 mm 가 그대로 쓰인다.
 - 입력 필터(ESP32 3표본 평균·median3·EMA)는 잡음을 절반으로 줄이지만 drowsy 과다에는 효과가 없을 것이다. 우선순위를 낮춘다.
 
+## 10-25 시뮬로 확인한 것 (보드 모델 `opt_l8_c256`, UBAI `pc_tilt_orient.py`)
+
+- **기울기 25° 는 drowsy 오탐 원인이 아니다.** 시뮬 기울기별 48세션 × 300 s 결과:
+
+  | 기울기 | 정확도 | drowsy 오탐률 | upright→misplaced |
+  |---|---|---|---|
+  | 10° | 0.64 | 0.040 | 0.20 |
+  | 15° | 0.82 | 0.028 | 0.05 |
+  | 20° | 0.83 | 0.026 | 0.05 |
+  | 25° | 0.74 | 0.019 | 0.13 |
+  | 30° | 0.55 | 0.012 | 0.29 |
+
+  기울수록 drowsy 오탐은 줄고 misplaced 가 는다. **권장 장착은 15~20°** 다.
+- **좌우 반전은 원인 후보다.** 10-19 실측(정면 80 cm)을 열(좌우) 뒤집어 채점하면 결과가 이렇게 나빠진다.
+  - F1: 0.445 → 0.344
+  - 바른자세를 drowsy 로 보는 비율: 0.077 → 0.146(2배)
+- **실측 drowsy 오탐은 턱괴기에서 가장 많다.**
+  - 정답 턱괴기의 50 % 를 drowsy 로 본다(거북목 12 %, 바른자세 8 %).
+  - 정답 drowsy 는 67 % 를 misplaced 로, 16 % 만 drowsy 로 본다.
+  - 실측 오탐률 0.11 은 시뮬 0.02~0.04 보다 커서, 사람·자세 쪽(손이 얼굴 앞에 오는 자세, 미세 흔들림, 옷·머리 반사) 차이로 본다.
+
 ## 남은 질문 (drowsy 과다의 원인 후보)
 
-- **사람 쪽:** 실제 사람의 미세한 몸 흔들림, 옷·머리카락 반사가 시뮬 사람과 다를 수 있다.
-  - `session --steps empty,still,work --session-dir <같은 폴더>` 의 가만히 앉기·평소 작업 녹화로 가른다(HW 확정 뒤).
-- **장착 각도:** 지그 위로 약 25° 는 시뮬 학습 기울기 범위(0~25°)의 끝이다.
-- **좌우 방향:** 이번 녹화의 0x05 flags=3(행·열 뒤집기)은 10-22 재장착 뒤 기록(flags=1, FLIP_COLS=0)과 다르다.
-  장착이 그 뒤에 바뀐 게 아니라면 좌우 거울상일 수 있어 손 들기로 확인한다.
+- ~~센서 잡음~~: 아니다(이 문서).
+- ~~장착 기울기 25°~~: 아니다(위 시뮬 표). 다만 정확도는 15~20° 가 낫다.
+- **좌우 방향**: 이번 녹화의 0x05 flags=3(행·열 뒤집기)은 10-22 재장착 뒤 기록(flags=1, FLIP_COLS=0)과 다르다.
+  - flags 비트 뜻은 10-19 와 같다(b0 flip_rows, b1 flip_cols, 펌웨어가 이미 적용).
+  - 그 뒤 COLS=1 로 다시 구웠거나 장착이 바뀐 것이라, flags 만으로는 맞는지 못 가린다.
+- **사람·자세 쪽**: 턱괴기 → drowsy 혼동, 실제 사람의 미세 흔들림·반사. 사람 녹화가 있어야 가른다.
+
+## 해야 할 것
+
+- [ ] **좌우 방향 확인 — 지금 HW 로 왼팔 들기** (1분)
+  - 장치를 마주 보고 앉아 `python -I tof_wall_noise.py aim --pi5 <PI5> --person` 을 돌린다.
+  - 왼팔을 옆으로 뻗은 채 한 번 더 돌린다.
+  - 사진 규약이라, 내 왼팔은 **센서 A(왼쪽 모듈) 격자의 오른쪽 열(5~7)** 에 가까운 값으로 나와야 맞다.
+  - 왼쪽 열에 나오면 거울상이다 → 펌웨어 `DESKMATE_TOF_FLIP_COLS` 를 바꿔 다시 굽는다. 받는 쪽은 더 뒤집지 않는다.
+- [ ] **지그 기울기를 15~20° 로** (HW 확정 때). 25° 는 정확도 0.74, 15~20° 는 0.82~0.83(위 시뮬 표).
+- [ ] **HW 확정 뒤 벽 60 cm 5분 다시 재기**: `session --pi5 <PI5> --steps wall60`.
+  - 렌즈 앞 커버·센서 모듈·펌웨어 측정 설정이 바뀌었으면 꼭 한다.
+  - 결과는 이 문서 표와 비교하고, 원본은 `dataset/tof_wall_noise/` 에 더한다.
+- [ ] **사람 녹화** (HW 확정 뒤). 같은 세션 폴더에 wall60 이 있어야 비교가 된다.
+  - `session --pi5 <PI5> --session-dir <폴더> --steps empty,still,work`: 빈 자리 1분·가만히 3분·평소 작업 5분.
+  - 턱괴기도 따로 3분: `record --pi5 <PI5> --label chinrest --kind person --seconds 180 --out <폴더>`. 실측 오탐이 가장 많은 자세다.
+- [ ] **시뮬·학습: 턱괴기 ↔ drowsy 혼동 보강.**
+  - 손이 얼굴 앞에 오는 턱괴기 변형을 시뮬에 넣는다.
+  - 사람 녹화가 생기면 그걸로 채점한다.
+  - 실제 drowsy 를 misplaced 로 보는 문제(67 %)도 같이 본다.
+- [ ] **측정 도구: 프레임 놓침 줄이기** (낮음).
+  - 다음 측정은 Pi 4 핫스팟 주소로 터널 없이 붙는다(`--raw http://<PI4>:8772 --api http://<PI4>:8771`).
+  - 근본 해결은 중계기 HTTP 가 UART 읽기를 막지 않게 하는 것, 또는 자세 서비스의 `/raw`(PR #72)를 쓰는 것이다.
+- [ ] **`WALL_NOISE_TEST.md` 에 hub 모드 ↔ 중계기 모드 전환 절차 넣기.**
+  - PR #71 뒤 hub 가 ESP32 USB 를 직접 읽으면 중계기(`/raw`)를 같이 못 띄운다.
+  - 지금은 10-24 팀원용 zip 의 `START_HERE.md` 에만 있다.
