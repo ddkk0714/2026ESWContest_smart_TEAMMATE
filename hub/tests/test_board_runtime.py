@@ -18,6 +18,7 @@ MISSING_ON_BOARD = ("_socket", "_random", "_ssl")
 BOARD_MODULES = (
     "deskmate_hub.service_bridge",
     "deskmate_hub.live",
+    "deskmate_hub.identity",                       # 프로필 id 한 곳(10-25)
     "deskmate_hub.profile",                        # 시연 프로파일 오버레이(DESKMATE_PROFILE) — 표준 라이브러리만
     "deskmate_hub.ingest.mqtt_lines",
     "deskmate_hub.ingest.uart_source",

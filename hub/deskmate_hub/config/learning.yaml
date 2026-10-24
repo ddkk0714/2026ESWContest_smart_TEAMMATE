@@ -55,9 +55,9 @@ undo_s: 120                 # 자동 실행 뒤 이 안의 거절 = 되돌리기
 undo_weight: 1.0            # 되돌리기 라벨 무게 — 기기가 싫어서 끈 것과 안 피곤한 것을 못 가른다. 기기 선택을 정책이 따로 배우면 0
 
 # 확인 카드(interaction/request kind checkin_suggest "지금 피곤하세요?") — FSM 이 개입하지 않는 순간의 라벨.
-# 보드는 끈다: Pi 5 화면 앱(ui_env_app)이 아직 kind 를 보지 않고 마지막 request_id 만 기억해서, 카드가 화면에 안 뜨고
-# 다른 응답이 이 id 를 달고 올 수 있다. 화면 앱에 확인 카드가 생기면 true 로.
-probe: false
+# 10-25 켬: Pi 5 앱(7bef8a0)·제품 UI 가 checkin_suggest 카드를 띄운다. 카드는 한 번에 하나 — 우선순위 FSM ACTION 카드 >
+# CO₂ vent_suggest > checkin_suggest (live.py: 개입·환기 카드가 떠 있으면 확인 카드를 안 내고, 확인 카드가 떠 있으면 환기 카드를 안 낸다).
+probe: true
 probe_band: 0.25            # 모델이 애매할 때만(|p − 0.5| < 이 값)
 probe_gap_s: 900            # 카드·개입 사이 최소 간격
 probe_max: 6                # 세션당 상한

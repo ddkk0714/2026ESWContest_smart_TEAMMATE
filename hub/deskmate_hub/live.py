@@ -21,6 +21,7 @@ from .features import BaselineStore
 from .ingest import SensorCache, SessionTracker, build_frame, load_ingest_config, sensor_summary
 from .presentation import state_envelope
 from .profile import apply_profile, apply_section
+from .identity import active_profile_id
 from .esm import make_label, write_label
 from .fatigue.live import build_fatigue_runtime, load_fatigue_config
 from .co2_window import CARD_KIND as CO2_CARD_KIND, PROMPT_CODE as CO2_PROMPT, ARM_ID as CO2_ARM, ARM_LABEL as CO2_ARM_LABEL
@@ -154,7 +155,7 @@ class LiveHub:
                     print("[personalize] enabled 지만 정책 모듈을 못 불러 기록만 한다", file=self.out)
                 else:
                     policy_path = personalize_policy_path or os.path.join(
-                        log_dir, "profiles", str(self.personalize_cfg.get("profile_id", "default")), "policy.json")
+                        log_dir, "profiles", active_profile_id(self.personalize_cfg), "policy.json")
                     self.personalize_policy = InterventionPolicy.load(policy_path, self.personalize_cfg)
             self.personalize_recorder = EpisodeRecorder(
                 self.personalize_cfg, path, boot_id=self.boot_id, ingest_cfg=self.ingest_cfg,
@@ -179,9 +180,12 @@ class LiveHub:
         # 상태는 learning.yaml state_path(보드: logs/profiles/<profile_id>/reaction.json)에 라벨마다 저장한다.
         self.learning_cfg = learning_cfg if learning_cfg is not None else (
             load_learning_config() if load_learning_config is not None else {})
+        # 프로필 id 는 identity.active_profile_id 한 곳에서 — 개인화 정책·반응 학습 상태 파일이 같은 사람을 가리킨다
+        self.profile_id = active_profile_id(self.learning_cfg, self.personalize_cfg)
         self.learner = None
         if ReactionLearner is not None and self.learning_cfg.get("enabled"):
-            self.learner = ReactionLearner(self.learning_cfg, self.fsm_cfg, state_path=learning_state_path,
+            self.learner = ReactionLearner(dict(self.learning_cfg, profile_id=self.profile_id), self.fsm_cfg,
+                                           state_path=learning_state_path,
                                            on_log=lambda m: print(m, file=self.out, flush=True))
             self.engine.score_adjust = self.learner.adjust
 
@@ -337,12 +341,12 @@ class LiveHub:
             # fatigue_logger 가 남기는 학습 tick 과 같은 입력(state/phase 의 ts·c_fatigue·sensor_summary)이어야
             # 학습과 기기의 특징이 같다 — c_fatigue 는 state_envelope 처럼 0~1 로 자르고 4자리로 둔다.
             self.fatigue.set_hub_session(self.tracker.session_started)
-            view = self.fatigue.observe({
+            fatigue_view = self.fatigue.observe({     # 'view' 는 CacheView 스냅샷 — 아래 CO₂ 규칙이 쓰므로 덮지 않는다(10-25 통합)
                 "ts": now, "fsm_state": result.state.value, "sensor_summary": summary,
                 "c_fatigue": round(max(0.0, min(1.0, float(result.scores.c_fatigue))), 4),
             })
-            if view is not None:
-                summary["fatigue"] = view
+            if fatigue_view is not None:
+                summary["fatigue"] = fatigue_view
         envelope = state_envelope(result, boot_id=self.boot_id, seq=self.seq, ts=now, sensor_summary=summary)
         self.seq += 1
         self.publish(envelope)

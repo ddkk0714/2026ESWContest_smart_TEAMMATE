@@ -1,0 +1,35 @@
+# 시연 프로파일 demo-b-study (2026-10-25) — DESKMATE_PROFILE=demo-b-study. demo-b 전부 + 책 읽는 수험생 자세 가중치.
+# 전부 "시연 전용 — 시뮬 근거(PC life_sim 수험생 페르소나), 실측 성공 기록에 쓰지 말 것". 적지 않은 키는 기본값 그대로.
+# 왜: 자세 모델 v4 가 책 읽기(고개 숙임)의 59 % 를 거북목(forward_head)으로 봐서 기본 가중치면 독서 중 피로 증거가 쌓인다.
+#   lean_forward 0, forward_head 0.1/0.05, chin_rest 0.3/0.3 = life_sim 수험생 페르소나 값.
+fsm:
+  timers:
+    baseline_sec: 10                # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 300
+    fatigue_elevated_hold_sec: 20   # 기본 180
+    fatigue_confirm_hold_sec: 20    # 기본 180
+    monitor_window_sec: 30          # 기본 0
+    rest_min_sec: 60                # 기본 300
+    fatigue_hold_min_frac: 0.8      # 기본 1.0
+  gate:
+    asleep_retry: rest
+    conf_auto: 0.55                 # 기본 0.75
+  thresholds:
+    still_asleep_delta: 0.9
+    fatigue_confirm: 0.60           # 기본 0.70
+personalize:
+  gate:
+    conf_auto: 0.55                 # FSM gate.conf_auto 와 같은 값(다르면 정책이 자동을 제안으로 낮춘다)
+ingest:
+  normalization: linear             # 기본 baseline (10 s 보정 창으로는 기준선이 안 잡힌다)
+  pc_ratio_window_sec: 120          # 기본 900
+  elapsed:
+    reset_on_rest: true             # 기본 false
+  tof:
+    posture_phi:
+      lean_forward: 0.0             # 시연 전용 — 시뮬 근거(수험생 페르소나). 기본 0.2. 책 읽는 숙임을 집중 저하로 안 본다
+      forward_head: 0.1             # 기본 0.3. v4 가 독서 59 % 를 거북목으로 봄
+      chin_rest: 0.3                # 기본 0.5
+    posture_delta:
+      lean_forward: 0.0             # 기본 0.1
+      forward_head: 0.05            # 기본 0.2
+      chin_rest: 0.3                # 기본 0.6
