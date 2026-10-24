@@ -20,6 +20,7 @@ from .control import ControlDispatcher, MockPlugAdapter, load_control_config
 from .features import BaselineStore
 from .ingest import SensorCache, SessionTracker, build_frame, load_ingest_config, sensor_summary
 from .presentation import state_envelope
+from .profile import apply_profile
 from .esm import make_label, write_label
 from .personalization import PersonalizationRuntime, load_personalization_config
 from .personalization.privacy import PersonalizationPrivacy, load_privacy_config
@@ -60,6 +61,7 @@ class LiveHub:
         personalize_cfg: dict[str, Any] | None = None,
         personalize_log_path: str | None = None,
         personalize_policy_path: str | None = None,
+        profile: str | None = None,
         frame_log: TextIO | None = None,
         state_log: TextIO | None = None,
         out: TextIO = sys.stdout,
@@ -67,6 +69,9 @@ class LiveHub:
         self.cache = cache
         self.fsm_cfg = fsm_cfg or load_config()
         self.ingest_cfg = ingest_cfg or load_ingest_config()
+        # 시연 프로파일(DESKMATE_PROFILE=demo-a|demo-b, profile.py): fsm·ingest 위에 오버레이. profile="" 이면 환경변수를 무시한다.
+        self.fsm_cfg, self.ingest_cfg, self.profile = apply_profile(
+            self.fsm_cfg, self.ingest_cfg, profile, log=lambda m: print(m, file=out, flush=True))
         self.engine = FSMEngine(self.fsm_cfg)
         self.tracker = SessionTracker(
             elapsed_reset_on_rest=bool((self.ingest_cfg.get("elapsed") or {}).get("reset_on_rest", False)))
@@ -435,7 +440,8 @@ def run_live(broker: str, port: int, *, fsm_config: str | None, ingest_config: s
             hub.esm_log_path = os.path.join(log_dir, f"esm-{hub.boot_id}.jsonl")
         if hub.personalize_recorder is not None:
             hub.personalize_recorder.path = os.path.join(log_dir, f"personalize-{hub.boot_id}.jsonl")
-        print(f"deskmate hub live — broker {broker}:{port}, period {hub.period:.0f}s, logs {log_dir}/", file=sys.stderr)
+        print(f"deskmate hub live — broker {broker}:{port}, period {hub.period:.0f}s, logs {log_dir}/"
+              + (f", profile {hub.profile}" if hub.profile else ""), file=sys.stderr)
         source.start()
         # 별도 자세 서비스(deskmate_tofposture) 판정을 1 s 마다 받아 온다(ingest.yaml tof.posture_source: service, PC 경로)
         from .ingest.tof_service import TofServicePoller, should_poll

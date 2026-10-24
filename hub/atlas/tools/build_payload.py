@@ -114,6 +114,13 @@ def main() -> None:
                     privacy_config = yaml.safe_load(source)
                 archive.writestr("deskmate_hub/config/privacy.json",
                                  json.dumps(privacy_config, ensure_ascii=False, separators=(",", ":")))
+            # 시연 프로파일(config/profiles/*.yaml, DESKMATE_PROFILE=demo-a|demo-b) — deskmate_hub/profile.py 가 pkgutil 로
+            # profiles/<이름>.json 을 읽는다(ingest.json 과 같은 방식). 없으면 보드에서 그 프로파일을 못 켠다.
+            for profile_yaml in sorted((args.config.parent / "profiles").glob("*.yaml")):
+                with profile_yaml.open(encoding="utf-8") as source:
+                    profile_config = yaml.safe_load(source)
+                archive.writestr(f"deskmate_hub/config/profiles/{profile_yaml.stem}.json",
+                                 json.dumps(profile_config, ensure_ascii=False, separators=(",", ":")))
             ondevice_yaml = args.config.with_name("ondevice.yaml")
             if ondevice_yaml.exists():
                 with ondevice_yaml.open(encoding="utf-8") as source:

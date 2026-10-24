@@ -96,13 +96,17 @@ def _run_live_bridge() -> None:
     from .live import LiveHub
 
     from .ingest import load_ingest_config
+    from .inference import load_config
     from .ingest.mapping import mmwave_presence_hint
     from .ingest.tof_service import TofServiceLineSource, TofServicePoller, should_poll, uses_service
     from .posture.tof_mlp import load_posture_from_config
+    from .profile import apply_profile
 
     store = BridgeStateStore()
     cache = SensorCache()
-    ingest_cfg = load_ingest_config()
+    # 시연 프로파일(hub.env DESKMATE_PROFILE=demo-a|demo-b)은 여기서 한 번 얹고 LiveHub 에는 얹은 설정을 그대로 준다(profile="")
+    fsm_cfg, ingest_cfg, profile = apply_profile(load_config(), load_ingest_config(),
+                                                 log=lambda m: print(m, file=sys.stderr, flush=True))
     # ToF 자세 MLP(원본 격자 0x05 → posture). 가중치가 없으면 None 이고 0x03 규칙 판정으로 돈다.
     posture = load_posture_from_config((ingest_cfg.get("tof") or {}),
                                        log=lambda m: print(m, file=sys.stderr, flush=True))
@@ -161,7 +165,8 @@ def _run_live_bridge() -> None:
         if mqtt_source is not None:
             mqtt_source.publish_control(command)
 
-    hub = LiveHub(cache, publish=publish, publish_request=publish_request, publish_control=publish_control,
+    hub = LiveHub(cache, fsm_cfg=fsm_cfg, ingest_cfg=ingest_cfg, profile="",
+                  publish=publish, publish_request=publish_request, publish_control=publish_control,
                   out=sys.stderr)
     if os.environ.get("DESKMATE_PERSONALIZATION_SELF_CHECK") == "1":
         from .personalization.self_check import run_self_check

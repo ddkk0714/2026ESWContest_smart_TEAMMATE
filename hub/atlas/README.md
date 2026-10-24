@@ -42,6 +42,19 @@ curl http://<PI4_IP>:8765/health
 payload 해석은 Python(`deskmate_hub/ingest/uart_frame.py`)이 한다. 규약은 `docs/data-spec.md` §13.1.
 
 Python 브리지를 실센서 모드로 띄우려면 서비스 환경에 `DESKMATE_HUB_MODE=live`(선택: `DESKMATE_MQTT_HOST`)를 준다.
+
+### 시연 프로파일 (2026-10-24)
+
+`hub.env`(`pi4-hub-activate.sh` 가 만드는 서비스 환경 파일)에 한 줄을 더하고 서비스를 다시 띄우면 Python 브리지가 기본 fsm·ingest 위에
+`deskmate_hub/config/profiles/<이름>.yaml` 의 `fsm:`·`ingest:` 절을 깊은 병합으로 얹는다(`deskmate_hub/profile.py`). 줄을 지우면 기본으로 돌아온다.
+
+```
+DESKMATE_PROFILE=demo-a        # 또는 demo-b
+```
+
+빌드 때 `tools/build_payload.py` 가 profiles/*.yaml 을 `profiles/<이름>.json` 으로 payload 에 넣으므로(ingest.json 과 같은 방식) 보드의 제한 Python 은
+YAML 없이 읽는다. 모르는 이름이면 브리지가 바로 종료하고 stderr 에 있는 이름을 찍는다. 적용되면 시작 로그에 `[profile] DESKMATE_PROFILE=demo-a — …` 한 줄이 남는다.
+**두 프로파일은 시연 전용(시뮬 근거)이다 — 실측 성공 기록에 쓰지 않는다.**
 빌드 시 `paho-mqtt` 가 설치돼 있으면 payload 에 동봉된다(`tools/build_payload.py`).
 
 ## 자세 서비스 판정 폴링 (2026-10-23)
