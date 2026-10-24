@@ -468,8 +468,8 @@ void testAwayReset(const std::string& bin) {
           "away: one more reset while the last frame is reused (<= stale_ms), none once all sensors are offline");
 }
 
-// (c) 둘 다 0: DevicePosture(센서 1개) 경로의 센서별 확률이 golden 의 softmax(logits) 와 같다. 기본값(주기 0 / 자리 비움 60)도
-//     240 프레임(24 s, 사람 있음)에서는 같다. 기본값 자체도 검사한다(주기 0 = 끔, 자리 비움 60 s)
+// (c) 둘 다 0: DevicePosture(센서 1개) 경로의 센서별 확률이 golden 의 softmax(logits) 와 같다. 기본값(둘 다 0 = 끔)이
+//     곧 그 설정이고, 명시적으로 켠 설정(900/60)도 240 프레임(24 s, 사람 있음)에서는 같다. 기본값 자체도 검사한다
 void testDevicePathMatchesGolden(const std::string& bin, const std::string& golden_path) {
     tof::PostureNet probe;
     std::string err;
@@ -479,7 +479,8 @@ void testDevicePathMatchesGolden(const std::string& bin, const std::string& gold
     const int n = gd.H * gd.W, C = gd.C;
     for (int pass = 0; pass < 2; ++pass) {
         tof::DeviceConfig cfg;
-        if (pass == 0) { cfg.reset_period_s = 0; cfg.away_reset_s = 0; }
+        if (pass == 0) { cfg.reset_period_s = 0; cfg.away_reset_s = 0; }     // = 기본값
+        else { cfg.reset_period_s = 900; cfg.away_reset_s = 60; }           // 켠 설정: 24 s 안에는 안 걸린다
         tof::DevicePosture d(cfg);
         d.loadModel(bin, &err);
         const int s = d.addSensor("g");
@@ -512,28 +513,28 @@ void testDevicePathMatchesGolden(const std::string& bin, const std::string& gold
         }
         const auto r = d.result();
         std::printf("device-golden (%s): max |prob diff| %.3g, argmax mismatches %d, resets periodic %llu away %llu\n",
-                    pass == 0 ? "resets off" : "defaults 0/60", max_diff, mism,
+                    pass == 0 ? "resets off (= defaults)" : "enabled 900/60", max_diff, mism,
                     (unsigned long long)r.resets.periodic, (unsigned long long)r.resets.away);
         check(max_diff < 1e-4 && mism == 0 && r.resets.periodic == 0 && r.resets.away == 0 && r.resets.manual == 0,
-              pass == 0 ? "resets off: DevicePosture path matches golden (no regression)"
-                        : "defaults: DevicePosture path matches golden over 24 s (no reset fired)");
+              pass == 0 ? "resets off (defaults): DevicePosture path matches golden (no regression)"
+                        : "enabled 900/60: DevicePosture path matches golden over 24 s (no reset fired)");
     }
     const tof::DeviceConfig def;
-    check(def.reset_period_s == 0 && def.away_reset_s == 60 && def.present_min_mm == 150 && def.present_max_mm == 1300 &&
+    check(def.reset_period_s == 0 && def.away_reset_s == 0 && def.present_min_mm == 150 && def.present_max_mm == 1300 &&
               std::fabs(def.present_min_coverage - 0.06f) < 1e-6f,
-          "defaults: periodic reset off (0), away reset 60 s, presence 150-1300 mm, coverage 0.06");
-    // 기본값으로 15 분 이상 앉아 있어도 주기 리셋은 걸리지 않는다 (자리 비움 리셋만 켜져 있음)
+          "defaults: periodic reset off (0), away reset off (0), presence 150-1300 mm, coverage 0.06");
+    // 기본값으로 15 분 앉아 있다가 2 분 비워도 리셋은 걸리지 않는다 (둘 다 꺼짐). coverage·present_rule 은 그대로 보고된다
     tof::DevicePosture d(def);
     d.loadModel(bin, &err);
     const int s = d.addSensor("long");
-    for (int k = 0; k <= 9100; ++k) {                      // 910 s
+    for (int k = 0; k <= 10300; ++k) {                     // 910 s 착석 + 120 s 비움
         const int64_t now = 100 * k;
-        d.feed(s, makeFrame(k + 1, (uint32_t)now, 20), now);
+        d.feed(s, makeFrame(k + 1, (uint32_t)now, k <= 9100 ? 20 : 0), now);
         d.tick(now);
     }
     const auto r = d.result();
-    check(r.resets.periodic == 0 && r.resets.away == 0 && r.resets.last_reset_ms == 0,
-          "defaults: 910 s seated -> no periodic reset (off), no away reset (present)");
+    check(r.resets.periodic == 0 && r.resets.away == 0 && r.resets.manual == 0 && r.resets.last_reset_ms == 0 && !r.present_rule,
+          "defaults: 910 s seated + 120 s empty -> no reset at all (both off), present_rule still reported");
 }
 
 // UART 0x05 v1 줄: 거리 base+i (i==7 은 0xFFFF, i==9 는 0 → 없음), 상태 i%8==1 이면 4 아니면 5
@@ -747,10 +748,10 @@ int main(int argc, char** argv) {
     testRawHttp(argv[1]);
     if (argc > 3) {
         const std::vector<std::string> files(argv + 3, argv + argc);
-        testReplay(argv[1], files, tof::DeviceConfig{}, "defaults 0/60");
-        tof::DeviceConfig off;
-        off.reset_period_s = 0; off.away_reset_s = 0;
-        testReplay(argv[1], files, off, "resets off");
+        testReplay(argv[1], files, tof::DeviceConfig{}, "defaults (resets off)");
+        tof::DeviceConfig on;
+        on.reset_period_s = 900; on.away_reset_s = 60;
+        testReplay(argv[1], files, on, "enabled 900/60");
     }
     std::printf("%s (%d failures)\n", failures ? "FAIL" : "PASS", failures);
     return failures ? 1 : 0;

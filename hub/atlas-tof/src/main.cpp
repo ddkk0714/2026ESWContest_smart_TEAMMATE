@@ -27,8 +27,9 @@
 //   운영(UART2): hub/atlas 가 TYPE 0x05 줄을 tcp:9100 으로 넘긴다 → TOFPOSTURE_PORTS=tcp:9100 하나에 두 센서(번호로 나눔)
 //   TOFPOSTURE_RESET_PERIOD_S 0(끔). N 이면 마지막 리셋(또는 시작)으로부터 N s 지나면 추론 전에 GRU h·EMA 리셋.
 //                      PC 시뮬 36개에서 900 s 는 좋은 배치 −0.038 로 전체 효과 없음(0.595→0.592) → 기본 끔, 실측 고착 때 켬
-//   TOFPOSTURE_AWAY_RESET_S   60. ToF 규칙 재실(coverage)이 이 시간 동안 false 면 리셋, 비어 있는 동안 반복. 0 = 끔.
-//                      재실 한 프레임이면 타이머를 지운다. 모델 출력 away 는 근거로 쓰지 않는다(device_posture.h "리셋")
+//   TOFPOSTURE_AWAY_RESET_S   0(끔). N 이면 ToF 규칙 재실(coverage)이 N s 동안 false 면 리셋, 비어 있는 동안 반복.
+//                      재실 한 프레임이면 타이머를 지운다. 모델 출력 away 는 근거로 쓰지 않는다(device_posture.h "리셋").
+//                      PC 시뮬 180회(보드 모델 v4): 복귀 0~60 s 정확도 끔 0.790 / 60 s 0.633 → 기본 끔, 실기 고착 때 300 s
 //   TOFPOSTURE_PRESENT_MIN_MM / TOFPOSTURE_PRESENT_MAX_MM  150 / 1300. 재실 coverage 에 세는 zone 의 거리 범위(mm)
 //   TOFPOSTURE_PRESENT_MIN_COVERAGE  0.06. 두 센서 중 큰 coverage(status 5·6·9·10 ∧ 거리 범위 인 zone / 64)가 이 이상이면 재실
 //   TOFPOSTURE_STDOUT   change(기본: 자세가 바뀔 때만) | tick(매 스텝) | off
@@ -180,7 +181,7 @@ int main() {
     if (cfg.flip_rows > 1) cfg.flip_rows = 1;
     if (cfg.flip_cols > 1) cfg.flip_cols = 1;
     cfg.reset_period_s = std::max(0, envInt("TOFPOSTURE_RESET_PERIOD_S", 0));
-    cfg.away_reset_s = std::max(0, envInt("TOFPOSTURE_AWAY_RESET_S", 60));
+    cfg.away_reset_s = std::max(0, envInt("TOFPOSTURE_AWAY_RESET_S", 0));
     cfg.present_min_mm = envInt("TOFPOSTURE_PRESENT_MIN_MM", 150);
     cfg.present_max_mm = envInt("TOFPOSTURE_PRESENT_MAX_MM", 1300);
     cfg.present_min_coverage = static_cast<float>(envDouble("TOFPOSTURE_PRESENT_MIN_COVERAGE", 0.06));

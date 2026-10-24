@@ -86,7 +86,7 @@ arc build hub/atlas-tof          # -> hub/atlas-tof/build/arm64/ipk/com.deskmate
 | `TOFPOSTURE_FUSION` | logprob | `logprob`(log-softmax 합) 또는 `mean`(softmax 평균). 아래 "두 센서 합치기" |
 | `TOFPOSTURE_SMOOTH_S` | 1.0 | 화면용 확률 EMA 시간상수 |
 | `TOFPOSTURE_RESET_PERIOD_S` | 0 (끔) | N 이면 마지막 리셋(또는 시작)으로부터 N s 지나면 추론 전에 GRU h·EMA 를 비운다. 시뮬 36개에서 900 은 전체 효과가 없어 기본 끔. 아래 "GRU 리셋" |
-| `TOFPOSTURE_AWAY_RESET_S` | 60 | ToF 규칙 재실(coverage)이 이 시간 동안 계속 false 면 리셋, 비어 있는 동안 반복. 재실 한 프레임이면 타이머 해제. 0 이면 끔 |
+| `TOFPOSTURE_AWAY_RESET_S` | 0 (끔) | N 이면 ToF 규칙 재실(coverage)이 N s 동안 계속 false 면 리셋, 비어 있는 동안 반복. 재실 한 프레임이면 타이머 해제. 시뮬 180회에서 60 은 복귀 뒤 정확도를 떨어뜨려 기본 끔, 실기 고착 때 300. 아래 "GRU 리셋" |
 | `TOFPOSTURE_PRESENT_MIN_MM` / `_MAX_MM` | 150 / 1300 | 재실 coverage 에 세는 zone 의 거리 범위(mm) |
 | `TOFPOSTURE_PRESENT_MIN_COVERAGE` | 0.06 | 두 센서 중 큰 coverage(status 5·6·9·10 이고 거리 범위 안인 zone / 64)가 이 이상이면 재실(64칸 중 4칸) |
 | `TOFPOSTURE_STDOUT` | change | `change` 자세 바뀔 때 / `tick` 매 스텝 / `off` |
@@ -118,14 +118,18 @@ GRU h 와 융합 EMA 를 비운다(워밍업 없음, 다음 스텝은 그 스텝
 | 계기 | 조건 | 설정 |
 |---|---|---|
 | 주기 | 매 스텝 추론 전에 "지금 − 마지막 리셋 ≥ N s" (사람이 앉아 있어도, 자세 중간이어도) | `TOFPOSTURE_RESET_PERIOD_S` **0 = 끔(기본)**, 켤 때 900 |
-| 자리 비움 | ToF 규칙 재실이 N s 동안 계속 false. 비어 있는 동안 N s 마다 반복. 재실 한 프레임이면 타이머 해제 | `TOFPOSTURE_AWAY_RESET_S` 60 |
+| 자리 비움 | ToF 규칙 재실이 N s 동안 계속 false. 비어 있는 동안 N s 마다 반복. 재실 한 프레임이면 타이머 해제 | `TOFPOSTURE_AWAY_RESET_S` **0 = 끔(기본)**, 켤 때 300 |
 | 수동 | `POST /api/reset` | — |
 
 - **왜**: PC 시뮬(MuJoCo + GRU, 10-24, 시뮬 근거·실측 전)에서 보드와 같은 융합·EMA 를 넣어 보니 배치가 나쁜 장면(시드 1)에서
   GRU 가 거북목(forward_head)에 갇혀 못 빠져나왔다(0.308→0.269). 900 s 주기 + 자리 비움 60 s 리셋을 넣으면 그 장면은 0.334(+0.065) 로 회복.
   서비스는 그 시뮬 정의(PC `GruPosture`)를 그대로 따른다.
 - **주기 리셋 기본값이 0(끔)인 이유**: 최종 36개 장면에서는 900 s 주기 리셋이 좋은 배치(시드 2·3)에서 −0.038 손해라 전체 효과가
-  없었다(0.595→0.592). 옵션은 남기고 실측에서 고착이 보이면 켠다. 자리 비움 리셋은 60 s 유지(단독 효과는 PC 시뮬이 따로 재는 중).
+  없었다(0.595→0.592). 옵션은 남기고 실측에서 고착이 보이면 켠다.
+- **자리 비움 리셋 기본값도 0(끔)인 이유**: PC 시뮬 180회(`tof-sim_ubai_results_1024/away_reset_1024.md`, 보드 모델 `opt_l8_c256`=v4,
+  시뮬 근거)에서 복귀 뒤 0~60 s 정확도가 끔 0.790 / 60 s 0.633, 120 s 밖은 0.859 / 0.808 로 끄는 쪽이 낫다. 배치 12개 중 6개는
+  자리를 비워도 coverage 재실이 true 라 리셋이 걸리지 않는다. v7b 모델은 반대 결과라 모델을 바꾸면 다시 잰다.
+  실기에서 은닉 상태 고착이 보이면 `TOFPOSTURE_AWAY_RESET_S=300` 으로 켠다.
 - **자리 비움 근거가 모델 출력 `away` 가 아니라 coverage 인 이유**: 융합 결과 `away` 를 쓰면 GRU 가 빈 의자를 사람으로 보는
   배치에서 리셋이 영영 안 걸린다. coverage = 센서별로 target_status 5·6·9·10 이면서 거리 150~1300 mm 인 zone 비율,
   두 센서 중 큰 값이 0.06(64칸 중 4칸) 이상이면 재실. 프레임마다 판정. 센서가 전부 offline 이면 상태는 이미 비어 있으므로

@@ -37,7 +37,7 @@ struct DeviceConfig {
     int flip_cols = -1;             // 좌우: 같은 규칙(b3)
     // GRU 은닉 상태 리셋 (PC 시뮬 2026-10-24 정의와 같다. 아래 "리셋" 주석)
     int reset_period_s = 0;         // 마지막 리셋(또는 시작)으로부터 이 시간이 지나면 매 스텝 추론 전에 리셋. 0 = 끔(기본, 아래 "왜")
-    int away_reset_s = 60;          // ToF 규칙 재실(coverage)이 이 시간 동안 계속 false 면 리셋, 비어 있는 동안 반복. 0 = 끔
+    int away_reset_s = 0;           // ToF 규칙 재실(coverage)이 이 시간 동안 계속 false 면 리셋, 비어 있는 동안 반복. 0 = 끔(기본, 아래 "왜")
     int present_min_mm = 150;       // 재실 coverage 에 세는 zone: status 5·6·9·10 이고 거리 [min, max] mm
     int present_max_mm = 1300;
     float present_min_coverage = 0.06f;   // 두 센서 중 큰 coverage 가 이 이상이면 재실 (64칸 중 4칸)
@@ -52,7 +52,9 @@ struct DeviceConfig {
 // 왜: PC 시뮬(MuJoCo+GRU, 2026-10-24, 실측 전)에서 배치가 나쁜 장면의 GRU 가 거북목에 갇혀 못 나왔다(시드 1: 0.308→0.269).
 //     주기 900 s + 자리 비움 60 s 리셋으로 그 장면은 0.334(+0.065) 회복. 그러나 최종 36개 장면에서는 주기 리셋이 좋은 배치에서
 //     −0.038(시드 2·3) 손해라 전체 효과가 없었다(0.595→0.592) → 주기 리셋 기본값은 0(끔), 실측에서 고착이 보이면 켠다.
-//     자리 비움 리셋은 60 s 유지(단독 효과는 PC 가 따로 재는 중).
+//     자리 비움 리셋도 기본 0(끔): PC 시뮬 180회(tof-sim_ubai_results_1024/away_reset_1024.md, 보드 모델 opt_l8_c256=v4)에서
+//     복귀 뒤 0~60 s 정확도 끔 0.790 / 60 s 0.633, 120 s 밖 0.859 / 0.808 로 끄는 쪽이 낫고, 배치 12개 중 6개는 비워도
+//     coverage 재실이 true 라 리셋이 안 걸린다(v7b 모델은 반대 — 모델을 바꾸면 재측정). 실기에서 은닉 상태 고착이 보이면 300 s.
 
 inline const char* fusionName(FusionRule r) { return r == FusionRule::LogProb ? "logprob" : "mean"; }
 
