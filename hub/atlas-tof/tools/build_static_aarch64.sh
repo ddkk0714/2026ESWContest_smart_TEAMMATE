@@ -9,5 +9,5 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$HERE"
 ZIG="${ZIG:-zig}"; OUT=build/aarch64; mkdir -p "$OUT"
 FLAGS="-target aarch64-linux-musl -O2 -std=c++17 -static -s"
 $ZIG c++ $FLAGS -o $OUT/deskmate_tofposture src/main.cpp src/line_source.cpp src/http_server.cpp src/tof_line.cpp src/device_posture.cpp
-$ZIG c++ $FLAGS -o $OUT/tofposture_selftest src/host_test.cpp src/tof_line.cpp src/device_posture.cpp
+$ZIG c++ $FLAGS -o $OUT/tofposture_selftest src/host_test.cpp src/http_server.cpp src/tof_line.cpp src/device_posture.cpp
 ls -l $OUT

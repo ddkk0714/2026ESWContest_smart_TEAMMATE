@@ -80,21 +80,62 @@ arc build hub/atlas-tof          # -> hub/atlas-tof/build/arm64/ipk/com.deskmate
 | `TOFPOSTURE_MODEL` | `<exe>/models/posture_net.bin` | 가중치 (클래스 수·은닉 폭은 파일 헤더에서 읽음) |
 | `TOFPOSTURE_FLIP_ROWS` / `_COLS` | 비움 | 1 이면 받은 격자를 위아래/좌우로 뒤집는다. **UART 0x05 표준 배치는 펌웨어가 이미 장면 방향으로 보내므로 비워 둔다**(flags 는 적용한 변환 기록). USB·PC 경로에서 장착 방향을 바꿀 때만 쓴다(`tof_live.py --show` 로 정함) |
 | `TOFPOSTURE_HTTP` / `TOFPOSTURE_BIND` | 8771 / 0.0.0.0 | HTTP. 8765(hub)·8770(camsvc)과 겹치지 않게. 0 이면 끔 |
+| `TOFPOSTURE_RAW_HTTP` | 0 (끔) | 보드에서는 8772: 두 번째 리스너를 열고 `GET /raw` 에 `uart_relay_board` 와 같은 스키마로 센서 원본 격자를 낸다(Pi 5 개발자 화면 ToF 열지도 소스). hub 가 `/dev/ttyUSB0` 을 직접 읽어 중계기가 못 뜰 때 서비스가 대신 낸다. 포트가 이미 쓰이면 경고만 내고 계속 |
 | `TOFPOSTURE_RATE_HZ` | 10 | 모델 스텝 주기 = 학습 프레임률. **바꾸면 안 된다** |
 | `TOFPOSTURE_STALE_MS` | 1000 | 이보다 오래 조용한 센서는 offline(융합 제외, 돌아오면 GRU 리셋) |
 | `TOFPOSTURE_FUSION` | logprob | `logprob`(log-softmax 합) 또는 `mean`(softmax 평균). 아래 "두 센서 합치기" |
 | `TOFPOSTURE_SMOOTH_S` | 1.0 | 화면용 확률 EMA 시간상수 |
+| `TOFPOSTURE_RESET_PERIOD_S` | 0 (끔) | N 이면 마지막 리셋(또는 시작)으로부터 N s 지나면 추론 전에 GRU h·EMA 를 비운다. 시뮬 36개에서 900 은 전체 효과가 없어 기본 끔. 아래 "GRU 리셋" |
+| `TOFPOSTURE_AWAY_RESET_S` | 0 (끔) | N 이면 ToF 규칙 재실(coverage)이 N s 동안 계속 false 면 리셋, 비어 있는 동안 반복. 재실 한 프레임이면 타이머 해제. 시뮬 180회에서 60 은 복귀 뒤 정확도를 떨어뜨려 기본 끔, 실기 고착 때 300. 아래 "GRU 리셋" |
+| `TOFPOSTURE_PRESENT_MIN_MM` / `_MAX_MM` | 150 / 1300 | 재실 coverage 에 세는 zone 의 거리 범위(mm) |
+| `TOFPOSTURE_PRESENT_MIN_COVERAGE` | 0.06 | 두 센서 중 큰 coverage(status 5·6·9·10 이고 거리 범위 안인 zone / 64)가 이 이상이면 재실(64칸 중 4칸) |
 | `TOFPOSTURE_STDOUT` | change | `change` 자세 바뀔 때 / `tick` 매 스텝 / `off` |
 
 ## API
 
-- `GET /health` — `{"ok","model_loaded","rate_hz","ticks","online_sensors","sensors":[{name,online,frames,hz,age_ms,error}]}`
+- `GET /health` — `{"ok","model_loaded","rate_hz","ticks","online_sensors","present_rule","resets":{...},"sensors":[{name,online,frames,hz,age_ms,error}]}`
 - `GET /api/state` — `{"schema":"deskmate/tof_posture/1","posture","posture_ko","index","conf","since_ms",
-  "probs":{...}, "instant":{...}, "present","misplaced","online_sensors","sensors":[{name,online,posture,conf,probs,
-  frames,steps,reused,resets,age_ms,hz,has_status,rule,hello,info,error}], "model":{file,classes,rate_hz,fusion,flip_rows,flip_cols,labels}}`
-  `posture` 는 1 초 EMA 를 거친 값, `instant` 는 이번 스텝 값. `present` = valid 이고 `away` 가 아님.
+  "probs":{...}, "instant":{...}, "present","misplaced","online_sensors","present_rule","coverage":[s0,s1],
+  "resets":{periodic,away,manual,last_reset_ms,since_reset_ms,period_s,away_s,present_min_mm,present_max_mm,present_min_coverage},
+  "sensors":[{name,online,posture,conf,probs,frames,steps,reused,resets,age_ms,hz,has_status,coverage,rule,hello,info,error}],
+  "model":{file,classes,rate_hz,fusion,flip_rows,flip_cols,labels}}`
+  `posture` 는 1 초 EMA 를 거친 값, `instant` 는 이번 스텝 값. `present` = valid 이고 `away` 가 아님(모델).
+  `present_rule`·`coverage` 는 모델과 무관한 ToF 규칙 재실(아래 "GRU 리셋"), `resets` 는 리셋 계기별 횟수와 마지막 리셋 시각(`ts_ms` 와 같은 단조 시계).
   `sensors[].rule` 은 펌웨어 온보드 규칙 판정(bring-up `P,` 줄 / tof_logger `rule.posture`)으로, 모델과 비교용이다.
-- `POST /api/reset` — 모든 GRU 상태 0 (장치를 옮겨 놓은 뒤).
+- `POST /api/reset` — 모든 GRU 상태 0 + EMA 비움 (장치를 옮겨 놓은 뒤). `resets.manual` 이 늘고 마지막 리셋 시각이 갱신된다.
+- `GET /raw` (주 포트와 `TOFPOSTURE_RAW_HTTP` 포트) — `uart_relay_board` 의 `/raw` 와 같은 스키마:
+  `{"dev","frames","type5","sent","bad":0,"sensors":[{"id":0,"have":true,"age_ms","uart_seq","ts_ms","frame_id","frame_seq","mask",
+  "flags","flip_rows","flip_cols","w":8,"h":8,"dist_mm":[64],"status":[64]},{"id":1,…}]}`. `id` 는 물리 센서 번호(0x05 의 sensor,
+  0 = A 왼쪽·1 = B 오른쪽; USB·파일 입력은 자리 번호), 격자는 **받은 그대로**(모델 입력용 뒤집기 전, 표준 배치는 -1 = 없음),
+  없는 센서는 `{"id":n,"have":false}`. `other`(mmWave 등) 는 없다. 앱 파서(`display/atlas/ui_env_app/lib/tof_raw_client.dart`)는
+  have·id·w·h·dist_mm·status·age_ms 만 읽는다.
+
+## GRU 리셋 (10-24)
+
+GRU 는 은닉 상태를 세션 내내 끌고 가므로 한 번 틀린 자세에 갇히면 프레임이 바뀌어도 못 나올 수 있다. 세 계기로 모든 센서의
+GRU h 와 융합 EMA 를 비운다(워밍업 없음, 다음 스텝은 그 스텝의 융합 확률로 시작). 어느 계기든 "마지막 리셋 시각"을 갱신한다.
+
+| 계기 | 조건 | 설정 |
+|---|---|---|
+| 주기 | 매 스텝 추론 전에 "지금 − 마지막 리셋 ≥ N s" (사람이 앉아 있어도, 자세 중간이어도) | `TOFPOSTURE_RESET_PERIOD_S` **0 = 끔(기본)**, 켤 때 900 |
+| 자리 비움 | ToF 규칙 재실이 N s 동안 계속 false. 비어 있는 동안 N s 마다 반복. 재실 한 프레임이면 타이머 해제 | `TOFPOSTURE_AWAY_RESET_S` **0 = 끔(기본)**, 켤 때 300 |
+| 수동 | `POST /api/reset` | — |
+
+- **왜**: PC 시뮬(MuJoCo + GRU, 10-24, 시뮬 근거·실측 전)에서 보드와 같은 융합·EMA 를 넣어 보니 배치가 나쁜 장면(시드 1)에서
+  GRU 가 거북목(forward_head)에 갇혀 못 빠져나왔다(0.308→0.269). 900 s 주기 + 자리 비움 60 s 리셋을 넣으면 그 장면은 0.334(+0.065) 로 회복.
+  서비스는 그 시뮬 정의(PC `GruPosture`)를 그대로 따른다.
+- **주기 리셋 기본값이 0(끔)인 이유**: 최종 36개 장면에서는 900 s 주기 리셋이 좋은 배치(시드 2·3)에서 −0.038 손해라 전체 효과가
+  없었다(0.595→0.592). 옵션은 남기고 실측에서 고착이 보이면 켠다.
+- **자리 비움 리셋 기본값도 0(끔)인 이유**: PC 시뮬 180회(`tof-sim_ubai_results_1024/away_reset_1024.md`, 보드 모델 `opt_l8_c256`=v4,
+  시뮬 근거)에서 복귀 뒤 0~60 s 정확도가 끔 0.790 / 60 s 0.633, 120 s 밖은 0.859 / 0.808 로 끄는 쪽이 낫다. 배치 12개 중 6개는
+  자리를 비워도 coverage 재실이 true 라 리셋이 걸리지 않는다. v7b 모델은 반대 결과라 모델을 바꾸면 다시 잰다.
+  실기에서 은닉 상태 고착이 보이면 `TOFPOSTURE_AWAY_RESET_S=300` 으로 켠다.
+- **자리 비움 근거가 모델 출력 `away` 가 아니라 coverage 인 이유**: 융합 결과 `away` 를 쓰면 GRU 가 빈 의자를 사람으로 보는
+  배치에서 리셋이 영영 안 걸린다. coverage = 센서별로 target_status 5·6·9·10 이면서 거리 150~1300 mm 인 zone 비율,
+  두 센서 중 큰 값이 0.06(64칸 중 4칸) 이상이면 재실. 프레임마다 판정. 센서가 전부 offline 이면 상태는 이미 비어 있으므로
+  자리 비움 타이머는 돌지 않는다(기존 동작: online 0 → EMA 전부 0, valid false).
+- 리셋 때 stderr 에 한 줄(`tofposture: reset (periodic|away|manual) after … s`). 둘 다 0 이면 동작은 이전과 같다
+  (호스트 테스트가 골든 240 프레임으로 확인).
 
 hub FSM 연동은 `hub/deskmate_hub/ingest` 가 이 `/api/state` 를 읽거나(`tof_feature.posture`, `data-spec.md` §6.1),
 C++ hub 서비스가 같은 프로세스로 합치는 두 길이 있다. 연동 방식은 팀 결정.
@@ -134,7 +175,7 @@ cd hub/atlas-tof
 # export 산출물을 test/ 에 (커밋 안 함): posture_net.bin, golden.txt, 선택 replay_s0.jsonl replay_s1.jsonl
 cmake -S . -B build/host -DBUILD_TESTING=ON && cmake --build build/host && (cd build/host && ctest --output-on-failure)
 # cmake 가 없으면
-g++ -O2 -std=c++17 -o build/host_test src/host_test.cpp src/tof_line.cpp src/device_posture.cpp
+g++ -O2 -std=c++17 -pthread -o build/host_test src/host_test.cpp src/http_server.cpp src/tof_line.cpp src/device_posture.cpp
 build/host_test test/posture_net.bin test/golden.txt test/replay_s0.jsonl test/replay_s1.jsonl
 # 서비스 자체를 파일 입력으로
 TOFPOSTURE_PORTS=test/replay_s0.jsonl,test/replay_s1.jsonl TOFPOSTURE_MODEL=test/posture_net.bin \
@@ -154,9 +195,9 @@ TOFPOSTURE_EXIT_ON_EOF=1 build/deskmate_tofposture
 | `src/tof_line.{h,cpp}` | 펌웨어 줄 파서 — tof_logger JSON, bring-up CSV (라이브러리 없음) |
 | `src/line_source.{h,cpp}` | tty(raw, 보드율 자동)·TCP(`tcp:<port>`)·파일 읽기 스레드, 끊기면 다시 연결 |
 | `src/device_posture.{h,cpp}` | 센서 N개 × 모델, 10 Hz 스텝, 방향 보정, offline 처리, 융합, EMA, 상태 JSON |
-| `src/http_server.{h,cpp}` | `/health` `/api/state` `/api/reset` |
+| `src/http_server.{h,cpp}` | `/health` `/api/state` `/api/reset` `/raw` (두 번째 포트는 `/raw` 만) |
 | `src/main.cpp` | 설정(`tofposture.env`)·포트 자동 탐색(5초마다)·루프·stdout. sdbus-c++ 가 있으면 D-Bus 이름 소유 |
-| `src/host_test.cpp` | 파서·골든·리플레이 테스트 (보드에서는 `tofposture_selftest`) |
+| `src/host_test.cpp` | 파서·골든·리셋 규칙(주기·자리 비움·끔=골든과 일치)·`/raw` JSON·HTTP 리스너·리플레이 테스트 (보드에서는 `tofposture_selftest`) |
 | `board/start.sh` `stop.sh` `status.sh` `selftest.sh` `tofposture.env.example` | A 경로에서 보드에 함께 올리는 스크립트(BusyBox sh) |
 | `tools/build_static_aarch64.sh` | A 경로 정적 빌드(Zig) |
 | `tools/deploy-pi4.ps1` / `deploy-pi4.sh` | A 경로: PC → 보드 복사·자가 시험·시작 |

@@ -13,6 +13,9 @@
 //   TOFPOSTURE_MODEL   posture_net.bin 경로. 기본 <실행파일 폴더>/models/posture_net.bin
 //   TOFPOSTURE_HTTP    HTTP 포트. 기본 8771 (8765 hub, 8770 camsvc 와 겹치지 않게). 0 이면 끔
 //   TOFPOSTURE_BIND    0.0.0.0 (개발 PC 에서 curl). 보드 안에서만 쓰면 127.0.0.1
+//   TOFPOSTURE_RAW_HTTP 0(끔). 보드에서는 8772: 그 포트에 두 번째 리스너를 열고 GET /raw 에 uart_relay_board 와 같은 스키마로
+//                      센서 원본 격자를 낸다(Pi 5 개발자 화면 ToF 열지도). hub 가 USB 를 직접 읽어 중계기가 못 뜰 때 대신.
+//                      주 포트(8771)에도 GET /raw 가 있다. 포트가 이미 쓰이면(옛 중계기) 경고만 내고 계속 돈다
 //   TOFPOSTURE_RATE_HZ 10. 모델 학습 프레임률. 바꾸면 안 된다
 //   TOFPOSTURE_STALE_MS 1000. 이보다 오래 프레임이 없는 센서는 offline
 //   TOFPOSTURE_SMOOTH_S 1.0. 화면용 확률 EMA 시간상수(초)
@@ -22,6 +25,13 @@
 //                      맞는 값은 tof_live.py --show 로 손을 센서 위쪽·왼쪽에 대 보고 정한다
 //   포트 목록에 "tcp:9001" 을 주면 그 포트에서 PC 가 보내는 센서 줄을 받는다(tof_live.py --forward). USB 직결이 안 될 때
 //   운영(UART2): hub/atlas 가 TYPE 0x05 줄을 tcp:9100 으로 넘긴다 → TOFPOSTURE_PORTS=tcp:9100 하나에 두 센서(번호로 나눔)
+//   TOFPOSTURE_RESET_PERIOD_S 0(끔). N 이면 마지막 리셋(또는 시작)으로부터 N s 지나면 추론 전에 GRU h·EMA 리셋.
+//                      PC 시뮬 36개에서 900 s 는 좋은 배치 −0.038 로 전체 효과 없음(0.595→0.592) → 기본 끔, 실측 고착 때 켬
+//   TOFPOSTURE_AWAY_RESET_S   0(끔). N 이면 ToF 규칙 재실(coverage)이 N s 동안 false 면 리셋, 비어 있는 동안 반복.
+//                      재실 한 프레임이면 타이머를 지운다. 모델 출력 away 는 근거로 쓰지 않는다(device_posture.h "리셋").
+//                      PC 시뮬 180회(보드 모델 v4): 복귀 0~60 s 정확도 끔 0.790 / 60 s 0.633 → 기본 끔, 실기 고착 때 300 s
+//   TOFPOSTURE_PRESENT_MIN_MM / TOFPOSTURE_PRESENT_MAX_MM  150 / 1300. 재실 coverage 에 세는 zone 의 거리 범위(mm)
+//   TOFPOSTURE_PRESENT_MIN_COVERAGE  0.06. 두 센서 중 큰 coverage(status 5·6·9·10 ∧ 거리 범위 인 zone / 64)가 이 이상이면 재실
 //   TOFPOSTURE_STDOUT   change(기본: 자세가 바뀔 때만) | tick(매 스텝) | off
 //   TOFPOSTURE_EXIT_ON_EOF 1 이면 리플레이 파일이 끝났을 때 종료 (테스트용)
 // 같은 키를 <실행파일 폴더>/tofposture.env (KEY=VALUE 한 줄씩) 에 적어도 된다 — D-Bus 로 뜬 서비스는
@@ -170,10 +180,16 @@ int main() {
     cfg.flip_cols = envInt("TOFPOSTURE_FLIP_COLS", -1);
     if (cfg.flip_rows > 1) cfg.flip_rows = 1;
     if (cfg.flip_cols > 1) cfg.flip_cols = 1;
+    cfg.reset_period_s = std::max(0, envInt("TOFPOSTURE_RESET_PERIOD_S", 0));
+    cfg.away_reset_s = std::max(0, envInt("TOFPOSTURE_AWAY_RESET_S", 0));
+    cfg.present_min_mm = envInt("TOFPOSTURE_PRESENT_MIN_MM", 150);
+    cfg.present_max_mm = envInt("TOFPOSTURE_PRESENT_MAX_MM", 1300);
+    cfg.present_min_coverage = static_cast<float>(envDouble("TOFPOSTURE_PRESENT_MIN_COVERAGE", 0.06));
     const std::string baud_env = envOr("TOFPOSTURE_BAUD", "auto");
     const int baud = baud_env == "auto" ? 0 : std::atoi(baud_env.c_str());
     const int http_port = envInt("TOFPOSTURE_HTTP", 8771);
     const std::string bind_addr = envOr("TOFPOSTURE_BIND", "0.0.0.0");
+    const int raw_port = envInt("TOFPOSTURE_RAW_HTTP", 0);
     const std::string model_path = envOr("TOFPOSTURE_MODEL", exe_dir + "/models/posture_net.bin");
     const std::string stdout_mode = envOr("TOFPOSTURE_STDOUT", "change");
     const bool exit_on_eof = envInt("TOFPOSTURE_EXIT_ON_EOF", 0) != 0;
@@ -188,7 +204,9 @@ int main() {
     } else {
         std::cerr << "tofposture: model " << model_path << " (" << device.classes() << " classes, "
                   << cfg.rate_hz << " Hz, fusion " << tof::fusionName(cfg.fusion) << ", flip_rows " << cfg.flip_rows
-                  << " flip_cols " << cfg.flip_cols << ")\n";
+                  << " flip_cols " << cfg.flip_cols << ", reset period " << cfg.reset_period_s << " s, away "
+                  << cfg.away_reset_s << " s, present " << cfg.present_min_mm << "-" << cfg.present_max_mm << " mm cov>="
+                  << cfg.present_min_coverage << ")\n";
     }
 
     std::vector<std::unique_ptr<tof::LineSource>> sources;
@@ -231,18 +249,29 @@ int main() {
     };
     if (ports_env.empty()) attachNew(scanPorts(4));
     else for (const std::string& p : split(ports_env, ',')) attach(p);
+    device.setDeviceLabel(ports_env.empty() ? "auto" : ports_env);
     if (sources.empty()) std::cerr << "tofposture: no serial port yet; scanning /dev/ttyUSB* /dev/ttyACM* every 5 s\n";
 
+    auto rawHandler = [&device] { return device.rawJson(nowMs()); };
     tof::HttpServer http(bind_addr, http_port,
                          tof::HttpHandlers{[&device] { return device.healthJson(nowMs()); },
                                            [&device] { return device.stateJson(nowMs()); },
-                                           [&device] { device.reset(); }});
+                                           [&device] { device.reset(nowMs()); }, rawHandler});
     if (http_port > 0) {
         if (!http.start(&err)) {
             std::cerr << "tofposture: HTTP listen failed on " << bind_addr << ":" << http_port << " (" << err << ")\n";
             return 1;
         }
-        std::cerr << "tofposture: HTTP on " << bind_addr << ":" << http_port << "  (GET /api/state, /health, POST /api/reset)\n";
+        std::cerr << "tofposture: HTTP on " << bind_addr << ":" << http_port << "  (GET /api/state, /health, /raw, POST /api/reset)\n";
+    }
+    // 두 번째 리스너: /raw 만 (uart_relay_board 의 8772 자리). 실패해도 서비스는 계속 — 옛 중계기가 아직 그 포트를 쥐고 있을 수 있다.
+    tof::HttpServer raw_http(bind_addr, raw_port, tof::HttpHandlers{nullptr, nullptr, nullptr, rawHandler});
+    if (raw_port > 0) {
+        if (raw_http.start(&err))
+            std::cerr << "tofposture: raw HTTP on " << bind_addr << ":" << raw_port << "  (GET /raw)\n";
+        else
+            std::cerr << "tofposture: raw HTTP listen failed on " << bind_addr << ":" << raw_port << " (" << err
+                      << "); /raw is still on the main port\n";
     }
 
     int last_label = -2;
@@ -286,6 +315,7 @@ int main() {
     std::cerr << "tofposture: stopping\n";
     for (auto& s : sources) s->stop();
     http.stop();
+    raw_http.stop();
 #ifdef TOFPOSTURE_HAVE_SDBUS
     if (dbus) dbus->leaveEventLoop();
 #endif
