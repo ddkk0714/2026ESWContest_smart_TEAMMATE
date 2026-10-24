@@ -22,6 +22,7 @@ from .ingest import SensorCache, SessionTracker, build_frame, load_ingest_config
 from .presentation import state_envelope
 from .profile import apply_profile, apply_section
 from .esm import make_label, write_label
+from .fatigue.live import build_fatigue_runtime, load_fatigue_config
 from .personalization import PersonalizationRuntime, load_personalization_config
 from .personalization.privacy import PersonalizationPrivacy, load_privacy_config
 from .personalization.ondevice import OnDeviceLearner, load_ondevice_config
@@ -62,6 +63,8 @@ class LiveHub:
         personalize_log_path: str | None = None,
         personalize_policy_path: str | None = None,
         profile: str | None = None,
+        fatigue_cfg: dict[str, Any] | None = None,
+        fatigue_model=None,
         frame_log: TextIO | None = None,
         state_log: TextIO | None = None,
         out: TextIO = sys.stdout,
@@ -146,6 +149,11 @@ class LiveHub:
                 on_log=lambda m: print(m, file=self.out), policy=self.personalize_policy, policy_path=policy_path)
         self.ondevice_cfg = ondevice_cfg if ondevice_cfg is not None else load_ondevice_config()
         self.ondevice = OnDeviceLearner(self.ondevice_cfg, self.privacy)
+        # 피로 점수(공용 KSS 모델, docs/fatigue-dataset.md §6) — 관찰 전용, FSM 입력 아님. 모델 JSON 이 없으면 None.
+        self.fatigue_cfg = fatigue_cfg if fatigue_cfg is not None else load_fatigue_config()
+        self.fatigue = build_fatigue_runtime(
+            self.fatigue_cfg, tick_period=self.period, model=fatigue_model,
+            personal_allowed=self._fatigue_personal_allowed, on_log=lambda m: print(m, file=self.out))
 
     def tick_once(self, now: float | None = None) -> dict[str, Any]:
         now = time.time() if now is None else now
@@ -182,6 +190,11 @@ class LiveHub:
                     if self.control is not None:
                         self.control.on_feedback(verdict, now, received_at=feedback_now)
                     self._record_feedback(feedback, now, request)
+
+        # Pi 5 피로 기록 앱 응답: 세션 문맥(시작 KSS·수면·프로필)과 프로필 보정. 모델이 없으면 버린다.
+        for label, _received in self.cache.pop_fatigue_label_events():
+            if self.fatigue is not None:
+                self.fatigue.on_label(label)
 
         self._expire_pending_request(now)
         if self.control is not None:
@@ -263,6 +276,16 @@ class LiveHub:
             self.ondevice.observe(self.personalization, result.state.value, now)
             self.ondevice.advance(result.state.value)
             summary["ondevice_learning"] = self.ondevice.snapshot()
+        if self.fatigue is not None:
+            # fatigue_logger 가 남기는 학습 tick 과 같은 입력(state/phase 의 ts·c_fatigue·sensor_summary)이어야
+            # 학습과 기기의 특징이 같다 — c_fatigue 는 state_envelope 처럼 0~1 로 자르고 4자리로 둔다.
+            self.fatigue.set_hub_session(self.tracker.session_started)
+            view = self.fatigue.observe({
+                "ts": now, "fsm_state": result.state.value, "sensor_summary": summary,
+                "c_fatigue": round(max(0.0, min(1.0, float(result.scores.c_fatigue))), 4),
+            })
+            if view is not None:
+                summary["fatigue"] = view
         envelope = state_envelope(result, boot_id=self.boot_id, seq=self.seq, ts=now, sensor_summary=summary)
         self.seq += 1
         self.publish(envelope)
@@ -311,9 +334,16 @@ class LiveHub:
             cfg["enabled"] = False
         return cfg
 
+    def _fatigue_personal_allowed(self) -> bool:
+        if not (self.fatigue_cfg.get("personal") or {}).get("require_consent", True):
+            return True
+        return self.privacy.enabled and self.privacy.valid and self.privacy.consented
+
     def _reset_personalization(self):
         if hasattr(self, "ondevice"):
             self.ondevice.reset()
+        if getattr(self, "fatigue", None) is not None:
+            self.fatigue.reset_personal()
         if self.tracker.baseline is not None:
             self.tracker.baseline = BaselineStore(self.tracker.baseline.cfg)
         self.personalization = PersonalizationRuntime(
@@ -322,6 +352,8 @@ class LiveHub:
         )
 
     def _grant_personalization(self):
+        if getattr(self, "fatigue", None) is not None:
+            self.fatigue.load_personal()
         baseline = self.tracker.baseline
         if baseline is not None:
             persist = baseline.cfg.get("persist") or {}
