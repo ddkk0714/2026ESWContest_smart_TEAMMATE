@@ -43,6 +43,7 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 | `deskmate/control/result` | control 어댑터, Pi 5 앱(조명) | hub | 이벤트, QoS 1 | 명령 결과 (`control_result`). hub 는 `command_id` 로 매칭 |
 | `deskmate/feedback/user` | display | hub | 이벤트 | 사용자 수락 · 정정 · 조명 직접 조절 보고(`kind: manual_adjust`) |
 | `deskmate/profile/user` | Pi 5 앱 | hub(personalize) | 온보딩·설정 변경 시(retain, QoS 1) | 첫 설정 프로필. FSM 입력이 아니라 개입 선택의 기준(prior)·취침 시각에만 쓴다 |
+| `deskmate/fatigue/label` | Pi 5 피로 기록 앱(`display/atlas/fatigue_app`) | PC `tools/fatigue_logger.py`, hub | 이벤트, QoS 1 | 피로 데이터 수집: 작업 시작·끝, 15분 KSS 응답. hub 는 피로 점수 문맥·프로필 보정에만 씀, FSM 입력 아님 ([fatigue-dataset.md](fatigue-dataset.md)) |
 | `deskmate/health/<node>` | 전 장치 | hub | LWT/retain | `{ts,node,status:online|offline,reconnects}`. hub 는 `deskmate/health/hub` |
 
 ## 페이로드 예시
@@ -356,9 +357,10 @@ ACTION_ENV 진입 시 원인별 명령 목록, 게이트 auto 면 즉시 · sugg
 FSM 을 MONITOR 로 보낸다. `state/phase.sensor_summary.control` 에 진행 중 에피소드(명령·상태)가 실린다.
 어댑터가 없을 때의 리허설: `python tools/mock_plug.py --broker <ip>` (결과 응답 + `deskmate/control/state/<target>` retain).
 
-Pi 5 앱은 `desk_lamp`의 `set_brightness`(iLink 원시 밝기 정수 **0~255**, 퍼센트 아님)와
-`set_power`(`on`/`off`)를 실행하고 `display-control` 노드의 결과를 QoS 1·retain 없음으로
-돌려준다. 기존 설정의 밝기 70은 약 27%, 되돌림 40은 약 16%다. 다른 대상은 해당 어댑터가
+Pi 5 앱은 `desk_lamp`의 `adjust_brightness`(`value: {"percent": ±정수}` — **지금 밝기 대비 %**, 2026-10-25. 앱이 지금 원시 밝기로
+계산·상하한을 정하고 결과에 `previous`·`actual`(원시 0~255)을 싣는다; value 에 `min_raw` 가 있으면 결과 = max(계산값, min_raw)), `set_brightness`(iLink 원시 밝기 정수 **0~255**, 허브의
+되돌리기가 `previous` 로 보낸다)와 `set_power`(`on`/`off`)를 실행하고 `display-control` 노드의 결과를 QoS 1·retain 없음으로
+돌려준다. 기본 설정은 환경 +30 %, 졸음 +60 %, 개인화 arm ±50 % 다. 다른 대상은 해당 어댑터가
 처리하며, 앱이 환기팬 등의 성공 응답을 대신 만들지 않는다.
 
 앱의 자동 피드백 스위치가 꺼졌거나 램프가 미설정·실패·만료이면 `failed`와 `error_code`를
@@ -452,3 +454,20 @@ ESM·제어 승인에 쓰지 않고, 허브가 밝힌 뒤 `implicit.dim_window_m
 실행 중인 학습 job이 있고 실제 상태가 IDLE/END 밖이면 status=paused로 표시한다. 입력·판단·제어는 유지하고, 다시 유휴 상태가 되면 training으로 재개한다. Pi 5는 이 snapshot을 표시하며 연결 끊김이나 동의 철회 때 이전 개인 모델 상태를 현재처럼 표시하지 않는다. 서비스 시작 self-check는 stderr 진단만 사용하며 MQTT 명령·개인 표본을 새로 만들지 않는다.
 
 ondevice.yaml이 활성화된 경우에만 `state/phase.data.sensor_summary.ondevice_learning`을 추가한다. `execution: local`, `decision_source: fsm`, `head_source: common|personal`, `samples`, `sessions`, `training_step`(job이 없으면 null)을 제공한다. status는 disabled, unavailable, awaiting_consent, awaiting_portable_model, collecting, training, paused, accepted, rejected, storage_error, head_load_failed이다. embedding·개인 head·표본·파일 경로는 MQTT로 보내지 않는다. 기본 비활성에서는 기존 출력과 FSM을 유지한다. [실행·학습 계약](ondevice-personalization.md)을 따른다.
+
+## 피로 데이터 수집 (2026-10-20)
+
+`deskmate/fatigue/label` 은 Pi 5 피로 기록 앱(`com.atlas.app.deskmate_fatigue`)이 보내는 학습 라벨이다. hub FSM 입력은 아니다 —
+hub 는 이 토픽을 구독해 피로 점수의 세션 문맥과 프로필 보정에만 쓰고, 점수는 `state/phase.data.sensor_summary.fatigue`
+(`{kss, kss_personal, window_s, n_ticks, model_id, valid, ts}`, 1분마다 갱신, 모델이 없으면 생략)로 낸다([fatigue-dataset.md](fatigue-dataset.md) §6).
+QoS 1, retain 없음. 연결이 끊긴 동안의 기록은 앱이 순서대로 쌓아 두었다가 다시 보낸다(중복은 기록기가 거른다).
+
+```json
+{"schema_version":"1.0","ts":1792900000.0,"node":"display-fatigue","boot_id":"fatigue-1","seq":4,
+ "data":{"event":"kss","session_id":"A-3f2k-1792899100000","profile_id":"A-3f2k","ts":1792900000.0,
+         "kss":6,"prompt_ts":1792899992.0,"response_ms":8000}}
+```
+
+`event`: `session_start`(kss, sleep_hours_last_night, profile{chronotype, usual_sleep_h, work_type}) ·
+`kss`(kss 1~9, prompt_ts, response_ms) · `sleepy` · `prompt_missed`(prompt_ts) · `session_end`(kss).
+프로필 슬롯 이름(A~F)은 보내지 않고 `profile_id` 만 보낸다.

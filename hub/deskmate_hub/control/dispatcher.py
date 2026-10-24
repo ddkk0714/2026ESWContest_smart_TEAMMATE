@@ -12,6 +12,11 @@
 - 결과(succeeded/failed) 가 오거나 result_timeout_sec 이 지나면 해당 에피소드는 완료 → frame.action_done=True.
 - 같은 target/operation 은 cooldown_sec 안에 다시 보내지 않는다. 비가역 동작은 requires_confirmation=True 로만 만들고
   자동 실행하지 않는다.
+- 밝기는 절대값이 아니라 지금 밝기 대비 % 다(2026-10-25): operation `adjust_brightness`, value {"percent": ±정수}. 지금 밝기는
+  램프를 쓰는 Pi 5 앱만 알므로 hub 는 % 만 보내고 앱이 계산해 결과에 `previous`(바꾸기 전 원시 0~255)·`actual`(바꾼 뒤)을 준다.
+  value 에 선택 키 `min_raw` 가 있으면 앱은 결과를 max(계산값, min_raw) 로 한다(깨우기 묶음만 — 꺼진 램프도 켜지게).
+  되돌리기(spec `undo: previous`)는 그 결과의 previous 로 `set_brightness <previous>` 를 보낸다 — 결과가 없거나 previous 가 없으면
+  되돌리기 생략(로그만). 그 밖(set_brightness·set_power·set_mode)은 지금처럼 undo_value.
 표준 라이브러리만 사용한다.
 """
 from __future__ import annotations
@@ -38,6 +43,8 @@ class ControlCommand:
     requires_confirmation: bool
     expires_ts: float
     undo_value: Any = None
+    undo_mode: str | None = None      # "previous" = 결과의 previous 로 set_brightness (adjust_brightness 용). None = undo_value
+    result: dict[str, Any] | None = None   # 마지막 control/result payload(previous·actual 등)
     status: str = "accepted"          # accepted | executing | succeeded | failed | timeout | cancelled | skipped
     sent_ts: float | None = None
     completed_ts: float | None = None
@@ -162,13 +169,29 @@ class ControlDispatcher:
         cid = payload.get("command_id")
         for ep in ([self.episode] if self.episode else []) + self.history[-5:]:
             for c in ep.commands:
+                if c.command_id == cid and c.terminal:
+                    # 이미 끝난 명령에 같은 command_id 결과가 다시 오면 상태는 그대로 두고 previous·actual 만 보충한다 —
+                    # PC life_sim 의 모의 어댑터는 succeeded 를 먼저 보내고 previous·actual 을 한 번 더 보낸다(실기 앱은 한 번).
+                    late = {k: payload[k] for k in ("previous", "actual") if k in payload}
+                    if late:
+                        c.result = dict(c.result or {}, **late)
+                        self._log(f"[control] {c.target_id}.{c.operation} 늦은 결과로 previous/actual 보충 {late}")
+                    continue
                 if c.command_id == cid and not c.terminal:
                     if c.sent_ts is not None and now >= c.expires_ts:
                         c.status, c.completed_ts = "timeout", now
                         return False
                     status = str(payload.get("status", "")).lower()
-                    if status == "succeeded" and "actual_value" in payload and payload["actual_value"] != c.value:
-                        status = "failed"
+                    c.result = dict(payload)
+                    if status == "succeeded" and "actual_value" in payload:
+                        av = payload["actual_value"]
+                        if isinstance(c.value, dict):
+                            # 상대 명령({percent}): actual_value 는 앱이 계산한 원시 밝기여야 하고, actual 이 함께 오면 같아야 한다
+                            numeric = isinstance(av, (int, float)) and not isinstance(av, bool)
+                            if not numeric or ("actual" in payload and av != payload["actual"]):
+                                status = "failed"
+                        elif av != c.value:
+                            status = "failed"
                     c.status = status if status in ("executing", "succeeded", "failed", "cancelled") else "failed"
                     if c.terminal:
                         c.completed_ts = now
@@ -234,7 +257,8 @@ class ControlDispatcher:
                 continue
             cmds.append(ControlCommand(
                 command_id=uuid.uuid4().hex[:12], target_id=spec["target_id"], operation=spec["operation"],
-                value=spec.get("value"), undo_value=spec.get("undo_value"), origin_state=state, cause=cause,
+                value=spec.get("value"), undo_value=spec.get("undo_value"), undo_mode=spec.get("undo"),
+                origin_state=state, cause=cause,
                 gate=gate.value, requires_confirmation=irreversible, expires_ts=now + self.timeout,
             ))
         return cmds
@@ -252,13 +276,33 @@ class ControlDispatcher:
         ep.outcome = "executed"
         self._log(f"[control] {ep.state}/{ep.cause}: {len(ep.commands)}건 발행 ({ep.gate.value})")
 
+    def _undo_plan(self, c: ControlCommand) -> tuple[str, Any] | None:
+        """이 명령을 되돌리는 (operation, value). 못 되돌리면 None.
+
+        undo: previous — 앱 결과의 previous(바꾸기 전 원시 밝기)로 set_brightness. 결과가 없거나 previous 가 없으면 None.
+        그 밖은 같은 operation 에 undo_value.
+        """
+        if c.undo_mode == "previous":
+            previous = (c.result or {}).get("previous")
+            if previous is None:
+                self._log(f"[control] {c.target_id}.{c.operation} 되돌리기 생략 — 결과에 previous 가 없다")
+                return None
+            return "set_brightness", previous
+        if c.undo_value is None:
+            return None
+        return c.operation, c.undo_value
+
     def _undo(self, ep: Episode, now: float) -> None:
         sent = False
         for c in list(ep.commands):
-            if c.undo_value is None or c.status not in ("succeeded", "executing"):
+            if c.gate == "undo" or c.status not in ("succeeded", "executing"):
                 continue
+            plan = self._undo_plan(c)
+            if plan is None:
+                continue
+            undo_op, undo_value = plan
             undo = ControlCommand(
-                command_id=uuid.uuid4().hex[:12], target_id=c.target_id, operation=c.operation, value=c.undo_value,
+                command_id=uuid.uuid4().hex[:12], target_id=c.target_id, operation=undo_op, value=undo_value,
                 origin_state=ep.state, cause=ep.cause, gate="undo", requires_confirmation=False,
                 expires_ts=now + self.timeout, sent_ts=now, status="executing",
             )
@@ -281,12 +325,30 @@ class MockPlugAdapter:
         self.delay = delay_sec
         self._clock = clock
         self.state: dict[str, Any] = {}
+        self.brightness: dict[str, int] = {}      # target → 모의 원시 밝기(adjust_brightness 계산용)
         self._pending: list[tuple[float, dict[str, Any]]] = []
 
+    DEFAULT_BRIGHTNESS = 110          # 모의 램프의 처음 원시 밝기(0~255). Pi 5 앱의 실제 값은 램프 상태에서 온다
+
     def handle_command(self, payload: dict[str, Any]) -> None:
-        self.state[payload["target_id"]] = {payload["operation"]: payload["value"]}
-        result = {"command_id": payload["command_id"], "status": "succeeded", "actual_value": payload["value"],
+        target, operation, value = payload["target_id"], payload["operation"], payload["value"]
+        result = {"command_id": payload["command_id"], "status": "succeeded", "actual_value": value,
                   "completed_ts_ms": int(self._clock() * 1000)}
+        if operation == "adjust_brightness":
+            # 앱과 같은 계약: 지금 밝기 × (1 + percent/100), 0~255 로 자른 뒤 previous·actual 을 결과에 싣는다
+            previous = int(self.brightness.get(target, self.DEFAULT_BRIGHTNESS))
+            percent = float((value or {}).get("percent", 0))
+            actual = int(round(previous * (1.0 + percent / 100.0)))
+            if (value or {}).get("min_raw") is not None:          # 깨우기 최소 밝기: 결과 = max(계산값, min_raw)
+                actual = max(actual, int((value or {})["min_raw"]))
+            actual = max(0, min(255, actual))
+            self.brightness[target] = actual
+            self.state[target] = {operation: value, "brightness": actual}
+            result.update(previous=previous, actual=actual, actual_value=actual)
+        else:
+            if operation == "set_brightness":
+                self.brightness[target] = int(value)
+            self.state[target] = {operation: value}
         if self.delay <= 0:
             self.on_result(result)
         else:

@@ -23,6 +23,7 @@ BOARD_MODULES = (
     "deskmate_hub.ingest.uart_source",
     "deskmate_hub.ingest.tof_service",             # 자세 서비스 판정 수신(urllib 은 폴러 함수 안에서만 import)
     "deskmate_hub.esm",
+    "deskmate_hub.fatigue.live",                   # 피로 점수(관찰 전용) — 표준 라이브러리만, hashlib 없이 모델 지문
     "deskmate_hub.features.baseline",
     "deskmate_hub.control.dispatcher",
     "deskmate_hub.inference.report",
@@ -102,6 +103,7 @@ def test_personalize_policy_decides_and_learns_without_numpy_or_random():
         sys.modules.pop("random", None)
         from deskmate_hub.personalize import InterventionPolicy, Situation, load_personalize_config
         cfg = load_personalize_config()
+        cfg["policy"] = {{"causes": ["environment", "posture", "cognitive"]}}   # 환경 arm(날씨·환기)까지 보드에서 돌려 본다
         p = InterventionPolicy(cfg)
         s = Situation(ts=1e6, hour_local=15.5, weekday=2, month=10, co2_ppm=1400, temp_c=24.0, lux=300,
                       c_fatigue=0.8, session_elapsed_min=90,

@@ -111,7 +111,7 @@ class Decision:
     arm: str | None
     candidates: list[str]
     excluded: dict[str, str]
-    source: str                      # bandit | rule_sleep | fallback
+    source: str                      # bandit | rule_sleep | fallback | fsm_fixed(정책이 맡지 않는 원인 — FSM 기본 명령)
     policy_mode: str                 # global | personal
     n_personal: int
     scores: dict[str, float]
@@ -138,6 +138,9 @@ class Decision:
         }
 
 
+
+
+DEFAULT_POLICY_CAUSES = ("posture", "cognitive")   # personalize.yaml policy.causes 가 없을 때
 
 
 class InterventionPolicy:
@@ -334,6 +337,13 @@ class InterventionPolicy:
         if gate_s == "none":
             return Decision(arm=None, candidates=[], excluded={}, source="fallback", scores={},
                             delivered_gate="none", auto_threshold=None, explanation="정책 미적용", **base)
+        # policy.causes(기본 posture·cognitive): 환경 원인은 밴딧이 arm 을 고르지 않고 control.yaml 기본 명령(FSM)만 나간다(2026-10-25).
+        # null 이면 모든 원인. 기록(에피소드)은 record.py 가 fsm_fixed 로 계속 남긴다.
+        allowed = (self.cfg.get("policy") or {}).get("causes", list(DEFAULT_POLICY_CAUSES))
+        if allowed is not None and cause not in allowed:
+            return Decision(arm=None, candidates=[], excluded={}, source="fsm_fixed", scores={},
+                            delivered_gate="none", auto_threshold=None,
+                            explanation=f"{cause} 원인은 정책이 고르지 않는다 — FSM 기본 명령(control.yaml) 그대로", **base)
         if self._session_count >= int(self.cfg["bandit"]["max_per_session"]):
             return Decision(arm=None, candidates=[], excluded={}, source="fallback", scores={},
                             delivered_gate="none", auto_threshold=None,

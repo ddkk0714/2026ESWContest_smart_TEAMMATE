@@ -4,6 +4,7 @@ import math
 import time
 from collections import deque
 
+from .assets import read_asset
 from .contract import CLASSES, feature_values, model_metadata
 
 
@@ -28,14 +29,13 @@ class PersonalizationRuntime:
                     raise ValueError("invalid limits")
             self.expected = model_metadata(width, period, normalization)
             self.rows = deque(maxlen=width)
-            with open(config["metadata_path"], encoding="utf-8") as source:
-                metadata = json.load(source)
+            # 파일 경로 또는 패키지 안 경로(보드 payload) — assets.read_asset
+            metadata = json.loads(read_asset(config["metadata_path"]).decode("utf-8"))
             if any(metadata.get(k) != v for k, v in self.expected.items()):
                 raise ValueError("metadata contract mismatch")
             # Check the file before importing any optional native dependency.
-            with open(config["model_path"], "rb") as source:
-                if not source.read(1):
-                    raise ValueError("empty model")
+            if not read_asset(config["model_path"])[:1]:
+                raise ValueError("empty model")
             if backend_factory is None:
                 backend_name = config.get("backend", "tflite")
                 if backend_name == "portable_cnn":
