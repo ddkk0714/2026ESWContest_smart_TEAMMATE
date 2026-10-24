@@ -39,6 +39,7 @@ class DeskmateSettings {
     this.postureUrl,
     this.speaker,
     this.lamp,
+    this.fan,
   });
 
   final String? mqttHost;
@@ -46,6 +47,7 @@ class DeskmateSettings {
   final String? postureUrl;
   final SavedBluetoothDevice? speaker;
   final SavedBluetoothDevice? lamp;
+  final SavedBluetoothDevice? fan;
 
   static const empty = DeskmateSettings();
 
@@ -54,7 +56,8 @@ class DeskmateSettings {
       mqttPort == null &&
       postureUrl == null &&
       speaker == null &&
-      lamp == null;
+      lamp == null &&
+      fan == null;
 
   DeskmateSettings copyWith({
     String? mqttHost,
@@ -67,6 +70,8 @@ class DeskmateSettings {
     bool clearSpeaker = false,
     SavedBluetoothDevice? lamp,
     bool clearLamp = false,
+    SavedBluetoothDevice? fan,
+    bool clearFan = false,
   }) =>
       DeskmateSettings(
         mqttHost: clearMqttHost ? null : mqttHost ?? this.mqttHost,
@@ -74,6 +79,7 @@ class DeskmateSettings {
         postureUrl: clearPostureUrl ? null : postureUrl ?? this.postureUrl,
         speaker: clearSpeaker ? null : speaker ?? this.speaker,
         lamp: clearLamp ? null : lamp ?? this.lamp,
+        fan: clearFan ? null : fan ?? this.fan,
       );
 
   Map<String, Object?> toJson() {
@@ -93,6 +99,9 @@ class DeskmateSettings {
     if (lamp != null) {
       json['lamp'] = lamp!.toJson();
     }
+    if (fan != null) {
+      json['fan'] = fan!.toJson();
+    }
     return json;
   }
 
@@ -110,6 +119,7 @@ class DeskmateSettings {
       postureUrl: posture,
       speaker: SavedBluetoothDevice._from(json['speaker']),
       lamp: SavedBluetoothDevice._from(json['lamp']),
+      fan: SavedBluetoothDevice._from(json['fan']),
     );
   }
 

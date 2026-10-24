@@ -254,13 +254,14 @@ static uint32_t natural_factor(uint32_t clock_ms) {
 
 uint16_t fan_duty_permille(const fan_state_t *s) {
     if (!s->power || s->speed == 0 || s->pause_ms) return 0;
-    if (s->kick_ms) return 1000;
+    if (s->kick_ms) return FAN_MAX_DUTY_PERMILLE;
     uint32_t speed = s->speed;
     if (s->mode == FAN_MODE_NATURAL) {
         speed = speed * natural_factor(s->clock_ms) / 1000u;
         if (speed == 0) speed = 1;
     }
-    return (uint16_t)(FAN_MIN_DUTY_PERMILLE + (1000u - FAN_MIN_DUTY_PERMILLE) * speed / 100u);
+    uint32_t duty = FAN_MAX_DUTY_PERMILLE * speed / 100u;
+    return (uint16_t)(duty < FAN_MIN_DUTY_PERMILLE ? FAN_MIN_DUTY_PERMILLE : duty);
 }
 
 uint8_t fan_level(const fan_state_t *s) {

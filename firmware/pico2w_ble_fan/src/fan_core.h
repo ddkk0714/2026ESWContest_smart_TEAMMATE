@@ -10,11 +10,19 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Below this duty the small DC motor on the L9110 module stalls; speed 1 % maps here. */
+/* Duty = speed % of FAN_MAX_DUTY_PERMILLE, never below FAN_MIN_DUTY_PERMILLE while running.
+ * 10-24 bench values: level 1/2/3 = 30/45/60 % duty (speed 50/75/100), nothing above 60 %. */
 #ifndef FAN_MIN_DUTY_PERMILLE
-#define FAN_MIN_DUTY_PERMILLE 350
+#define FAN_MIN_DUTY_PERMILLE 300 /* level 1; floor for low speeds and natural-wind dips */
 #endif
-/* Full power for this long whenever the motor starts from rest. */
+/* Ceiling for every output, start kick included. -DFAN_MAX_DUTY_PERMILLE=1000 restores full power. */
+#ifndef FAN_MAX_DUTY_PERMILLE
+#define FAN_MAX_DUTY_PERMILLE 600
+#endif
+#if FAN_MAX_DUTY_PERMILLE < FAN_MIN_DUTY_PERMILLE || FAN_MAX_DUTY_PERMILLE > 1000
+#error FAN_MAX_DUTY_PERMILLE must be between FAN_MIN_DUTY_PERMILLE and 1000
+#endif
+/* Maximum duty for this long whenever the motor starts from rest. */
 #ifndef FAN_KICK_MS
 #define FAN_KICK_MS 250
 #endif
@@ -23,10 +31,10 @@
 #define FAN_REVERSE_PAUSE_MS 400
 #endif
 #ifndef FAN_LEVEL1_SPEED
-#define FAN_LEVEL1_SPEED 30
+#define FAN_LEVEL1_SPEED 50
 #endif
 #ifndef FAN_LEVEL2_SPEED
-#define FAN_LEVEL2_SPEED 60
+#define FAN_LEVEL2_SPEED 75
 #endif
 #ifndef FAN_LEVEL3_SPEED
 #define FAN_LEVEL3_SPEED 100

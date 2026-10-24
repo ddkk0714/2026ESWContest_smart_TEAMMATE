@@ -12,6 +12,7 @@ import 'bluetooth_service.dart';
 import 'connection_guide.dart';
 import 'connection_page.dart';
 import 'display_state.dart';
+import 'fan_control.dart';
 import 'feedback_policy.dart';
 import 'dashboard_view.dart';
 import 'deskmate_theme.dart';
@@ -171,6 +172,7 @@ class _DashboardPageState extends State<DashboardPage> {
       music: _music,
       lamp: IlinkLampFeedback(_bluetooth),
       bluetooth: _bluetooth,
+      fan: BleFanControl(_bluetooth),
     );
     HardwareKeyboard.instance.addHandler(_onKey);
     _settingsStore = widget.settings ?? SettingsStore();
@@ -189,7 +191,8 @@ class _DashboardPageState extends State<DashboardPage> {
     // 저장된 스피커·램프가 있으면 검색 없이 붙는다. 실패해도 앱은 계속 돈다.
     unawaited(_btLinks.restore().then((_) {
       diag.write('bluetooth: 복원 스피커=${_btLinks.speakerStatus.health.name} '
-          '램프=${_btLinks.lampStatus.health.name}');
+          '램프=${_btLinks.lampStatus.health.name} '
+          '선풍기=${_btLinks.fanStatus.health.name}');
     }));
     _startMqttCheck();
     _refresh();
@@ -569,16 +572,21 @@ class _DashboardPageState extends State<DashboardPage> {
       case LinkId.posture:
         setState(() => _postureReloadToken++);
         _notify('자세 카메라를 다시 찾습니다.');
-      case LinkId.speaker || LinkId.lamp:
+      case LinkId.speaker || LinkId.lamp || LinkId.fan:
         // 저장된 기기가 있으면 그 자리에서 다시 붙이고, 없으면 검색하러 보낸다.
-        final saved =
-            id == LinkId.speaker ? _btLinks.savedSpeaker : _btLinks.savedLamp;
+        final saved = switch (id) {
+          LinkId.speaker => _btLinks.savedSpeaker,
+          LinkId.lamp => _btLinks.savedLamp,
+          _ => _btLinks.savedFan,
+        };
         if (saved == null) {
           setState(() => _view = _AppView.bluetooth);
         } else {
-          unawaited(id == LinkId.speaker
-              ? _btLinks.reconnectSpeaker()
-              : _btLinks.reconnectLamp());
+          unawaited(switch (id) {
+            LinkId.speaker => _btLinks.reconnectSpeaker(),
+            LinkId.lamp => _btLinks.reconnectLamp(),
+            _ => _btLinks.reconnectFan(),
+          });
           _notify('${saved.name}에 다시 연결합니다.');
         }
       case LinkId.keystroke:
@@ -627,6 +635,7 @@ class _DashboardPageState extends State<DashboardPage> {
       posture: _postureStatus,
       speaker: _btLinks.speakerStatus,
       lamp: _btLinks.lampStatus,
+      fan: _btLinks.fanStatus,
     );
     if (mounted) setState(() => _links = next);
   }
