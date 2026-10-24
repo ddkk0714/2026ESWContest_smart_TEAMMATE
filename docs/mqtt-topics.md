@@ -41,6 +41,7 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 | `deskmate/control/cmd` | hub | control 어댑터, Pi 5 앱(조명) | 이벤트, QoS 1, retain 없음 | 기기 제어 명령 (`control_command`, data-spec §10) |
 | `deskmate/control/result` | control 어댑터, Pi 5 앱(조명) | hub | 이벤트, QoS 1 | 명령 결과 (`control_result`). hub 는 `command_id` 로 매칭 |
 | `deskmate/feedback/user` | display | hub | 이벤트 | 사용자 수락 · 정정 |
+| `deskmate/fatigue/label` | Pi 5 피로 기록 앱(`display/atlas/fatigue_app`) | PC `tools/fatigue_logger.py` | 이벤트, QoS 1 | 피로 데이터 수집: 작업 시작·끝, 15분 KSS 응답. FSM 입력 아님 ([fatigue-dataset.md](fatigue-dataset.md)) |
 | `deskmate/health/<node>` | 전 장치 | hub | LWT/retain | `{ts,node,status:online|offline,reconnects}`. hub 는 `deskmate/health/hub` |
 
 ## 페이로드 예시
@@ -386,3 +387,18 @@ retain으로 들어온 명령은 무시한다. 최근 128개 `command_id`의 처
 실행 중인 학습 job이 있고 실제 상태가 IDLE/END 밖이면 status=paused로 표시한다. 입력·판단·제어는 유지하고, 다시 유휴 상태가 되면 training으로 재개한다. Pi 5는 이 snapshot을 표시하며 연결 끊김이나 동의 철회 때 이전 개인 모델 상태를 현재처럼 표시하지 않는다. 서비스 시작 self-check는 stderr 진단만 사용하며 MQTT 명령·개인 표본을 새로 만들지 않는다.
 
 ondevice.yaml이 활성화된 경우에만 `state/phase.data.sensor_summary.ondevice_learning`을 추가한다. `execution: local`, `decision_source: fsm`, `head_source: common|personal`, `samples`, `sessions`, `training_step`(job이 없으면 null)을 제공한다. status는 disabled, unavailable, awaiting_consent, awaiting_portable_model, collecting, training, paused, accepted, rejected, storage_error, head_load_failed이다. embedding·개인 head·표본·파일 경로는 MQTT로 보내지 않는다. 기본 비활성에서는 기존 출력과 FSM을 유지한다. [실행·학습 계약](ondevice-personalization.md)을 따른다.
+
+## 피로 데이터 수집 (2026-10-20)
+
+`deskmate/fatigue/label` 은 Pi 5 피로 기록 앱(`com.atlas.app.deskmate_fatigue`)이 보내는 학습 라벨이다. hub FSM 은 구독하지 않는다.
+QoS 1, retain 없음. 연결이 끊긴 동안의 기록은 앱이 순서대로 쌓아 두었다가 다시 보낸다(중복은 기록기가 거른다).
+
+```json
+{"schema_version":"1.0","ts":1792900000.0,"node":"display-fatigue","boot_id":"fatigue-1","seq":4,
+ "data":{"event":"kss","session_id":"A-3f2k-1792899100000","profile_id":"A-3f2k","ts":1792900000.0,
+         "kss":6,"prompt_ts":1792899992.0,"response_ms":8000}}
+```
+
+`event`: `session_start`(kss, sleep_hours_last_night, profile{chronotype, usual_sleep_h, work_type}) ·
+`kss`(kss 1~9, prompt_ts, response_ms) · `sleepy` · `prompt_missed`(prompt_ts) · `session_end`(kss).
+프로필 슬롯 이름(A~F)은 보내지 않고 `profile_id` 만 보낸다.
