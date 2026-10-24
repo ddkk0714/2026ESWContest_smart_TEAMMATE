@@ -87,14 +87,16 @@ class FanState {
 
 class BleFanControl {
   BleFanControl(this._bluetooth,
-      {this.connectAttempts = 5,
-      this.retryDelay = const Duration(milliseconds: 1500),
+      {this.connectAttempts = 8,
+      this.retryDelay = const Duration(seconds: 3),
       this.rescanFor = const Duration(seconds: 6)});
   final AtlasBluetoothService _bluetooth;
 
-  /// 10-24 Pi 5 실기: Pi 5 → Pico 2 W 링크는 두세 번에 한 번만 맺어지고
-  /// (`le-connection-abort-by-local`, 노트북은 매번 성공), 페어링하지 않은 기기는 BlueZ 가 곧 잊어서
-  /// 저장된 주소로 바로 붙으면 실패한다. 그래서 실패하면 잠깐 검색해 다시 찾은 뒤 다시 붙는다.
+  /// 10-24 Pi 5 실기: Pi 5 → Pico 2 W 링크는 두 번에 한 번꼴로만 맺어지고
+  /// (`le-connection-abort-by-local`, 스피커 연결 여부와 무관, 노트북은 매번 성공), 페어링하지 않은 기기는
+  /// BlueZ 가 곧 잊는다. Atlas Connect 는 실패를 먼저 돌려준 뒤에도 BlueZ 가 링크를 계속 맺고 있어서,
+  /// 곧바로 검색을 시작하면 그 링크가 끊긴다. 그래서 실패하면 [retryDelay] 기다렸다 다시 붙고,
+  /// BlueZ 가 잊었을 때를 위해 두 번에 한 번만 검색한다.
   final int connectAttempts;
   final Duration retryDelay;
   final Duration rescanFor;
@@ -147,8 +149,8 @@ class BleFanControl {
         _lastError = error;
         if (attempt >= connectAttempts) return false;
       }
-      await _rediscover();
       await Future<void>.delayed(retryDelay);
+      if (attempt.isEven) await _rediscover();
     }
   }
 
