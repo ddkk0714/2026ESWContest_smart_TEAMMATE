@@ -69,6 +69,35 @@ def test_real_frame_state_pair_and_esm_correction(tmp_path):
     assert manifest["counts"]["train_augmented"] == {name: 0 for name in manifest["classes"]}
 
 
+def test_sim_truth_labels_replace_fsm_phase_but_esm_still_wins(tmp_path):
+    logs = tmp_path / "inputs"
+    logs.mkdir()
+    truth = ["focus", "focus", "fatigue", "fatigue"]
+    frame_lines = [json.dumps({"now": 100 + tick, "present": True, "pc_ratio": 0.5, "signals": {}}) for tick in range(4)]
+    (logs / "frames-a.jsonl").write_text("\n".join(frame_lines) + "\n", encoding="utf-8")
+    (logs / "state-a.jsonl").write_text("\n".join(json.dumps({"data": {"phase": "focus"}}) for _ in range(4)) + "\n",
+                                        encoding="utf-8")
+    (logs / "truth-a.jsonl").write_text("\n".join(json.dumps({"now": 100 + t, "truth": c}) for t, c in enumerate(truth)) + "\n",
+                                        encoding="utf-8")
+    out = tmp_path / "output"
+    manifest = build_dataset(name="truth", synthetic="", logs=str(logs), truth=True, window=2, augment_count=0,
+                             eval_fraction=0, output_dir=out)
+    assert manifest["counts"]["label_source"] == {"sim_truth": 3}
+    with np.load(out / "windows.npz", allow_pickle=False) as data:
+        assert data["y_train"].tolist() == [0, 1, 1]         # focus, fatigue, fatigue (창의 마지막 tick)
+    esm = logs / "esm.jsonl"
+    esm.write_text(json.dumps({"verdict": "correct", "corrected_state": "REST",
+                               "target_window_start_ms": 103000, "target_window_end_ms": 103000}) + "\n", encoding="utf-8")
+    manifest = build_dataset(name="truth2", synthetic="", logs=str(logs), truth=True, esm=str(esm), window=2,
+                             augment_count=0, eval_fraction=0, output_dir=tmp_path / "out2")
+    assert manifest["counts"]["label_source"] == {"sim_truth": 2, "esm": 1}
+    (logs / "truth-a.jsonl").unlink()
+    import pytest
+    with pytest.raises(FileNotFoundError):
+        build_dataset(name="truth3", synthetic="", logs=str(logs), truth=True, window=2, augment_count=0,
+                      output_dir=tmp_path / "out3")
+
+
 def test_balanced_logistic_recovers_a_rare_class():
     from ml.training.evidence import predict_logistic
 

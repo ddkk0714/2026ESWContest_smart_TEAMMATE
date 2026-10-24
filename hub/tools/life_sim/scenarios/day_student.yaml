@@ -1,0 +1,36 @@
+# §B-3 하루 각본 ① 과제 중 대학생 (PC 컨텍스트). 가속 재생. 시각은 각 구간의 뜻을 살리되 전체 길이는 ~2.3 h 로 압축.
+#  ① 착석 → START 베이스라인 → CONTEXT_DETECT(키 입력)  ② 몰입 90 분 → 서서히 슬럼프, CO₂ 600→1400  ③ 오후 졸음(§A 폐루프)
+#  ④ 환기 상황: CO₂ 높음 + 날씨(바람)  ⑤ 턱괴기·거북목 지속 → 자세 알림  ⑥ 늦은 밤 피로·졸음 반복 → 취침 권유  ⑦ 자리비움 → IDLE → 복귀
+name: day_student
+persona: student
+seed: 101
+start_clock: "21:30"           # 취침 23:30(기본) 뒤에 ⑥ 이 오도록; 정숙 시간(23~07)엔 voice/sound arm 제외
+l8_params: v5
+env: {co2_ppm: 600, temp_c: 24.0, humidity_pct: 45, lux: 380, pm25: 18}
+weather: {temp_c: 15.0, humidity: 50, wind_ms: 5.0, condition: clear, season: autumn}
+policy: {profile: none}        # ab 명령이 A/B 로 바꿔 돌린다
+segments:
+  # ① 착석·베이스라인·컨텍스트 (키 입력 활발)
+  - {kind: away, seconds: 10}
+  - {kind: upright, seconds: 330, typing: true}
+  # ② 몰입 90 분 압축(25 분): 타이핑 품질이 서서히 나빠지고 CO₂ 가 600→1400 로 오른다
+  - {kind: upright, seconds: 600, typing: true, keys: {idle_ratio: 0.15, flight_cv: 0.30, correction_rate: 0.04}, env: {co2_to: 1000}}
+  - {kind: mouse_work, seconds: 300, typing: true, keys: {idle_ratio: 0.30, flight_cv: 0.40, correction_rate: 0.06}, env: {co2_to: 1200}}
+  - {kind: upright, seconds: 600, typing: true, keys: {idle_ratio: 0.40, flight_cv: 0.55, correction_rate: 0.10}, env: {co2_to: 1400}}
+  # ③ 오후 졸음 (§A 폐루프: 깨우기 개입 → 반응)
+  - {kind: drowsy, seconds: 1500, typing: false,
+     nods: {interval_s: [6, 14], amp_deg: [30, 50], micro_sleep_p: 0.5, hold_s: [5, 15], first_s: [20, 40]}}
+  # ④ 환기 상황: CO₂ 높음 상태에서 깨어 일한다 → 환경 개입(선풍기/조명 vs 환기 카드) 선택
+  - {kind: upright, seconds: 600, typing: true, keys: {idle_ratio: 0.35, flight_cv: 0.5, correction_rate: 0.08}, env: {co2_to: 1500}}
+  # ⑤ 턱괴기·거북목 지속 → 자세 알림 → 복귀/무시
+  - {kind: chin_rest, seconds: 420, typing: false}
+  - {kind: turtle, seconds: 420, typing: true, keys: {idle_ratio: 0.3, flight_cv: 0.45, correction_rate: 0.07}}
+  # ⑥ 늦은 밤 피로·졸음 반복 → 취침 권유
+  - {kind: upright, seconds: 300, typing: true, keys: {idle_ratio: 0.5, flight_cv: 0.6, correction_rate: 0.12}}
+  - {kind: drowsy, seconds: 900, typing: false, nods: {interval_s: [4, 10], amp_deg: [35, 55], micro_sleep_p: 0.7, hold_s: [8, 20], first_s: [10, 25]}}
+  - {kind: upright, seconds: 240, typing: true, keys: {idle_ratio: 0.5, flight_cv: 0.6, correction_rate: 0.12}}
+  - {kind: drowsy, seconds: 900, typing: false, nods: {interval_s: [4, 10], amp_deg: [35, 55], micro_sleep_p: 0.7, hold_s: [8, 20], first_s: [10, 25]}}
+  # ⑦ 자리비움 → IDLE(10 분 부재) → 복귀 → 종료
+  - {kind: away, seconds: 660}
+  - {kind: upright, seconds: 240, typing: true}
+  - {kind: away, seconds: 30, no_return: true}

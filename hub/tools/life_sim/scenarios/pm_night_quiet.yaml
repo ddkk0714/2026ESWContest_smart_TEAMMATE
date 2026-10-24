@@ -1,0 +1,25 @@
+# 공기청정기 ③ 겨울밤 스모그 (필기 수험생, 비PC). 바깥 PM2.5 48(나쁨)·-3 ℃ → 창문 제외(outdoor_pm_bad). 실내 52 로 시작.
+#  23 시부터 정숙 시간 → 재실 중 상한 2(강풍 소음 금지). 볼 것: 정숙 상한이 PM 을 얼마나 늦게 내리는지(나쁨 재실 분),
+#  졸음·취침 권유, 마지막 자리비움(잠자리) 때 boost 가 3 단계로 올라가는 것 — 같은 방에서 자는 경우엔 소음 문제(설계 질문).
+name: pm_night_quiet
+persona: examinee
+seed: 404
+start_clock: "22:30"
+l8_params: v5
+env: {co2_ppm: 750, temp_c: 21.0, humidity_pct: 30, lux: 400, pm25: 52}
+weather: {temp_c: -3.0, humidity: 45, wind_ms: 1.5, condition: clear, season: winter, pm25: 48}
+policy: {profile: none}
+devices: {room: {hvac: {mode: heat, setpoint: 22}}}   # 겨울 난방
+# 환경은 물리로(co2_to 강제 없음): CO₂·온습도·조도가 방 모델(room.py) → SCD41·DHT22·BH1750 대역 → UART 0x10 으로 hub 에 들어간다.
+segments:
+  - {kind: away, seconds: 10}
+  - {kind: writing, seconds: 330, typing: false}
+  - {kind: writing, seconds: 900, typing: false}
+  - {kind: reading, seconds: 900, typing: false}
+  - {kind: chin_rest, seconds: 420, typing: false}
+  - {kind: drowsy, seconds: 1200, typing: false,
+     nods: {interval_s: [5, 12], amp_deg: [35, 55], micro_sleep_p: 0.6, hold_s: [8, 20], first_s: [15, 30]}}
+  - {kind: writing, seconds: 600, typing: false}
+  - {kind: drowsy, seconds: 900, typing: false, nods: {interval_s: [4, 10], amp_deg: [35, 55], micro_sleep_p: 0.7, hold_s: [8, 20], first_s: [10, 25]}}
+  - {kind: away, seconds: 1200, where: room}       # 같은 방 침대로
+  - {kind: away, seconds: 30, no_return: true}

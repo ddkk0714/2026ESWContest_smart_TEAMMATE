@@ -1,0 +1,27 @@
+# 공기청정기 ①-대조 맑은 낮 (pm_yellowdust 와 같은 하루, 바깥 PM2.5 12 · 바람 5 m/s) → 창문 환기 허용(windy 우선).
+#  볼 것: 환기 카드 수락 → 창문 열림이 CO₂ 를 실제로 내리는지(10-22 강제 램프 수정 확인), 창문이 실내 PM 도 바깥값으로 내리는지,
+#  같은 간식 발생원에 공기청정기가 몇 분 켜지는지(황사 날과 비교).
+name: pm_clear_vent
+persona: student
+seed: 402
+start_clock: "13:30"
+l8_params: v5
+env: {co2_ppm: 650, temp_c: 22.0, humidity_pct: 40, lux: 420, pm25: 18}
+weather: {temp_c: 16.0, humidity: 35, wind_ms: 5.0, condition: clear, season: spring, pm25: 12}
+policy: {profile: none}
+# 환경은 물리로(co2_to 강제 없음): CO₂·온습도·조도가 방 모델(room.py) → SCD41·DHT22·BH1750 대역 → UART 0x10 으로 hub 에 들어간다.
+segments:
+  - {kind: away, seconds: 10}
+  - {kind: upright, seconds: 330, typing: true}
+  - {kind: upright, seconds: 900, typing: true, keys: {idle_ratio: 0.15, flight_cv: 0.30, correction_rate: 0.04}}
+  - {kind: mouse_work, seconds: 600, typing: true, keys: {idle_ratio: 0.30, flight_cv: 0.40, correction_rate: 0.06}}
+  # 간식(과자 부스러기·포장) — 실내 발생원
+  - {kind: upright, seconds: 300, typing: false, env: {pm_add_per_s: 0.05}}
+  - {kind: drowsy, seconds: 1200, typing: false,
+     nods: {interval_s: [6, 14], amp_deg: [30, 50], micro_sleep_p: 0.5, hold_s: [5, 15], first_s: [20, 40]}}
+  # 늦은 점심 — 20 분 자리비움(away boost)
+  - {kind: away, seconds: 1200}
+  - {kind: upright, seconds: 900, typing: true, keys: {idle_ratio: 0.3, flight_cv: 0.45, correction_rate: 0.07}}
+  - {kind: turtle, seconds: 420, typing: true, keys: {idle_ratio: 0.3, flight_cv: 0.45, correction_rate: 0.07}}
+  - {kind: upright, seconds: 300, typing: true}
+  - {kind: away, seconds: 30, no_return: true}

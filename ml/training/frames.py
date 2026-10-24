@@ -58,12 +58,27 @@ def state_phases(states: list[dict], count: int) -> list[str | None]:
     return [(state.get("data") or {}).get("phase") for state in states]
 
 
-def label_ticks(frames: list[dict], phases: list[str | None], esm: list[dict] = ()) -> tuple[list[int | None], list[str], dict]:
+def truth_classes(records: list[dict], count: int) -> list[str | None]:
+    """life_sim 정답 로그(`truth-*.jsonl`, tick 마다 {"now","truth"})를 frame tick 순서대로."""
+    if len(records) != count:
+        raise ValueError(f"frame/truth tick 수 불일치: {count}/{len(records)}")
+    return [record.get("truth") for record in records]
+
+
+def label_ticks(frames: list[dict], phases: list[str | None], esm: list[dict] = (),
+                truth: list[str | None] | None = None) -> tuple[list[int | None], list[str], dict]:
+    """약한 라벨(FSM phase) → 시뮬 정답(truth, 있으면) → ESM 정정 순으로 덮는다."""
     if len(frames) != len(phases):
         raise ValueError("frame/phase tick 수 불일치")
     labels = [phase_label(phase) for phase in phases]
     sources = ["fsm"] * len(frames)
     unknown = dict(Counter(str(phase) for phase, label in zip(phases, labels) if label is None))
+    if truth is not None:
+        if len(truth) != len(frames):
+            raise ValueError("frame/truth tick 수 불일치")
+        for index, name in enumerate(truth):
+            if name in CLASS_INDEX:
+                labels[index], sources[index] = CLASS_INDEX[name], "sim_truth"
     for record in esm:
         if record.get("verdict") != "correct" or record.get("corrected_state") not in CORRECTED_CLASS:
             continue

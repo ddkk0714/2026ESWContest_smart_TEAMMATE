@@ -42,7 +42,7 @@ def _counts(labels: np.ndarray) -> dict[str, int]:
 
 
 def build_dataset(*, name: str, synthetic: str = "default,short,demo", seeds: str = "1-20",
-                  offsets: str = "0,3,7", logs: str | None = None, esm: str | None = None,
+                  offsets: str = "0,3,7", logs: str | None = None, esm: str | None = None, truth: bool = False,
                   window: int = 6, stride: int = 1, augment_count: int = 4,
                   eval_fraction: float = 0.25, seed: int = 42,
                   output_dir: Path | None = None) -> dict:
@@ -62,7 +62,7 @@ def build_dataset(*, name: str, synthetic: str = "default,short,demo", seeds: st
             for offset in number_list(offsets):
                 session_id = f"synth-{scenario}-s{item_seed}-o{offset}"
                 ticks, phases, raw = synth.generate_session(scenario, item_seed, offset)
-                sessions.append((session_id, ticks, phases))
+                sessions.append((session_id, ticks, phases, None))
                 material.append({"session_id": session_id, "source": "synthetic", "scenario": scenario,
                                  "seed": item_seed, "offset": offset, "sha256": hashlib.sha256(raw).hexdigest(),
                                  "ticks": len(ticks)})
@@ -75,10 +75,18 @@ def build_dataset(*, name: str, synthetic: str = "default,short,demo", seeds: st
             ticks = frames.read_jsonl(frame_path)
             phases = frames.state_phases(frames.read_jsonl(state_path), len(ticks))
             session_id = f"log-{hashlib.sha256(str(frame_path).encode()).hexdigest()[:12]}"
-            sessions.append((session_id, ticks, phases))
+            truth_path = frame_path.with_name(frame_path.name.replace("frames-", "truth-", 1))
+            labels_truth = None
+            if truth:                      # life_sim 정답 로그(시뮬 사람의 잠재 피로에서 나온 라벨)
+                if not truth_path.exists():
+                    raise FileNotFoundError(f"truth 로그 없음: {truth_path}")
+                labels_truth = frames.truth_classes(frames.read_jsonl(truth_path), len(ticks))
+            sessions.append((session_id, ticks, phases, labels_truth))
             material.append({"session_id": session_id, "source": "log", "frames": str(frame_path),
                              "state": str(state_path), "sha256": hashlib.sha256(raw).hexdigest(),
-                             "state_sha256": hashlib.sha256(state_path.read_bytes()).hexdigest(), "ticks": len(ticks)})
+                             "state_sha256": hashlib.sha256(state_path.read_bytes()).hexdigest(), "ticks": len(ticks),
+                             **({"truth": str(truth_path), "truth_sha256": hashlib.sha256(truth_path.read_bytes()).hexdigest()}
+                                if truth else {})})
     if not sessions:
         raise ValueError("합성 시나리오 또는 로그가 하나 이상 필요합니다")
     # Offset variants must remain together across train/test.
@@ -88,8 +96,8 @@ def build_dataset(*, name: str, synthetic: str = "default,short,demo", seeds: st
     train_ids = {session[0] for session in sessions if group_id(session[0]) in train_groups}
     test_ids = {session[0] for session in sessions if group_id(session[0]) in test_groups}
     train_x, train_y, test_x, test_y, train_meta, test_meta = [], [], [], [], [], []
-    for session_id, ticks, phases in sessions:
-        labels, sources, missing = frames.label_ticks(ticks, phases, esm_records)
+    for session_id, ticks, phases, labels_truth in sessions:
+        labels, sources, missing = frames.label_ticks(ticks, phases, esm_records, truth=labels_truth)
         unknown.update(missing)
         x, y, meta = frames.windows(ticks, labels, sources, session_id=session_id,
                                     width=window, stride=stride)
@@ -150,6 +158,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--offsets", default="0,3,7")
     parser.add_argument("--logs")
     parser.add_argument("--esm")
+    parser.add_argument("--truth", action="store_true",
+                        help="--logs 의 frames-*.jsonl 옆 truth-*.jsonl(life_sim 정답)로 라벨을 덮는다(label_source=sim_truth)")
     parser.add_argument("--window", type=int, default=6)
     parser.add_argument("--stride", type=int, default=1)
     parser.add_argument("--augment", type=int, default=4)
@@ -157,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args(argv)
     manifest = build_dataset(name=args.name, synthetic=args.synthetic, seeds=args.seeds,
-                             offsets=args.offsets, logs=args.logs, esm=args.esm,
+                             offsets=args.offsets, logs=args.logs, esm=args.esm, truth=args.truth,
                              window=args.window, stride=args.stride, augment_count=args.augment,
                              eval_fraction=args.eval_fraction, seed=args.seed)
     print(json.dumps({"sessions": manifest["sessions"]["total"], "counts": manifest["counts"]},

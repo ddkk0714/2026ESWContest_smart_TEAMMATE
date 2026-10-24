@@ -1,0 +1,33 @@
+# §B-2 간이 개인화 정책 (feat/personalize-policy 의 컨텍스트 밴딧이 push 되기 전 대역). 같은 규칙을 설정값으로 둔다.
+# 보상 2축: 수용도(수락 +1 / 무응답 0 / 거절 −1 / 되돌리기 −2) · 효과(개입 뒤 10 분 C_fatigue 추세, 내려가면 +).
+enabled: true
+reward:
+  accept: 1.0
+  none: 0.0
+  reject: -1.0
+  undo: -2.0
+  effect_window_s: 600          # 개입 뒤 이 시간의 C_fatigue 추세로 효과 보상
+  effect_scale: 2.0             # 효과 보상 = clip(-(끝 − 시작) × scale, −1, 1)
+gate:
+  auto_threshold: 0.75          # hub conf_auto 와 같은 출발값
+  undo_step: 0.05               # 되돌리기마다 자동 문턱 +0.05
+  demote_after_undos: 2         # 되돌리기 2 회 뒤 자동 → 제안으로 내린다
+  max_auto_threshold: 0.95
+reject_block:
+  enabled: true                 # 거절한 개입 종류는 같은 세션에서 재제안 금지
+  scope: session
+cooldown_s: 300                 # 같은 개입 종류 최소 간격(hub 의 cmd_cooldown 과 같은 뜻, 정책 쪽 상한 로그)
+per_session_cap: 10             # 세션당 개입 상한(agent-briefing "세션당 개입 상한")
+channel_scores:                 # 개입 종류별 채널 선호 초깃값(학습 프로필이 덮는다). 높을수록 먼저 고른다.
+  posture: {screen_notice: 0.5, lamp_cool: 0.5, tts: 0.5}
+  env:     {vent_fan: 0.5, desk_lamp: 0.5, window: 0.5, air_purifier: 0.5}
+  break:   {screen_notice: 0.5, tts: 0.5}
+learning_rate: 0.3              # 보상으로 채널 점수를 당기는 비율(간이 밴딧)
+explore_p: 0.1                  # 가끔 다른 채널을 시도
+bedtime:                        # 취침 권유 별도 규칙: 평소 취침 이후 ∧ 피로 높음 ∧ 졸음 반복 ∧ 앞 개입 2 회 무효
+  enabled: true
+  usual_bedtime: "23:30"
+  fatigue_min: 0.70
+  drowsy_episodes_min: 2
+  failed_interventions_min: 2
+why_template: "{kind}: {reason} (프로필 {profile}, 채널 {channel}, 점수 {score:.2f}, 자동문턱 {threshold:.2f})"

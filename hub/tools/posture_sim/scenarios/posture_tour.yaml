@@ -1,0 +1,22 @@
+# 자세 한 바퀴 — 라벨마다 2~3 분씩, 사이사이 짧은 자리비움(방 안/밖). 자세 모델 라벨별 재현율·혼동과 재실 판정을 한 번에 본다.
+name: posture_tour
+seed: 701
+start_clock: "15:00"
+l8_params: v5
+segments:
+  - {kind: away, seconds: 10}
+  - {kind: upright, seconds: 180, typing: true}
+  - {kind: lean_forward, seconds: 150, typing: true}
+  - {kind: turtle, seconds: 150, typing: true}
+  - {kind: chin_rest, seconds: 150, typing: false}
+  - {kind: away, seconds: 60, where: room}
+  - {kind: recline, seconds: 150, typing: false}
+  - {kind: upright, seconds: 120, typing: true}
+  - {kind: drowsy, seconds: 240, typing: false,
+     nods: {interval_s: [6, 14], amp_deg: [30, 50], micro_sleep_p: 0.5, hold_s: [5, 15], first_s: [15, 30]}}
+  - {kind: face_down, seconds: 180, typing: false}
+  - {kind: away, seconds: 90, where: out}
+  - {kind: writing, seconds: 150, typing: false}
+  - {kind: reading, seconds: 150, typing: false}
+  - {kind: upright, seconds: 120, typing: true}
+  - {kind: away, seconds: 30, no_return: true}

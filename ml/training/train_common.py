@@ -132,7 +132,7 @@ def train(directory, output, *, epochs=30, batch_size=64, seed=42, validation_fr
               "dataset_manifest": data["manifest"], "cnn": metrics(ty, prediction),
               "baseline_balanced_logistic": metrics(ty, baseline),
               "by_label_source": {source: metrics(ty[data["test_sources"] == source], prediction[data["test_sources"] == source])
-                                  for source in ("fsm", "esm")},
+                                  for source in ("fsm", "esm", "sim_truth")},
               "limitations": ["FSM labels measure teacher agreement, not cognitive accuracy.",
                               "Synthetic sessions do not establish real-user generalization.",
                               "Log groups are file sessions, not verified independent users.",

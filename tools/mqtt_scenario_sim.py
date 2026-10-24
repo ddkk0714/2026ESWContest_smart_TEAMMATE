@@ -52,12 +52,14 @@ class Phase:
         return self.co2_ppm + (self.co2_end - self.co2_ppm) * r
 
 
-SCENARIOS = ("default", "short", "demo")
+SCENARIOS = ("default", "short", "demo", "undo_learn")
 
 
 def scenario(name: str) -> list[Phase]:
     if name == "demo":
         return demo_phases()
+    if name == "undo_learn":
+        return undo_learn_phases()
     if name == "short":           # fsm.demo.yaml(짧은 타이머)과 함께 약 6분
         return [
             Phase("absent", 20, present=False, motion_level=0, drowsy="NOPERSON", resp_valid=False),
@@ -98,6 +100,27 @@ def demo_phases() -> list[Phase]:
         Phase("wake_fresh", 45, **typing, co2_ppm=1300, co2_end=750, temp_c=25.0, humidity_pct=45.0, lux=480,
               env_jitter=calm),
         Phase("leave", 20, present=False, motion_level=0, drowsy="NOPERSON", resp_valid=False, **office),
+    ]
+
+
+def undo_learn_phases() -> list[Phase]:
+    """개인화 시연(2분대) — fsm.demo.yaml + `demo_dryrun.py --scenario undo_learn --personalize --undo-at <초>`.
+
+    어두운 방에서 타이핑 리듬이 흐트러져 인지성 피로 → 조명을 자동으로 밝게(light_cool_bright) → 사람이 되돌리기 →
+    회복 → 다시 같은 피로 → 이번엔 정책이 자동 대신 **묻는다**("지난번 되돌리셔서 이번엔 여쭙니다").
+    환경성 원인은 FSM 가중치상 첫 개입에서 자동 게이트가 못 나오므로(environment 0.10) 인지성으로 만든다.
+    """
+    calm = 0.005
+    dark_room = dict(co2_ppm=750, temp_c=24.0, humidity_pct=45.0, lux=80, env_jitter=calm)
+    typing = dict(motion_level=35, typing=True, idle_ratio=0.15, flight_cv=0.30, correction_rate=0.04)
+    tired = dict(motion_level=4, drowsy="DROWSY", typing=True, idle_ratio=0.70, flight_cv=0.90, correction_rate=0.25)   # 졸린 채 리듬 흐트러짐(키스트로크가 지배 → 인지성)
+    return [
+        Phase("absent", 10, present=False, motion_level=0, drowsy="NOPERSON", resp_valid=False, **dark_room),
+        Phase("start_typing", 40, **typing, **dark_room),
+        Phase("tired_typing", 140, **tired, **dark_room),     # 피로 확정 → 인지성 → 조명 자동(되돌리기는 여기서)
+        Phase("recover_typing", 70, **typing, **dark_room),   # 회복 → 몰입 복귀
+        Phase("tired_again", 140, **tired, **dark_room),      # 같은 피로 → 이번엔 묻는다
+        Phase("leave", 20, present=False, motion_level=0, drowsy="NOPERSON", resp_valid=False, **dark_room),
     ]
 
 

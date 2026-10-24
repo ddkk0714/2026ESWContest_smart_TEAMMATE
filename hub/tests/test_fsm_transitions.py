@@ -119,6 +119,44 @@ def test_intervention_success_recovers():
     assert e.tick(frame(t + 120, sig=calm)).state is State.FOCUS_PC  # 회복 승인
 
 
+def test_monitor_window_waits_before_judging():
+    from deskmate_hub.inference.config import load_config
+    cfg = load_config()
+    cfg["timers"]["monitor_window_sec"] = 120
+    e = FSMEngine(cfg)
+    t = drive_to_focus(e)
+    sig = {"posture": {"delta": 0.9}, "elapsed": {"delta": 0.9}, "keystroke": {"delta": 0.9}}
+    t = confirm_fatigue(e, t, sig)
+    e.tick(frame(t, sig=sig))                              # →CAUSE_ANALYSIS
+    e.tick(frame(t + 30, sig=sig))                         # →ACTION_*
+    e.tick(frame(t + 60, sig=sig, action_done=True))      # →MONITOR
+    assert e.state is State.MONITOR
+    # 창 안에서는 개입 직후 피로가 그대로여도 ESCALATE 로 가지 않는다
+    assert e.tick(frame(t + 90, sig=sig)).state is State.MONITOR
+    calm = {"posture": {"delta": 0.1}, "elapsed": {"delta": 0.1}, "keystroke": {"delta": 0.1}}
+    assert e.tick(frame(t + 150, sig=calm)).state is State.MONITOR      # 90 s < 120 s
+    assert e.tick(frame(t + 190, sig=calm)).state is State.RECOVERY     # 창이 지난 뒤 판정
+
+
+@pytest.mark.parametrize("frac,reaches", [(1.0, False), (0.8, True)])
+def test_fatigue_hold_tolerates_short_dips_only_when_enabled(frac, reaches):
+    """졸음 판정이 깜빡여 C_fatigue 가 6 tick 마다 한 번 임계 아래로 내려간다. 연속 유지(1.0)는 매번 처음부터라 확정 못 하고,
+    80 % 유지는 확정한다."""
+    from deskmate_hub.inference.config import load_config
+    cfg = load_config()
+    cfg["timers"]["fatigue_hold_min_frac"] = frac
+    e = FSMEngine(cfg)
+    t = drive_to_focus(e)
+    hot = {"posture": {"delta": 0.95}, "elapsed": {"delta": 0.95}, "keystroke": {"delta": 0.95}}
+    mid = {"posture": {"delta": 0.55}, "elapsed": {"delta": 0.55}, "keystroke": {"delta": 0.55}}   # 0.40 위·0.70 아래
+    seen = set()
+    for i in range(1, 90):
+        r = e.tick(frame(t + i * 10, sig=mid if i % 6 == 0 else hot))
+        seen.add(r.state)
+    assert State.FATIGUE_SUSPECT in seen
+    assert (State.FATIGUE in seen) is reaches
+
+
 def test_intervention_failure_escalates_and_forces_rest():
     e = FSMEngine()
     t = drive_to_focus(e)

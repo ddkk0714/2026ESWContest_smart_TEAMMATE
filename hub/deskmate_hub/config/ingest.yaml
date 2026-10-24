@@ -13,6 +13,13 @@ freshness_sec:
   tof: 3              # ESP32 가 0x03 을 5 Hz 로 보낸다. 센서가 둘 다 죽으면 아무것도 안 보내 미가용이 된다
   tof_mlp: 3          # Pi 4 MLP 판정(원본 격자 0x05, 5 Hz). 이보다 낡으면 0x03 규칙 판정으로 돌아간다
 
+# 재실 판정 우선순위(2026-10-23 결정): mmwave = mmWave(C1001)가 신선·유효하면 그것만 따르고 ToF 는 mmWave 가 끊겼을 때 대체 /
+# any = 둘 중 하나라도 보면 재실(이전 동작). life_sim 에서 ToF 가 빈 의자를 사람으로 보는 배치(시드 1)는 any 로는 20 분 넘게
+# 비워도 IDLE 로 가지 않았다.
+presence_priority: mmwave
+# mmWave 가 재실이라도 사람까지 거리가 이보다 멀면 "방엔 있지만 책상은 빔"(C1001 은 11 m·100° 를 본다). 실제 설치에서 재 맞춘다.
+desk_max_cm: 130
+
 # MVP 지름길: 디스플레이 터치 대신 재실 상승엣지(IDLE 에서 present false→true)로 세션을 시작한다.
 auto_start_on_presence: true
 # MVP 지름길: 제어 모듈이 없으므로 ACTION_* 상태를 한 tick 뒤 실행 완료로 간주해 MONITOR 로 넘긴다.
@@ -116,6 +123,21 @@ mmwave:
     DROWSY: 1.0
   # respiration 신호: 재실 중 resp_valid=false 가 이 시간 이상 이어지면 '호흡 소실' delta 1.0
   resp_lost_sec: 60
+  # (실험, 기본 꺼짐 — life_sim 10-23 팀 제안) ToF 로 가만히 있는데 mmWave 졸음 증거가 있으면 자세 delta 1.0.
+  # 지금은 ToF 가 살아 있으면 위 drowsy_delta 를 안 쓴다(ToF 가 끊겼을 때만 대체). mode·조건 설명은 mapping._still_drowsy_and.
+  still_drowsy_and:
+    enabled: false
+    mode: hr_down            # hr_down = 펌웨어 심박 하락 증거(0x20 확장 필요) · drowsy_state = DrowsyDetector DROWSY(현 계약)
+    tof_still: motion        # motion = 자세 판정 표본의 격자 움직임 tof_motion_mm · none = ToF 조건 없음(비교용)
+    tof_motion_max_mm: 8
+    tof_still_s: 60
+    # mode hr_down_presence_base(사용자 설계 입력 10-23): 기준선 = 책상 재실 ∧ 깨어 움직일 때 심박, 가만히 있으면 얼림. 0x20 heart_bpm 만 씀
+    hr_win_s: 120            # '지금' 심박 중앙값 창
+    hr_min_n: 8
+    base_n: 60               # 기준선 = 깨어 움직일 때 심박 최근 60 표본(10 s tick 이면 약 10 분)의 중앙값
+    base_min_n: 20
+    drop_bpm: 4              # 펌웨어 kHrDropBpm 과 같은 값
+    down_hold_s: 30          # 펌웨어 kHrDownHoldMs 와 같은 값
 
 environment:
   # 절대 CO₂뿐 아니라 세션 중 상승과 어두움도 피로 증거로 삼는다.
@@ -137,3 +159,4 @@ environment:
 elapsed:
   # delta = clip(세션 경과초 / full_sec)
   full_sec: 5400
+  reset_on_rest: false     # true 면 휴식(REST)을 마친 뒤부터 경과 시간을 다시 잰다. false 면 휴식 중에도 쌓여 C_fatigue 가 내려오지 않는다(life_sim 10-23)

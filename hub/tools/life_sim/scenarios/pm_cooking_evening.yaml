@@ -1,0 +1,26 @@
+# 공기청정기 ② 원룸 저녁 요리 (재택 개발자, PC). 바깥은 보통(22). 책상 옆 주방에서 25 분 요리 → 실내 PM 급증(발생원) → 자리비움 중 켜짐·강풍,
+#  돌아와 책상에서 식사(작은 발생원) → 몰입 코딩 중 상한 2·내리기 → 졸음 → 퇴근. 볼 것: 자리비움 동안 boost, 몰입 중 강풍 분,
+#  매우나쁨(≥76) 이면 몰입 중이라도 3 단계(bypass), 내리기·끄기 시점(최소 유지 10 분, 15 이하 5 분).
+name: pm_cooking_evening
+persona: developer
+seed: 403
+start_clock: "18:20"
+l8_params: v5
+env: {co2_ppm: 700, temp_c: 24.0, humidity_pct: 50, lux: 300, pm25: 20}
+weather: {temp_c: 14.0, humidity: 60, wind_ms: 2.0, condition: cloudy, season: autumn, pm25: 22}
+policy: {profile: none}
+# 환경은 물리로(co2_to 강제 없음): CO₂·온습도·조도가 방 모델(room.py) → SCD41·DHT22·BH1750 대역 → UART 0x10 으로 hub 에 들어간다.
+segments:
+  - {kind: away, seconds: 10}
+  - {kind: upright, seconds: 330, typing: true}
+  - {kind: upright, seconds: 900, typing: true, keys: {idle_ratio: 0.12, flight_cv: 0.28, correction_rate: 0.03}}
+  # 요리 25 분 — 굽기·볶기(자리비움, 발생원 큼)
+  - {kind: away, seconds: 1500, where: room, env: {pm_add_per_s: 0.25, moisture_add_g_per_s: 0.25}}   # 원룸 주방
+  # 책상에서 식사 — 작은 발생원
+  - {kind: upright, seconds: 900, typing: false, arms: lap, env: {pm_add_per_s: 0.02}}
+  - {kind: upright, seconds: 1500, typing: true, keys: {idle_ratio: 0.15, flight_cv: 0.30, correction_rate: 0.04}}
+  - {kind: turtle, seconds: 600, typing: true, keys: {idle_ratio: 0.25, flight_cv: 0.40, correction_rate: 0.05}}
+  - {kind: drowsy, seconds: 900, typing: false,
+     nods: {interval_s: [6, 14], amp_deg: [30, 50], micro_sleep_p: 0.5, hold_s: [5, 15], first_s: [20, 40]}}
+  - {kind: upright, seconds: 300, typing: true}
+  - {kind: away, seconds: 30, no_return: true}

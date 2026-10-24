@@ -1,0 +1,26 @@
+# §B-3 하루 각본 ③ 필기 수험생 (비PC 컨텍스트: 키 입력 없음 → FOCUS_NPC, posture·environment 가중치↑). 겨울 → 환기 5 분.
+name: day_examinee
+persona: examinee
+seed: 303
+start_clock: "21:30"           # 취침 23:30(기본) 뒤에 ⑥
+l8_params: v5
+env: {co2_ppm: 700, temp_c: 22.0, humidity_pct: 35, lux: 420, pm25: 15}
+weather: {temp_c: -2.0, humidity: 40, wind_ms: 3.0, condition: clear, season: winter}
+policy: {profile: none}
+segments:
+  - {kind: away, seconds: 10}
+  - {kind: writing, seconds: 330, typing: false}
+  - {kind: writing, seconds: 900, typing: false, env: {co2_to: 1100}}
+  - {kind: reading, seconds: 600, typing: false, env: {co2_to: 1400}}
+  - {kind: drowsy, seconds: 1200, typing: false,
+     nods: {interval_s: [6, 14], amp_deg: [30, 50], micro_sleep_p: 0.5, hold_s: [5, 15], first_s: [20, 40]}}
+  - {kind: writing, seconds: 600, typing: false, env: {co2_to: 1500}}
+  - {kind: chin_rest, seconds: 420, typing: false}
+  - {kind: writing, seconds: 420, typing: false}
+  - {kind: upright, seconds: 300, typing: false, arms: lap}
+  - {kind: drowsy, seconds: 900, typing: false, nods: {interval_s: [4, 10], amp_deg: [35, 55], micro_sleep_p: 0.7, hold_s: [8, 20], first_s: [10, 25]}}
+  - {kind: writing, seconds: 240, typing: false}
+  - {kind: drowsy, seconds: 900, typing: false, nods: {interval_s: [4, 10], amp_deg: [35, 55], micro_sleep_p: 0.7, hold_s: [8, 20], first_s: [10, 25]}}
+  - {kind: away, seconds: 660}
+  - {kind: writing, seconds: 240, typing: false}
+  - {kind: away, seconds: 30, no_return: true}

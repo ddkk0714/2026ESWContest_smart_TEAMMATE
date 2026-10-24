@@ -1,0 +1,24 @@
+# (실험 10-23) 심박 모델 + 펌웨어 DrowsyDetector 를 켠 각본 — 'ToF 정지 ∧ mmWave 졸음 증거' 규칙(ingest mmwave.still_drowsy_and)의
+#  검출·오탐 측정용. 규칙은 --ingest-set mmwave.still_drowsy_and.enabled=true (mode·tof_still 은 같은 방식으로) 로 켠다.
+#  a1_weak_nods(끄덕임 15~25°). 작은 끄덕임은 체동 스파이크가 드물다(nod_spike_p 0.02).
+# §A-① 변형: 약한 끄덕임(15~25°)으로 졸 때 hub 가 언제 처음 개입하는지(a1 과 같은 사람 반응). 원본 a1 은 30~50°. 과제 중 대학생, 오후 2시. 착석 → 바른 자세 타이핑 → 꾸벅 졸음 → 첫 자세 알림(자동: 화면+무드등+TTS)에 깸 → 복귀.
+name: hr_weak_nods
+persona: student
+seed: 11
+start_clock: "14:00"
+l8_params: v5                # 센서 보정 real1019_v5 (opt_l8v5_c256 학습과 같은 파일)
+env: {co2_ppm: 900, temp_c: 24.5, humidity_pct: 45, lux: 380, pm25: 18}
+weather: {temp_c: 17.0, humidity: 50, wind_ms: 2.5, condition: clear, season: autumn}
+segments:
+  - {kind: away, seconds: 8}
+  - {kind: upright, seconds: 180, typing: true}                       # 보정 창(START 300 s) 안
+  - {kind: upright, seconds: 420, typing: true, keys: {idle_ratio: 0.25, flight_cv: 0.40, correction_rate: 0.06}}
+  - {kind: drowsy, seconds: 1500, typing: false,
+     nods: {interval_s: [6, 14], amp_deg: [15, 25], micro_sleep_p: 0.5, hold_s: [5, 15], first_s: [20, 40]}}
+  - {kind: upright, seconds: 300, typing: true}
+  - {kind: away, seconds: 30, no_return: true}
+reaction:
+  wake: {screen_notice: 0.6, lamp_cool: 0.6, tts: 0.95}     # 첫 묶음에 사실상 깬다
+  awake_s: [1200, 1500]
+  card: {posture_suggest: {accept: 0.9, reject: 0.0, none: 0.1}}
+sensors: {mmwave: {nod_spike_p: 0.02, hr_model: {enabled: true}}}

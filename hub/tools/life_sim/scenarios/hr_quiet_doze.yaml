@@ -1,0 +1,24 @@
+# (실험 10-23) 심박 모델 + 펌웨어 DrowsyDetector 를 켠 각본 — 'ToF 정지 ∧ mmWave 졸음 증거' 규칙(ingest mmwave.still_drowsy_and)의
+#  검출·오탐 측정용. 규칙은 --ingest-set mmwave.still_drowsy_and.enabled=true (mode·tof_still 은 같은 방식으로) 로 켠다.
+#  조용한 졸음: 크게 끄덕이지 않고 고개만 조금 숙인 채 오래 멈춘다(진폭 4~10°, 간격 20~60 s, 미세수면 80 %·10~30 s).
+#  자세 모델·0x03 끄덕임 검출이 가장 놓치기 쉬운 경우. 사람 반응은 a1 과 같다(첫 개입에 거의 깬다).
+name: hr_quiet_doze
+persona: student
+seed: 12
+start_clock: "14:00"
+l8_params: v5
+env: {co2_ppm: 900, temp_c: 24.5, humidity_pct: 45, lux: 380, pm25: 18}
+weather: {temp_c: 17.0, humidity: 50, wind_ms: 2.5, condition: clear, season: autumn}
+segments:
+  - {kind: away, seconds: 8}
+  - {kind: upright, seconds: 180, typing: true}
+  - {kind: upright, seconds: 420, typing: true, keys: {idle_ratio: 0.25, flight_cv: 0.40, correction_rate: 0.06}}
+  - {kind: drowsy, seconds: 1500, typing: false,
+     nods: {interval_s: [20, 60], amp_deg: [4, 10], micro_sleep_p: 0.8, hold_s: [10, 30], first_s: [30, 60]}}
+  - {kind: upright, seconds: 300, typing: true}
+  - {kind: away, seconds: 30, no_return: true}
+reaction:
+  wake: {screen_notice: 0.6, lamp_cool: 0.6, tts: 0.95}
+  awake_s: [1200, 1500]
+  card: {posture_suggest: {accept: 0.9, reject: 0.0, none: 0.1}}
+sensors: {mmwave: {nod_spike_p: 0.0, hr_model: {enabled: true}}}

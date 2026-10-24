@@ -56,11 +56,34 @@ class FSMEngine:
         self._remaining_options: list[str] = []
         # 첫 원인이 효과가 없어 다른 원인을 재시도하는 중인지 (gate.retry_max 로 자동 실행을 낮춘다)
         self._retry: bool = False
+        # timers.fatigue_hold_min_frac < 1 이면 피로 유지(elevated·confirm)를 "지난 hold 초 tick 중 이 비율 이상이 임계 위"로 본다.
+        # 1(기본)이면 지금처럼 한 tick 만 내려가도 처음부터 다시 잰다.
+        self._hold_frac: float = float(self.tm.get("fatigue_hold_min_frac", 1.0))
+        self._hold_win: dict[str, dict[str, Any]] = {"elevated": {"t0": None, "hist": []}, "high": {"t0": None, "hist": []}}
 
     # ── 내부 헬퍼 ──────────────────────────────────────────────
     def _goto(self, new_state: State, now: float) -> None:
+        if self._hold_frac < 1.0:
+            if new_state not in FOCUS_STATES:
+                self._hold_win["elevated"] = {"t0": None, "hist": []}
+            if new_state is not State.FATIGUE_SUSPECT:
+                self._hold_win["high"] = {"t0": None, "hist": []}
         self.state = new_state
         self._state_since = now
+
+    def _hold_note(self, name: str, now: float, above: bool) -> None:
+        """완화 유지용 기록 — 이 단계에 들어온 뒤 tick 마다 임계 위/아래를 남긴다."""
+        w = self._hold_win[name]
+        if w["t0"] is None:
+            w["t0"] = now
+        w["hist"].append((now, above))
+
+    def _hold_ok(self, name: str, now: float, key: str) -> bool:
+        """이 단계에 hold 초 이상 머물렀고, 지난 hold 초 tick 중 fatigue_hold_min_frac 이상이 임계 위."""
+        w, hold = self._hold_win[name], float(self.tm[key])
+        w["hist"] = [(t, a) for t, a in w["hist"] if t > now - hold]
+        return (w["t0"] is not None and now - w["t0"] >= hold and bool(w["hist"])
+                and sum(1 for _, a in w["hist"] if a) / len(w["hist"]) >= self._hold_frac)
 
     def _held(self, since: float | None, now: float, key: str) -> bool:
         return since is not None and (now - since) >= self.tm[key]
@@ -136,6 +159,8 @@ class FSMEngine:
                     actions.append(f"context_switch:{self.context.value}")
                 elif c.c_fatigue < th["fatigue_focus_low"]:
                     self._fatigue_elevated_since = None
+                    if self._hold_frac < 1.0:
+                        self._hold_note("elevated", now, False)
                     if c.c_focus >= th["focus_break"]:
                         self._break_since = now
                         self._break_entry_fatigue = c.c_fatigue
@@ -144,7 +169,12 @@ class FSMEngine:
                 else:                                            # 피로 상승
                     if self._fatigue_elevated_since is None:
                         self._fatigue_elevated_since = now
-                    if self._held(self._fatigue_elevated_since, now, "fatigue_elevated_hold_sec"):
+                    if self._hold_frac < 1.0:
+                        self._hold_note("elevated", now, True)
+                        held = self._hold_ok("elevated", now, "fatigue_elevated_hold_sec")
+                    else:
+                        held = self._held(self._fatigue_elevated_since, now, "fatigue_elevated_hold_sec")
+                    if held:
                         self._goto(State.FATIGUE_SUSPECT, now)
                         actions.append("display_warning:yellow")
 
@@ -168,13 +198,20 @@ class FSMEngine:
             elif c.c_fatigue >= th["fatigue_confirm"]:
                 if self._fatigue_high_since is None:
                     self._fatigue_high_since = now
-                if self._held(self._fatigue_high_since, now, "fatigue_confirm_hold_sec"):
+                if self._hold_frac < 1.0:
+                    self._hold_note("high", now, True)
+                    held = self._hold_ok("high", now, "fatigue_confirm_hold_sec")
+                else:
+                    held = self._held(self._fatigue_high_since, now, "fatigue_confirm_hold_sec")
+                if held:
                     self._remaining_options = list(_ALL_CAUSES)
                     self._retry = False
                     self._goto(State.FATIGUE, now)
                     actions.append("log_fatigue_event")
             else:
                 self._fatigue_high_since = None
+                if self._hold_frac < 1.0:
+                    self._hold_note("high", now, False)
 
         elif s is State.FATIGUE:
             self._goto(State.CAUSE_ANALYSIS, now)
@@ -215,7 +252,10 @@ class FSMEngine:
 
         elif s is State.MONITOR:
             # TODO(9월): C_fatigue trend 를 5~10분 윈도우로 측정. 지금은 진입 대비 부호로 판정.
-            if c.c_fatigue < self._monitor_entry_fatigue:
+            # timers.monitor_window_sec(없으면 0 = 다음 tick 에 바로 판정): 개입 효과가 나타날 시간을 기다린 뒤 판정한다.
+            if (now - self._state_since) < self.tm.get("monitor_window_sec", 0):
+                pass
+            elif c.c_fatigue < self._monitor_entry_fatigue:
                 self._goto(State.RECOVERY, now)
                 actions += ["reward:+", "update_ai_policy"]
             else:
