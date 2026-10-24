@@ -13,10 +13,12 @@ fsm:
     conf_auto: 0.60                 # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 0.75 (이상이면 자동 실행)
   thresholds:
     still_asleep_delta: 0.9
+learning:
+  keep_floor: 0.70                 # 확정 기준을 넘은 점수는 학습기가 끌어내리지 못함 — PC 리허설 10-25 근거(keep_floor 0.60 → demo-B 첫 깨우기 662/292/102 s → 102/102/102 s). 기본 0.85 = 이 프로파일의 fsm thresholds.fatigue_confirm
 personalize:
   gate:
     conf_auto: 0.60                 # 시연 전용 — PC 리허설 10-24 근거. 기본 0.75. FSM gate.conf_auto 와 같은 값으로 맞춘 것 — 다르면 정책이 FSM 자동을 제안(personalize:ask)으로 낮춰 무드등이 자동으로 안 켜진다
 ingest:
   pc_ratio_window_sec: 120          # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 900 (PC/비PC 컨텍스트 창)
   elapsed:
-    reset_on_rest: true             # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 false (휴식 뒤 경과 시간 초기화)
+    reset_on_rest: true             # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 10-25 부터 보드 기본도 true (휴식 뒤 경과 시간 초기화)

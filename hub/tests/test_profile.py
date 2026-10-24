@@ -15,6 +15,7 @@ import pytest
 
 from deskmate_hub.inference import load_config
 from deskmate_hub.ingest import SensorCache, load_ingest_config
+from deskmate_hub.learning import load_learning_config
 from deskmate_hub.personalize import load_personalize_config
 from deskmate_hub.live import LiveHub
 from deskmate_hub.profile import PROFILE_ENV, apply_profile, apply_section, available, deep_merge, load_profile, profile_name
@@ -32,7 +33,7 @@ def test_deep_merge_overrides_nested_keys_keeps_others_and_leaves_base_alone():
 
 def test_shipped_profiles_only_touch_keys_the_engine_knows():
     """오타·엔진이 모르는 키(fatigue_hold_min_frac 등)가 섞이면 조용히 무시되므로, 기본 설정에 있는 키만 허용한다."""
-    fsm, ingest, personalize = load_config(), load_ingest_config(), load_personalize_config()
+    fsm, ingest, personalize, learning = load_config(), load_ingest_config(), load_personalize_config(), load_learning_config()
 
     def check(overlay, base, path):
         for key, value in overlay.items():
@@ -46,8 +47,12 @@ def test_shipped_profiles_only_touch_keys_the_engine_knows():
         check(prof["fsm"], fsm, f"{name}:fsm.")
         check(prof["ingest"], ingest, f"{name}:ingest.")
         check(prof["personalize"], personalize, f"{name}:personalize.")
+        check(prof["learning"], learning, f"{name}:learning.")
+        # 학습기 울타리 keep_floor = 그 프로파일의 피로 확정 기준(기본 0.70) — 확정을 넘은 점수를 학습기가 못 내린다(PC 리허설 10-25)
+        assert prof["learning"]["keep_floor"] == prof["fsm"].get("thresholds", {}).get("fatigue_confirm", fsm["thresholds"]["fatigue_confirm"])
         # 정책 문턱은 FSM 자동 문턱과 같아야 한다 — 다르면 정책이 FSM 자동을 제안으로 낮춘다(10-24 PC 리허설 결함)
         assert prof["personalize"]["gate"]["conf_auto"] == prof["fsm"]["gate"]["conf_auto"]
+    assert learning["keep_floor"] == 0.85                                  # 보드 기본은 그대로
     a, b = load_profile("demo-a"), load_profile("demo-b")
     assert a["fsm"]["timers"]["monitor_window_sec"] == 30 and a["ingest"]["elapsed"]["reset_on_rest"] is True
     assert "baseline_sec" not in a["fsm"]["timers"] and b["fsm"]["timers"]["baseline_sec"] == 10
@@ -90,6 +95,8 @@ def test_env_profile_overlays_live_hub(monkeypatch):
     # personalize: 절 — 정책 자동 문턱도 0.60 으로(기본 0.75). 정책 객체가 실제로 그 설정을 들고 있는지까지
     assert hub.personalize_cfg["gate"]["conf_auto"] == 0.60 and hub.personalize_cfg["gate"]["undo_penalty_step"] == 0.05
     assert hub.personalize_policy is not None and hub.personalize_policy.cfg["gate"]["conf_auto"] == 0.60
+    # learning: 절 — 학습기가 실제로 그 keep_floor 로 선다
+    assert hub.learning_cfg["keep_floor"] == 0.70 and hub.learner is not None and hub.learner.c["keep_floor"] == 0.70
     # 건드리지 않은 부분은 기본과 같다
     assert hub.fsm_cfg["weights"] == load_config()["weights"] and hub.ingest_cfg["tof"] == load_ingest_config()["tof"]
 
@@ -102,6 +109,7 @@ def test_env_profile_overlays_live_hub(monkeypatch):
     assert hub_b.engine.tm["baseline_sec"] == 10 and hub_b.fsm_cfg["gate"]["conf_auto"] == 0.55
     assert hub_b.fsm_cfg["thresholds"]["fatigue_confirm"] == 0.60 and hub_b.tracker.baseline is None
     assert hub_b.personalize_cfg["gate"]["conf_auto"] == 0.55
+    assert hub_b.learner.c["keep_floor"] == 0.60 and LiveHub(SensorCache(), profile="", out=io.StringIO()).learner.c["keep_floor"] == 0.85
     # 명시적으로 넘긴 personalize 설정 위에도 얹는다(LiveHub 가 읽는 지점에서 적용)
     assert LiveHub(SensorCache(), personalize_cfg=load_personalize_config(), out=io.StringIO()).personalize_cfg["gate"]["conf_auto"] == 0.55
     # 명시적 설정을 줘도(run_live --config) 그 위에 얹는다. profile="" 은 환경변수를 무시한다(service_bridge 가 이미 얹은 뒤)

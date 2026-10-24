@@ -459,9 +459,9 @@ def test_elapsed_clock_restarts_after_rest_only_when_enabled(reset, expected_sta
 
 
 def test_live_hub_reads_elapsed_reset_on_rest_from_ingest_config(cfg):
-    assert LiveHub(SensorCache(), ingest_cfg=cfg, out=io.StringIO()).tracker.elapsed_reset_on_rest is False
-    cfg2 = dict(cfg, elapsed=dict(cfg["elapsed"], reset_on_rest=True))
-    assert LiveHub(SensorCache(), ingest_cfg=cfg2, out=io.StringIO()).tracker.elapsed_reset_on_rest is True
+    assert LiveHub(SensorCache(), ingest_cfg=cfg, out=io.StringIO()).tracker.elapsed_reset_on_rest is True   # 10-25 보드 기본 true
+    cfg2 = dict(cfg, elapsed=dict(cfg["elapsed"], reset_on_rest=False))
+    assert LiveHub(SensorCache(), ingest_cfg=cfg2, out=io.StringIO()).tracker.elapsed_reset_on_rest is False
 
 
 def test_self_kss_passes_only_fresh_app_answer(cfg):

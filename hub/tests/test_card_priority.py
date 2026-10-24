@@ -62,6 +62,39 @@ def test_checkin_card_blocks_vent_card_until_it_closes():
     assert kinds(reqs) == ["checkin_suggest", "vent_suggest"]
 
 
+def test_open_card_blocks_new_vent_and_checkin_until_answer_or_expiry():
+    """PC 리허설 10-25 카드 겹침: FSM 자동 진입이 pending_request 를 비워도 앱의 카드는 남는다 — 그 카드가 응답·만료되기 전엔
+    vent_suggest·checkin_suggest 를 새로 내지 않고 다음 기회를 기다린다. expires_in_s(환기 180 s)가 지나면 다시 낸다."""
+    hub, reqs = _hub()
+    hub.tick_once(0.0)
+    assert kinds(reqs) == ["vent_suggest"] and reqs[0]["data"]["expires_in_s"] == 180
+    hub.pending_request = None                                            # FSM 자동 진입(_maybe_request 의 gate ≠ suggest)과 같은 효과
+    hub.tick_once(70.0)
+    assert kinds(reqs) == ["vent_suggest"] and hub.learner.probe is None  # 70 s 뒤: 카드가 아직 떠 있다 → 확인·환기 모두 안 낸다
+    hub.tick_once(170.0)
+    assert kinds(reqs) == ["vent_suggest"]
+    hub.tick_once(190.0)                                                  # 만료(180 s) 뒤에는 낸다
+    assert kinds(reqs) == ["vent_suggest", "vent_suggest"]
+    # 응답이 오면 바로 닫힌다(환기 조건은 그 사이 사라졌다고 둔다 — 새 카드가 바로 나오지 않게)
+    hub.co2_window.observe_view = lambda *a, **k: None
+    hub.cache.put_feedback({"verdict": "reject", "request_id": hub.pending_request["data"]["request_id"]})
+    hub.tick_once(200.0)
+    # 거절로 자리가 비자 같은 tick 에 확인 카드가 들어온다(= 환기 카드가 닫혔다는 뜻). 환기 카드 기록은 지워졌다
+    assert hub.pending_request is None and kinds(reqs) == ["vent_suggest", "vent_suggest", "checkin_suggest"]
+    assert hub._open_card is not None and hub._open_card[0] == "checkin_suggest" and hub.learner.probe is not None
+
+
+def test_fsm_env_card_blocks_vent_until_it_expires():
+    hub, reqs = _hub()
+    hub.pending_request = {"ts": 0.0, "data": {"request_id": "fsm-env", "kind": "env_suggest", "cause": "environment",
+                                             "expires_in_s": 180}}
+    hub._mark_card(0.0, 180, "env_suggest")
+    hub.tick_once(10.0)
+    assert kinds(reqs) == [] and hub.learner.probe is None
+    hub.tick_once(190.0)                                                  # 허브 만료 → 다음 tick 부터 환기 카드 가능
+    assert kinds(reqs) == ["vent_suggest"]
+
+
 def test_fsm_action_card_blocks_both():
     hub, reqs = _hub()
     hub.pending_request = {"ts": -100.0, "data": {"request_id": "fsm-1", "kind": "posture_suggest", "cause": "posture"}}

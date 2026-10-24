@@ -185,7 +185,8 @@ environment:
 elapsed:
   # delta = clip(세션 경과초 / full_sec)
   full_sec: 5400
-  reset_on_rest: false     # true 면 휴식(REST)을 마친 뒤부터 경과 시간을 다시 잰다. false 면 휴식 중에도 쌓여 C_fatigue 가 내려오지 않는다(life_sim 10-23)
+  reset_on_rest: true      # 휴식(REST)을 마친 뒤부터 경과 시간을 다시 잰다. false 면 휴식 중에도 쌓여 C_fatigue 가 내려오지 않아 졸지 않는데
+                           # 강제 휴식이 반복된다(life_sim 개발자 하루 11 → 1 회). 10-25 보드 기본 true(PC 리허설 10-25 근거)
 
 # Pi 5 피로 기록 앱의 KSS 자가 응답(deskmate/fatigue/label)을 SensorFrame.self_kss 로 넘길 때의 신선도 — 앱은 15 분마다 묻는다.
 # FSM 규칙은 쓰지 않는다 — 반응 학습(learning.yaml kss_label)이 새 응답을 라벨로 쓴다. 응답 시각(앱 시계) 기준이라 Pi 4 ·

@@ -110,6 +110,9 @@ class LiveHub:
         self.publish = publish or (lambda envelope: None)
         self.publish_request = publish_request or (lambda envelope: None)
         self.pending_request: dict[str, Any] | None = None
+        # 화면에 카드가 떠 있는 동안(응답·만료 전)은 vent_suggest·checkin_suggest 를 새로 내지 않는다 — FSM 자동 진입이
+        # pending_request 를 비워도 앱의 카드는 남아 있으므로 만료 시각을 따로 기억한다(PC 리허설 10-25 카드 겹침 6건).
+        self._open_card: tuple[str, float] | None = None      # (kind, 만료 시각)
         # 제어: control.yaml enabled 면 ACTION_ENV 를 디스패처가 맡는다(auto_complete 대신). mock 어댑터는 즉시 성공 응답.
         self.control_cfg = control_cfg if control_cfg is not None else load_control_config()
         self.control: ControlDispatcher | None = None
@@ -180,6 +183,8 @@ class LiveHub:
         # 상태는 learning.yaml state_path(보드: logs/profiles/<profile_id>/reaction.json)에 라벨마다 저장한다.
         self.learning_cfg = learning_cfg if learning_cfg is not None else (
             load_learning_config() if load_learning_config is not None else {})
+        # 프로파일의 learning: 절(keep_floor 등) — 시연에서 공통모델 학습기(α 0.3)가 점수를 0.05 낮춰 첫 깨우기가 늦어지던 것(PC 리허설 10-25)
+        self.learning_cfg = apply_section(self.learning_cfg, "learning", self.profile or "")
         # 프로필 id 는 identity.active_profile_id 한 곳에서 — 개인화 정책·반응 학습 상태 파일이 같은 사람을 가리킨다
         self.profile_id = active_profile_id(self.learning_cfg, self.personalize_cfg)
         rec = self.personalize_recorder
@@ -232,6 +237,7 @@ class LiveHub:
                     if current is not None and rid == current:
                         request = self.pending_request
                         self.pending_request = None
+                        self._open_card = None
                         self._record_feedback(feedback, now, request)
                         if co2_card:
                             self.co2_window.on_feedback("timeout", now)
@@ -240,12 +246,14 @@ class LiveHub:
                 elif co2_card and rid in (None, "", "atlas-display", current):
                     request = self.pending_request
                     self.pending_request = None
+                    self._open_card = None
                     self.co2_window.on_feedback(verdict, now)
                     self._record_feedback(feedback, now, request)
                 elif rid in (None, "", "atlas-display", current):
                     request = self.pending_request
                     self.tracker.pending_feedback = verdict
                     self.pending_request = None
+                    self._open_card = None
                     if self.control is not None:
                         self.control.on_feedback(verdict, now, received_at=feedback_now)
                     self._record_feedback(feedback, now, request)
@@ -374,18 +382,18 @@ class LiveHub:
             # FSM 이 ACTION_* 이거나 카드가 떠 있으면 내지 않는다. 개인화 에피소드에 묶이지 않게 link_request 뒤에 낸다
             card = self.co2_window.observe_view(
                 view, now, self.ingest_cfg, present=frame.present, state=result.state.value,
-                blocked=(result.state in self._REQUEST_STATES or self.pending_request is not None
-                         or (self.learner is not None and self.learner.probe is not None)))   # 확인 카드가 떠 있으면 환기 카드도 안 낸다
+                blocked=result.state in self._REQUEST_STATES or self._card_open(now))   # 어떤 카드든 떠 있으면(응답·만료 전) 안 낸다
             if card is not None:
                 self._publish_co2_card(card, result, now)
         if self.learner is not None:
             # 방금 낸 개입 카드를 학습 대기에 묶고, 모델이 애매하면 확인 카드("지금 피곤하세요?", learning.yaml probe)를 낸다
             if self.pending_request is not None and self.pending_request["ts"] == now:
                 self.learner.link_request(self.pending_request["data"]["request_id"])
-            probe = self.learner.maybe_checkin(result, frame, now, busy=self.pending_request is not None,
+            probe = self.learner.maybe_checkin(result, frame, now, busy=self._card_open(now),
                                                request_id=f"{self.boot_id}-{self.seq}-checkin")
             if probe is not None:
                 self.seq += 1
+                self._mark_card(now, probe.get("expires_in_s"), "checkin_suggest")
                 self.publish_request({"schema_version": "1.0", "ts": now, "node": "hub", "boot_id": self.boot_id,
                                       "seq": self.seq, "data": probe})
 
@@ -493,6 +501,7 @@ class LiveHub:
         if expiry is None or now < request["ts"] + expiry:
             return
         self.pending_request = None
+        self._open_card = None
         self._record_feedback({"verdict": "timeout", "request_id": request["data"]["request_id"]},
                               now, request, source="hub")
         if self._is_co2_card(request):
@@ -589,7 +598,29 @@ class LiveHub:
             if view.get("ventilate_minutes") is not None:       # 창문 환기 카드: "N 분만 열어 주세요"(날씨가 정한 길이)
                 self.pending_request["data"]["ventilate_minutes"] = view["ventilate_minutes"]
         self.seq += 1
+        self._mark_card(now, self.pending_request["data"]["expires_in_s"], kind)
         self.publish_request(self.pending_request)
+
+    def _mark_card(self, now: float, expires_in_s: Any, kind: str) -> None:
+        """카드를 하나 띄웠다 — 응답이 오거나 expires_in_s 가 지나기 전까지 환기·확인 카드를 새로 내지 않는다."""
+        try:
+            self._open_card = (kind, now + float(expires_in_s))
+        except (TypeError, ValueError):
+            self._open_card = None
+
+    def _card_open(self, now: float) -> bool:
+        """화면에 카드(FSM 개입·환기·확인)가 떠 있는가 — 응답·만료 전. FSM 자동 진입으로 pending_request 가 비어도 앱의 카드는 남아 있다."""
+        if self.pending_request is not None:
+            return True
+        if self.learner is not None and self.learner.probe is not None:
+            return True
+        if self._open_card is not None:
+            kind, until = self._open_card
+            # 확인 카드는 응답·만료를 학습기가 닫는다(probe None). 그 밖은 만료 시각까지
+            if kind != "checkin_suggest" and now < until:
+                return True
+            self._open_card = None
+        return False
 
     @staticmethod
     def _is_co2_card(request: dict[str, Any] | None) -> bool:
@@ -610,6 +641,7 @@ class LiveHub:
             },
         }
         self.seq += 1
+        self._mark_card(now, self.pending_request["data"]["expires_in_s"], CO2_CARD_KIND)
         print(f"[co2_window] 카드: {card['explanation']} why={','.join(card['why'])}", file=self.out, flush=True)
         self.publish_request(self.pending_request)
 
