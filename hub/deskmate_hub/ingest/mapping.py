@@ -6,7 +6,7 @@ baseline 정규화(features/)가 들어오면 이 선형 매핑을 대체한다.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from ..features import BaselineStore
@@ -71,6 +71,11 @@ class SessionTracker:
     last_state: State = State.IDLE
     baseline: BaselineStore | None = None   # normalization: baseline 일 때만
     elapsed_reset_on_rest: bool = False     # ingest.yaml elapsed.reset_on_rest: 휴식(REST)을 마치면 경과 시간을 그때부터 다시 잰다
+    sd_still_since: float | None = None     # (실험) mmwave.still_drowsy_and: ToF 정지가 시작된 시각
+    sd_debug: dict[str, Any] | None = None  # 이번 tick 의 규칙 판정(로그용)
+    sd_hr_recent: list[tuple[float, float]] = field(default_factory=list)   # (실험) hr_down_presence_base: 최근 심박 (t, bpm)
+    sd_hr_base: list[float] = field(default_factory=list)                   # 깨어 움직일 때 모은 심박(기준선 표본)
+    sd_down_since: float | None = None
 
     def observe_state(self, state: State, now: float) -> None:
         if state is State.START and self.session_started is None:
@@ -248,6 +253,79 @@ def pc_ratio(view: CacheView, now: float, window_sec: float) -> float:
     return sum(1 for t in ticks if t.input_active) / len(ticks)
 
 
+def _still_drowsy_and(signals: dict[str, Signal], view: CacheView, mm: Sample, drowsy: str, tof_posture_used: bool,
+                      now: float, cfg: dict[str, Any], tracker: SessionTracker) -> None:
+    """(실험, 기본 꺼짐) ToF 로 가만히 있는데 mmWave 졸음 증거가 있으면 자세 delta 를 1.0 으로 — mmwave.still_drowsy_and.
+    지금은 ToF 가 살아 있으면 mmWave 졸음 판정을 안 쓴다(ToF 가 끊겼을 때만 대체). 팀 제안(10-23): 둘을 AND 로 같이 쓴다.
+      mode drowsy_state — 펌웨어 DrowsyDetector 의 DROWSY(지금 0x20 계약). 정지만 3 분이어도 DROWSY 라 깨어 있는 정지와 못 가린다.
+      mode hr_down      — 펌웨어의 '심박 하락' 증거(중앙값 120 s 가 기준선보다 4 bpm↓ 30 s). 0x20 에 아직 없는 필드(확장 제안).
+      ToF 정지 = 자세 판정 표본의 격자 움직임 tof_motion_mm ≤ tof_motion_max_mm 가 tof_still_s 이어짐(tof_still: none 이면 조건 없음)."""
+    sd = cfg["mmwave"].get("still_drowsy_and") or {}
+    if not sd.get("enabled") or not tof_posture_used:
+        tracker.sd_still_since, tracker.sd_debug = None, None
+        return
+    fresh = cfg["freshness_sec"]
+    mlp = view.fresh("tof_mlp", now, fresh.get("tof_mlp", fresh.get("tof", 3)))
+    motion = mlp.data.get("tof_motion_mm") if mlp else None
+    if str(sd.get("tof_still", "motion")) == "none":
+        still_now = True
+    else:
+        still_now = motion is not None and float(motion) <= float(sd.get("tof_motion_max_mm", 8.0))
+    if still_now:
+        if tracker.sd_still_since is None:
+            tracker.sd_still_since = now
+    else:
+        tracker.sd_still_since = None
+    tof_still = tracker.sd_still_since is not None and now - tracker.sd_still_since >= float(sd.get("tof_still_s", 60))
+    mode = str(sd.get("mode", "hr_down"))
+    hr_dbg: dict[str, Any] = {}
+    if mode == "drowsy_state":
+        evidence = drowsy == "DROWSY"
+    elif mode == "hr_down_presence_base":
+        ks = view.fresh("keystroke", now, fresh["keystroke"])
+        moving = (bool(ks and ks.data.get("typing_active")) or not still_now or tracker.still_since is None)
+        evidence, hr_dbg = _hr_presence_drop(mm, moving, now, sd, tracker)
+    else:
+        evidence = bool(mm.data.get("hr_down"))
+    active = tof_still and evidence
+    if active:
+        p = signals["posture"]
+        signals["posture"] = Signal(phi=p.phi, delta=1.0, available=True)
+    tracker.sd_debug = {"mode": mode, "tof_motion_mm": motion, "tof_still": tof_still, "evidence": evidence, "active": active,
+                        **hr_dbg}
+
+
+def _hr_presence_drop(mm: Sample, moving: bool, now: float, sd: dict[str, Any],
+                      tracker: SessionTracker) -> tuple[bool, dict[str, Any]]:
+    """(실험) mode hr_down_presence_base — 사용자 설계 입력(10-23): "재실 판단 시 심박수와 졸음 심박수는 차이가 있을 것".
+    기준선 = 책상 재실 ∧ 깨어 움직일 때(타이핑 중 · mmWave 체동 · ToF 움직임)의 심박만 모은 중앙값(최근 base_n 개). 가만히 있는 동안엔
+    기준선을 얼린다(펌웨어는 졸음 전이면 τ 600 s 로 계속 따라가서, 오래 가만히 있으면 하락이 기준선에 묻힌다).
+    지금 = 최근 hr_win_s 심박 중앙값. 기준선 − 지금 ≥ drop_bpm 이 down_hold_s 이어지면 증거. 0x20 의 heart_bpm 만 쓰므로 펌웨어 변경이 없다."""
+    bpm = mm.data.get("heart_bpm")
+    ok = bool(mm.data.get("heart_valid")) and bpm is not None and 40 <= float(bpm) <= 150
+    if ok:
+        tracker.sd_hr_recent.append((now, float(bpm)))
+        if moving:
+            tracker.sd_hr_base.append(float(bpm))
+            del tracker.sd_hr_base[:-int(sd.get("base_n", 60))]
+    tracker.sd_hr_recent = [(t, b) for t, b in tracker.sd_hr_recent if now - t <= float(sd.get("hr_win_s", 120))]
+    base = _median(tracker.sd_hr_base) if len(tracker.sd_hr_base) >= int(sd.get("base_min_n", 20)) else None
+    cur = _median([b for _, b in tracker.sd_hr_recent]) if len(tracker.sd_hr_recent) >= int(sd.get("hr_min_n", 8)) else None
+    drop = None if base is None or cur is None else base - cur
+    if drop is not None and drop >= float(sd.get("drop_bpm", 4.0)):
+        if tracker.sd_down_since is None:
+            tracker.sd_down_since = now
+    else:
+        tracker.sd_down_since = None
+    evidence = tracker.sd_down_since is not None and now - tracker.sd_down_since >= float(sd.get("down_hold_s", 30))
+    return evidence, {"hr_base": base, "hr_cur": cur, "hr_drop": None if drop is None else round(drop, 1), "moving": moving}
+
+
+def _median(xs: list[float]) -> float:
+    s = sorted(xs)
+    return s[len(s) // 2]
+
+
 def build_frame(
     view: CacheView,
     now: float,
@@ -305,9 +383,11 @@ def build_frame(
         signals["respiration"] = Signal(
             phi=0.0, delta=1.0 if lost >= mcfg["resp_lost_sec"] else 0.0, available=True
         )
+        _still_drowsy_and(signals, view, mm, drowsy, tof_posture_used, now, cfg, tracker)
     else:
         tracker.still_since = None
         tracker.resp_lost_since = None
+        tracker.sd_still_since, tracker.sd_debug = None, None
         if not tof_posture_used:
             signals["posture"] = Signal(available=False)
         signals["respiration"] = Signal(available=False)
