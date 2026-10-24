@@ -49,8 +49,10 @@ Python 브리지를 실센서 모드로 띄우려면 서비스 환경에 `DESKMA
 `deskmate_hub/config/profiles/<이름>.yaml` 의 `fsm:`·`ingest:` 절을 깊은 병합으로 얹는다(`deskmate_hub/profile.py`). 줄을 지우면 기본으로 돌아온다.
 
 ```
-DESKMATE_PROFILE=demo-a        # 또는 demo-b
+DESKMATE_PROFILE=demo-a
 ```
+
+(`demo-b` 도 같은 식. 줄 끝 주석은 쓰지 않는다 — `main.cpp loadEnvironmentFile` 은 `#` 으로 시작하는 줄만 건너뛰고 값 안의 `#` 은 값으로 본다.)
 
 빌드 때 `tools/build_payload.py` 가 profiles/*.yaml 을 `profiles/<이름>.json` 으로 payload 에 넣으므로(ingest.json 과 같은 방식) 보드의 제한 Python 은
 YAML 없이 읽는다. 모르는 이름이면 브리지가 바로 종료하고 stderr 에 있는 이름을 찍는다. 적용되면 시작 로그에 `[profile] DESKMATE_PROFILE=demo-a — …` 한 줄이 남는다.
