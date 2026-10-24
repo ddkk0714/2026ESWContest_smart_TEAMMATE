@@ -512,7 +512,7 @@ class MqttStateSource implements StateSource, PrivacySource {
           // 질문이 있는 동안 FSM 이 ACTION_* 를 벗어나면 카드도 내린다. 다만 상태와 무관한
           // 질문(checkin_suggest·vent_suggest)은 응답·만료까지 둔다.
           if (!_latest!.fsmState.startsWith('ACTION_') &&
-              !_isStateIndependent(_pendingRequest?.kind)) {
+              !keepsPendingAcrossStates(_pendingRequest?.kind)) {
             _pendingRequestId = null;
             _pendingExpiresInS = null;
             _pendingRequest = null;
@@ -631,7 +631,8 @@ class MqttStateSource implements StateSource, PrivacySource {
     _pendingRequest = null;
   }
 
-  static bool _isStateIndependent(String? kind) =>
+  /// 이 종류의 질문은 FSM 이 ACTION_* 가 아닐 때(FOCUS_* 등)도 오고, 상태 전이로 지우지 않는다 — 응답·만료까지.
+  static bool keepsPendingAcrossStates(String? kind) =>
       kind == 'checkin_suggest' || kind == 'vent_suggest';
 
   @override

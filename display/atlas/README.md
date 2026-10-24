@@ -163,7 +163,9 @@ value 의 선택 키 `min_raw`(0~255): 계산 결과가 그보다 낮으면 거�
 발행한다. 이전 값을 모르면(앱 시작 뒤 한 번도 안 씀) `from` 을 넣지 않는다. hub 는 "밝힌 뒤 직접 어둡게 = 밝음 싫음" 신호로 쓴다.
 
 **질문 카드 종류.** `interaction/request` 의 `kind` 가 `checkin_suggest` 면 "지금 피곤하세요?" 와 예/아니오(feedback accept/reject, 같은 request_id),
-`vent_suggest` 면 `data.minutes`·`why[]` 로 "창문을 N분 열어 주세요" + 이유(열게요/괜찮아요). 이 두 종류는 FSM 상태와 무관하게 응답·만료까지 떠 있다.
+`vent_suggest` 면 "창문을 N분 열어 주세요"(`data.minutes`) + 본문은 `data.explanation`(hub 의 한국어 문장) 우선, 없으면 `why[]` 코드를 문구로
+(`co2_rule`·`co2_avg=<N>`·`urgent`·`after_focus_wait`·`windy`·`weather_unknown`), 버튼은 열게요/괜찮아요. 이 두 종류는 FSM 이 ACTION_* 가 아닐 때(FOCUS_* 등)도 오므로
+request 자체로 카드를 띄우고, 상태 전이로 지우지 않는다(응답·만료까지).
 그 밖의 kind 는 원인(cause) 기준 문구. 명령 로그에는 `REQUEST vent_suggest 5 분 why=co2_high,outdoor_ok 60 s` 처럼 그대로 찍힌다.
 
 개발자 모드 판정 패널 오른쪽 정보 패널: 블루투스 기기 연결 상태·자동 피드백 스위치 ON/OFF, mmWave(재실·움직임·거리·졸음·호흡), 환경(CO₂·온도·습도·조도·플래그),

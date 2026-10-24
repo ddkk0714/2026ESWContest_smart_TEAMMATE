@@ -1107,11 +1107,11 @@ String suggestionBody(DisplayState state, PendingRequest? request) {
     case 'checkin_suggest':
       return request!.explanation ?? '예/아니오로만 답해 주세요. 판정을 다듬는 데 써요.';
     case 'vent_suggest':
-      final why = [for (final w in request!.why) ventWhyText(w)];
+      // hub 의 explanation(한국어 문장, 예 "CO₂ 1180 ppm 이 5 분째 높아요 — 창문을 15 분만 열어 주세요 (가을)")이 있으면 그것.
+      if (request!.explanation != null) return request.explanation!;
+      final why = [for (final w in request.why) ventWhyText(w)];
       if (why.isNotEmpty) return '이유: ${why.join(' · ')}';
-      return request.explanation != null
-          ? '이유: ${request.explanation}'
-          : '이유: ${interventionReason(state)}';
+      return '이유: ${interventionReason(state)}';
     default:
       return '이유: ${interventionReason(state)}';
   }
@@ -1125,18 +1125,22 @@ String suggestionBody(DisplayState state, PendingRequest? request) {
       _ => (accept: '적용할게요', reject: '괜찮아요'),
     };
 
-/// vent_suggest 의 why 코드 → 문구. 모르는 코드는 그대로.
-String ventWhyText(String code) => switch (code) {
-      'co2_high' => 'CO₂가 높아요',
-      'co2_rising' => 'CO₂가 오르고 있어요',
-      'too_hot' => '방이 더워요',
-      'too_humid' => '습도가 높아요',
-      'stale_air' => '공기가 답답해요',
-      'outdoor_ok' => '바깥 날씨가 괜찮아요',
-      'outdoor_cold' => '바깥이 추워 짧게만',
-      'wind' => '바람이 있어 환기가 잘 돼요',
-      _ => code,
-    };
+/// vent_suggest 의 why 코드(hub CO₂ 창문 규칙이 실제로 보내는 것) → 문구. 모르는 코드는 그대로.
+/// `co2_avg=<숫자>` 는 값이 붙은 코드다.
+String ventWhyText(String code) {
+  if (code.startsWith('co2_avg=')) {
+    final n = code.substring('co2_avg='.length);
+    return '평균 $n ppm';
+  }
+  return switch (code) {
+    'co2_rule' => 'CO₂ 가 5분 넘게 높음',
+    'urgent' => '1400 ppm 넘음',
+    'after_focus_wait' => '몰입이 끝나 지금 알림',
+    'windy' => '바람이 불어 환기가 잘 됨',
+    'weather_unknown' => '날씨 정보 없음',
+    _ => code,
+  };
+}
 
 String _suggestionTitle(DisplayState state) => switch (state.cause) {
       // 환경은 원인이 여럿이라 플래그로 무엇을 할지 고른다(CO₂ 면 환기, 어두우면 조명).
