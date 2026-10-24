@@ -97,7 +97,10 @@ def test_logger_writes_one_line_per_episode_with_feedback_and_outcome(tmp_path):
     assert row["schema_name"] == "personalize_episode" and row["simulated"] is False
     assert row["decision"]["arm"] == d.arm and row["feedback"]["verdict"] == "accept"
     assert row["outcome"]["reward_accept"] == 1 and row["outcome"]["reward_effect"] > 0.8
-    assert row["outcome"]["reward"] > 0.9 and row["features"]["co2_ppm"] == 1400
+    b = CFG["bandit"]                                  # 보상 = 수락·효과 가중합(무게는 personalize.yaml, 보드 0.2·0.8)
+    expect = float(b["weight_accept"]) * 1 + float(b["weight_effect"]) * row["outcome"]["reward_effect"]
+    assert abs(row["outcome"]["reward"] - expect) < 1e-3 and row["outcome"]["reward"] > 0.8
+    assert row["features"]["co2_ppm"] == 1400
     assert row["local_time"].endswith("+09:00")
     logger.open_episode(session_id="s1", situation=s, fsm={}, decision=d, ts=s.ts + 700)
     assert logger.flush() == 1 and read_records(str(path))[1]["outcome"]["status"] == "missing"

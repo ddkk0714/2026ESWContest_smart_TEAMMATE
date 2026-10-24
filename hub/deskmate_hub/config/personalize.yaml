@@ -30,8 +30,8 @@ bandit:
   algorithm: thompson           # thompson | greedy(검증용: 평균만 사용)
   prior_precision: 2.0          # λ — 클수록 전역 prior 를 오래 믿는다
   noise_var: 0.25               # σ² — Thompson 샘플 분산
-  weight_accept: 0.5
-  weight_effect: 0.5
+  weight_accept: 0.2            # Pi 4 배포판: 효과(C_fatigue 회복)를 더 믿는다 — 시뮬 v13(life_sim --policy-set) 근거, 실측 전. 이전 0.5
+  weight_effect: 0.8            # 수락만 보면 "괜찮아요" 습관이 보상이 돼 깨우는 arm 을 덜 고른다(시뮬 v13). 이전 0.5
   effect_window_min: 10
   effect_full_drop: 0.30        # C_fatigue 가 이만큼 내려가면 효과 +1
   max_per_session: 6

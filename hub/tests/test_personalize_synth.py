@@ -7,7 +7,10 @@ from deskmate_hub.personalize import FEATURE_NAMES, InterventionPolicy, Situatio
 from deskmate_hub.personalize.features import POSTURE_LABELS
 from deskmate_hub.personalize.synth import PERSONAS, SynthGenerator, arm_counts
 
+# 보상 무게: Pi 4 배포판 personalize.yaml 은 효과 0.8·수락 0.2(시뮬 v13). 합성 페르소나(synth.py)는 수락 확률로 사람을 만들어서
+# 이 시험의 학습 수치는 이전 기본 0.5·0.5 기준이다 — 밴딧 메커니즘을 보려고 그 값으로 고정한다.
 CFG = load_personalize_config()
+CFG["bandit"] = dict(CFG["bandit"], weight_accept=0.5, weight_effect=0.5)
 REQUIRED = {"schema_name", "schema_version", "simulated", "persona", "episode_id", "session_id", "profile_id",
             "ts_ms", "local_time", "features", "fsm", "decision", "feedback", "outcome"}
 FEATURE_KEYS = {"posture_dist", "posture_label", "posture_hold_min", "slump_hold_min", "present", "drowsy",
