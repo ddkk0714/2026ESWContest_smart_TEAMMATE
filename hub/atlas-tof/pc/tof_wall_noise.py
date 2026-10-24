@@ -1,7 +1,7 @@
 """ToF 벽 잡음 측정 (2026-10-24) — 장치를 벽에 비춘 채 일정 시간 센서별 8×8 거리값이 얼마나 흔들리는지 잰다.
 
-    python -I tof_wall_noise.py session --pi5 <Pi5 주소>                     # 사람이 하는 안내 진행(소리·Enter): 벽 45/60/70 cm 각 5분
-                                                                             #   → 빈 자리 1분 → 가만히 3분 → 평소 작업 5분 → 맞춤·비교
+    python -I tof_wall_noise.py session --pi5 <Pi5 주소>                     # 사람이 하는 안내 진행(소리·Enter): 벽 45/50/60 cm 각 5분 → 맞춤
+    python -I tof_wall_noise.py session --pi5 <Pi5 주소> --session-dir <같은 폴더> --steps empty,still,work   # 나중에 사람 단계
     python -I tof_wall_noise.py aim --pi5 <Pi5 주소> --distance-cm 60        # 조준·연결 확인: 3 s 중앙값 격자
     python -I tof_wall_noise.py record --pi5 <Pi5 주소> --label wall60 --distance-cm 60 --seconds 300   # 한 번만 녹화 → 분석
     python -I tof_wall_noise.py analyze noise_runs/session_.../wall60_...    # 다시 분석(끊긴 녹화 복구)
@@ -58,15 +58,17 @@ PI4_ADDR = "172.16.34.199"          # Pi 4 eth0 (Pi 5 와 랜선 직결)
 MB_PER_MIN = 0.46                   # 실측 frames 576 B/줄 × 10 줄/s + /api/state ≈ 1.9 KB/s
 TOOL_VERSION = "2026-10-24b"
 
-# 안내 진행 순서(사용자 지정 10-24: 벽 45·60·70 cm 각 5분)
+# 안내 진행 순서(사용자 지정 10-24: 벽 45·50·60 cm 각 5분)
 PLAN = [
     {"label": "wall45", "kind": "wall", "distance_cm": 45, "seconds": 300},
+    {"label": "wall50", "kind": "wall", "distance_cm": 50, "seconds": 300},
     {"label": "wall60", "kind": "wall", "distance_cm": 60, "seconds": 300},
-    {"label": "wall70", "kind": "wall", "distance_cm": 70, "seconds": 300},
     {"label": "empty", "kind": "empty", "distance_cm": None, "seconds": 60},
     {"label": "still", "kind": "person", "distance_cm": None, "seconds": 180},
     {"label": "work", "kind": "person", "distance_cm": None, "seconds": 300},
 ]
+WALL_STEPS = ["wall45", "wall50", "wall60"]      # session 기본(사용자 10-24: 우선 벽만). 사람 단계는 --with-person / --steps
+PERSON_STEPS = ["empty", "still", "work"]
 GUIDE = {
     "wall": "센서 커버 앞면 → 벽을 줄자로 {d} cm (바닥과 평행)에 맞춘다. 장치 정면이 벽을 똑바로, 시야엔 벽만. 지그 기울기는 그대로 둔다.",
     "empty": "장치를 평소 쓰는 자리(책상 위, 의자 쪽)로 옮긴다. 의자는 평소 위치, 사람은 시야 밖. "
@@ -1150,8 +1152,9 @@ class Reminder(threading.Thread):
 def session(raw_url: str, api_url: str, out: str = "noise_runs", session_dir=None, steps=None, notes=None,
             ask=input, beep_fn=beep, delay: float = 5.0, durations=None, aim_seconds: float = 3.0,
             interval: float = 0.08, pollers: int = 3, tunnel=None) -> str:
-    """벽 45/60/70 cm → 빈 자리 → 가만히 → 평소 작업. 단계마다 조준 격자 → 소리 → Enter → 카운트다운 → 녹화 → 소리."""
-    plan = [dict(p) for p in PLAN if not steps or p["label"] in steps]
+    """기본 벽 45/50/60 cm(steps 로 빈 자리·가만히·평소 작업 추가). 단계마다 조준 격자 → 소리 → Enter → 카운트다운 → 녹화 → 소리."""
+    steps = steps or WALL_STEPS
+    plan = [dict(p) for p in PLAN if p["label"] in steps]
     for p in plan:
         if durations and p["label"] in durations:
             p["seconds"] = durations[p["label"]]
@@ -1279,6 +1282,10 @@ def finish_session(sess, log, beep_fn=no_beep) -> str:
                 if c.get("posture_still"):
                     L.append(f"- 자세 출력: {c['posture_still']['posture']}")
                 L.append(f"- 자세히: `compare_{k}.md`")
+    left = [x for x in PERSON_STEPS if x not in runs]
+    if walls and left:
+        L += ["", f"사람 단계({','.join(left)})는 아직 — 나중에 같은 폴더에 이어서: "
+                  f"`session --pi5 <PI5> --session-dir {sess} --steps {','.join(left)}`"]
     L += ["", "돌려보낼 것: 이 폴더 전체를 zip 으로(WALL_NOISE_TEST.md §7)."]
     path = os.path.join(sess, "SESSION.md")
     with open(path, "w", encoding="utf-8") as f:
@@ -1417,8 +1424,8 @@ def selftest() -> int:
         s = analyze(rd2, quiet=True)["sensors"]["0"]
         check(s["slow_ratio"] > 1.5 and s["lag1_r"] > 0.6, f"slow_ratio {s['slow_ratio']}, lag1 {s['lag1_r']} 가 느린 성분을 잡는다")
 
-        print("[3] 45/60/70 cm 맞춤 + 움직인 녹화는 뺀다")
-        rds = [synth_run(root, f"wall{d}", d, synth_frames(d * 10, s0, k, seed=d)) for d in (45, 70)] + [rd]
+        print("[3] 45/50/60 cm 맞춤 + 움직인 녹화는 뺀다")
+        rds = [synth_run(root, f"wall{d}", d, synth_frames(d * 10, s0, k, seed=d)) for d in (45, 50)] + [rd]
         moved = synth_run(root, "wall60_moved", 60, synth_frames(600, s0, k, sway_all=300.0, seed=9))
         r = fit(rds + [moved], out=os.path.join(root, "fit"), quiet=True)
         a = r["sensors"]["all"]
@@ -1476,25 +1483,35 @@ def selftest() -> int:
         finally:
             fb.close()
 
-        print("[9] 안내 진행(session): Enter·r·s·q 흐름")
+        print("[9] 안내 진행: 기본은 벽만(r·s), 나중에 같은 폴더에 사람 단계 이어서(q)")
         fb = FakeBoard()
-        answers = iter(["형광등", "흰 벽", "10°", "55",      # 메모 4개
-                        "",                                     # wall45 시작
-                        "r", "",                                # wall60 격자 다시 → 시작
-                        "s",                                    # wall70 건너뜀
-                        "", "",                                 # empty, still
-                        "q"])                                   # work 전에 끝냄
+        dur = {p["label"]: 5 for p in PLAN}
+        a1 = iter(["형광등", "흰 벽", "10°", "55",   # 메모 4개
+                   "",                                  # wall45 시작
+                   "r", "",                             # wall50 격자 다시 → 시작
+                   "s"])                                # wall60 건너뜀
         try:
-            sd = session(fb.url, fb.url, os.path.join(root, "sess"), ask=lambda q: next(answers), beep_fn=no_beep,
-                         delay=0, durations={p["label"]: 5 for p in PLAN}, aim_seconds=1.0)
+            sd = session(fb.url, fb.url, os.path.join(root, "sess"), ask=lambda q: next(a1), beep_fn=no_beep,
+                         delay=0, durations=dur, aim_seconds=1.0)
+            with open(os.path.join(sd, "session.json"), encoding="utf-8") as f:
+                lg = json.load(f)
+            with open(os.path.join(sd, "SESSION.md"), encoding="utf-8") as f:
+                md1 = f.read()
+            check(sorted(lg["runs"]) == ["wall45", "wall50"] and os.path.isfile(os.path.join(sd, "fit.md")),
+                  f"벽만: 녹화된 단계 {sorted(lg['runs'])}, fit.md")
+            check("--steps empty,still,work" in md1 and not os.path.exists(os.path.join(sd, "compare_still.md")),
+                  "SESSION.md 가 사람 단계 이어 하기 명령을 알려 준다")
+            a2 = iter(["", "", "", "q"])                # wall60, empty, still 시작 → work 전에 끝냄(메모는 저장된 것 사용)
+            session(fb.url, fb.url, steps=["wall60"] + PERSON_STEPS, session_dir=sd, ask=lambda q: next(a2),
+                    beep_fn=no_beep, delay=0, durations=dur, aim_seconds=1.0)
         finally:
             fb.close()
         with open(os.path.join(sd, "session.json"), encoding="utf-8") as f:
             lg = json.load(f)
-        check(sorted(lg["runs"]) == ["empty", "still", "wall45", "wall60"], f"녹화된 단계 {sorted(lg['runs'])}")
+        check(sorted(lg["runs"]) == ["empty", "still", "wall45", "wall50", "wall60"], f"이어서: 녹화된 단계 {sorted(lg['runs'])}")
         check(all(os.path.isfile(os.path.join(sd, x)) for x in ("SESSION.md", "fit.md", "compare_still.md")),
               "SESSION.md·fit.md·compare_still.md 생성")
-        check(lg["notes"].get("chin") == "55", "메모 저장")
+        check(lg["notes"].get("chin") == "55", "메모 저장·이어서 재사용")
     finally:
         shutil.rmtree(root, ignore_errors=True)
     print("selftest " + ("통과" if not fails else f"실패 {len(fails)}개"))
@@ -1544,11 +1561,12 @@ def main() -> int:
             pass
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("session", help="안내 진행(사람이 실행): 벽 45/60/70 cm 각 5분 → 빈 자리 → 가만히 → 평소 작업, 소리·Enter")
+    p = sub.add_parser("session", help="안내 진행(사람이 실행): 벽 45/50/60 cm 각 5분(--with-person 이면 빈 자리·가만히·평소 작업까지), 소리·Enter")
     add_conn(p)
     p.add_argument("--out", default="noise_runs")
     p.add_argument("--session-dir", help="끊긴 세션 폴더에 이어서 녹화")
-    p.add_argument("--steps", help="일부 단계만, 쉼표로(예: wall70,still). 단계: " + ",".join(x["label"] for x in PLAN))
+    p.add_argument("--steps", help="이 단계만, 쉼표로(예: wall60 / empty,still,work). 기본은 벽 3개. 단계: " + ",".join(x["label"] for x in PLAN))
+    p.add_argument("--with-person", action="store_true", help="벽 3개 뒤에 빈 자리·가만히·평소 작업까지")
     p.add_argument("--delay", type=float, default=5.0, help="Enter 뒤 카운트다운 s")
     p.add_argument("--pollers", type=int, default=3, help="/raw 폴러 수(터널이 느려 놓침이 클 때 늘린다)")
     p.add_argument("--no-beep", action="store_true")
@@ -1560,7 +1578,7 @@ def main() -> int:
     p = sub.add_parser("record", help="한 번 녹화 → 분석 (Claude 셸에서 돌리면 timeout 을 녹화 길이 + 120 s 이상으로)")
     add_conn(p)
     p.add_argument("--seconds", type=float, default=300.0)
-    p.add_argument("--label", required=True, help="예: wall45, wall60, wall70, empty, still, work, dark60")
+    p.add_argument("--label", required=True, help="예: wall45, wall50, wall60, empty, still, work, dark60")
     p.add_argument("--kind", choices=("wall", "empty", "person"), default=None, help="기본: wall* 이면 wall, empty 면 empty, 나머지 person")
     p.add_argument("--distance-cm", type=float, help="렌즈 앞면 ~ 벽 (줄자). 사람 녹화는 비운다")
     p.add_argument("--light", default="", help="조명 조건(사람에게 물어 채운다)")
@@ -1601,7 +1619,10 @@ def main() -> int:
                     print("다시 녹화할 만한 문제: " + " / ".join(probs))
                     return 3
                 return 0
-            steps = [x.strip() for x in a.steps.split(",")] if a.steps else None
+            steps = [x.strip() for x in a.steps.split(",")] if a.steps else (WALL_STEPS + PERSON_STEPS if a.with_person else WALL_STEPS)
+            bad = [x for x in steps if x not in WALL_STEPS + PERSON_STEPS]
+            if bad:
+                sys.exit(f"모르는 단계 {bad} — 단계: {','.join(WALL_STEPS + PERSON_STEPS)}")
             session(raw, api, a.out, a.session_dir, steps, beep_fn=no_beep if a.no_beep else beep, delay=a.delay,
                     pollers=a.pollers, tunnel=tun)
             return 0
