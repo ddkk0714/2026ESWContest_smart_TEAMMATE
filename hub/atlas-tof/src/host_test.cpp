@@ -4,8 +4,10 @@
 //
 // 1) 줄 파서: tof / tof_hello / tof_err / 쓰레기
 // 2) PostureNet: export.py 의 golden.txt (PyTorch logits) 와 비교, 프레임당 시간
-// 3) 리플레이(있으면): 시뮬 세션을 두 센서 파일로 넣어 DevicePosture 전체 경로를 가상 시계로 돌리고
-//    파일의 "label" 과 비교 (dataset/tof_sim_v5/tools/sim_to_toflines.py 가 만든 파일)
+// 3) GRU 리셋 규칙 (device_posture.h "리셋"): (a) 주기 리셋이 N s 뒤 h·EMA 를 비우고 시각을 갱신, (b) coverage 미달이
+//    N s 이어지면 반복 리셋·재실 한 프레임에 타이머 해제, (c) 둘 다 0 이면 DevicePosture 경로가 golden 과 같다(회귀 없음)
+// 4) 리플레이(있으면): 시뮬 세션을 두 센서 파일로 넣어 DevicePosture 전체 경로를 가상 시계로 돌리고
+//    파일의 "label" 과 비교 (dataset/tof_sim_v5/tools/sim_to_toflines.py 가 만든 파일). 기본 설정과 리셋 끔 두 번
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -270,32 +272,51 @@ void testParser() {
     check(!tof::parseTofLine("UART\t{\"type\":32,\"seq\":1,\"ts_ms\":2,\"payload_hex\":\"0101\"}", l), "other UART types ignored");
 }
 
+struct Golden {
+    int T = 0, H = 0, W = 0, C = 0, hid = 0;
+    std::vector<int16_t> dist;
+    std::vector<uint8_t> status;
+    std::vector<int> reset;
+    std::vector<float> want;    // PyTorch logits, T×C
+};
+
+bool loadGolden(const std::string& golden_path, const tof::PostureNet& net, Golden& gd) {
+    std::ifstream g(golden_path);
+    if (!g) { std::printf("FAIL open golden %s\n", golden_path.c_str()); ++failures; return false; }
+    std::string tok;
+    g >> tok >> gd.T >> gd.H >> gd.W >> gd.C >> gd.hid;
+    if (tok != "golden" || gd.H != net.H || gd.W != net.W || gd.C != net.classes || gd.hid != net.hidden) {
+        std::printf("FAIL golden header mismatch\n"); ++failures; return false;
+    }
+    const int n = gd.H * gd.W, T = gd.T, C = gd.C;
+    gd.dist.assign((size_t)T * n, 0);
+    gd.status.assign((size_t)T * n, 0);
+    gd.reset.assign(T, 0);
+    gd.want.assign((size_t)T * C, 0.f);
+    for (int t = 0; t < T; ++t) {
+        int tt, v;
+        g >> tok >> tt >> tok >> gd.reset[t] >> tok;
+        for (int i = 0; i < n; ++i) { g >> v; gd.dist[(size_t)t * n + i] = (int16_t)v; }
+        g >> tok;
+        for (int i = 0; i < n; ++i) { g >> v; gd.status[(size_t)t * n + i] = (uint8_t)v; }
+        g >> tok;
+        for (int c = 0; c < C; ++c) g >> gd.want[(size_t)t * C + c];
+    }
+    return true;
+}
+
 bool testGolden(const std::string& bin, const std::string& golden_path) {
     tof::PostureNet net;
     std::string err;
     if (!net.load(bin, &err)) { std::printf("FAIL load model: %s\n", err.c_str()); ++failures; return false; }
-    std::ifstream g(golden_path);
-    if (!g) { std::printf("FAIL open golden %s\n", golden_path.c_str()); ++failures; return false; }
-    std::string tok;
-    int T, H, W, C, hid;
-    g >> tok >> T >> H >> W >> C >> hid;
-    if (tok != "golden" || H != net.H || W != net.W || C != net.classes || hid != net.hidden) {
-        std::printf("FAIL golden header mismatch\n"); ++failures; return false;
-    }
-    const int n = H * W;
-    std::vector<int16_t> dist((size_t)T * n);
-    std::vector<uint8_t> status((size_t)T * n);
-    std::vector<int> reset(T);
-    std::vector<float> want((size_t)T * C), got(C);
-    for (int t = 0; t < T; ++t) {
-        int tt, v;
-        g >> tok >> tt >> tok >> reset[t] >> tok;
-        for (int i = 0; i < n; ++i) { g >> v; dist[(size_t)t * n + i] = (int16_t)v; }
-        g >> tok;
-        for (int i = 0; i < n; ++i) { g >> v; status[(size_t)t * n + i] = (uint8_t)v; }
-        g >> tok;
-        for (int c = 0; c < C; ++c) g >> want[(size_t)t * C + c];
-    }
+    Golden gd;
+    if (!loadGolden(golden_path, net, gd)) return false;
+    const int T = gd.T, C = gd.C, n = gd.H * gd.W;
+    std::vector<int16_t>& dist = gd.dist;
+    std::vector<uint8_t>& status = gd.status;
+    std::vector<int>& reset = gd.reset;
+    std::vector<float>& want = gd.want;
+    std::vector<float> got(C);
     double max_diff = 0.0;
     int mism = 0;
     for (int t = 0; t < T; ++t) {
@@ -323,10 +344,177 @@ bool testGolden(const std::string& bin, const std::string& golden_path) {
     return ok;
 }
 
+// 8×8 프레임 하나: 앞 `present_zones` 칸은 600 mm(재실 범위 안), 나머지는 2000 mm(모델에는 유효, 재실 범위 밖). 상태값 5.
+tof::TofLine makeFrame(uint32_t seq, uint32_t ms, int present_zones, int present_mm = 600, uint8_t present_status = 5) {
+    tof::TofLine l;
+    l.kind = tof::LineKind::Frame;
+    l.frame.seq = seq; l.frame.ms = ms; l.frame.w = 8; l.frame.h = 8; l.frame.has_status = true;
+    for (int i = 0; i < 64; ++i) {
+        const bool p = i < present_zones;
+        l.frame.d[i] = (int16_t)(p ? present_mm : 2000);
+        l.frame.st[i] = p ? present_status : 5;
+    }
+    return l;
+}
+
+bool smoothEqualsInstant(const tof::DeviceResult& r, int C) {
+    for (int i = 0; i < C; ++i) if (r.smooth[i] != r.probs[i]) return false;
+    return true;
+}
+
+// (a) 주기 리셋: reset_period_s=2 — 사람이 계속 앉아 있어도 2 s 마다 h·EMA 를 비우고 마지막 리셋 시각이 갱신된다
+void testPeriodicReset(const std::string& bin) {
+    tof::DeviceConfig cfg;
+    cfg.reset_period_s = 2;
+    cfg.away_reset_s = 0;
+    tof::DevicePosture d(cfg);
+    std::string err;
+    if (!d.loadModel(bin, &err)) { check(false, "periodic: model load"); return; }
+    const int C = d.classes();
+    const int s0 = d.addSensor("p0"), s1 = d.addSensor("p1");
+    tof::DeviceResult at19, at20, at21, at40;
+    for (int k = 0; k <= 40; ++k) {
+        const int64_t now = 100 * k;
+        d.feed(s0, makeFrame(k + 1, (uint32_t)now, 20), now);
+        d.feed(s1, makeFrame(k + 1, (uint32_t)now, 12), now);
+        d.tick(now);
+        if (k == 19) at19 = d.result();
+        if (k == 20) at20 = d.result();
+        if (k == 21) at21 = d.result();
+        if (k == 40) at40 = d.result();
+    }
+    const auto ss = d.sensors(4000);
+    check(at19.resets.periodic == 0 && at19.resets.last_reset_ms == 0 && at19.present_rule,
+          "periodic: no reset before 2 s (last_reset = start), person present by coverage");
+    check(at20.resets.periodic == 1 && at20.resets.last_reset_ms == 2000 && at20.resets.away == 0 && at20.resets.manual == 0,
+          "periodic: reset at 2 s, last_reset_ms updated");
+    check(smoothEqualsInstant(at20, C) && at20.label_since_ms == 2000 && at20.valid && at20.smooth_argmax >= 0,
+          "periodic: EMA cleared (smooth == instant on the reset step, label restarted), no warm-up");
+    check(!smoothEqualsInstant(at21, C) || at21.smooth_argmax == at20.smooth_argmax, "periodic: EMA runs again after reset");
+    check(at40.resets.periodic == 2 && at40.resets.last_reset_ms == 4000, "periodic: repeats every 2 s from the last reset");
+    check(ss.size() == 2 && ss[0].resets == 2 && ss[1].resets == 2, "periodic: every sensor GRU reset twice");
+    // 수동 리셋도 마지막 리셋 시각을 갱신해 주기 타이머를 다시 시작한다
+    d.reset(4100);
+    for (int k = 41; k <= 61; ++k) {
+        const int64_t now = 100 * k;
+        d.feed(s0, makeFrame(k + 1, (uint32_t)now, 20), now);
+        d.feed(s1, makeFrame(k + 1, (uint32_t)now, 12), now);
+        d.tick(now);
+    }
+    const auto r61 = d.result();
+    check(r61.resets.manual == 1 && r61.resets.periodic == 3 && r61.resets.last_reset_ms == 6100,
+          "periodic: manual reset restarts the period (next periodic at manual + 2 s)");
+}
+
+// (b) 자리 비움 리셋: away_reset_s=1 — coverage 미달이 1 s 이어지면 리셋, 비어 있는 동안 1 s 마다 반복, 재실 한 프레임에 타이머 해제
+void testAwayReset(const std::string& bin) {
+    tof::DeviceConfig cfg;
+    cfg.reset_period_s = 0;
+    cfg.away_reset_s = 1;
+    tof::DevicePosture d(cfg);
+    std::string err;
+    if (!d.loadModel(bin, &err)) { check(false, "away: model load"); return; }
+    const int s0 = d.addSensor("a0"), s1 = d.addSensor("a1");
+    // coverage 셈: 4칸/64 = 0.0625 ≥ 0.06 재실, 3칸 미달, 범위 밖 거리·상태 4 는 안 센다
+    d.feed(s0, makeFrame(1, 0, 4), 0);
+    d.feed(s1, makeFrame(1, 0, 3), 0);
+    auto cs = d.sensors(0);
+    check(std::fabs(cs[0].coverage - 0.0625f) < 1e-6f && std::fabs(cs[1].coverage - 3.f / 64.f) < 1e-6f, "away: coverage = zones in range / 64");
+    d.feed(s0, makeFrame(2, 100, 4, 140), 100);
+    d.feed(s1, makeFrame(2, 100, 4, 1400), 100);
+    cs = d.sensors(100);
+    check(cs[0].coverage == 0.f && cs[1].coverage == 0.f, "away: 140 mm and 1400 mm zones do not count");
+    d.feed(s0, makeFrame(3, 200, 4, 600, 4), 200);
+    check(d.sensors(200)[0].coverage == 0.f, "away: status 4 zones do not count");
+
+    tof::DevicePosture e(cfg);
+    e.loadModel(bin, &err);
+    const int e0 = e.addSensor("e0"), e1 = e.addSensor("e1");
+    std::map<int, tof::DeviceResult> at;
+    auto run = [&](int k_from, int k_to, int zones0, int zones1) {
+        for (int k = k_from; k <= k_to; ++k) {
+            const int64_t now = 100 * k;
+            e.feed(e0, makeFrame(k + 1, (uint32_t)now, zones0), now);
+            e.feed(e1, makeFrame(k + 1, (uint32_t)now, zones1), now);
+            e.tick(now);
+            at[k] = e.result();
+        }
+    };
+    run(0, 25, 0, 3);                 // 두 센서 모두 미달 (최대 3/64) → 1 s, 2 s 에 리셋
+    check(!at[0].present_rule && at[9].resets.away == 0, "away: no reset before 1 s of absence");
+    check(at[10].resets.away == 1 && at[10].resets.last_reset_ms == 1000 && at[10].resets.periodic == 0,
+          "away: reset after 1 s without presence (coverage, not model output)");
+    check(smoothEqualsInstant(at[10], e.classes()) && at[10].label_since_ms == 1000, "away: EMA cleared on the reset step");
+    check(at[19].resets.away == 1 && at[20].resets.away == 2 && at[20].resets.last_reset_ms == 2000,
+          "away: repeats every 1 s while the seat stays empty");
+    run(26, 26, 0, 4);                // 한 프레임 재실(4/64 한쪽만) → 타이머 해제
+    check(at[26].present_rule && at[26].resets.away == 2, "away: one present frame (max of the two sensors) clears the timer");
+    run(27, 35, 0, 0);                // 다시 비움: 2.7 s 부터 → 3.6 s 에는 아직, 3.7 s 에 리셋
+    check(at[35].resets.away == 2, "away: timer restarts from the first absent frame (0.9 s: no reset yet)");
+    run(36, 37, 0, 0);
+    check(at[37].resets.away == 3 && at[37].resets.last_reset_ms == 3700, "away: reset 1 s after absence resumed");
+    // 프레임이 끊기면: stale_ms(1 s) 안에서는 마지막 프레임을 재사용하므로 4.7 s 에 한 번 더 리셋되고, 그 뒤 센서가
+    // 전부 offline 이면 세지 않는다 — 상태는 이미 비어 있다
+    for (int k = 38; k <= 80; ++k) e.tick(100 * k);
+    const auto off = e.result();
+    check(!off.valid && off.resets.away == 4 && off.resets.last_reset_ms == 4700 && !off.present_rule,
+          "away: one more reset while the last frame is reused (<= stale_ms), none once all sensors are offline");
+}
+
+// (c) 둘 다 0: DevicePosture(센서 1개) 경로의 센서별 확률이 golden 의 softmax(logits) 와 같다. 기본값(900/60)도 240 프레임(24 s)에서는 같다
+void testDevicePathMatchesGolden(const std::string& bin, const std::string& golden_path) {
+    tof::PostureNet probe;
+    std::string err;
+    if (!probe.load(bin, &err)) { check(false, "device-golden: model load"); return; }
+    Golden gd;
+    if (!loadGolden(golden_path, probe, gd)) return;
+    const int n = gd.H * gd.W, C = gd.C;
+    for (int pass = 0; pass < 2; ++pass) {
+        tof::DeviceConfig cfg;
+        if (pass == 0) { cfg.reset_period_s = 0; cfg.away_reset_s = 0; }
+        tof::DevicePosture d(cfg);
+        d.loadModel(bin, &err);
+        const int s = d.addSensor("g");
+        double max_diff = 0.0;
+        int mism = 0;
+        for (int t = 0; t < gd.T; ++t) {
+            const int64_t now = 100 * t;
+            if (gd.reset[t] && t > 0) {                      // golden 의 리셋 지점 = 센서 재시작(hello)
+                tof::TofLine hello;
+                hello.kind = tof::LineKind::Hello;
+                hello.hello.ms = (uint32_t)now; hello.hello.w = 8; hello.hello.h = 8; hello.hello.hz = 10;
+                d.feed(s, hello, now);
+            }
+            tof::TofLine l;
+            l.kind = tof::LineKind::Frame;
+            l.frame.seq = t + 1; l.frame.ms = (uint32_t)now; l.frame.w = gd.W; l.frame.h = gd.H; l.frame.has_status = true;
+            for (int i = 0; i < n; ++i) { l.frame.d[i] = gd.dist[(size_t)t * n + i]; l.frame.st[i] = gd.status[(size_t)t * n + i]; }
+            d.feed(s, l, now);
+            d.tick(now);
+            const auto st = d.sensors(now)[0];
+            std::vector<float> wp(C);
+            tof::softmax(&gd.want[(size_t)t * C], C, wp.data());
+            int a = 0, b = 0;
+            for (int c = 0; c < C; ++c) {
+                max_diff = std::max(max_diff, std::fabs((double)st.probs[c] - wp[c]));
+                if (st.probs[c] > st.probs[a]) a = c;
+                if (wp[c] > wp[b]) b = c;
+            }
+            if (a != b) ++mism;
+        }
+        const auto r = d.result();
+        std::printf("device-golden (%s): max |prob diff| %.3g, argmax mismatches %d, resets periodic %llu away %llu\n",
+                    pass == 0 ? "resets off" : "defaults 900/60", max_diff, mism,
+                    (unsigned long long)r.resets.periodic, (unsigned long long)r.resets.away);
+        check(max_diff < 1e-4 && mism == 0 && r.resets.periodic == 0 && r.resets.away == 0 && r.resets.manual == 0,
+              pass == 0 ? "resets off: DevicePosture path matches golden (no regression)"
+                        : "defaults: DevicePosture path matches golden over 24 s (no reset fired)");
+    }
+}
+
 struct ReplayLine { uint32_t ms; int sensor; tof::TofLine line; };
 
-void testReplay(const std::string& bin, const std::vector<std::string>& files) {
-    tof::DeviceConfig cfg;
+void testReplay(const std::string& bin, const std::vector<std::string>& files, tof::DeviceConfig cfg, const char* tag) {
     tof::DevicePosture device(cfg);
     std::string err;
     if (!device.loadModel(bin, &err)) { check(false, "replay: model load"); return; }
@@ -376,7 +564,7 @@ void testReplay(const std::string& bin, const std::vector<std::string>& files) {
             per_correct[s] += std::string(tof::DevicePosture::labelName(ss[s].argmax)) == label;
         }
     }
-    std::printf("replay: %zu lines, %ld ticks, %ld scored; fused acc %.3f", lines.size(), ticks, scored,
+    std::printf("replay[%s]: %zu lines, %ld ticks, %ld scored; fused acc %.3f", tag, lines.size(), ticks, scored,
                 scored ? (double)correct / scored : 0.0);
     for (size_t s = 0; s < files.size(); ++s)
         std::printf(", sensor%zu acc %.3f", s, per_scored[s] ? (double)per_correct[s] / per_scored[s] : 0.0);
@@ -384,6 +572,9 @@ void testReplay(const std::string& bin, const std::vector<std::string>& files) {
     for (const auto& kv : per_label)
         std::printf(" %s %.2f(%ld)", kv.first.c_str(), (double)kv.second.first / kv.second.second, kv.second.second);
     std::printf("\n");
+    const tof::DeviceResult fin = device.result();
+    std::printf("  resets: periodic %llu away %llu manual %llu\n", (unsigned long long)fin.resets.periodic,
+                (unsigned long long)fin.resets.away, (unsigned long long)fin.resets.manual);
     check(scored > 0, "replay produced scored ticks");
     std::printf("  state: %s\n", device.stateJson(end_ms).substr(0, 400).c_str());
 }
@@ -398,7 +589,16 @@ int main(int argc, char** argv) {
     bin_for_tests = argv[1];
     testParser();
     testGolden(argv[1], argv[2]);
-    if (argc > 3) testReplay(argv[1], std::vector<std::string>(argv + 3, argv + argc));
+    testPeriodicReset(argv[1]);
+    testAwayReset(argv[1]);
+    testDevicePathMatchesGolden(argv[1], argv[2]);
+    if (argc > 3) {
+        const std::vector<std::string> files(argv + 3, argv + argc);
+        testReplay(argv[1], files, tof::DeviceConfig{}, "defaults 900/60");
+        tof::DeviceConfig off;
+        off.reset_period_s = 0; off.away_reset_s = 0;
+        testReplay(argv[1], files, off, "resets off");
+    }
     std::printf("%s (%d failures)\n", failures ? "FAIL" : "PASS", failures);
     return failures ? 1 : 0;
 }

@@ -35,7 +35,22 @@ struct DeviceConfig {
     FusionRule fusion = FusionRule::LogProb;
     int flip_rows = -1;             // 받은 격자를 위아래로 뒤집기: 1 = 뒤집음, 0 = 안 뒤집음, -1 = 자동(UART 0x05 flags b2, 없으면 안 뒤집음)
     int flip_cols = -1;             // 좌우: 같은 규칙(b3)
+    // GRU 은닉 상태 리셋 (PC 시뮬 2026-10-24 정의와 같다. 아래 "리셋" 주석)
+    int reset_period_s = 900;       // 마지막 리셋(또는 시작)으로부터 이 시간이 지나면 매 스텝 추론 전에 리셋. 0 = 끔
+    int away_reset_s = 60;          // ToF 규칙 재실(coverage)이 이 시간 동안 계속 false 면 리셋, 비어 있는 동안 반복. 0 = 끔
+    int present_min_mm = 150;       // 재실 coverage 에 세는 zone: status 5·6·9·10 이고 거리 [min, max] mm
+    int present_max_mm = 1300;
+    float present_min_coverage = 0.06f;   // 두 센서 중 큰 coverage 가 이 이상이면 재실 (64칸 중 4칸)
 };
+
+// 리셋: 모든 센서의 GRU h 를 0 으로, 융합 EMA 를 비움(smooth_argmax=-1 → 다음 스텝은 그 스텝의 융합 확률로 시작),
+// 워밍업 없음. 세 가지 계기가 전부 같은 일을 하고 모두 "마지막 리셋 시각"을 갱신한다:
+//   periodic  reset_period_s 마다 (사람이 앉아 있어도, 자세 중간이어도)
+//   away      재실 규칙이 away_reset_s 동안 false — 재실 근거는 모델 출력 away 가 아니라 ToF coverage.
+//             융합 결과 away 를 쓰면 GRU 가 빈 의자를 사람으로 보는 배치에서 리셋이 영영 안 걸린다
+//   manual    POST /api/reset
+// 왜: PC 시뮬(MuJoCo+GRU, 2026-10-24, 실측 전)에서 배치가 나쁜 장면의 GRU 가 거북목에 갇혀 못 나왔다(0.308→0.269).
+//     900 s 주기 + 자리 비움 60 s 리셋으로 0.334 회복, 21개 장면 평균 0.510→0.521.
 
 inline const char* fusionName(FusionRule r) { return r == FusionRule::LogProb ? "logprob" : "mean"; }
 
@@ -63,6 +78,12 @@ struct SensorStatus {
     uint64_t idle_frames = 0;       // UART 0x05 valid=0 (센서는 살아 있고 새 측정 없음) 받은 수
     bool alive = false;             // 최근 stale_ms 안에 이 센서의 줄(valid 든 아니든)이 왔다
     bool stale = false;             // 살아 있지만 유효 프레임이 stale_ms 넘게 없다 → 판정에서 빠지고 GRU 리셋
+    float coverage = 0.f;           // 마지막 프레임의 재실 coverage (status 5·6·9·10 ∧ [present_min_mm, present_max_mm] 인 zone / 전체)
+};
+
+struct ResetStats {
+    uint64_t periodic = 0, away = 0, manual = 0;
+    int64_t last_reset_ms = -1;     // 마지막 리셋 시각 (어떤 계기든). 리셋이 없었으면 첫 tick 시각
 };
 
 struct DeviceResult {
@@ -76,6 +97,9 @@ struct DeviceResult {
     uint64_t ticks = 0;
     int64_t last_tick_ms = -1;
     int64_t label_since_ms = -1;    // 현재 (smooth) 라벨이 시작된 시각
+    bool present_rule = false;      // ToF 규칙 재실 (online 센서 coverage 최대 ≥ present_min_coverage)
+    float coverage_max = 0.f;
+    ResetStats resets;
 };
 
 class DevicePosture {
@@ -95,7 +119,7 @@ public:
     // 메인 루프에서 주기적으로. 스텝을 돌렸으면 true (rate_hz 간격이 안 됐으면 false)
     bool tick(int64_t now_ms);
 
-    void reset();                                           // 모든 GRU 상태 0 (HTTP /api/reset)
+    void reset(int64_t now_ms = -1);                        // 모든 GRU 상태 0 + EMA 비움 (HTTP /api/reset). now_ms<0 면 마지막 tick 시각
 
     DeviceResult result() const;
     std::vector<SensorStatus> sensors(int64_t now_ms) const;
@@ -127,8 +151,11 @@ private:
     std::string modelPath_;
     DeviceConfig cfg_;
     int net_classes_ = 0;
+    void resetLocked(const char* why, int64_t now_ms);     // mutex_ 를 잡은 채로
+
     std::vector<Slot> slots_;
     DeviceResult res_;
+    int64_t absent_since_ms_ = -1;  // 재실 false 가 이어지기 시작한(또는 마지막 away 리셋) 시각. -1 = 재실 중/타이머 없음
     mutable std::mutex mutex_;
 };
 

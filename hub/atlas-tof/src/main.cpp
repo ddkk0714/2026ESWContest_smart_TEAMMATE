@@ -22,6 +22,11 @@
 //                      맞는 값은 tof_live.py --show 로 손을 센서 위쪽·왼쪽에 대 보고 정한다
 //   포트 목록에 "tcp:9001" 을 주면 그 포트에서 PC 가 보내는 센서 줄을 받는다(tof_live.py --forward). USB 직결이 안 될 때
 //   운영(UART2): hub/atlas 가 TYPE 0x05 줄을 tcp:9100 으로 넘긴다 → TOFPOSTURE_PORTS=tcp:9100 하나에 두 센서(번호로 나눔)
+//   TOFPOSTURE_RESET_PERIOD_S 900. 마지막 리셋(또는 시작)으로부터 이 시간이 지나면 추론 전에 GRU h·EMA 리셋. 0 = 끔
+//   TOFPOSTURE_AWAY_RESET_S   60. ToF 규칙 재실(coverage)이 이 시간 동안 false 면 리셋, 비어 있는 동안 반복. 0 = 끔.
+//                      재실 한 프레임이면 타이머를 지운다. 모델 출력 away 는 근거로 쓰지 않는다(device_posture.h "리셋")
+//   TOFPOSTURE_PRESENT_MIN_MM / TOFPOSTURE_PRESENT_MAX_MM  150 / 1300. 재실 coverage 에 세는 zone 의 거리 범위(mm)
+//   TOFPOSTURE_PRESENT_MIN_COVERAGE  0.06. 두 센서 중 큰 coverage(status 5·6·9·10 ∧ 거리 범위 인 zone / 64)가 이 이상이면 재실
 //   TOFPOSTURE_STDOUT   change(기본: 자세가 바뀔 때만) | tick(매 스텝) | off
 //   TOFPOSTURE_EXIT_ON_EOF 1 이면 리플레이 파일이 끝났을 때 종료 (테스트용)
 // 같은 키를 <실행파일 폴더>/tofposture.env (KEY=VALUE 한 줄씩) 에 적어도 된다 — D-Bus 로 뜬 서비스는
@@ -170,6 +175,11 @@ int main() {
     cfg.flip_cols = envInt("TOFPOSTURE_FLIP_COLS", -1);
     if (cfg.flip_rows > 1) cfg.flip_rows = 1;
     if (cfg.flip_cols > 1) cfg.flip_cols = 1;
+    cfg.reset_period_s = std::max(0, envInt("TOFPOSTURE_RESET_PERIOD_S", 900));
+    cfg.away_reset_s = std::max(0, envInt("TOFPOSTURE_AWAY_RESET_S", 60));
+    cfg.present_min_mm = envInt("TOFPOSTURE_PRESENT_MIN_MM", 150);
+    cfg.present_max_mm = envInt("TOFPOSTURE_PRESENT_MAX_MM", 1300);
+    cfg.present_min_coverage = static_cast<float>(envDouble("TOFPOSTURE_PRESENT_MIN_COVERAGE", 0.06));
     const std::string baud_env = envOr("TOFPOSTURE_BAUD", "auto");
     const int baud = baud_env == "auto" ? 0 : std::atoi(baud_env.c_str());
     const int http_port = envInt("TOFPOSTURE_HTTP", 8771);
@@ -188,7 +198,9 @@ int main() {
     } else {
         std::cerr << "tofposture: model " << model_path << " (" << device.classes() << " classes, "
                   << cfg.rate_hz << " Hz, fusion " << tof::fusionName(cfg.fusion) << ", flip_rows " << cfg.flip_rows
-                  << " flip_cols " << cfg.flip_cols << ")\n";
+                  << " flip_cols " << cfg.flip_cols << ", reset period " << cfg.reset_period_s << " s, away "
+                  << cfg.away_reset_s << " s, present " << cfg.present_min_mm << "-" << cfg.present_max_mm << " mm cov>="
+                  << cfg.present_min_coverage << ")\n";
     }
 
     std::vector<std::unique_ptr<tof::LineSource>> sources;
@@ -236,7 +248,7 @@ int main() {
     tof::HttpServer http(bind_addr, http_port,
                          tof::HttpHandlers{[&device] { return device.healthJson(nowMs()); },
                                            [&device] { return device.stateJson(nowMs()); },
-                                           [&device] { device.reset(); }});
+                                           [&device] { device.reset(nowMs()); }});
     if (http_port > 0) {
         if (!http.start(&err)) {
             std::cerr << "tofposture: HTTP listen failed on " << bind_addr << ":" << http_port << " (" << err << ")\n";

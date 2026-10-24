@@ -27,6 +27,18 @@ std::string probsJson(const float* p, int n) {
     return o + "}";
 }
 
+// "resets":{...} — /api/state 와 /health 에 같은 모양으로
+std::string resetsJson(const ResetStats& r, int64_t now_ms, const DeviceConfig& cfg) {
+    std::ostringstream o;
+    o << "\"resets\":{\"periodic\":" << r.periodic << ",\"away\":" << r.away << ",\"manual\":" << r.manual
+      << ",\"last_reset_ms\":" << r.last_reset_ms
+      << ",\"since_reset_ms\":" << (r.last_reset_ms >= 0 ? now_ms - r.last_reset_ms : -1)
+      << ",\"period_s\":" << cfg.reset_period_s << ",\"away_s\":" << cfg.away_reset_s
+      << ",\"present_min_mm\":" << cfg.present_min_mm << ",\"present_max_mm\":" << cfg.present_max_mm
+      << ",\"present_min_coverage\":" << cfg.present_min_coverage << "}";
+    return o.str();
+}
+
 }  // namespace
 
 DevicePosture::DevicePosture(DeviceConfig cfg) : cfg_(cfg) {
@@ -124,6 +136,14 @@ void DevicePosture::feed(int sensor, const TofLine& line, int64_t now_ms) {
             }
     }
     s.has_frame = true;
+    // 재실 coverage (리셋 규칙용. 뒤집기와 무관하게 개수만 센다)
+    {
+        int n = 0;
+        const int total = f.w * f.h;
+        for (int i = 0; i < total; ++i)
+            if (zoneValid(s.last.d[i], s.last.st[i]) && s.last.d[i] >= cfg_.present_min_mm && s.last.d[i] <= cfg_.present_max_mm) ++n;
+        s.st.coverage = total > 0 ? static_cast<float>(n) / static_cast<float>(total) : 0.f;
+    }
     s.last_seq = f.seq;
     s.last_rx_ms = now_ms;
     if (s.first_rx_ms < 0) s.first_rx_ms = now_ms;
@@ -150,6 +170,8 @@ bool DevicePosture::tick(int64_t now_ms) {
     float sum[kMaxClasses] = {};
     int online = 0;
     float logits[kMaxClasses];
+    // 1) 센서 online 판정 + 재실 coverage
+    float cov_max = 0.f;
     for (Slot& s : slots_) {
         const bool was_online = s.st.online;
         s.st.online = s.has_frame && s.net.loaded() && (now_ms - s.last_rx_ms) <= cfg_.stale_ms;
@@ -158,6 +180,33 @@ bool DevicePosture::tick(int64_t now_ms) {
             s.st.argmax = -1; s.st.conf = 0.f;
             continue;
         }
+        ++online;
+        if (s.st.coverage > cov_max) cov_max = s.st.coverage;
+    }
+    res_.coverage_max = cov_max;
+    res_.present_rule = online > 0 && cov_max >= cfg_.present_min_coverage;
+    // 2) 리셋 규칙 (추론 전). 시작 시각은 첫 tick
+    if (res_.resets.last_reset_ms < 0) res_.resets.last_reset_ms = now_ms;
+    if (cfg_.reset_period_s > 0 && now_ms - res_.resets.last_reset_ms >= 1000LL * cfg_.reset_period_s) {
+        ++res_.resets.periodic;
+        resetLocked("periodic", now_ms);
+    }
+    if (cfg_.away_reset_s > 0 && online > 0) {
+        if (res_.present_rule) {
+            absent_since_ms_ = -1;                                  // 재실 한 프레임이면 타이머를 지운다
+        } else if (absent_since_ms_ < 0) {
+            absent_since_ms_ = now_ms;
+        } else if (now_ms - absent_since_ms_ >= 1000LL * cfg_.away_reset_s) {
+            ++res_.resets.away;
+            resetLocked("away", now_ms);
+            absent_since_ms_ = now_ms;                              // 비어 있는 동안 away_reset_s 마다 반복
+        }
+    } else {
+        absent_since_ms_ = -1;      // 센서가 전부 offline 이면 상태는 이미 비어 있다(아래 online==0 분기) — 세지 않는다
+    }
+    // 3) 추론
+    for (Slot& s : slots_) {
+        if (!s.st.online) continue;
         if (s.used_once && s.last.seq == s.last_used_seq) ++s.st.reused;
         s.net.step(s.last.d, s.last.st, logits);
         s.last_used_seq = s.last.seq; s.used_once = true;
@@ -168,7 +217,6 @@ bool DevicePosture::tick(int64_t now_ms) {
         s.st.argmax = a; s.st.conf = s.st.probs[a];
         for (int i = 0; i < C; ++i)
             sum[i] += cfg_.fusion == FusionRule::LogProb ? std::log(s.st.probs[i] + 1e-6f) : s.st.probs[i];
-        ++online;
     }
     ++res_.ticks;
     res_.online_sensors = online;
@@ -199,10 +247,20 @@ bool DevicePosture::tick(int64_t now_ms) {
     return true;
 }
 
-void DevicePosture::reset() {
-    std::lock_guard<std::mutex> lock(mutex_);
+void DevicePosture::resetLocked(const char* why, int64_t now_ms) {
     for (Slot& s : slots_) { s.net.reset(); ++s.st.resets; s.used_once = false; }
     res_.smooth_argmax = -1; res_.label_since_ms = -1;
+    const int64_t since = res_.resets.last_reset_ms >= 0 ? now_ms - res_.resets.last_reset_ms : -1;
+    res_.resets.last_reset_ms = now_ms;
+    std::fprintf(stderr, "tofposture: reset (%s) after %.1f s, coverage %.3f, sensors %zu\n", why,
+                 since >= 0 ? static_cast<double>(since) / 1000.0 : -1.0, res_.coverage_max, slots_.size());
+}
+
+void DevicePosture::reset(int64_t now_ms) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (now_ms < 0) now_ms = res_.last_tick_ms;
+    ++res_.resets.manual;
+    resetLocked("manual", now_ms);
 }
 
 DeviceResult DevicePosture::result() const {
@@ -241,6 +299,9 @@ std::string DevicePosture::stateJson(int64_t now_ms) const {
       << ",\"present\":" << ((r.valid && r.smooth_argmax >= 0 && r.smooth_argmax != kAwayIndex) ? "true" : "false")
       << ",\"misplaced\":" << ((r.valid && r.smooth_argmax == kMisplacedIndex) ? "true" : "false")
       << ",\"online_sensors\":" << r.online_sensors << ",\"ticks\":" << r.ticks
+      << ",\"present_rule\":" << (r.present_rule ? "true" : "false") << ",\"coverage\":[";
+    for (size_t i = 0; i < ss.size(); ++i) o << (i ? "," : "") << (ss[i].online ? ss[i].coverage : 0.f);
+    o << "]," << resetsJson(r.resets, now_ms, cfg_)
       << ",\"sensors\":[";
     for (size_t i = 0; i < ss.size(); ++i) {
         const SensorStatus& s = ss[i];
@@ -253,7 +314,7 @@ std::string DevicePosture::stateJson(int64_t now_ms) const {
           << ",\"flip_rows\":" << (s.flip_rows ? "true" : "false") << ",\"flip_cols\":" << (s.flip_cols ? "true" : "false")
           << ",\"seq_gaps\":" << s.seq_gaps << ",\"duplicates\":" << s.duplicates
           << ",\"idle_frames\":" << s.idle_frames << ",\"alive\":" << (s.alive ? "true" : "false")
-          << ",\"stale\":" << (s.stale ? "true" : "false")
+          << ",\"stale\":" << (s.stale ? "true" : "false") << ",\"coverage\":" << s.coverage
           << ",\"rule\":\"" << jsonEscape(s.rule) << "\",\"hello\":\"" << jsonEscape(s.hello)
           << "\",\"info\":\"" << jsonEscape(s.info) << "\",\"error\":\"" << jsonEscape(s.error) << "\"}";
     }
@@ -273,6 +334,7 @@ std::string DevicePosture::healthJson(int64_t now_ms) const {
     std::ostringstream o;
     o << "{\"ok\":" << (net_classes_ > 0 ? "true" : "false") << ",\"model_loaded\":" << (net_classes_ > 0 ? "true" : "false")
       << ",\"rate_hz\":" << cfg_.rate_hz << ",\"ticks\":" << r.ticks << ",\"online_sensors\":" << r.online_sensors
+      << ",\"present_rule\":" << (r.present_rule ? "true" : "false") << "," << resetsJson(r.resets, now_ms, cfg_)
       << ",\"sensors\":[";
     for (size_t i = 0; i < ss.size(); ++i) {
         const SensorStatus& s = ss[i];
