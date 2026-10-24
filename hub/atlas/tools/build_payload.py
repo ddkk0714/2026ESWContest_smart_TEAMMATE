@@ -93,6 +93,10 @@ def main() -> None:
                     "deskmate_hub/config/control.json",
                     json.dumps(control_config, ensure_ascii=False, separators=(",", ":")),
                 )
+            # 2단계 피로 모델(stage2 portable CNN, 관찰 전용) — personalization.yaml model_path/metadata_path 가 가리키는 패키지 안 파일.
+            # add_python_tree 는 .py 만 담으므로 JSON 을 따로 넣는다. 없으면 보드에서 personalization status unavailable.
+            for stage2_file in sorted((args.config.parent / "stage2").glob("*.json")):
+                archive.write(stage2_file, f"deskmate_hub/config/stage2/{stage2_file.name}")
             personalization_yaml = args.config.with_name("personalization.yaml")
             if personalization_yaml.exists():
                 with personalization_yaml.open(encoding="utf-8") as source:

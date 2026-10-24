@@ -124,7 +124,9 @@ def test_inference_budget_and_nonfinite_input(tmp_path, monkeypatch):
 
 def test_observation_keeps_fsm_and_report(tmp_path):
     cfg = configured(tmp_path)
-    normal = LiveHub(SensorCache(), out=io.StringIO(), control_cfg={"enabled": False})
+    # 기준 hub 는 관찰 모델을 끈다 — 10-25 부터 배포 기본값(personalization.yaml)이 stage2 관찰 모델을 켠 상태라서
+    normal = LiveHub(SensorCache(), out=io.StringIO(), control_cfg={"enabled": False},
+                     personalization_cfg=dict(load_personalization_config(), enabled=False))
     observed = LiveHub(SensorCache(), out=io.StringIO(), control_cfg={"enabled": False},
                        personalization_cfg=cfg, personalization_backend_factory=Backend)
     observed.boot_id = normal.boot_id
