@@ -127,6 +127,19 @@ def main() -> None:
                     ondevice_config = yaml.safe_load(source)
                 archive.writestr("deskmate_hub/config/ondevice.json",
                                  json.dumps(ondevice_config, ensure_ascii=False, separators=(",", ":")))
+            # 피로 점수(fatigue/live.py) — 설정은 JSON 으로, 학습한 가중치(fatigue_linear.json)는 있을 때만 넣는다
+            fatigue_yaml = args.config.with_name("fatigue.yaml")
+            if fatigue_yaml.exists():
+                with fatigue_yaml.open(encoding="utf-8") as source:
+                    fatigue_config = yaml.safe_load(source)
+                archive.writestr("deskmate_hub/config/fatigue.json",
+                                 json.dumps(fatigue_config, ensure_ascii=False, separators=(",", ":")))
+            fatigue_model = args.config.with_name("fatigue_linear.json")
+            if fatigue_model.exists():
+                archive.write(fatigue_model, "deskmate_hub/config/fatigue_linear.json")
+            else:
+                print("build_payload: fatigue_linear.json 없음 — 피로 점수는 DESKMATE_FATIGUE_MODEL 로 줄 때만",
+                      file=sys.stderr)
         with args.executable.open("ab") as executable, open(payload_path, "rb") as built:
             executable.write(built.read())
 
