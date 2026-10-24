@@ -45,6 +45,12 @@
 #define DEBOUNCE_MS 40
 #define LONG_PRESS_MS 800
 #define WATCHDOG_MS 8000
+/* 10-24 Pi 5: BlueZ connects with a 420 ms supervision timeout, so any short radio gap (its Wi-Fi shares the
+ * antenna) dropped the link. Once connected, ask for 4 s at the same 30-50 ms interval. */
+#define CONN_PARAM_DELAY_MS 2000     /* after the central's service discovery */
+#define CONN_INTERVAL_MIN 24         /* x1.25 ms */
+#define CONN_INTERVAL_MAX 40
+#define CONN_SUPERVISION_TIMEOUT 400 /* x10 ms */
 #define PWM_WRAP 999 /* level = duty permille */
 
 #define COMMAND_VALUE_HANDLE ATT_CHARACTERISTIC_f1970002_51e1_4b0e_a7f1_8d27d8e34683_01_VALUE_HANDLE
@@ -65,6 +71,7 @@ static fan_state_t fan;
 static hci_con_handle_t con_handle = HCI_CON_HANDLE_INVALID;
 static bool notify_enabled;
 static btstack_timer_source_t tick_timer;
+static btstack_timer_source_t conn_param_timer;
 static btstack_packet_callback_registration_t hci_event_callback_registration;
 static uint32_t last_tick_ms;
 
@@ -243,6 +250,14 @@ static void tick_handler(btstack_timer_source_t *ts) {
     btstack_run_loop_add_timer(ts);
 }
 
+static void conn_param_handler(btstack_timer_source_t *ts) {
+    UNUSED(ts);
+    if (con_handle == HCI_CON_HANDLE_INVALID) return;
+    int err = gap_request_connection_parameter_update(con_handle, CONN_INTERVAL_MIN, CONN_INTERVAL_MAX, 0,
+                                                      CONN_SUPERVISION_TIMEOUT);
+    printf("[fan] asked for %u ms supervision timeout (%d)\n", CONN_SUPERVISION_TIMEOUT * 10u, err);
+}
+
 static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
     UNUSED(channel);
     UNUSED(size);
@@ -268,8 +283,25 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
     case ATT_EVENT_CONNECTED:
         con_handle = att_event_connected_get_handle(packet);
         printf("[fan] connected\n");
+        btstack_run_loop_remove_timer(&conn_param_timer);
+        conn_param_timer.process = &conn_param_handler;
+        btstack_run_loop_set_timer(&conn_param_timer, CONN_PARAM_DELAY_MS);
+        btstack_run_loop_add_timer(&conn_param_timer);
+        break;
+    case HCI_EVENT_LE_META:
+        if (hci_event_le_meta_get_subevent_code(packet) == HCI_SUBEVENT_LE_CONNECTION_UPDATE_COMPLETE) {
+            printf("[fan] link params: status=0x%02x interval=%u x1.25ms supervision=%u ms\n",
+                   hci_subevent_le_connection_update_complete_get_status(packet),
+                   hci_subevent_le_connection_update_complete_get_conn_interval(packet),
+                   hci_subevent_le_connection_update_complete_get_supervision_timeout(packet) * 10u);
+        }
+        break;
+    case HCI_EVENT_DISCONNECTION_COMPLETE:
+        /* 0x08 supervision timeout, 0x13 the central closed it, 0x3e the link never came up */
+        printf("[fan] link lost, reason 0x%02x\n", hci_event_disconnection_complete_get_reason(packet));
         break;
     case ATT_EVENT_DISCONNECTED:
+        btstack_run_loop_remove_timer(&conn_param_timer);
         con_handle = HCI_CON_HANDLE_INVALID;
         notify_enabled = false;
         printf("[fan] disconnected, advertising again\n");
