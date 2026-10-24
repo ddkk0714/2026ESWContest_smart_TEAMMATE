@@ -319,6 +319,13 @@ hub 는 현재 질문의 `request_id`(또는 `request_id` 생략·`atlas-display
 같은 내용이 `state/phase` 의 `data.sensor_summary.personalize` 에도 실린다(`{episode_id, arm, arm_label, source, explanation, fsm_gate, delivered_gate,
 policy_mode, n_personal, auto_threshold, ventilate_minutes}`; 에피소드가 닫히면 `closed: true, outcome`) — 자동 실행 알림이 "왜" 를 보여 줄 때 쓴다.
 
+**CO₂ 창문 환기 카드(2026-10-25, `co2_window.py`·`config/co2_window.yaml`, 보드 기본 켜짐)** — FSM 과 따로, SCD41 1 분 평균 CO₂ ≥ 1000 ppm 이 5 분 +
+책상 재실 + 깨어 있음(자세가 drowsy·face_down 아님 60 s) + 날씨 허용(비·눈·바깥이 2 °C 이상 더움·바깥 PM2.5 ≥ 36 제외)일 때 1건.
+`kind: vent_suggest`, `prompt_code: ventilate_window`, `minutes` = `ventilate_minutes`(창문 열 시간, personalize.yaml `ventilation:` 계산),
+`why`(예 `["co2_rule","co2_avg=1180","windy"]`), `explanation`, `arm: ventilate_suggest`, `arm_label: 창문 환기`, `cause: environment`, `source: co2_window`, `expires_in_s: 180`.
+FSM 이 `ACTION_*` 이거나 다른 카드가 떠 있으면 내지 않는다. 응답은 FSM·제어로 가지 않는다(기기 명령 없음). 수락 = 창문을 열었다고 보고
+권유 시간 동안 다시 묻지 않는다(창문 센서 없음). 무응답 20 분·거절 40 분 뒤 재시도. 상태는 `state/phase` 의 `sensor_summary.co2_window`.
+
 ### `deskmate/control/cmd`
 
 data-spec §10 `control_command` 필드 그대로(2026-09-16, `hub/deskmate_hub/control/`). 발행 조건은 `config/control.yaml`:

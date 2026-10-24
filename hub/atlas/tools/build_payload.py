@@ -112,6 +112,13 @@ def main() -> None:
                     personalize_config = yaml.safe_load(source)
                 archive.writestr("deskmate_hub/config/personalize.json",
                                  json.dumps(personalize_config, ensure_ascii=False, separators=(",", ":")))
+            # CO₂ 창문 환기 타이밍 규칙(co2_window.py) — 이 JSON 이 없으면 보드는 YAML 을 못 읽어 규칙이 꺼진다
+            co2_window_yaml = args.config.with_name("co2_window.yaml")
+            if co2_window_yaml.exists():
+                with co2_window_yaml.open(encoding="utf-8") as source:
+                    co2_window_config = yaml.safe_load(source)
+                archive.writestr("deskmate_hub/config/co2_window.json",
+                                 json.dumps(co2_window_config, ensure_ascii=False, separators=(",", ":")))
             privacy_yaml = args.config.with_name("privacy.yaml")
             if privacy_yaml.exists():
                 with privacy_yaml.open(encoding="utf-8") as source:
@@ -131,6 +138,13 @@ def main() -> None:
                     ondevice_config = yaml.safe_load(source)
                 archive.writestr("deskmate_hub/config/ondevice.json",
                                  json.dumps(ondevice_config, ensure_ascii=False, separators=(",", ":")))
+            # 반응 학습(learning/reaction.py, 순수 Python) — 이 JSON 이 없으면 보드는 YAML 을 못 읽어 학습이 꺼진 채 FSM 그대로 돈다
+            learning_yaml = args.config.with_name("learning.yaml")
+            if learning_yaml.exists():
+                with learning_yaml.open(encoding="utf-8") as source:
+                    learning_config = yaml.safe_load(source)
+                archive.writestr("deskmate_hub/config/learning.json",
+                                 json.dumps(learning_config, ensure_ascii=False, separators=(",", ":")))
             # 피로 점수(fatigue/live.py) — 설정은 JSON 으로, 학습한 가중치(fatigue_linear.json)는 있을 때만 넣는다
             fatigue_yaml = args.config.with_name("fatigue.yaml")
             if fatigue_yaml.exists():

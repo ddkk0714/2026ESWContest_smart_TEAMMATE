@@ -186,3 +186,18 @@ elapsed:
   # delta = clip(세션 경과초 / full_sec)
   full_sec: 5400
   reset_on_rest: false     # true 면 휴식(REST)을 마친 뒤부터 경과 시간을 다시 잰다. false 면 휴식 중에도 쌓여 C_fatigue 가 내려오지 않는다(life_sim 10-23)
+
+# Pi 5 피로 기록 앱의 KSS 자가 응답(deskmate/fatigue/label)을 SensorFrame.self_kss 로 넘길 때의 신선도 — 앱은 15 분마다 묻는다.
+# FSM 규칙은 쓰지 않는다 — 반응 학습(learning.yaml kss_label)이 새 응답을 라벨로 쓴다. 응답 시각(앱 시계) 기준이라 Pi 4 ·
+# Pi 5 시계가 어긋나면 그만큼 일찍·늦게 끊긴다.
+self_report:
+  max_age_sec: 900
+
+# 반응 학습(learning.yaml) 입력 — 재실 기준 심박 하락(SensorFrame.hr_drop_bpm). FSM 규칙에는 안 들어간다.
+# 기준선 = 책상 재실 ∧ 깨어 움직일 때(타이핑·mmWave 체동) 심박의 최근 base_n 표본 중앙값, 지금 = 최근 hr_win_s 중앙값.
+# 값은 시뮬 근거, 실측 전(10-23 life_sim, mmwave.still_drowsy_and 의 hr_down_presence_base 와 같은 값).
+learning_inputs:
+  hr_win_s: 120
+  hr_min_n: 8
+  base_n: 60               # 10 s tick 이면 약 10 분
+  base_min_n: 20

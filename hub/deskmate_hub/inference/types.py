@@ -67,6 +67,9 @@ class SensorFrame:
     end_touch: bool = False         # 작업 종료 터치
     action_done: bool = False       # ACTION_* 실행 완료
     break_accepted: bool | None = None  # ACTION_BREAK 사용자 결정(수락/거절)
+    self_kss: float | None = None   # (실험) 최근 KSS 자가 응답(Pi 5 피로 기록 앱) — FSM 규칙은 쓰지 않고 반응 학습이 라벨로 쓴다
+    hr_drop_bpm: float | None = None  # 반응 학습 입력: 재실 기준 심박 − 지금 심박(mapping._hr_drop_feature). FSM 은 안 쓴다
+    mm_motion: float | None = None    # 반응 학습 입력: mmWave 체동(0~100, 책상 재실일 때)
 
     def get(self, key: str) -> Signal:
         return self.signals.get(key, Signal(available=False))

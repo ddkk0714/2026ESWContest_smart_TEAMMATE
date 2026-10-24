@@ -11,6 +11,8 @@ from deskmate_hub.personalize import (InterventionPolicy, Situation, SituationEx
                                       is_decision_tick, load_personalize_config, situation_from_tick)
 from deskmate_hub.personalize.synth import PERSONAS, SynthGenerator, arm_counts
 
+# 보상 무게: Pi 4 배포판 personalize.yaml 은 효과 0.8·수락 0.2(시뮬 v13). 합성 페르소나(synth.py)는 수락 확률로 사람을 만들어서
+# 이 시험의 학습 수치는 이전 기본 0.5·0.5 기준이다 — 밴딧 메커니즘을 보려고 그 값으로 고정한다.
 CFG = load_personalize_config()
 # 이 파일은 밴딧 수식·날씨·페르소나를 환경 arm(선풍기·환기)으로도 시험한다 — 10-25 기본값(policy.causes 에 environment 없음)은
 # test_policy_causes.py 가 따로 본다. 여기서는 모든 원인을 정책에 맡긴다.

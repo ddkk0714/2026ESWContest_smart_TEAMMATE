@@ -462,3 +462,15 @@ def test_live_hub_reads_elapsed_reset_on_rest_from_ingest_config(cfg):
     assert LiveHub(SensorCache(), ingest_cfg=cfg, out=io.StringIO()).tracker.elapsed_reset_on_rest is False
     cfg2 = dict(cfg, elapsed=dict(cfg["elapsed"], reset_on_rest=True))
     assert LiveHub(SensorCache(), ingest_cfg=cfg2, out=io.StringIO()).tracker.elapsed_reset_on_rest is True
+
+
+def test_self_kss_passes_only_fresh_app_answer(cfg):
+    """반응 학습: 피로 기록 앱의 마지막 KSS 응답(live.py 가 tracker.self_kss 에 채움)을 신선할 때만 frame 에 싣는다."""
+    cache = SensorCache()
+    cache.put("tof", tof(100.0))
+    assert build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.FOCUS_NPC).self_kss is None
+    tr = SessionTracker()
+    tr.self_kss = (8.0, 100.0)
+    assert build_frame(cache.snapshot(), 100.0 + 899, cfg, tr, fsm_state=State.FOCUS_NPC).self_kss == 8.0
+    # 앱은 15 분마다 묻는다 — 그보다 옛 응답은 안 쓴다
+    assert build_frame(cache.snapshot(), 100.0 + 901, cfg, tr, fsm_state=State.FOCUS_NPC).self_kss is None

@@ -40,7 +40,7 @@ def test_shipped_profiles_only_touch_keys_the_engine_knows():
             if isinstance(value, dict):
                 check(value, base[key], f"{path}{key}.")
 
-    assert available() == ["demo-a", "demo-b"]
+    assert available() == ["demo-a", "demo-b", "demo-b-study"]
     for name in available():
         prof = load_profile(name)
         check(prof["fsm"], fsm, f"{name}:fsm.")
@@ -54,6 +54,13 @@ def test_shipped_profiles_only_touch_keys_the_engine_knows():
     assert a["fsm"]["timers"]["fatigue_hold_min_frac"] == 0.8 == b["fsm"]["timers"]["fatigue_hold_min_frac"]
     assert fsm["timers"]["fatigue_hold_min_frac"] == 1.0                   # 기본은 지금 동작(연속 유지)
     assert b["ingest"]["normalization"] == "linear" and b["fsm"]["thresholds"]["fatigue_confirm"] == 0.60
+    # demo-b-study = demo-b 전부 + 수험생 자세 가중치(10-25)
+    study = load_profile("demo-b-study")
+    assert study["fsm"] == b["fsm"] and study["personalize"] == b["personalize"]
+    assert {k: v for k, v in study["ingest"].items() if k != "tof"} == b["ingest"]
+    tof = study["ingest"]["tof"]
+    assert tof["posture_phi"] == {"lean_forward": 0.0, "forward_head": 0.1, "chin_rest": 0.3}
+    assert tof["posture_delta"] == {"lean_forward": 0.0, "forward_head": 0.05, "chin_rest": 0.3}
 
 
 def test_no_env_means_untouched_configs(monkeypatch):
@@ -86,6 +93,10 @@ def test_env_profile_overlays_live_hub(monkeypatch):
     # 건드리지 않은 부분은 기본과 같다
     assert hub.fsm_cfg["weights"] == load_config()["weights"] and hub.ingest_cfg["tof"] == load_ingest_config()["tof"]
 
+    monkeypatch.setenv(PROFILE_ENV, "demo-b-study")
+    hub_s = LiveHub(SensorCache(), out=io.StringIO())
+    assert hub_s.ingest_cfg["tof"]["posture_delta"]["forward_head"] == 0.05 and hub_s.ingest_cfg["tof"]["posture_delta"]["upright"] == 0.0
+    assert hub_s.engine.tm["baseline_sec"] == 10 and hub_s.ingest_cfg["normalization"] == "linear"
     monkeypatch.setenv(PROFILE_ENV, "demo-b")
     hub_b = LiveHub(SensorCache(), out=io.StringIO())
     assert hub_b.engine.tm["baseline_sec"] == 10 and hub_b.fsm_cfg["gate"]["conf_auto"] == 0.55
@@ -157,7 +168,7 @@ def test_payload_bundles_profiles_as_json_readable_by_pkgutil(tmp_path):
     with zipfile.ZipFile(executable) as archive:
         names = archive.namelist()
         assert "deskmate_hub/profile.py" in names
-        for name in ("demo-a", "demo-b"):
+        for name in ("demo-a", "demo-b", "demo-b-study"):
             packaged = json.loads(archive.read(f"deskmate_hub/config/profiles/{name}.json"))
             assert packaged == load_profile(name)
         assert not any(n.startswith("deskmate_hub/config/profiles/") and n.endswith(".yaml") for n in names)

@@ -691,3 +691,21 @@ def test_profile_without_id_keeps_active_profile(tmp_path):
     hub.tick_once(1000.0)
     assert hub.active_profile_id == "prof" and (tmp_path / "prof" / "user_profile.json").exists()
     assert not (tmp_path / "active_profile.json").exists()
+
+
+def test_reaction_learner_follows_active_profile(tmp_path):
+    from deskmate_hub.learning import load_learning_config
+
+    lcfg = dict(load_learning_config(), enabled=True, state_path=str(tmp_path / "{profile_id}" / "reaction.json"))
+    hub, cache, _ = _live(tmp_path, learning_cfg=lcfg)
+    assert hub.active_profile_id == "prof" and hub.profile_id == "default"   # 메시지 전: 각자 설정 기본값(경로 폴더·learning.yaml)
+    hub.tick_once(990.0)
+    assert hub.profile_id == "default"                                    # 사람이 안 바뀌었으면 학습기도 그대로
+    route_mqtt_message(cache, "deskmate/profile/user", _envelope({"profile_id": "dana", "sound_pref": "low"}), 1000.0)
+    hub.tick_once(1000.0)
+    assert hub.active_profile_id == hub.profile_id == "dana"
+    assert hub.learner.state_path == str(tmp_path / "dana" / "reaction.json")
+    assert hub.engine.score_adjust == hub.learner.adjust
+    hub2, _, _ = _live(tmp_path, learning_cfg=lcfg)                       # 재시작: 정책·반응 학습 모두 dana 로
+    assert hub2.active_profile_id == hub2.profile_id == "dana"
+    assert hub2.learner.state_path == str(tmp_path / "dana" / "reaction.json")

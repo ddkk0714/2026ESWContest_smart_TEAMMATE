@@ -18,12 +18,14 @@ MISSING_ON_BOARD = ("_socket", "_random", "_ssl")
 BOARD_MODULES = (
     "deskmate_hub.service_bridge",
     "deskmate_hub.live",
+    "deskmate_hub.identity",                       # 프로필 id 한 곳(10-25)
     "deskmate_hub.profile",                        # 시연 프로파일 오버레이(DESKMATE_PROFILE) — 표준 라이브러리만
     "deskmate_hub.ingest.mqtt_lines",
     "deskmate_hub.ingest.uart_source",
     "deskmate_hub.ingest.tof_service",             # 자세 서비스 판정 수신(urllib 은 폴러 함수 안에서만 import)
     "deskmate_hub.esm",
     "deskmate_hub.fatigue.live",                   # 피로 점수(관찰 전용) — 표준 라이브러리만, hashlib 없이 모델 지문
+    "deskmate_hub.co2_window",                     # CO₂ 창문 환기 타이밍 규칙(FSM 밖 vent_suggest 카드) — 표준 라이브러리·personalize 순수 Python
     "deskmate_hub.features.baseline",
     "deskmate_hub.control.dispatcher",
     "deskmate_hub.inference.report",
@@ -37,6 +39,8 @@ BOARD_MODULES = (
     "deskmate_hub.personalize.record",
     "deskmate_hub.personalize.onboarding",         # 첫 설정 프로필 → prior (2026-10-25)
     "deskmate_hub.personalize.signals",            # 밝힘 뒤 직접 어둡게 함 · 깨우기 성공 (2026-10-25)
+    "deskmate_hub.learning",                       # 반응 학습(FSM 점수 보정, 2026-10-25 보드 이식) — json·math·os·collections 만
+    "deskmate_hub.learning.reaction",
 )
 
 
@@ -118,6 +122,39 @@ def test_personalize_policy_decides_and_learns_without_numpy_or_random():
         os.remove(path)
         assert q.n_feedback == p.n_feedback
         print("ok", d.arm, d.ventilate_minutes)
+    """)
+    result = subprocess.run([sys.executable, "-c", code], cwd=HUB, capture_output=True, text=True)
+    assert result.returncode == 0 and "ok" in result.stdout, result.stderr[-2000:]
+
+def test_reaction_learner_adjusts_learns_and_persists_without_numpy_or_random():
+    """보드 조건(numpy·_random·statistics 없음)에서 반응 학습이 보정·라벨·저장·재시작 불러오기까지 돈다."""
+    code = textwrap.dedent(f"""
+        import sys, os, shutil
+        for name in {MISSING_ON_BOARD!r} + ("numpy", "statistics"):
+            sys.modules[name] = None
+        for name in ("random", "socket", "ssl"):
+            sys.modules.pop(name, None)
+        from deskmate_hub.inference import FSMEngine, SensorFrame, Signal
+        from deskmate_hub.learning import ReactionLearner
+        d = os.path.join(os.path.abspath("."), "board_learning_test")
+        cfg = {{"enabled": True, "n_min": 2, "n_full": 4, "down_max": 0.05, "pos_weight": 2.0, "local_utc_offset_hours": 9,
+               "profile_id": "A", "state_path": os.path.join(d, "{{profile_id}}", "reaction.json"),
+               "common_path": os.path.join(d, "none.json")}}
+        try:
+            lr = ReactionLearner(cfg)
+            e = FSMEngine()
+            e.score_adjust = lr.adjust
+            for i in range(6):
+                f = SensorFrame(now=1e9 + 600 * i, present=True, pc_ratio=0.9,
+                                signals={{"posture": Signal(phi=0.1, delta=0.9), "elapsed": Signal(delta=0.3)}})
+                e.tick(f)
+                lr.on_self_report(8, f.now - 1, f.now)
+            assert lr.n_labels == 6 and os.path.exists(os.path.join(d, "A", "reaction.json"))
+            again = ReactionLearner(cfg)
+            assert again.n_labels == 6 and again.model.w == lr.model.w
+            print("ok", round(lr.alpha(), 3))
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
     """)
     result = subprocess.run([sys.executable, "-c", code], cwd=HUB, capture_output=True, text=True)
     assert result.returncode == 0 and "ok" in result.stdout, result.stderr[-2000:]

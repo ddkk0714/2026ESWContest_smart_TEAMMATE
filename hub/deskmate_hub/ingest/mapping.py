@@ -76,6 +76,11 @@ class SessionTracker:
     sd_hr_recent: list[tuple[float, float]] = field(default_factory=list)   # (실험) hr_down_presence_base: 최근 심박 (t, bpm)
     sd_hr_base: list[float] = field(default_factory=list)                   # 깨어 움직일 때 모은 심박(기준선 표본)
     sd_down_since: float | None = None
+    lr_hr_recent: list[tuple[float, float]] = field(default_factory=list)   # 반응 학습 입력: 최근 심박 (t, bpm)
+    lr_hr_base: list[float] = field(default_factory=list)                   # 깨어 움직일 때 심박(재실 기준선 표본)
+    # 반응 학습: 피로 기록 앱의 마지막 KSS 응답 (kss, 응답 시각). live.py 가 deskmate/fatigue/label 큐(cache.fatigue_labels)에서
+    # 채운다 — 같은 토픽을 피로 점수(fatigue/live.py)도 읽어서 cache 슬롯을 따로 두지 않는다. FSM 규칙은 안 쓴다
+    self_kss: tuple[float, float] | None = None
 
     def observe_state(self, state: State, now: float) -> None:
         if state is State.START and self.session_started is None:
@@ -326,6 +331,22 @@ def _median(xs: list[float]) -> float:
     return s[len(s) // 2]
 
 
+def _hr_drop_feature(mm: Sample, moving: bool, now: float, lc: dict[str, Any], tracker: SessionTracker) -> float | None:
+    """반응 학습 입력(FSM 규칙 아님): 재실 기준 심박 − 지금 심박(bpm). 기준선 = 책상 재실 ∧ 깨어 움직일 때(타이핑·mmWave 체동)
+    심박의 최근 base_n 표본 중앙값(가만히 있으면 얼림), 지금 = 최근 hr_win_s 중앙값. 10-23 시뮬에서 이 방식(Bp)이 조용한 졸음을
+    4/4 잡고 깨어 읽기 오탐 0(시뮬 근거, 실측 전). 표본이 모자라면 None. (9b0720b 이식)"""
+    bpm = mm.data.get("heart_bpm")
+    if bool(mm.data.get("heart_valid")) and bpm is not None and 40 <= float(bpm) <= 150:
+        tracker.lr_hr_recent.append((now, float(bpm)))
+        if moving:
+            tracker.lr_hr_base.append(float(bpm))
+            del tracker.lr_hr_base[:-int(lc.get("base_n", 60))]
+    tracker.lr_hr_recent = [(t, b) for t, b in tracker.lr_hr_recent if now - t <= float(lc.get("hr_win_s", 120))]
+    if len(tracker.lr_hr_base) < int(lc.get("base_min_n", 20)) or len(tracker.lr_hr_recent) < int(lc.get("hr_min_n", 8)):
+        return None
+    return _median(tracker.lr_hr_base) - _median([b for _, b in tracker.lr_hr_recent])
+
+
 def build_frame(
     view: CacheView,
     now: float,
@@ -356,6 +377,8 @@ def build_frame(
         signals["posture"] = _tof_posture_signal(_tof_with_model(view, tof.data, now, cfg), cfg["tof"])
         tof_posture_used = True
         tracker.still_since = None
+    hr_drop: float | None = None                   # 반응 학습 입력(아래 mm 블록에서)
+    mm_motion: float | None = None
     if mm and mm_present and present:       # 책상이 비면 mmWave 체동·호흡 대체 신호도 쓰지 않는다(침대에서 자는 사람)
         level = float(mm.data.get("motion_level") or 0.0)
         if level <= mcfg["still_motion_level_max"]:
@@ -384,6 +407,10 @@ def build_frame(
             phi=0.0, delta=1.0 if lost >= mcfg["resp_lost_sec"] else 0.0, available=True
         )
         _still_drowsy_and(signals, view, mm, drowsy, tof_posture_used, now, cfg, tracker)
+        ks_now = view.fresh("keystroke", now, fresh["keystroke"])
+        moving = bool(ks_now and ks_now.data.get("typing_active")) or tracker.still_since is None
+        hr_drop = _hr_drop_feature(mm, moving, now, cfg.get("learning_inputs") or {}, tracker)
+        mm_motion = level
     else:
         tracker.still_since = None
         tracker.resp_lost_since = None
@@ -452,6 +479,9 @@ def build_frame(
         action_done = False
     tracker.pending_feedback = None
 
+    sr = cfg.get("self_report") or {}
+    kss = tracker.self_kss
+    self_kss = kss[0] if kss is not None and now - kss[1] <= float(sr.get("max_age_sec", 900)) else None
     return SensorFrame(
         now=now,
         present=present,
@@ -460,6 +490,9 @@ def build_frame(
         touch=touch,
         action_done=action_done,
         break_accepted=break_accepted,
+        self_kss=self_kss,
+        hr_drop_bpm=None if hr_drop is None else round(float(hr_drop), 2),
+        mm_motion=mm_motion,
     )
 
 
