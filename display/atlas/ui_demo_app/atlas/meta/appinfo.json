@@ -1,0 +1,16 @@
+{
+    "id":  "com.atlas.app.deskmate_ui_demo_v17",
+    "type":  "flutter",
+    "name":  "DESKMATE V17",
+    "description":  "A personal workspace for your daily focus.",
+    "entry":  "deskmate_ui_demo_v17 --bundle=./ --fullscreen --onscreen-keyboard -a com.atlas.app.deskmate_ui_demo_v17",
+    "version":  "0.17.0",
+    "required_permissions":  {
+                                 "privileged":  [
+
+                                                ],
+                                 "user_consent":  [
+
+                                                  ]
+                             }
+}

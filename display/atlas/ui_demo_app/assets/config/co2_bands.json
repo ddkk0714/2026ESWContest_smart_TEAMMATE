@@ -1,0 +1,11 @@
+{
+  "description": "DESKMATE display-only five-level CO2 legend; not a health diagnosis or the hub control thresholds. Subdivisions below 1000 ppm are a UI convention.",
+  "source": "https://www.umweltbundesamt.de/richtig-lueften-in-schulen",
+  "bands": [
+    {"upper_ppm": 600, "label": "매우 좋음", "face": 4},
+    {"upper_ppm": 800, "label": "좋음", "face": 3},
+    {"upper_ppm": 1000, "label": "보통", "face": 2},
+    {"upper_ppm": 2000, "label": "나쁨", "face": 1},
+    {"upper_ppm": null, "label": "매우 나쁨", "face": 0}
+  ]
+}
