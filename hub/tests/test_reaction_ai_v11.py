@@ -29,3 +29,33 @@ def test_pos_weight_scales_drowsy_labels_only():
     a2._label(x, 0, 0.4, 1000.0, "kss")
     b2._label(x, 0, 0.4, 1000.0, "kss")
     assert a2.model.w == b2.model.w                            # 괜찮음 라벨은 그대로
+
+
+def _mm(now, *, bpm, level):
+    from deskmate_hub.ingest import Sample
+    return Sample(received=now, ts=now, seq=None, data={
+        "present": True, "motion_state": "still" if level <= 10 else "active", "motion_level": level, "distance_cm": 55,
+        "resp_bpm": 15, "resp_valid": True, "heart_bpm": bpm, "heart_valid": True, "drowsy_state": "AWAKE", "valid": True})
+
+
+def test_hr_drop_against_presence_baseline_reaches_frame_and_learner():
+    from deskmate_hub.ingest import SensorCache, SessionTracker, build_frame, load_ingest_config
+    cfg = load_ingest_config()
+    cache, tr = SensorCache(), SessionTracker()
+    t = 1000.0
+    for i in range(30):                                   # 깨어 움직일 때 심박 72 → 기준선
+        cache.put("mmwave", _mm(t, bpm=72, level=40))
+        f = build_frame(cache.snapshot(), t, cfg, tr, fsm_state=State.FOCUS_PC)
+        t += 10.0
+    assert f.mm_motion == 40.0
+    for i in range(20):                                   # 가만히, 심박 64 → 기준선은 얼고 지금은 내려감
+        cache.put("mmwave", _mm(t, bpm=64, level=2))
+        f = build_frame(cache.snapshot(), t, cfg, tr, fsm_state=State.FOCUS_PC)
+        t += 10.0
+    assert f.hr_drop_bpm == 8.0
+    lr = ReactionLearner({"enabled": True})
+    x = lr.features(f, 0.4, 0.1)
+    names = lr.feature_names()
+    assert x[names.index("hr_drop")] == 0.8 and x[names.index("hr_avail")] == 1.0
+    assert x[names.index("mm_motion")] == 0.02 and x[names.index("mm_avail")] == 1.0
+    assert build_frame(SensorCache().snapshot(), t, cfg, SessionTracker(), fsm_state=State.IDLE).hr_drop_bpm is None
