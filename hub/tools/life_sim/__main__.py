@@ -47,6 +47,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             sc["policy"]["engine"] = args.policy_engine
         if args.policy_profile:
             sc["policy"]["profile"] = args.policy_profile
+        if args.posture_smoothing:
+            sc["devices_resolved"].setdefault("posture_model", {})["smoothing"] = args.posture_smoothing
         src = None
         if args.synthetic:
             from tools.posture_sim.synthetic import SyntheticPerson
@@ -197,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="2단계 피로 모델 portable 폴더(common.portable.json·common.metadata.json) — hub 관찰 모드로 매 tick 판정")
     r.add_argument("--policy-engine", choices=["hub", "simple", "none"], help="각본의 policy.engine 덮어쓰기")
     r.add_argument("--policy-profile", choices=["none", "synth", "global"], help="각본의 policy.profile 덮어쓰기")
+    r.add_argument("--posture-smoothing", choices=["vote", "board"],
+                   help="GRU 판정 확정: vote(1 s 다수결, 기본) | board(Pi 4 자세 서비스와 같은 log-prob 평균 + 1 s EMA, 주기 리셋 없음)")
     r.add_argument("--raise-errors", action="store_true")
     r.set_defaults(fn=cmd_run)
     v = sub.add_parser("video", help="replay.jsonl 로 MuJoCo 3D + 센서 격자 + 상태 영상(mp4)")

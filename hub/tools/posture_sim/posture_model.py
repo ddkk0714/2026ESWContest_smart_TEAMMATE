@@ -3,6 +3,8 @@
 GruPosture      dataset/tof_sim_v5 PostureNet(CNN→GRU, 9 라벨, drowsy 포함) 체크포인트를 torch 로 돌린다.
                 센서별로 은닉 상태를 따로 들고 프레임마다 한 스텝, 두 센서 확률은 log-softmax 합으로 융합(tof_mlp 와 같은 규칙),
                 vote_frames 다수결로 확정. ingest 의 `tof_mlp` 표본과 같은 dict 를 돌려주므로 hub 쪽 코드 변경 없이 꽂힌다.
+                smoothing: board 면 Pi 4 자세 서비스(hub/atlas-tof device_posture.cpp)와 같게 — 센서 log-prob 평균 → softmax →
+                EMA(α = 1/(smooth_s × rate_hz)) → 최대값. 다수결·워밍업·주기 리셋 없음.
 RuleFeatures    ESP32 규칙 추정기(UART 0x03 tof_feature)의 대역. 재실(coverage)·motion_score·끄덕임 검출(nod_rate_hz,
                 nods_in_window, drowsy 플래그)을 두 센서 격자에서 계산한다. 펌웨어 코드의 이식이 아니라 같은 뜻의 단순 규칙이다
                 (숫자는 config/sensors.yaml `rule_features`). posture 는 unknown — 자세 이름은 모델이 낸다.
@@ -35,6 +37,14 @@ def fuse_log_softmax(probs: list[np.ndarray]) -> np.ndarray:
     return e / e.sum()
 
 
+def fuse_mean_log(probs: list[np.ndarray]) -> np.ndarray:
+    """보드 FusionRule::LogProb — log(p + 1e-6) 을 살아 있는 센서 수로 나눈 평균 → softmax. 최대값은 합과 같고 확신도만 덜 뾰족하다."""
+    logs = sum(np.log(p + 1e-6) for p in probs) / len(probs)
+    logs = logs - logs.max()
+    e = np.exp(logs)
+    return e / e.sum()
+
+
 class _Voter:
     def __init__(self, labels: list[str], vote_frames: int):
         self.labels = labels
@@ -54,11 +64,32 @@ class _Voter:
         self.votes.clear()
 
 
+class _BoardEma:
+    """보드 device_posture.cpp tick() 의 확정 단계: 융합 확률을 EMA 로 완만하게 하고 그 최대값을 낸다(_Voter 와 같은 계약).
+    리셋 뒤 첫 프레임은 EMA 없이 그 확률로 시작한다(smooth_argmax < 0)."""
+
+    def __init__(self, labels: list[str], alpha: float):
+        self.labels = labels
+        self.alpha = alpha
+        self.smooth: np.ndarray | None = None
+
+    def push(self, fused: np.ndarray) -> tuple[str, float, str]:
+        self.smooth = fused.copy() if self.smooth is None else self.smooth + self.alpha * (fused - self.smooth)
+        i = int(self.smooth.argmax())
+        return self.labels[i], float(self.smooth[i]), self.labels[int(fused.argmax())]
+
+    def reset(self) -> None:
+        self.smooth = None
+
+
 class GruPosture:
     """체크포인트 → 센서별 스트리밍 추론 → 융합 → 다수결. `update(sample, now)` 는 ingest_frame 의 posture 훅 계약."""
 
     def __init__(self, ckpt_path: str, *, vote_frames: int = 10, warmup_frames: int = 45,
-                 reset_on_away_s: float = 60.0, reset_every_s: float | None = 900.0, device: str = "cpu"):
+                 reset_on_away_s: float | None = 60.0, reset_every_s: float | None = 900.0, device: str = "cpu",
+                 smoothing: str = "vote", smooth_s: float = 1.0, rate_hz: float = 10.0):
+        if smoothing not in ("vote", "board"):
+            raise ValueError(f"posture_model.smoothing: vote | board, got {smoothing!r}")
         import torch
         from tofsim.model import PostureNet
         self.torch = torch
@@ -82,9 +113,12 @@ class GruPosture:
         self.info = {"ckpt": ckpt_path, "labels": self.labels, "hidden": hidden, "gru_layers": layers,
                      "params": int(sum(p.numel() for p in self.net.parameters())), "step": self.step_no,
                      "vote_frames": vote_frames, "warmup_frames": warmup_frames,
-                     "reset_on_away_s": reset_on_away_s, "reset_every_s": reset_every_s}
+                     "reset_on_away_s": reset_on_away_s, "reset_every_s": reset_every_s,
+                     "smoothing": smoothing, "smooth_s": smooth_s if smoothing == "board" else None}
+        self.fuse = fuse_mean_log if smoothing == "board" else fuse_log_softmax
         self.h: dict[int, Any] = {}
-        self.voter = _Voter(self.labels, vote_frames)
+        self.voter = (_BoardEma(self.labels, 1.0 / (smooth_s * rate_hz) if smooth_s > 0 else 1.0)   # 보드: smooth_seconds 0 이면 EMA 끔
+                      if smoothing == "board" else _Voter(self.labels, vote_frames))
         self.warmup = warmup_frames
         self.frames_since_reset = 0
         self.frames = 0
@@ -123,7 +157,7 @@ class GruPosture:
         self.frames_since_reset += 1
         if not probs:
             return self._verdict("unknown", 0.0, "unknown", used=0, present=bool(present))
-        fused = fuse_log_softmax(probs)
+        fused = self.fuse(probs)
         self.last_probs = fused
         posture, conf, raw = self.voter.push(fused)
         if present is not None:
@@ -147,6 +181,16 @@ class GruPosture:
                 "baseline_ready": used > 0, "raw_posture": raw, "source": "gru", "sensors_used": used,
                 "frames": self.frames,
                 "probs": {self.labels[i]: round(float(p), 4) for i, p in enumerate(self.last_probs)} if self.last_probs is not None else {}}
+
+
+def make_gru(model_path: str, mcfg: dict[str, Any], *, fps: float = 10.0) -> GruPosture:
+    """config/sensors.yaml `posture_model` → GruPosture. board 는 보드 자세 서비스 그대로라 vote_frames·warmup·reset_* 를 안 쓰고
+    board_reset_* (기본 없음 — 보드는 센서가 끊길 때만 리셋)만 본다. rate_hz 는 시뮬 프레임률(보드 TOFPOSTURE_RATE_HZ 10 과 같아야 한다)."""
+    if str(mcfg.get("smoothing", "vote")) == "board":
+        return GruPosture(model_path, smoothing="board", smooth_s=float(mcfg.get("smooth_s", 1.0)), rate_hz=fps, warmup_frames=0,
+                          reset_on_away_s=mcfg.get("board_reset_on_away_s"), reset_every_s=mcfg.get("board_reset_every_s"))
+    return GruPosture(model_path, vote_frames=int(mcfg.get("vote_frames", 10)), warmup_frames=int(mcfg.get("warmup_frames", 45)),
+                      reset_on_away_s=float(mcfg.get("reset_on_away_s", 60)), reset_every_s=mcfg.get("reset_every_s", 900))
 
 
 class OraclePosture:

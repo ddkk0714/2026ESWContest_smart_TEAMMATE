@@ -62,9 +62,8 @@ def make_model(scenario: dict[str, Any], *, posture: str, model_path: str | None
     mcfg = scenario["sensors_resolved"].get("posture_model") or {}
     if posture == "oracle" or model_path is None:
         return OraclePosture(truth, seed=int(scenario["seed"]))
-    from .posture_model import GruPosture
-    return GruPosture(model_path, vote_frames=int(mcfg.get("vote_frames", 10)), warmup_frames=int(mcfg.get("warmup_frames", 45)),
-                      reset_on_away_s=float(mcfg.get("reset_on_away_s", 60)), reset_every_s=mcfg.get("reset_every_s", 900))
+    from .posture_model import make_gru
+    return make_gru(model_path, mcfg, fps=float(scenario["fps"]))
 
 
 def run_posture(scenario: dict[str, Any], *, out_dir: str, model_path: str | None = None, posture: str = "gru",

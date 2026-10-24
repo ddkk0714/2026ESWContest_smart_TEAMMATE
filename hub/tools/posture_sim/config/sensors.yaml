@@ -70,3 +70,9 @@ posture_model:
   warmup_frames: 45        # 학습 평가와 같은 워밍업
   reset_on_away_s: 60      # 이만큼 비어 있으면 은닉 상태 초기화(재착석)
   reset_every_s: 900       # 학습 세션 길이(≤900 s) 밖의 장기 상태 표류를 막는다 — 시뮬 가정
+  # 판정 확정 방식: vote = 위 다수결·워밍업·리셋(이전 시뮬 동작, 기본) / board = Pi 4 자세 서비스(hub/atlas-tof device_posture.cpp)와
+  # 같게: 센서 log-prob 평균 → EMA(smooth_s, 프레임률 기준) → 최대값, 워밍업·주기 리셋 없음(센서가 끊길 때만). 10-24 추가
+  smoothing: vote
+  smooth_s: 1.0            # board: TOFPOSTURE_SMOOTH_S
+  board_reset_every_s: null    # board 에서 주기 리셋을 따로 시험할 때만(보드에는 없음)
+  board_reset_on_away_s: null

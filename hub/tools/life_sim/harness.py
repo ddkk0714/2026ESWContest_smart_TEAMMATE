@@ -192,10 +192,8 @@ def run_scenario(scenario: dict[str, Any], *, out_dir: str, model_path: str | No
     if posture == "oracle" or (source is not None and model_path is None):
         model = OraclePosture(lambda: getattr(src, "last_label", None) or _truth.get("label", "upright"), seed=seed)
     else:
-        from tools.posture_sim.posture_model import GruPosture
-        mcfg = dev.get("posture_model") or {}
-        model = GruPosture(model_path, vote_frames=int(mcfg.get("vote_frames", 10)), warmup_frames=int(mcfg.get("warmup_frames", 45)),
-                           reset_on_away_s=float(mcfg.get("reset_on_away_s", 60)), reset_every_s=mcfg.get("reset_every_s", 900))
+        from tools.posture_sim.posture_model import make_gru
+        model = make_gru(model_path, dev.get("posture_model") or {}, fps=fps)
     engine, profile = _policy_engine(scenario)
     pcfg, policy_path, plog_path, policy_info = (None, None, None, {"engine": engine, "profile": profile})
     if engine == "hub":
