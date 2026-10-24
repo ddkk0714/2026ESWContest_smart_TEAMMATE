@@ -32,7 +32,7 @@ BLE GATT 서비스, A2DP 출력과 실제 조명 밝기·소리는 현장 확인
   → 허브 control/cmd → 앱 iLink GATT 쓰기 → control/result → MONITOR
 ```
 
-인지성·자세성 제안은 앱의 수락 뒤 로컬 조명·음악 피드백을 적용한다.
+인지성·자세성 제안은 앱의 수락 뒤 로컬 조명·음악 피드백을 적용한다. 자세성(졸음)은 2026-10-24 부터 허브도 `control.yaml actions.posture` 의 `desk_lamp set_brightness 230` 명령을 `control/cmd` 로 보낸다(자동 게이트면 즉시, 제안이면 수락 뒤; 앱의 로컬 조명 피드백과 같은 램프를 건드리므로 시연 전에 둘 중 하나로 정한다). `ACTION_BREAK` 는 그대로 명령 없음.
 `ACTION_BREAK` 수락은 REST로 진행한다. 거절·무응답은 제어하지 않고 MONITOR로 진행한다.
 
 ## 기본 설정에서 기다려야 하는 시간

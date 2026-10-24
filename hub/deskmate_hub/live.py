@@ -20,10 +20,18 @@ from .control import ControlDispatcher, MockPlugAdapter, load_control_config
 from .features import BaselineStore
 from .ingest import SensorCache, SessionTracker, build_frame, load_ingest_config, sensor_summary
 from .presentation import state_envelope
+from .profile import apply_profile, apply_section
 from .esm import make_label, write_label
 from .personalization import PersonalizationRuntime, load_personalization_config
 from .personalization.privacy import PersonalizationPrivacy, load_privacy_config
 from .personalization.ondevice import OnDeviceLearner, load_ondevice_config
+
+try:  # 개인화 로그 기록(personalize/record.py). 설정·패키지를 못 읽으면 기록만 빠지고 허브는 돈다.
+    from .personalize import EpisodeRecorder, InterventionPolicy, load_personalize_config
+except ImportError:  # pragma: no cover
+    EpisodeRecorder = None  # type: ignore[assignment,misc]
+    InterventionPolicy = None  # type: ignore[assignment,misc]
+    load_personalize_config = None  # type: ignore[assignment]
 
 
 def frame_to_dict(frame: SensorFrame) -> dict[str, Any]:
@@ -50,6 +58,10 @@ class LiveHub:
         privacy_cfg: dict[str, Any] | None = None,
         ondevice_cfg: dict[str, Any] | None = None,
         personalization_backend_factory=None,
+        personalize_cfg: dict[str, Any] | None = None,
+        personalize_log_path: str | None = None,
+        personalize_policy_path: str | None = None,
+        profile: str | None = None,
         frame_log: TextIO | None = None,
         state_log: TextIO | None = None,
         out: TextIO = sys.stdout,
@@ -57,8 +69,12 @@ class LiveHub:
         self.cache = cache
         self.fsm_cfg = fsm_cfg or load_config()
         self.ingest_cfg = ingest_cfg or load_ingest_config()
+        # 시연 프로파일(DESKMATE_PROFILE=demo-a|demo-b, profile.py): fsm·ingest 위에 오버레이. profile="" 이면 환경변수를 무시한다.
+        self.fsm_cfg, self.ingest_cfg, self.profile = apply_profile(
+            self.fsm_cfg, self.ingest_cfg, profile, log=lambda m: print(m, file=out, flush=True))
         self.engine = FSMEngine(self.fsm_cfg)
-        self.tracker = SessionTracker()
+        self.tracker = SessionTracker(
+            elapsed_reset_on_rest=bool((self.ingest_cfg.get("elapsed") or {}).get("reset_on_rest", False)))
         self.privacy_cfg = privacy_cfg if privacy_cfg is not None else load_privacy_config()
         self._personalization_factory = personalization_backend_factory
         self.privacy = PersonalizationPrivacy(
@@ -104,6 +120,30 @@ class LiveHub:
         )
         self._esm_seq = 0
         self._last_result = None
+        # 개인화 로그(personalization-log.md): personalize.yaml `record: true` 면 결정·피드백·10 분 뒤 결과를
+        # logs/personalize-<boot_id>.jsonl 에 한 줄씩 쓴다. 정책(enabled)은 별개 — 꺼져 있어도 기록은 쌓는다.
+        self.personalize_cfg = personalize_cfg if personalize_cfg is not None else (
+            load_personalize_config() if load_personalize_config is not None else {})
+        # 프로파일의 personalize: 절(정책 gate.conf_auto 등) — FSM 만 낮추고 정책이 0.75 로 남아 자동이 제안으로 깎이던 결함(10-24 PC 리허설)
+        self.personalize_cfg = apply_section(self.personalize_cfg, "personalize", self.profile or "")
+        # `enabled: true` 면 3층 정책(InterventionPolicy, 순수 Python — Pi 4 에서도 돈다)도 켜서 결정 tick 에
+        # arm·전달 게이트를 고르고 profiles/<profile_id>/policy.json 에 학습 상태를 저장한다.
+        self.personalize_recorder: EpisodeRecorder | None = None
+        self.personalize_policy = None
+        if EpisodeRecorder is not None and (self.personalize_cfg.get("record") or self.personalize_cfg.get("enabled")):
+            log_dir = self.personalize_cfg.get("log_dir") or "logs"
+            path = personalize_log_path or os.path.join(log_dir, f"personalize-{self.boot_id}.jsonl")
+            policy_path = None
+            if self.personalize_cfg.get("enabled"):
+                if InterventionPolicy is None:
+                    print("[personalize] enabled 지만 정책 모듈을 못 불러 기록만 한다", file=self.out)
+                else:
+                    policy_path = personalize_policy_path or os.path.join(
+                        log_dir, "profiles", str(self.personalize_cfg.get("profile_id", "default")), "policy.json")
+                    self.personalize_policy = InterventionPolicy.load(policy_path, self.personalize_cfg)
+            self.personalize_recorder = EpisodeRecorder(
+                self.personalize_cfg, path, boot_id=self.boot_id, ingest_cfg=self.ingest_cfg,
+                on_log=lambda m: print(m, file=self.out), policy=self.personalize_policy, policy_path=policy_path)
         self.ondevice_cfg = ondevice_cfg if ondevice_cfg is not None else load_ondevice_config()
         self.ondevice = OnDeviceLearner(self.ondevice_cfg, self.privacy)
 
@@ -159,8 +199,9 @@ class LiveHub:
             # The MVP auto-completion flag is not a substitute for a person's
             # response. Keep BREAK/POSTURE suggestions alive too, not just ENV.
             frame.action_done = False
-        if self.control is not None and self.engine.state is State.ACTION_ENV:
-            # ACTION_ENV 완료 여부는 제어 결과가 결정한다 (ingest 의 auto_complete 를 덮어쓴다)
+        if self.control is not None and self._control_owns(self.engine.state):
+            # ACTION_ENV(그리고 제어 에피소드가 열린 ACTION_POSTURE) 완료 여부는 제어 결과가 결정한다
+            # (ingest 의 auto_complete 를 덮어쓴다). ACTION_BREAK 는 사람이 쉬는 일이라 그대로 둔다.
             frame.action_done = self.control.action_done(now)
             frame.break_accepted = None
         prev_state = self.engine.state
@@ -171,14 +212,39 @@ class LiveHub:
         self._last_result = result
         self.tracker.observe_state(result.state, now)
         self.recorder.observe(frame, result)
-        if self.control is not None:
-            if result.state is State.ACTION_ENV and prev_state is not State.ACTION_ENV:
-                self.control.on_enter_action(result.state.value, result.cause, result.gate, now)
-            elif prev_state is State.ACTION_ENV and result.state is not State.ACTION_ENV:
-                self.control.close_episode()
-
         # tracker 를 넘겨야 세션 시작 대비 CO₂ 상승(co2_rising)도 화면 이유에 실린다.
         summary = sensor_summary(view, now, self.ingest_cfg, self.tracker)
+        # 개인화: 결정 tick(route:<cause>)에 에피소드를 열고, 정책이 켜져 있으면 arm·전달 게이트를 고른다.
+        # 정책은 FSM 게이트를 낮추기만 한다(auto → suggest). 제어·질문·발행보다 먼저 돌아야 그 결과가 반영된다.
+        specs = None
+        if self.personalize_recorder is not None:
+            request_kind = self._REQUEST_STATES.get(result.state)
+            self.personalize_recorder.on_tick(
+                frame, result, prev_state, view, now, retry=bool(getattr(self.engine, "_retry", False)),
+                env_flags=summary.get("env_flags") or (), fsm_action=request_kind[1] if request_kind else None)
+            decision = self.personalize_recorder.last_decision
+            if decision is not None:
+                if decision.delivered_gate == "suggest" and result.gate is GateMode.AUTO:
+                    result.gate = GateMode.SUGGEST
+                    result.actions.append("personalize:ask")
+                specs = self.personalize_recorder.commands_for(decision)
+            if self.personalize_recorder.last_view is not None:
+                summary["personalize"] = self.personalize_recorder.last_view
+        if self.control is not None:
+            # 제어 에피소드: ACTION_ENV 는 control.yaml 기본 명령으로, 다른 ACTION_* 는 정책이 기기 arm(조명 등)을
+            # 골랐을 때만(specs 비어 있지 않음). ACTION_POSTURE 는 2026-10-24 부터 정책 spec 이 없어도 control.yaml
+            # `actions.posture`(졸음 → 무드등 밝게)가 있으면 그것으로 — 정책 spec 이 있으면 그쪽이 우선이고, 설정에
+            # `actions.posture` 가 없으면 예전과 같이 명령 없음. 자동이면 바로 실행하고 되돌리기 창이 열린다.
+            entered = result.state in self._REQUEST_STATES and result.state is not prev_state
+            if (entered and result.state is State.ACTION_POSTURE and not specs
+                    and self.control.has_default_actions(result.state.value, result.cause)):
+                # 정책이 기기 arm 을 안 줬다(정책 없음, 또는 화면·음성 arm) → control.yaml 기본 명령으로
+                self.control.on_enter_action(result.state.value, result.cause, result.gate, now, specs=None)
+            elif entered and (result.state is State.ACTION_ENV or specs):
+                self.control.on_enter_action(result.state.value, result.cause, result.gate, now, specs=specs)
+            elif (prev_state in self._REQUEST_STATES and result.state is not prev_state
+                  and self.control.episode is not None):
+                self.control.close_episode()
         if self.control is not None:
             summary["control"] = self.control.summary()
         if self.tracker.baseline is not None:
@@ -201,6 +267,9 @@ class LiveHub:
         self.seq += 1
         self.publish(envelope)
         self._maybe_request(result, prev_state, now)
+        if (self.personalize_recorder is not None and self.personalize_recorder.last_episode_id
+                and self.pending_request is not None):
+            self.personalize_recorder.link_request(self.pending_request["data"]["request_id"])
 
         if self.frame_log:
             self.frame_log.write(json.dumps(frame_to_dict(frame), ensure_ascii=False) + "\n"); self.frame_log.flush()
@@ -217,6 +286,16 @@ class LiveHub:
         )
         return envelope
 
+
+    def _control_owns(self, state: State) -> bool:
+        """이 상태의 완료(action_done)를 제어 결과가 정하는가. ACTION_ENV 는 언제나, ACTION_POSTURE 는 이번 진입에
+        제어 에피소드가 열렸을 때만(control.yaml `actions.posture` 또는 정책 기기 arm). ACTION_BREAK 는 아니다."""
+        if state is State.ACTION_ENV:
+            return True
+        if state is State.ACTION_POSTURE and self.control is not None:
+            ep = self.control.episode
+            return ep is not None and ep.state == state.value
+        return False
 
     def report_envelope(self, now: float | None = None) -> dict[str, Any]:
         """지금까지의 세션 요약. 주기 발행과 세션 종료에 같은 모양을 쓴다."""
@@ -289,6 +368,9 @@ class LiveHub:
             kind = "auto_undo"
         else:
             kind = "feedback"
+        if self.personalize_recorder is not None and verdict != "correct":
+            self.personalize_recorder.on_feedback(verdict, ts=now, request_id=feedback.get("request_id") or None,
+                                      response_ms=response_ms, kind=kind)
         record = make_label(
             label_id=f"{self.boot_id}-esm{self._esm_seq}", ts=now, verdict=verdict,
             request_id=feedback.get("request_id") or None,
@@ -331,7 +413,8 @@ class LiveHub:
             return
         kind, prompt = self._REQUEST_STATES[result.state]
         expires = float(self.fsm_cfg["timers"].get("focus_break_poll_sec", 180))
-        if result.state is State.ACTION_ENV and self.control is not None:
+        if self.control is not None and self._control_owns(result.state):
+            # 제어가 맡은 제안(ENV, 기본 명령이 있는 POSTURE)은 카드 만료를 디스패처의 제안 시한과 맞춘다
             expires = min(expires, self.control.suggest_timeout)
         self.pending_request = {
             "schema_version": "1.0", "ts": now, "node": "hub", "boot_id": self.boot_id, "seq": self.seq,
@@ -342,6 +425,14 @@ class LiveHub:
                 "c_fatigue": round(float(result.scores.c_fatigue), 4),
             },
         }
+        view = self.personalize_recorder.last_view if self.personalize_recorder is not None else None
+        if view is not None and view.get("episode_id") == self.personalize_recorder.last_episode_id:
+            # 개인화 정책이 고른 개입과 "왜 이 개입인지" 한 줄 — 화면 카드가 그대로 보여 준다
+            self.pending_request["data"]["explanation"] = view.get("explanation")
+            self.pending_request["data"]["arm"] = view.get("arm")
+            self.pending_request["data"]["arm_label"] = view.get("arm_label")
+            if view.get("ventilate_minutes") is not None:       # 창문 환기 카드: "N 분만 열어 주세요"(날씨가 정한 길이)
+                self.pending_request["data"]["ventilate_minutes"] = view["ventilate_minutes"]
         self.seq += 1
         self.publish_request(self.pending_request)
 
@@ -367,8 +458,18 @@ def run_live(broker: str, port: int, *, fsm_config: str | None, ingest_config: s
         if not hub.control_cfg.get("esm_log_path"):
             # 프레임·상태 로그와 같은 곳에 둔다(--log-dir). 기본 logs/ 는 gitignore.
             hub.esm_log_path = os.path.join(log_dir, f"esm-{hub.boot_id}.jsonl")
-        print(f"deskmate hub live — broker {broker}:{port}, period {hub.period:.0f}s, logs {log_dir}/", file=sys.stderr)
+        if hub.personalize_recorder is not None:
+            hub.personalize_recorder.path = os.path.join(log_dir, f"personalize-{hub.boot_id}.jsonl")
+        print(f"deskmate hub live — broker {broker}:{port}, period {hub.period:.0f}s, logs {log_dir}/"
+              + (f", profile {hub.profile}" if hub.profile else ""), file=sys.stderr)
         source.start()
+        # 별도 자세 서비스(deskmate_tofposture) 판정을 1 s 마다 받아 온다(ingest.yaml tof.posture_source: service, PC 경로)
+        from .ingest.tof_service import TofServicePoller, should_poll
+        service_poller = None
+        if should_poll(hub.ingest_cfg.get("tof"), os.environ):
+            service_poller = TofServicePoller(cache, hub.ingest_cfg.get("tof"),
+                                              on_log=lambda m: print(m, file=sys.stderr))
+            service_poller.start()
         # 보드 bridge(service_bridge)와 같이 세션 리포트 스냅샷을 주기 발행한다(retain). 없으면 PC 경로에서
         # 화면의 리포트 탭이 비고 정량 지표(metrics)도 못 본다 — 10-01 실기에서 발견.
         report_period = float(os.environ.get("DESKMATE_REPORT_PERIOD_SEC", "10"))
@@ -385,5 +486,9 @@ def run_live(broker: str, port: int, *, fsm_config: str | None, ingest_config: s
         except KeyboardInterrupt:
             print("\n[hub] stopping", file=sys.stderr)
         finally:
+            if hub.personalize_recorder is not None:
+                hub.personalize_recorder.close_all(time.time())
+            if service_poller is not None:
+                service_poller.stop()
             source.stop()
     return 0

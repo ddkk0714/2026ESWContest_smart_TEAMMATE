@@ -153,7 +153,11 @@ def test_live_hub_routes_action_env_through_control():
     fcfg["weights"]["fatigue"]["npc"] = {"keystroke": 0.0, "posture": 0.15, "respiration": 0.0, "environment": 0.70, "elapsed": 0.15}
     cache = SensorCache()
     states = []
-    hub = LiveHub(cache, fsm_cfg=fcfg, ingest_cfg=icfg, control_cfg=CFG, publish=states.append, out=io.StringIO())
+    from deskmate_hub.personalize import load_personalize_config
+    # FSM 기본 ACTION_ENV 명령(control.yaml actions)을 본다 — Pi 4 배포판은 정책을 켜 두므로 여기서 끈다
+    pcfg = dict(load_personalize_config(), enabled=False)
+    hub = LiveHub(cache, fsm_cfg=fcfg, ingest_cfg=icfg, control_cfg=CFG, publish=states.append, out=io.StringIO(),
+                  personalize_cfg=pcfg)
     assert hub.control is not None and hub.mock_plug is not None
     period = hub.period
     baseline = float(hub.fsm_cfg["timers"]["baseline_sec"])

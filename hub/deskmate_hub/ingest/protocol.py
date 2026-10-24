@@ -13,7 +13,8 @@ TOPIC_HEALTH = "deskmate/health/hub"
 TOPIC_CONTROL_CMD = "deskmate/control/cmd"
 TOPIC_CONTROL_RESULT = "deskmate/control/result"
 
-_KIND_BY_TOPIC = {"mmwave": "mmwave", "env": "env", "keystroke": "keystroke"}
+_KIND_BY_TOPIC = {"mmwave": "mmwave", "env": "env", "keystroke": "keystroke",
+                  "weather": "weather"}   # deskmate/sensor/weather — Pi 5 앱이 받은 바깥 날씨 (personalize 전용)
 
 
 def parse_sensor_message(topic: str, payload: bytes, received: float) -> tuple[str, Sample] | None:

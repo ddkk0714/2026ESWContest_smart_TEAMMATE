@@ -1,0 +1,26 @@
+# 시연 프로파일 demo-b (2026-10-24) — DESKMATE_PROFILE=demo-b 로 켠다. demo-a + 보정 창 10 s·자동 0.55·확정 0.60·선형 정규화.
+# 전부 "시연 전용 — 시뮬 근거(PC life_sim 10-23), 실측 성공 기록에 쓰지 말 것". 적지 않은 키는 기본값 그대로.
+# 함정: baseline_sec 만 줄이면 기준선이 안 잡혀 점수가 0.62 에서 멈추고 개입이 안 나온다 — 그래서 normalization linear 와
+# fatigue_confirm 0.60 을 함께 둔다(셋을 같이 바꿔야 한다).
+fsm:
+  timers:
+    baseline_sec: 10                # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 300 (START 기준선 측정)
+    fatigue_elevated_hold_sec: 20   # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 180
+    fatigue_confirm_hold_sec: 20    # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 180
+    monitor_window_sec: 30          # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 0
+    rest_min_sec: 60                # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 300
+    fatigue_hold_min_frac: 0.8      # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 1.0 (지난 hold 초 tick 중 이 비율 이상 임계 위면 유지 성립, 1fd856d)
+  gate:
+    asleep_retry: rest
+    conf_auto: 0.55                 # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 0.75
+  thresholds:
+    still_asleep_delta: 0.9
+    fatigue_confirm: 0.60           # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 0.70 (피로 확정)
+personalize:
+  gate:
+    conf_auto: 0.55                 # 시연 전용 — PC 리허설 10-24 근거. 기본 0.75. FSM gate.conf_auto 와 같은 값으로 맞춘 것 — 다르면 정책이 FSM 자동을 제안(personalize:ask)으로 낮춰 무드등이 자동으로 안 켜진다
+ingest:
+  normalization: linear             # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 baseline (10 s 보정 창으로는 기준선이 안 잡힌다)
+  pc_ratio_window_sec: 120          # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 900
+  elapsed:
+    reset_on_rest: true             # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 false

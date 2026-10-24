@@ -22,6 +22,7 @@ UART 디코딩(COBS/CRC-16)과 MQTT 클라이언트는 그 C++ 서비스에 두�
 | `config/` | 공통 | 임계값 · 토픽 · 장치 설정 (YAML) | ✅ `fsm.yaml`, `ingest.yaml`(센서→신호 임시 스케일) |
 | `live.py` | 공통 | `run` 명령: ingest → FSM → `deskmate/state/phase`(retain, QoS 1) 발행, 프레임을 리플레이 호환 JSONL 로 기록 | 🟡 MVP(09-14). 로컬 amqtt 브로커 E2E 확인, Pi 4 Mosquitto 실연동 대기 |
 | `ingest/uart_frame.py` `uart_source.py` | 공통 | UART2 프레임 코덱(COBS·CRC-16/CCITT-FALSE·TYPE 구조체)과 `UART\t` 라인/raw 시리얼 소스. 10-17: ToF 원본 8×8 센서 프레임 `0x05` 디코더·`TofGridAssembler`(같은 frame_id 의 센서 프레임을 표본 하나로, `SensorCache.tof_grid`, 메모리 전용) | ✅ 09-15, 테스트 14개 + 0x05 4개 |
+| `ingest/tof_service.py` | 공통 | **별도 자세 서비스(deskmate_tofposture, GRU, HTTP 8771) 판정 → FSM**(10-23). `TOFSVC	<json>` 줄(보드: `hub/atlas` C++ 가 1 s 폴링) 또는 Python 폴러(PC)로 `/api/state` 를 받아 `tof_service` 표본으로 두고, `ingest.yaml tof.posture_source: service` 면 그 자세·신뢰도가 posture Signal 이 된다(라벨 9개, drowsy → 피로 증거). 없으면 MLP → 0x03 규칙 폴백 | ✅ Pi 4 배포판 기본. 테스트 `tests/test_tof_service.py` |
 | `posture/tof_mlp.py` | 공통 | **ToF 자세 MLP, 순수 Python**(10-17: 모델은 ESP32 가 아니라 Pi 4 에서). 센서별 8×8 → 센서마다 기준선(앉은 뒤 조용한 10 s 중앙값)·특징 192·192→64→10 → 두 센서 log-softmax 합 → 1 s 다수결 → `SensorCache.tof_mlp` → `mapping.py` posture 신호(`tof.posture_source: mlp`, 못 내면 0x03 규칙 판정으로 폴백). 가중치 `config/tof_mlp.json`(`dataset/tof_sim/export_mlp_json.py`, Atlas zip 에 동봉) | ✅ 테스트 8개. **후보 A(미확정)** — 후보 B 는 별도 서비스 `deskmate_tofposture`(HTTP 8771, `tof_sim_v5` PostureNet, `hub/atlas` 가 0x05 를 tcp:9100 중계). 실측 정확도로 고른다. 시뮬 8×8 가중치 — 실측 16×8 모델 대기 |
 | `replay.py` `demo.py` `preview_api.py` `service_bridge.py` | 박소연 | 리플레이 하네스 · 합성 데모 · HTTP 미리보기 · Atlas 라인 브리지 | ✅ `report.py`·`--report` 포함 |
 
@@ -73,10 +74,11 @@ python -m deskmate_hub run --broker <ip> --ingest-config my-ingest.yaml --log-di
 ```
 
 - 구독: `deskmate/sensor/#`(mmwave·env·keystroke — envelope(collector 포함) 또는 구버전 평면 payload), `deskmate/feedback/user`
-- 발행: `deskmate/state/phase`(retain, QoS 1, 10 s 주기), `deskmate/interaction/request`(제안 게이트로 ACTION_* 진입 시, retain 없음), `deskmate/control/cmd`(ACTION_ENV, `control.yaml`), `deskmate/health/hub`(LWT). 구독에 `deskmate/control/result` 포함
+- 발행: `deskmate/state/phase`(retain, QoS 1, 10 s 주기), `deskmate/interaction/request`(제안 게이트로 ACTION_* 진입 시, retain 없음), `deskmate/control/cmd`(ACTION_ENV 와 ACTION_POSTURE, `control.yaml actions.<cause>` — 10-24 부터 자세성(졸음)도 `desk_lamp` 밝기 230 명령, 개인화 기기 arm 이 있으면 그쪽 우선), `deskmate/health/hub`(LWT). 구독에 `deskmate/control/result` 포함
 - 제어 어댑터가 없으면 명령은 `result_timeout_sec` 뒤 timeout 으로 닫히고 FSM 은 계속 진행한다. 리허설은 `python tools/mock_plug.py --broker <ip>`. `control.yaml adapter: mock` 이면 프로세스 안에서 즉시 성공 처리
 - 매핑은 `config/ingest.yaml`. `normalization: baseline`(기본)이면 START 보정 창에서 만든 개인 기준선(중앙값·MAD Modified z)을 우선 쓰고, 기준선이 없는 지표·보정 전에는 선형 램프로 폴백한다. `baseline.persist.enabled: true` 면 median·MAD·표본 수만 JSON 에 저장(opt-in).
 - `--config deskmate_hub/config/fsm.demo.yaml` 은 임계값은 같고 **타이머만 짧은 시연·리허설 프로파일**(baseline 30 s, 이탈 60 s 등). 운영 기본값이 아니다.
+- 환경변수 `DESKMATE_PROFILE=demo-a|demo-b` 는 `config/profiles/<이름>.yaml` 의 `fsm:`·`ingest:`·`personalize:` 절을 기본 설정 위에 깊은 병합으로 얹는다(`run`·bridge 둘 다, 10-24). demo-a = 피로 유지 20 s·MONITOR 창 30 s·휴식 60 s·자동 0.60·PC 창 120 s·휴식 뒤 경과 초기화, demo-b = demo-a + 보정 10 s·자동 0.55·확정 0.60·선형 정규화. 개인화 정책 gate.conf_auto 도 같은 값으로 맞춘다(다르면 정책이 자동을 제안으로 낮춘다). **시연 전용(시뮬 근거) — 실측 성공 기록에 쓰지 않는다.** 보드에서는 `hub.env` 한 줄(`hub/atlas/README.md`).
 - `logs/frames-*.jsonl` 은 `--replay` 로 그대로 재생되고, `logs/state-*.jsonl` 은 발행한 envelope 다.
 - 콘솔 한 줄 = 한 tick: 상태·ctx·C_fatigue/C_focus·present·pc_ratio·가용 신호(`ekprs` 첫 글자, `.`=미가용)
 

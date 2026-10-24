@@ -12,6 +12,24 @@ freshness_sec:
   keystroke: 5
   tof: 3              # ESP32 가 0x03 을 5 Hz 로 보낸다. 센서가 둘 다 죽으면 아무것도 안 보내 미가용이 된다
   tof_mlp: 3          # Pi 4 MLP 판정(원본 격자 0x05, 5 Hz). 이보다 낡으면 0x03 규칙 판정으로 돌아간다
+  tof_service: 3      # 별도 자세 서비스(deskmate_tofposture, 1 s 폴링) 판정. 이보다 낡으면 tof.service.fallback 으로
+
+# 재실 판정(2026-10-23): mmWave(C1001) 가 사람이 있는지를 정하고, ToF 는 그 안에서 자세만 본다.
+#   source: mmwave  mmWave 표본이 신선하면 그 present 만 쓴다. mmWave 가 끊겼을 때만 ToF present 로 대신한다.
+#           either  둘 중 하나라도 보면 재실(10-22 까지의 동작)
+#   desk_max_cm: C1001 은 최대 11 m·100°×100° 를 봐서 원룸이면 침대·주방의 사람도 present 다. mmWave distance_cm 가
+#           이 이하일 때만 '책상 재실', 더 멀면 '방엔 있지만 책상 빔' = 부재(엎드려 ToF 가 놓쳐도 가까우면 재실).
+#           distance_cm 가 없으면 ToF 에 맡긴다. 130 은 가정값 — 실제 설치에서 재서 바꾼다.
+#           근거(10-23 life_sim, MuJoCo+GRU 시뮬 — 실측 아님): 책상 재실 정확도 OR(10-22 까지) 0.59~0.83 · mmWave 만 0.78~0.93 ·
+#           거리 게이트 0.98~0.99. 방 안 식사 12분·주방 25분: OR·게이트 없는 mmWave 는 IDLE 못 감, 게이트는 600 s 에 IDLE·
+#           복귀 0 s 에 START. 외출 15분: 게이트 620 s IDLE·복귀 10 s. gate_posture 로 자세 정확도 0.61→0.99(시드 2),
+#           misplaced 오탐 8.1 %→0.5 %. 남은 과제: 시드 1 배치에서 GRU 가 upright→forward_head 로 오분류.
+#   gate_posture: true 면 책상이 빈 동안 ToF 자세(0x03·Pi 4 MLP)와 mmWave 체동·호흡 대체 신호를 쓰지 않고, Pi 4 MLP 는
+#           기준선도 모으지 않는다 — 빈 의자·지나가는 사람을 자세로 읽지 않게.
+presence:
+  source: mmwave
+  desk_max_cm: 130
+  gate_posture: true
 
 # MVP 지름길: 디스플레이 터치 대신 재실 상승엣지(IDLE 에서 present false→true)로 세션을 시작한다.
 auto_start_on_presence: true
@@ -49,15 +67,25 @@ keystroke:
   correction_rate_high: 0.15
 
 tof:
-  # posture 신호. 자세 이름은 두 곳에서 온다(2026-10-17 결정: 자세 AI 모델은 Pi 4 에서 돈다).
-  #   mlp  — Pi 4 posture/tof_mlp (ESP32 가 보낸 원본 격자 0x05 → 순수 Python MLP, 1 s 다수결). 기본.
-  #   rule — ESP32 TofPosture 추정기(firmware/.../preprocess/tof)의 자세 enum (0x03). MLP 가중치가 없거나
-  #          기준선이 안 잡혔거나 tof_mlp 가 낡으면 자동으로 이쪽.
-  # motion_score·nod_rate_hz·drowsy 는 언제나 0x03 규칙 값이다(졸음은 시간 현상이라 모델 밖).
+  # posture 신호. 자세 이름은 세 곳에서 온다(2026-10-17 결정: 자세 AI 모델은 Pi 4 에서 돈다).
+  #   service — 별도 자세 서비스 deskmate_tofposture(PostureNet CNN+GRU, HTTP 8771 /api/state, 2026-10-23). hub/atlas 가
+  #             0x05 를 tcp:9100 으로 복사해 주고 1 s 마다 /api/state 를 받아 `TOFSVC` 줄로 넣는다. 실측(10-19)에서 이 모델
+  #             (opt_l8_c256, 융합 F1 0.456)이 hub MLP 보다 나아 Pi 4 배포판 기본. 라벨 9개(아래 표 + misplaced).
+  #   mlp     — Pi 4 posture/tof_mlp (ESP32 가 보낸 원본 격자 0x05 → 순수 Python MLP, 1 s 다수결). PR #39 단일 센서 시뮬
+  #             가중치, drowsy·misplaced 없음. service 가 없을 때의 fallback.
+  #   rule    — ESP32 TofPosture 추정기(firmware/.../preprocess/tof)의 자세 enum (0x03). 모델이 없거나 낡으면 자동으로 이쪽.
+  # motion_score·nod_rate_hz 는 언제나 0x03 규칙 값이다. drowsy 는 0x03 플래그 또는 서비스 라벨 drowsy.
   # phi(집중 저하 증거) = max(posture_phi[posture], motion_score × motion_phi_weight)
   # delta(피로 증거)   = max(posture_delta[posture], nod_rate_hz / nod_rate_full_hz, drowsy 면 1.0)
   # 값은 전부 실측 전 잠정이다(2026-10-16). 10-12 시뮬에서 규칙 판정 정확도가 48% 라 confidence 로 거른다.
-  posture_source: mlp
+  posture_source: service
+  service:
+    url: http://127.0.0.1:8771/api/state   # Python 폴러(PC)용. 보드에서는 C++ 가 DESKMATE_TOF_SERVICE_PORT(8771) 로 받는다
+    poll_s: 1.0
+    timeout_s: 0.5
+    fallback: mlp                 # 서비스가 없거나 낡았거나 valid 가 아니면: mlp(hub MLP → 규칙) | rule
+    min_online_sensors: 1         # 살아 있는 센서가 이보다 적으면 서비스 판정을 쓰지 않는다
+    poller: auto                  # auto(DESKMATE_NATIVE_MQTT=1 인 보드는 끔) | on | off
   min_confidence: 0.3            # posture_confidence 가 이보다 낮으면 unknown 으로 본다
   posture_phi:
     unknown: 0.0
@@ -72,6 +100,7 @@ tof:
     lean_right: 0.3
     drowsy: 1.0
     away: 0.0
+    misplaced: 0.0               # 서비스 전용 — 기기가 사람을 못 보는 위치(설치 어긋남). 자세 증거가 아니라 0
   posture_delta:
     unknown: 0.0
     upright: 0.0
@@ -85,6 +114,7 @@ tof:
     lean_right: 0.3
     drowsy: 1.0
     away: 0.0
+    misplaced: 0.0
   motion_phi_weight: 0.5         # 안절부절(motion_score 1.0)이면 phi 0.5
   nod_rate_full_hz: 0.05         # 60 s 에 3번 끄덕이면 delta 1.0
   mlp:
@@ -100,7 +130,8 @@ tof:
     still_mm: 15                   # 프레임 간 평균 변화가 이 이하면 조용한 프레임
     baseline_frames: 50            # 5 Hz × 10 s 가 쌓이면 zone 별 중앙값을 기준선으로
     baseline_max_moving_frac: 0.2  # 그 창에 움직인 프레임이 이 비율 넘게 섞이면 더 기다린다
-    away_reset_sec: 300            # 이만큼 비어 있으면 기준선 폐기(다른 사람·재착석)
+    away_reset_sec: 300            # 격자만 보고 이만큼 비어 있으면 기준선 폐기(다른 사람·재착석)
+    reset_on_away_s: 60            # mmWave 가 '책상 빔' 이라고 이만큼 이어지면 기준선 폐기(presence.gate_posture)
     vote_frames: 5                 # 5 Hz × 1 s 다수결(학습 평가와 같은 1 s)
 
 mmwave:
@@ -116,6 +147,23 @@ mmwave:
     DROWSY: 1.0
   # respiration 신호: 재실 중 resp_valid=false 가 이 시간 이상 이어지면 '호흡 소실' delta 1.0
   resp_lost_sec: 60
+  # (실험, 기본 꺼짐 — life_sim 10-23 팀 제안) ToF 로 가만히 있는데 mmWave 졸음 증거가 있으면 자세 delta 1.0.
+  # 지금은 ToF 가 살아 있으면 위 drowsy_delta 를 안 쓴다(ToF 가 끊겼을 때만 대체). mode·조건 설명은 mapping._still_drowsy_and.
+  # PC 권고값(life_sim 10-24, 96 실행 — 시뮬 근거, 실측 미검증이라 demo 프로파일에는 넣지 않았다): mode hr_down_presence_base ·
+  # tof_motion_max_mm 12 · fsm timers.fatigue_hold_min_frac 0.8 과 함께 켤 때 놓친 졸음 9/12 → 0/12, 깨어 독서 오탐 0.
+  still_drowsy_and:
+    enabled: false
+    mode: hr_down            # hr_down = 펌웨어 심박 하락 증거(0x20 확장 필요) · drowsy_state = DrowsyDetector DROWSY(현 계약)
+    tof_still: motion        # motion = 자세 판정 표본의 격자 움직임 tof_motion_mm · none = ToF 조건 없음(비교용)
+    tof_motion_max_mm: 8
+    tof_still_s: 60
+    # mode hr_down_presence_base(사용자 설계 입력 10-23): 기준선 = 책상 재실 ∧ 깨어 움직일 때 심박, 가만히 있으면 얼림. 0x20 heart_bpm 만 씀
+    hr_win_s: 120            # '지금' 심박 중앙값 창
+    hr_min_n: 8
+    base_n: 60               # 기준선 = 깨어 움직일 때 심박 최근 60 표본(10 s tick 이면 약 10 분)의 중앙값
+    base_min_n: 20
+    drop_bpm: 4              # 펌웨어 kHrDropBpm 과 같은 값
+    down_hold_s: 30          # 펌웨어 kHrDownHoldMs 와 같은 값
 
 environment:
   # 절대 CO₂뿐 아니라 세션 중 상승과 어두움도 피로 증거로 삼는다.
@@ -137,3 +185,4 @@ environment:
 elapsed:
   # delta = clip(세션 경과초 / full_sec)
   full_sec: 5400
+  reset_on_rest: false     # true 면 휴식(REST)을 마친 뒤부터 경과 시간을 다시 잰다. false 면 휴식 중에도 쌓여 C_fatigue 가 내려오지 않는다(life_sim 10-23)

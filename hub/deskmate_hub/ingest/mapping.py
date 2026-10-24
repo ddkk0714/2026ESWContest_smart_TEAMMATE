@@ -6,12 +6,12 @@ baseline 정규화(features/)가 들어오면 이 선형 매핑을 대체한다.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Callable
 
 from ..features import BaselineStore
 from ..inference import SensorFrame, Signal, State
-from .cache import CacheView
+from .cache import CacheView, Sample
 
 
 def _clip(value: float) -> float:
@@ -70,9 +70,18 @@ class SessionTracker:
     pending_feedback: str | None = None     # accept | reject
     last_state: State = State.IDLE
     baseline: BaselineStore | None = None   # normalization: baseline 일 때만
+    elapsed_reset_on_rest: bool = False     # ingest.yaml elapsed.reset_on_rest: 휴식(REST)을 마치면 경과 시간을 그때부터 다시 잰다
+    sd_still_since: float | None = None     # (실험) mmwave.still_drowsy_and: ToF 정지가 시작된 시각
+    sd_debug: dict[str, Any] | None = None  # 이번 tick 의 규칙 판정(로그용)
+    sd_hr_recent: list[tuple[float, float]] = field(default_factory=list)   # (실험) hr_down_presence_base: 최근 심박 (t, bpm)
+    sd_hr_base: list[float] = field(default_factory=list)                   # 깨어 움직일 때 모은 심박(기준선 표본)
+    sd_down_since: float | None = None
 
     def observe_state(self, state: State, now: float) -> None:
         if state is State.START and self.session_started is None:
+            self.session_started = now
+        if (self.elapsed_reset_on_rest and self.last_state is State.REST and state is not State.REST
+                and self.session_started is not None):
             self.session_started = now
         if state in (State.IDLE, State.END):
             self.session_started = None
@@ -110,14 +119,63 @@ def _tof_posture_signal(data: dict[str, Any], cfg: dict[str, Any]) -> Signal:
     return Signal(phi=_clip(phi), delta=_clip(delta), available=True)
 
 
-def _tof_with_mlp(view: CacheView, tof_data: dict[str, Any], now: float, cfg: dict[str, Any]) -> dict[str, Any]:
-    """0x03 규칙 특징 위에 Pi 4 MLP 판정(tof_mlp, 2026-10-17)의 posture·confidence 를 덮어쓴다.
+def _service_sample(view: CacheView, now: float, cfg: dict[str, Any]) -> Sample | None:
+    """`tof.posture_source: service` 일 때 쓸 만한 별도 자세 서비스(deskmate_tofposture, GRU) 판정. 없거나 낡았거나
+    valid 가 아니거나 살아 있는 센서가 `tof.service.min_online_sensors` 보다 적으면 None(→ fallback)."""
+    tcfg = cfg.get("tof") or {}
+    if str(tcfg.get("posture_source", "mlp")) != "service":
+        return None
+    fresh = cfg["freshness_sec"]
+    svc = view.fresh("tof_service", now, fresh.get("tof_service", fresh.get("tof", 3)))
+    if svc is None or not svc.data.get("valid", False):
+        return None
+    scfg = (tcfg.get("service") or {})
+    if int(svc.data.get("online_sensors") or 0) < int(scfg.get("min_online_sensors", 1)):
+        return None
+    return svc
 
-    `tof.posture_source: mlp`(기본)이고 tof_mlp 표본이 신선하며 기준선이 잡혀 있을 때만. 아니면 규칙 판정 그대로
-    (가중치 파일이 없어도 허브는 돈다). drowsy·nod_rate 는 모델 밖이라 언제나 규칙 값이다.
+
+def _tof_sample(view: CacheView, now: float, cfg: dict[str, Any]) -> Sample | None:
+    """posture 의 바탕이 되는 ToF 표본. 0x03 규칙 특징이 신선하면 그것, 없고 자세 서비스 판정만 신선하면 그 판정으로
+    0x03 모양을 만든다(ESP32 가 0x05 만 보내거나 0x03 이 끊겨도 서비스 자세는 FSM 에 닿게)."""
+    fresh = cfg["freshness_sec"]
+    tof = view.fresh("tof", now, fresh.get("tof", 3))
+    if tof is not None:
+        return tof
+    svc = _service_sample(view, now, cfg)
+    if svc is None:
+        return None
+    d = svc.data
+    return Sample(received=svc.received, ts=svc.ts, seq=None, data={
+        "present": bool(d.get("present", False)), "posture": d.get("posture", "unknown"),
+        "posture_confidence": float(d.get("posture_confidence") or 0.0), "posture_source": "service",
+        "drowsy": bool(d.get("drowsy", False)), "baseline_ready": True, "sensors_ok": int(d.get("online_sensors") or 0),
+        "from_service": True,
+    })
+
+
+def _tof_with_model(view: CacheView, tof_data: dict[str, Any], now: float, cfg: dict[str, Any]) -> dict[str, Any]:
+    """0x03 규칙 특징 위에 Pi 4 자세 모델 판정의 posture·confidence 를 덮어쓴다.
+
+    `tof.posture_source`:
+      service — 별도 서비스 deskmate_tofposture(GRU, /api/state → `tof_service` 표본, 2026-10-23). 표본이 신선하고
+                valid 이고 센서가 살아 있을 때. 라벨이 drowsy 면 `drowsy` 도 켠다(졸음 증거는 posture_delta 1.0 과 0x03
+                플래그 자리 둘 다). 쓸 수 없으면 `tof.service.fallback`(mlp 기본 | rule)로 내려간다.
+      mlp     — hub 안 순수 Python MLP(tof_mlp, 10-17). 표본이 신선하며 기준선이 잡혀 있을 때만.
+      rule    — ESP32 0x03 규칙 판정 그대로.
+    motion_score·nod_rate 는 모델 밖이라 언제나 규칙 값이다.
     """
     tcfg = cfg.get("tof") or {}
-    if str(tcfg.get("posture_source", "mlp")) != "mlp":
+    source = str(tcfg.get("posture_source", "mlp"))
+    if source == "service":
+        svc = _service_sample(view, now, cfg)
+        if svc is not None and svc.data.get("posture") not in (None, "unknown"):
+            return dict(tof_data, posture=str(svc.data["posture"]),
+                        posture_confidence=float(svc.data.get("posture_confidence") or 0.0),
+                        drowsy=bool(tof_data.get("drowsy")) or bool(svc.data.get("drowsy")),
+                        misplaced=bool(svc.data.get("misplaced", False)), posture_source="service")
+        source = str((tcfg.get("service") or {}).get("fallback", "mlp"))
+    if source != "mlp":
         return dict(tof_data, posture_source="rule")
     fresh = cfg["freshness_sec"]
     mlp = view.fresh("tof_mlp", now, fresh.get("tof_mlp", fresh.get("tof", 3)))
@@ -127,11 +185,145 @@ def _tof_with_mlp(view: CacheView, tof_data: dict[str, Any], now: float, cfg: di
                 posture_confidence=float(mlp.data.get("posture_confidence") or 0.0), posture_source="mlp")
 
 
+_tof_with_mlp = _tof_with_model     # 10-17 이름(테스트·외부 참조 호환)
+
+
+def _usable_mmwave(mm: Sample | None) -> Sample | None:
+    """C1001 표본이 `valid: false`(락온 전·통신 오류)면 없는 것으로 본다 — 재실은 ToF 가 대신한다."""
+    return mm if mm is not None and mm.data.get("valid", True) is not False else None
+
+
+def _mmwave_at_desk(mm: Sample, pcfg: dict[str, Any]) -> bool | None:
+    """mmWave 표본 하나 → 책상에 사람이 있는가. present=false 면 False, 거리 게이트(`presence.desk_max_cm`) 안이면
+    True, 밖이면 False(방엔 있지만 책상은 빔 — C1001 은 11 m 를 봐서 원룸의 침대·주방도 잡는다). 게이트가 없으면 present
+    그대로, 거리가 비어 있으면 None(모름 — ToF 에 맡긴다)."""
+    if not bool(mm.data.get("present", False)):
+        return False
+    desk_max = pcfg.get("desk_max_cm")
+    if desk_max is None:
+        return True
+    dist = mm.data.get("distance_cm")
+    if dist is None:
+        return None
+    return float(dist) <= float(desk_max)
+
+
+def resolve_presence(mm: Sample | None, tof: Sample | None, cfg: dict[str, Any]) -> tuple[bool, str]:
+    """(책상 재실, 근거). `presence.source: mmwave`(기본)면 신선한 mmWave 가 정한다 — 없음 → 부재, 있음 + 거리 ≤
+    desk_max_cm → 재실(엎드려 ToF 가 놓쳐도), 있음 + 더 멀다 → 부재(ToF 가 빈 의자를 사람으로 봐도). 거리가 없거나
+    mmWave 가 끊겼을 때만 ToF present 로 대신한다. `either` 면 둘 중 하나라도 보면 재실(10-22 까지).
+    근거: mmwave | mmwave_room(방엔 있음·책상 빔) | tof | either | none."""
+    pcfg = cfg.get("presence") or {}
+    mm_present = bool(mm.data.get("present", False)) if mm else False
+    tof_present = bool(tof.data.get("present", False)) if tof else False
+    if str(pcfg.get("source", "mmwave")) == "either":
+        return mm_present or tof_present, "either"
+    mm = _usable_mmwave(mm)
+    if mm is not None:
+        at_desk = _mmwave_at_desk(mm, pcfg)
+        if at_desk is not None:
+            return at_desk, "mmwave_room" if mm_present and not at_desk else "mmwave"
+    if tof is not None:
+        return tof_present, "tof"
+    if mm is not None:                      # 거리 없음 + ToF 없음 → mmWave present 그대로
+        return mm_present, "mmwave"
+    return False, "none"
+
+
+def mmwave_presence_hint(cache: Any, cfg: dict[str, Any]) -> Callable[[float], bool | None]:
+    """Pi 4 자세 모델 앞의 재실 게이트. now → mmWave 가 본 책상 재실(거리 게이트 포함), 표본이 없거나 낡았거나 거리가
+    비어 있으면 None(게이트 안 함 — 격자로 판단)."""
+    fresh = float(cfg["freshness_sec"]["mmwave"])
+    pcfg = cfg.get("presence") or {}
+    gate = bool(pcfg.get("gate_posture", True))
+
+    def hint(now: float) -> bool | None:
+        if not gate:
+            return None
+        mm = _usable_mmwave(cache.snapshot().fresh("mmwave", now, fresh))
+        return None if mm is None else _mmwave_at_desk(mm, pcfg)
+
+    return hint
+
+
 def pc_ratio(view: CacheView, now: float, window_sec: float) -> float:
     ticks = [t for t in view.keystroke_history if now - t.received <= window_sec]
     if not ticks:
         return 0.0
     return sum(1 for t in ticks if t.input_active) / len(ticks)
+
+
+def _still_drowsy_and(signals: dict[str, Signal], view: CacheView, mm: Sample, drowsy: str, tof_posture_used: bool,
+                      now: float, cfg: dict[str, Any], tracker: SessionTracker) -> None:
+    """(실험, 기본 꺼짐) ToF 로 가만히 있는데 mmWave 졸음 증거가 있으면 자세 delta 를 1.0 으로 — mmwave.still_drowsy_and.
+    지금은 ToF 가 살아 있으면 mmWave 졸음 판정을 안 쓴다(ToF 가 끊겼을 때만 대체). 팀 제안(10-23): 둘을 AND 로 같이 쓴다.
+      mode drowsy_state — 펌웨어 DrowsyDetector 의 DROWSY(지금 0x20 계약). 정지만 3 분이어도 DROWSY 라 깨어 있는 정지와 못 가린다.
+      mode hr_down      — 펌웨어의 '심박 하락' 증거(중앙값 120 s 가 기준선보다 4 bpm↓ 30 s). 0x20 에 아직 없는 필드(확장 제안).
+      ToF 정지 = 자세 판정 표본의 격자 움직임 tof_motion_mm ≤ tof_motion_max_mm 가 tof_still_s 이어짐(tof_still: none 이면 조건 없음)."""
+    sd = cfg["mmwave"].get("still_drowsy_and") or {}
+    if not sd.get("enabled") or not tof_posture_used:
+        tracker.sd_still_since, tracker.sd_debug = None, None
+        return
+    fresh = cfg["freshness_sec"]
+    mlp = view.fresh("tof_mlp", now, fresh.get("tof_mlp", fresh.get("tof", 3)))
+    motion = mlp.data.get("tof_motion_mm") if mlp else None
+    if str(sd.get("tof_still", "motion")) == "none":
+        still_now = True
+    else:
+        still_now = motion is not None and float(motion) <= float(sd.get("tof_motion_max_mm", 8.0))
+    if still_now:
+        if tracker.sd_still_since is None:
+            tracker.sd_still_since = now
+    else:
+        tracker.sd_still_since = None
+    tof_still = tracker.sd_still_since is not None and now - tracker.sd_still_since >= float(sd.get("tof_still_s", 60))
+    mode = str(sd.get("mode", "hr_down"))
+    hr_dbg: dict[str, Any] = {}
+    if mode == "drowsy_state":
+        evidence = drowsy == "DROWSY"
+    elif mode == "hr_down_presence_base":
+        ks = view.fresh("keystroke", now, fresh["keystroke"])
+        moving = (bool(ks and ks.data.get("typing_active")) or not still_now or tracker.still_since is None)
+        evidence, hr_dbg = _hr_presence_drop(mm, moving, now, sd, tracker)
+    else:
+        evidence = bool(mm.data.get("hr_down"))
+    active = tof_still and evidence
+    if active:
+        p = signals["posture"]
+        signals["posture"] = Signal(phi=p.phi, delta=1.0, available=True)
+    tracker.sd_debug = {"mode": mode, "tof_motion_mm": motion, "tof_still": tof_still, "evidence": evidence, "active": active,
+                        **hr_dbg}
+
+
+def _hr_presence_drop(mm: Sample, moving: bool, now: float, sd: dict[str, Any],
+                      tracker: SessionTracker) -> tuple[bool, dict[str, Any]]:
+    """(실험) mode hr_down_presence_base — 사용자 설계 입력(10-23): "재실 판단 시 심박수와 졸음 심박수는 차이가 있을 것".
+    기준선 = 책상 재실 ∧ 깨어 움직일 때(타이핑 중 · mmWave 체동 · ToF 움직임)의 심박만 모은 중앙값(최근 base_n 개). 가만히 있는 동안엔
+    기준선을 얼린다(펌웨어는 졸음 전이면 τ 600 s 로 계속 따라가서, 오래 가만히 있으면 하락이 기준선에 묻힌다).
+    지금 = 최근 hr_win_s 심박 중앙값. 기준선 − 지금 ≥ drop_bpm 이 down_hold_s 이어지면 증거. 0x20 의 heart_bpm 만 쓰므로 펌웨어 변경이 없다."""
+    bpm = mm.data.get("heart_bpm")
+    ok = bool(mm.data.get("heart_valid")) and bpm is not None and 40 <= float(bpm) <= 150
+    if ok:
+        tracker.sd_hr_recent.append((now, float(bpm)))
+        if moving:
+            tracker.sd_hr_base.append(float(bpm))
+            del tracker.sd_hr_base[:-int(sd.get("base_n", 60))]
+    tracker.sd_hr_recent = [(t, b) for t, b in tracker.sd_hr_recent if now - t <= float(sd.get("hr_win_s", 120))]
+    base = _median(tracker.sd_hr_base) if len(tracker.sd_hr_base) >= int(sd.get("base_min_n", 20)) else None
+    cur = _median([b for _, b in tracker.sd_hr_recent]) if len(tracker.sd_hr_recent) >= int(sd.get("hr_min_n", 8)) else None
+    drop = None if base is None or cur is None else base - cur
+    if drop is not None and drop >= float(sd.get("drop_bpm", 4.0)):
+        if tracker.sd_down_since is None:
+            tracker.sd_down_since = now
+    else:
+        tracker.sd_down_since = None
+    evidence = tracker.sd_down_since is not None and now - tracker.sd_down_since >= float(sd.get("down_hold_s", 30))
+    return evidence, {"hr_base": base, "hr_cur": cur, "hr_drop": None if drop is None else round(drop, 1), "moving": moving}
+
+
+def _median(xs: list[float]) -> float:
+    s = sorted(xs)
+    return s[len(s) // 2]
 
 
 def build_frame(
@@ -147,22 +339,24 @@ def build_frame(
     mm = view.fresh("mmwave", now, fresh["mmwave"])
     env = view.fresh("env", now, fresh["env"])
     ks = view.fresh("keystroke", now, fresh["keystroke"])
-    tof = view.fresh("tof", now, fresh.get("tof", 3)) if "tof" in cfg else None
+    tof = _tof_sample(view, now, cfg) if "tof" in cfg else None
 
     mm_present = bool(mm.data.get("present", False)) if mm else False
     tof_present = bool(tof.data.get("present", False)) if tof else False
-    # 재실은 둘 중 하나라도 보면 참. ToF 가 자리비움(away)이고 mmWave 가 없으면 거짓.
-    present = mm_present or tof_present
+    present, _ = resolve_presence(mm, tof, cfg)
+    pcfg = cfg.get("presence") or {}
+    # mmWave 가 책상에 사람이 없다고 하면 ToF 가 무엇을 보든 자세로 쓰지 않는다(빈 의자·지나가는 사람·방 안 다른 자리)
+    tof_gated = bool(pcfg.get("gate_posture", True)) and _usable_mmwave(mm) is not None and not present
     signals: dict[str, Signal] = {}
 
     # ---- posture: ToF tof_feature 가 신선하면 그것을, 아니면 mmWave 체동으로 대체 ----
     mcfg = cfg["mmwave"]
     tof_posture_used = False
-    if tof and tof_present:
-        signals["posture"] = _tof_posture_signal(_tof_with_mlp(view, tof.data, now, cfg), cfg["tof"])
+    if tof and tof_present and not tof_gated:
+        signals["posture"] = _tof_posture_signal(_tof_with_model(view, tof.data, now, cfg), cfg["tof"])
         tof_posture_used = True
         tracker.still_since = None
-    if mm and mm_present:
+    if mm and mm_present and present:       # 책상이 비면 mmWave 체동·호흡 대체 신호도 쓰지 않는다(침대에서 자는 사람)
         level = float(mm.data.get("motion_level") or 0.0)
         if level <= mcfg["still_motion_level_max"]:
             if tracker.still_since is None:
@@ -189,9 +383,11 @@ def build_frame(
         signals["respiration"] = Signal(
             phi=0.0, delta=1.0 if lost >= mcfg["resp_lost_sec"] else 0.0, available=True
         )
+        _still_drowsy_and(signals, view, mm, drowsy, tof_posture_used, now, cfg, tracker)
     else:
         tracker.still_since = None
         tracker.resp_lost_since = None
+        tracker.sd_still_since, tracker.sd_debug = None, None
         if not tof_posture_used:
             signals["posture"] = Signal(available=False)
         signals["respiration"] = Signal(available=False)
@@ -272,21 +468,35 @@ def sensor_summary(view: CacheView, now: float, cfg: dict[str, Any],
     """state/phase 의 sensor_summary — 화면 표시용 특징 요약. 없는 필드는 생략한다."""
     fresh = cfg["freshness_sec"]
     out: dict[str, Any] = {}
-    tof = view.fresh("tof", now, fresh.get("tof", 3)) if "tof" in cfg else None
+    tof = _tof_sample(view, now, cfg) if "tof" in cfg else None
     if tof:
-        out["present"] = bool(tof.data.get("present", False))
         # 화면용 요약. 원본 zone 격자(UART 0x05)는 Pi 4 메모리에만 두고 여기 싣지 않는다(firmware README "원칙").
-        data = _tof_with_mlp(view, tof.data, now, cfg)
+        data = _tof_with_model(view, tof.data, now, cfg)
         out["tof"] = {
             k: data[k]
             for k in ("posture", "posture_confidence", "posture_source", "motion_score", "head_delta_mm",
-                      "nod_rate_hz", "drowsy", "nods_in_window", "baseline_ready", "grid_width", "grid_height",
-                      "coverage_ratio", "sensors_ok")
+                      "nod_rate_hz", "drowsy", "misplaced", "nods_in_window", "baseline_ready", "grid_width",
+                      "grid_height", "coverage_ratio", "sensors_ok")
             if k in data
         }
+    svc = view.fresh("tof_service", now, fresh.get("tof_service", fresh.get("tof", 3))) if "tof" in cfg else None
+    if svc:
+        # 별도 자세 서비스(GRU) 의 최근 판정 — posture_source 가 service 가 아니어도 화면·실기 로그용으로 보여 준다
+        out["tof_service"] = {
+            k: svc.data[k]
+            for k in ("posture", "posture_confidence", "valid", "present", "misplaced", "online_sensors", "since_ms",
+                      "presence_source")
+            if k in svc.data
+        }
+        if isinstance(svc.data.get("model"), dict) and svc.data["model"].get("file"):
+            out["tof_service"]["model"] = str(svc.data["model"]["file"]).rsplit("/", 1)[-1]
     mm = view.fresh("mmwave", now, fresh["mmwave"])
+    if mm or tof:
+        # 재실은 build_frame 과 같은 규칙(presence.source) — 화면 배지와 FSM 이 다른 말을 하지 않게
+        out["present"], out["presence_source"] = resolve_presence(mm, tof, cfg)
+        if mm:
+            out["in_room"] = bool(mm.data.get("present", False))       # 책상은 비어도 방엔 있음(화면 표시용)
     if mm:
-        out["present"] = bool(out.get("present", False)) or bool(mm.data.get("present", False))
         out["mmwave"] = {
             k: mm.data[k]
             # 심박·호흡은 *_valid 와 짝으로 넘긴다. 락온이 풀린 구간의 값을 화면이 그대로

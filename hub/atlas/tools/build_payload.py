@@ -101,12 +101,26 @@ def main() -> None:
                     "deskmate_hub/config/personalization.json",
                     json.dumps(personalization_config, ensure_ascii=False, separators=(",", ":")),
                 )
+            # 개입 선택 정책(personalize/, 2026-10-23 순수 Python) — 이 JSON 이 없으면 보드는 YAML 을 못 읽어 개인화가 꺼진다
+            personalize_yaml = args.config.with_name("personalize.yaml")
+            if personalize_yaml.exists():
+                with personalize_yaml.open(encoding="utf-8") as source:
+                    personalize_config = yaml.safe_load(source)
+                archive.writestr("deskmate_hub/config/personalize.json",
+                                 json.dumps(personalize_config, ensure_ascii=False, separators=(",", ":")))
             privacy_yaml = args.config.with_name("privacy.yaml")
             if privacy_yaml.exists():
                 with privacy_yaml.open(encoding="utf-8") as source:
                     privacy_config = yaml.safe_load(source)
                 archive.writestr("deskmate_hub/config/privacy.json",
                                  json.dumps(privacy_config, ensure_ascii=False, separators=(",", ":")))
+            # 시연 프로파일(config/profiles/*.yaml, DESKMATE_PROFILE=demo-a|demo-b) — deskmate_hub/profile.py 가 pkgutil 로
+            # profiles/<이름>.json 을 읽는다(ingest.json 과 같은 방식). 없으면 보드에서 그 프로파일을 못 켠다.
+            for profile_yaml in sorted((args.config.parent / "profiles").glob("*.yaml")):
+                with profile_yaml.open(encoding="utf-8") as source:
+                    profile_config = yaml.safe_load(source)
+                archive.writestr(f"deskmate_hub/config/profiles/{profile_yaml.stem}.json",
+                                 json.dumps(profile_config, ensure_ascii=False, separators=(",", ":")))
             ondevice_yaml = args.config.with_name("ondevice.yaml")
             if ondevice_yaml.exists():
                 with ondevice_yaml.open(encoding="utf-8") as source:

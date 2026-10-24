@@ -34,6 +34,7 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 | `deskmate/sensor/mmwave/<node>` | ESP32 | hub | 1Hz | SEN0623 재실·모션·호흡/심박 보조 특징 |
 | `deskmate/sensor/env/<node>` | ESP32 | hub | 0.2Hz | CO₂ · 온습도 · 조도 |
 | `deskmate/sensor/keystroke` | PC 수집기 | hub, display/PC 키스트로크 탭 | 1Hz | 키 입력 타이밍 특징 |
+| `deskmate/sensor/weather` | Pi 5 앱 | hub(personalize) | 30 분 + 시작 시 1회(retain, QoS 0) | 바깥 날씨·계절. FSM 입력이 아니라 개입 선택(환기 vs 공기청정기, 겨울 짧은 환기)에만 쓴다 |
 | `deskmate/state/phase` | hub | display, control | 10 s 주기(retain) | 추론 결과 + 신뢰도. `python -m deskmate_hub run` 이 발행 |
 | `deskmate/display/message` | Node-RED/debug | display | 이벤트 | Pi 5 화면에 일회성 텍스트 표시 |
 | `deskmate/session/report` | hub | display | 10 s 주기 스냅샷(retain) + 세션 종료 시 | 화면용 세션 요약. 개별 행동 로그 없음 |
@@ -130,6 +131,33 @@ Pi 5의 **PC 키스트로크** 탭은 앱에 설정된 동일 MQTT 브로커에�
 오래되면 "수신 끊김"으로 표시하므로 PC·Pi의 시계 동기화가 필요하다.
 최근 60개 집계 표본의 추이는 탭을 연 동안 메모리에만 유지하고, 미입력·수신 공백을
 타이밍 곡선으로 연결하지 않는다. 내장 데모는 실제 PC 미연결임을 명시한다.
+
+### `deskmate/sensor/weather` (2026-10-21 최종 확정: 날씨는 Pi 5 앱이 받아 MQTT 로 허브에 넘긴다)
+
+발행자 Pi 5 앱(`node: pi5-display`), **retain, QoS 0, 30 분 주기 + 앱 시작 시 1회 즉시**. 공통 envelope 를 쓴다. 토픽 이름은 `deskmate/sensor/weather` 로 고정한다(`deskmate/env/weather` 는 계약 밖).
+`deskmate/sensor/#` 아래라 hub 의 기존 구독(PC paho·보드 C++ 브리지 모두)이 그대로 받는다. 허브 `SensorCache.weather` 에 마지막 표본만
+머물고 FSM `SensorFrame` 에는 들어가지 않는다 — `personalize/`(개입 선택)만 읽는다([`personalization-spec.md`](personalization-spec.md) §7).
+
+```json
+{
+  "schema_version": "1.0", "ts": 1792561200.0,
+  "node": "pi5-display", "boot_id": "c41d9a02", "seq": 17,
+  "data": {
+    "temp_c": 16.4,                 // 바깥 기온 °C
+    "humidity": 58,                 // 바깥 상대습도 %RH (int)
+    "wind_ms": 5.2,                 // 풍속 m/s. hub 는 personalize.yaml weather.windy_ms(4.0) 이상을 "바람 붊"으로 본다
+    "condition": "clear",           // clear | cloudy | rain | snow | fog | unknown — 뇌우·폭풍·소나기는 rain, 진눈깨비·우박은 snow, 매핑 불가는 unknown
+    "season": "autumn",             // spring | summer | autumn | winter (앱이 날짜로 계산). hub 는 자기 날짜를 우선한다
+    "fetched_at": 1792560900,       // 날씨를 외부에서 받은 Unix epoch s (int). 재발행해도 이 값은 바뀌지 않는다
+    "source": "kma-short-term"      // 출처 문자열(자유). 키·토큰·좌표는 넣지 않는다
+  }
+}
+```
+
+- **stale 기준**: hub 는 `now − fetched_at > weather.stale_sec`(기본 **2 h**) 이면 표본을 무시하고 **계절(월)만으로** 동작한다.
+  retain 된 옛 표본이 재시작 뒤 들어와도 같은 규칙으로 걸러진다. `fetched_at` 이 없으면 envelope `ts` 를 쓴다.
+- 앱이 날씨를 못 받으면 발행하지 않는다(빈 값·추정값을 만들어 보내지 않는다). 선택 필드 `pm_bad: true`(미세먼지 나쁨)는 넣으면 환기 후보 제외에 쓴다.
+- 좌표·주소·API 키는 토픽에 싣지 않는다. 위치 설정은 앱 안에만 둔다.
 
 ### `deskmate/state/phase`
 
@@ -255,6 +283,13 @@ hub 가 현재 발행하는 종류(2026-09-16, `live.py`): **제안 게이트(0.
 자동(≥0.75)은 실행 후 알림이라 질문하지 않는다. retain 하지 않는다. display 는 `request_id` 를 기억해 `feedback/user` 에 실어 보내고,
 hub 는 현재 질문의 `request_id`(또는 `request_id` 생략·`atlas-display`)만 반영한다. 신호 충돌(`state_disambiguation`)은 4-B §5 에서 추가.
 
+**개인화 정책이 켜져 있으면(`personalize.yaml enabled: true`, 2026-10-21)** `data` 에 세 필드가 더 실린다 — `explanation`(왜 이 개입인지 한 줄,
+예 `"조도 80 lx 어두움 · 졸음 2회 · 지난번 조명 밝고 차갑게 되돌리셔서 이번엔 여쭙니다 · 기본 정책 · 피드백 1건"`), `arm`(개입 id, `personalization-spec.md` §4),
+`arm_label`(한국어 이름). 창문 환기(`arm: ventilate_suggest`)면 `ventilate_minutes`(날씨가 정한 권유 길이, 분, 2026-10-23)도 실린다 —
+화면은 "N 분만 열어 주세요" 로 쓴다. 화면은 카드에 `explanation` 을 그대로 보여 준다. 정책이 FSM 의 자동 게이트를 제안으로 낮춘 경우 `evidence` 에 `personalize:ask` 가 들어 있다.
+같은 내용이 `state/phase` 의 `data.sensor_summary.personalize` 에도 실린다(`{episode_id, arm, arm_label, source, explanation, fsm_gate, delivered_gate,
+policy_mode, n_personal, auto_threshold, ventilate_minutes}`; 에피소드가 닫히면 `closed: true, outcome`) — 자동 실행 알림이 "왜" 를 보여 줄 때 쓴다.
+
 ### `deskmate/control/cmd`
 
 data-spec §10 `control_command` 필드 그대로(2026-09-16, `hub/deskmate_hub/control/`). 발행 조건은 `config/control.yaml`:
@@ -267,6 +302,7 @@ ACTION_ENV 진입 시 원인별 명령 목록, 게이트 auto 면 즉시 · sugg
   "data": {
     "command_id": "9f3c1a2b7d4e",          // 멱등 키. result 가 이 값으로 돌아온다
     "target_id": "vent_fan",               // vent_fan | desk_lamp | air_purifier | plug_1 (control.yaml)
+                                           // air_purifier: set_mode off|auto|low|mid|high (auto = 자체 PM 자동, high = 3단계)
     "operation": "set_power", "value": "on",
     "origin_state": "ACTION_ENV", "cause": "environment",
     "gate": "auto",                        // auto | suggest(수락 후) | undo(자동 실행 뒤 거절 시 되돌리기)
@@ -343,6 +379,7 @@ retain으로 들어온 명령은 무시한다. 최근 128개 `command_id`의 처
 ## QoS · 보존
 
 - 센서 스트림: QoS 0 (유실 허용, 고빈도)
+- `sensor/weather` 는 QoS 0 + retain (주기가 길어 재시작 시 마지막 값을 바로 받는다. stale 판정은 hub 가 `fetched_at` 으로)
 - `state/phase` · `display/message` · `session/report` · `interaction/request` · `control/cmd` · `feedback/user`: QoS 1
 - `state/phase` 는 retain 을 켜서 디스플레이 재시작 시 즉시 현재 상태를 받는다
 - `display/message` 는 retain 을 끈다. 이전 문구가 재시작 뒤 다시 표시되거나 broker에 남지 않게 한다.

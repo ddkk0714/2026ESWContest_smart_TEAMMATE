@@ -6,6 +6,9 @@
 - ACTION_ENV 진입 + 게이트 auto(≥0.75)  → 즉시 명령 발행 (가역 동작만). 사용자가 나중에 reject 하면 undo 발행.
 - ACTION_ENV 진입 + 게이트 suggest      → 대기. `feedback/user` accept 면 발행, reject 면 skipped 로 종료.
 - ACTION_ENV 진입 + 게이트 none         → skipped (로그만). FSM 은 다음 tick 에 MONITOR 로 간다.
+- ACTION_POSTURE 도 control.yaml `actions.posture` 가 있으면 같은 규칙으로 명령을 낸다(2026-10-24, 졸음 → 무드등 깨우기).
+  개인화 정책이 기기 arm 의 spec 을 준 경우(specs)는 그것이 우선이고, `actions.posture` 가 없으면 예전처럼 명령 없음.
+  ACTION_BREAK 는 specs 가 있을 때만(기본 명령 없음).
 - 결과(succeeded/failed) 가 오거나 result_timeout_sec 이 지나면 해당 에피소드는 완료 → frame.action_done=True.
 - 같은 target/operation 은 cooldown_sec 안에 다시 보내지 않는다. 비가역 동작은 requires_confirmation=True 로만 만들고
   자동 실행하지 않는다.
@@ -84,16 +87,27 @@ class ControlDispatcher:
         self.cooldown = float(cfg.get("cooldown_sec", 300))
         self.irreversible = set(cfg.get("irreversible_operations") or [])
         self.actions = cfg.get("actions") or {}
+        # control.yaml `actions.<cause>` 를 기본 명령으로 쓰는 상태. ENV 는 처음부터, POSTURE 는 2026-10-24 부터(졸음 → 무드등).
+        # ACTION_BREAK 는 여기 없다 — 휴식은 기기가 아니라 사람이 하는 일이라 개인화 arm(specs)이 있을 때만 명령이 나간다.
+        self.default_action_states = ("ACTION_ENV", "ACTION_POSTURE")
         self._last_sent: dict[tuple[str, str], float] = {}
         self.episode: Episode | None = None
         self.history: list[Episode] = []
 
     # ---------------------------------------------------------------- FSM 훅
-    def on_enter_action(self, state: str, cause: str | None, gate: GateMode, now: float | None = None) -> Episode:
-        """ACTION_ENV 진입. 게이트에 따라 즉시 실행 / 사용자 대기 / 건너뜀."""
+    def has_default_actions(self, state: str, cause: str | None) -> bool:
+        """이 상태·원인에 control.yaml `actions.<cause>` 기본 명령이 정의돼 있는지(live.py 가 에피소드를 열지 정할 때 본다)."""
+        return state in self.default_action_states and bool(self.actions.get(cause or ""))
+
+    def on_enter_action(self, state: str, cause: str | None, gate: GateMode, now: float | None = None,
+                        *, specs: list[dict[str, Any]] | None = None) -> Episode:
+        """ACTION_ENV·ACTION_POSTURE 진입. 게이트에 따라 즉시 실행 / 사용자 대기 / 건너뜀.
+
+        specs 를 주면 control.yaml `actions[cause]` 대신 그 명령 spec 목록을 쓴다(개인화 정책이 고른 arm 의 기기 값).
+        """
         now = self._clock() if now is None else now
         ep = Episode(state=state, cause=cause, gate=gate, started_ts=now)
-        ep.commands = self._plan(state, cause, gate, now)
+        ep.commands = self._plan(state, cause, gate, now, specs=specs)
         self.episode = ep
         if not ep.commands:
             ep.outcome = "skipped"
@@ -203,8 +217,10 @@ class ControlDispatcher:
                 "commands": [{"target": c.target_id, "op": c.operation, "value": c.value, "status": c.status} for c in ep.commands]}
 
     # ---------------------------------------------------------------- 내부
-    def _plan(self, state: str, cause: str | None, gate: GateMode, now: float) -> list[ControlCommand]:
-        specs = self.actions.get(cause or "", []) if state == "ACTION_ENV" else []
+    def _plan(self, state: str, cause: str | None, gate: GateMode, now: float,
+              *, specs: list[dict[str, Any]] | None = None) -> list[ControlCommand]:
+        if specs is None:
+            specs = self.actions.get(cause or "", []) if state in self.default_action_states else []
         cmds: list[ControlCommand] = []
         for spec in specs:
             key = (spec["target_id"], spec["operation"])

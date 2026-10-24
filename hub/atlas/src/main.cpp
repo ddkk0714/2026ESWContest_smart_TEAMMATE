@@ -1,6 +1,7 @@
 #include <sdbus-c++/sdbus-c++.h>
 
 #include "mqtt_client.h"
+#include "tof_service_poll.h"
 #include "uart_relay.h"
 #include "uart_rx.h"
 
@@ -676,6 +677,15 @@ int main()
             });
         uart.start();
 
+        // 별도 자세 서비스(deskmate_tofposture, HTTP 8771) 의 /api/state 를 1 s 마다 받아 TOFSVC 줄로 브리지에 넣는다.
+        // 브리지 Python 은 소켓이 없어 직접 못 읽는다. 서비스가 없으면 조용히 재시도하고 hub 는 MLP/규칙 판정으로 돈다.
+        deskmate::TofServicePoller tof_service(deskmate::tofServicePollConfigFromEnvironment(),
+            [&hub, &bridge_input_mutex](const std::string& line) {
+                if (hub.input_fd < 0) return false;
+                return writeBridgeInput(hub.input_fd, bridge_input_mutex, line);
+            });
+        tof_service.start();
+
         deskmate::MqttConfig mqtt_config = deskmate::mqttConfigFromEnvironment();
         mqtt_config.will = {kHealthTopic, R"({"node":"hub","status":"offline"})", 1, true};
         mqtt_config.subscriptions = {{"deskmate/sensor/#", 0}, {"deskmate/feedback/user", 1},
@@ -728,6 +738,7 @@ int main()
         g_stop_requested = 1;
         uart.stop();
         relay.stop();
+        tof_service.stop();
         if (mqtt.connected()) {
             mqtt.publish(kHealthTopic, R"({"node":"hub","status":"offline"})", 1, true);
             std::this_thread::sleep_for(std::chrono::milliseconds(200));

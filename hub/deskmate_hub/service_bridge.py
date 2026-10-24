@@ -2,6 +2,7 @@
 
 stdin  ← C++ 서비스:  POST	<id>	/api/feedback|/api/test-frame	<json>   (HTTP 요청 중계)
                       UART	{"type","seq","ts_ms","payload_hex"}         (UART2 프레임, CRC 통과분)
+                      TOFSVC	<deskmate_tofposture /api/state json>       (별도 자세 서비스 판정, C++ 가 1 s 폴링)
 stdout → C++ 서비스:  STATE	<envelope json> · ACK	<id>	<status>
 
 모드 (환경변수 DESKMATE_HUB_MODE):
@@ -38,7 +39,7 @@ class BridgeStateStore(PreviewStateStore):
         )
 
 
-def _read_commands(store: BridgeStateStore, uart_source=None, mqtt_line_source=None) -> None:
+def _read_commands(store: BridgeStateStore, uart_source=None, mqtt_line_source=None, tof_service_source=None) -> None:
     for raw_line in sys.stdin.buffer:
         request_id = "0"
         try:
@@ -46,6 +47,10 @@ def _read_commands(store: BridgeStateStore, uart_source=None, mqtt_line_source=N
             if line.startswith("UART\t"):
                 if uart_source is not None:
                     uart_source.feed_line(line)
+                continue
+            if line.startswith("TOFSVC\t"):
+                if tof_service_source is not None:
+                    tof_service_source.feed_line(line)
                 continue
             if line.startswith("MQTT\t"):
                 if mqtt_line_source is not None:
@@ -91,19 +96,37 @@ def _run_live_bridge() -> None:
     from .live import LiveHub
 
     from .ingest import load_ingest_config
+    from .ingest.mapping import mmwave_presence_hint
+    from .ingest.tof_service import TofServiceLineSource, TofServicePoller, should_poll, uses_service
     from .posture.tof_mlp import load_posture_from_config
+    from .profile import apply_section, profile_name
 
     store = BridgeStateStore()
     cache = SensorCache()
+    # 시연 프로파일(hub.env DESKMATE_PROFILE=demo-a|demo-b): 여기서 쓰는 ingest 설정에 얹고, LiveHub 는 같은 이름으로
+    # fsm·ingest·personalize 세 절을 스스로 얹는다(로그 한 줄).
+    profile = profile_name()
+    ingest_cfg = apply_section(load_ingest_config(), "ingest", profile or "")
     # ToF 자세 MLP(원본 격자 0x05 → posture). 가중치가 없으면 None 이고 0x03 규칙 판정으로 돈다.
-    posture = load_posture_from_config((load_ingest_config().get("tof") or {}),
+    posture = load_posture_from_config((ingest_cfg.get("tof") or {}),
                                        log=lambda m: print(m, file=sys.stderr, flush=True))
-    uart = UartLineSource(cache, posture=posture)
+    # 사람이 있는지는 mmWave 가 정한다 — 없다고 하면 자세 모델을 돌리지 않고 기준선도 모으지 않는다
+    uart = UartLineSource(cache, posture=posture, presence=mmwave_presence_hint(cache, ingest_cfg))
     native_mqtt = os.environ.get("DESKMATE_NATIVE_MQTT") == "1"
     mqtt_lines = MqttLineSource(cache) if native_mqtt else None
+    # 별도 자세 서비스(deskmate_tofposture, GRU) 판정. 보드에서는 C++ 가 1 s 마다 /api/state 를 받아 TOFSVC 줄로 넣고,
+    # PC 에서는 Python 폴러가 직접 받는다(보드 제한 Python 은 소켓이 없다). 둘 다 없으면 MLP → 규칙으로 돈다.
+    tof_cfg = ingest_cfg.get("tof") or {}
+    tof_service = TofServiceLineSource(cache) if uses_service(tof_cfg) else None
+    service_poller = None
+    if should_poll(tof_cfg, os.environ):
+        service_poller = TofServicePoller(cache, tof_cfg, on_log=lambda m: print(m, file=sys.stderr, flush=True))
+        service_poller.start()
+    elif tof_service is not None:
+        print("[tof_service] posture_source=service — C++ hub/atlas 의 TOFSVC 줄을 기다린다", file=sys.stderr, flush=True)
     reader = threading.Thread(
         target=_read_commands,
-        args=(store, uart, mqtt_lines),
+        args=(store, uart, mqtt_lines, tof_service),
         daemon=True,
     )
     reader.start()
@@ -142,7 +165,8 @@ def _run_live_bridge() -> None:
         if mqtt_source is not None:
             mqtt_source.publish_control(command)
 
-    hub = LiveHub(cache, publish=publish, publish_request=publish_request, publish_control=publish_control,
+    hub = LiveHub(cache, profile=profile or "",
+                  publish=publish, publish_request=publish_request, publish_control=publish_control,
                   out=sys.stderr)
     if os.environ.get("DESKMATE_PERSONALIZATION_SELF_CHECK") == "1":
         from .personalization.self_check import run_self_check
@@ -182,6 +206,18 @@ def _run_live_bridge() -> None:
                     + (f" err={mlp['error']}" if mlp.get("error") else "")
                     if mlp else " | mlp=-"
                 )
+                # svc = 별도 자세 서비스(GRU) 의 최근 판정과 수신 통계(TOFSVC 줄 또는 Python 폴러)
+                svc = cache.tof_service.data if cache.tof_service is not None else None
+                if tof_service is not None or service_poller is not None:
+                    svc_rx = (f"lines={tof_service.stats.accepted}/{tof_service.stats.lines}"
+                              if tof_service is not None else "")
+                    if service_poller is not None:
+                        svc_rx += f" polls={service_poller.stats.ok}/{service_poller.stats.polls}"
+                    mlp_status += (
+                        f" | svc={svc.get('posture')}/{svc.get('posture_confidence')} valid={int(bool(svc.get('valid')))} "
+                        f"online={svc.get('online_sensors')} {svc_rx}"
+                        if svc else f" | svc=- {svc_rx}"
+                    )
                 print(
                     f"[bridge] uart frames={st.frames} dropped={st.dropped} hb={st.heartbeats} "
                     f"unknown={st.unknown_types} grids={st.grids} parts={st.grid_parts} "
