@@ -1,6 +1,9 @@
 # 시연 프로파일 demo-a (2026-10-24) — DESKMATE_PROFILE=demo-a 로 켠다. 기본 fsm.yaml·ingest.yaml 위에 깊은 병합으로 얹는다.
 # 전부 "시연 전용 — 시뮬 근거(PC life_sim 10-23), 실측 성공 기록에 쓰지 말 것". 적지 않은 키는 기본값 그대로.
 # 뜻: 사람이 졸면(drowsy·face_down) 몇 분 안에 ACTION_POSTURE → 무드등(control.yaml actions.posture)까지 닿게 타이머만 줄인다.
+# 진행 조건(10-25): demo-a 는 기준선 정규화(normalization baseline)를 그대로 쓰므로 START 보정 300 s 동안 **바르게 앉아 있어야**
+#   하고 엎드림은 그 뒤(약 5 분 뒤)에 시작한다. 보정 중에 엎드리면 자세 모델이 face_down→lean_forward 로 흘러 점수가 0.1~0.2 에 머문다
+#   (PC 시뮬 seed 3). 보정 창을 줄이려면 선형 정규화·확정 0.60 을 함께 바꿔야 하는데 그것이 demo-b 다 — 시연 주력은 demo-b.
 fsm:
   # 10-25 PC 폐루프 시뮬: 엎드림(face_down δ 1.0)만으로는 기본 가중치(npc posture 0.40, 호흡 꺼져 재정규화 → 0.53)가
   # 확정 기준에 못 미쳐 무드등이 안 켜졌다(실측 끄덕임 recall 0.16 이라 시연은 엎드림으로 간다). 자세 몫을 올린다 — 보드 기본(fsm.yaml)은 그대로.
@@ -22,12 +25,20 @@ fsm:
     conf_auto: 0.60                 # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 0.75 (이상이면 자동 실행)
   thresholds:
     still_asleep_delta: 0.9
+    monitor_recovered_below: 0.30   # 기본 null. 점수가 회복 수준(recovery_success)이면 진입 대비 부호 잡음으로 격상하지 않는다(PC 시뮬 10-25)
 learning:
   keep_floor: 0.70                 # 확정 기준을 넘은 점수는 학습기가 끌어내리지 못함 — PC 리허설 10-25 근거(keep_floor 0.60 → demo-B 첫 깨우기 662/292/102 s → 102/102/102 s). 기본 0.85 = 이 프로파일의 fsm thresholds.fatigue_confirm
 personalize:
   gate:
     conf_auto: 0.60                 # 시연 전용 — PC 리허설 10-24 근거. 기본 0.75. FSM gate.conf_auto 와 같은 값으로 맞춘 것 — 다르면 정책이 FSM 자동을 제안(personalize:ask)으로 낮춰 무드등이 자동으로 안 켜진다
 ingest:
+  tof:
+    # 10-25 PC 시뮬: 자세 몫 0.80 에서 ESP32 0x03 규칙 졸음 플래그·끄덕임(δ 1.0)이 깨어 있는 사람(턱 괴기·타이핑)에게 무드등을
+    # 헛켰다(턱 괴기 600 s 플래그 49/60 tick → C 0.81). posture_source: service 라 자세 모델 라벨(face_down·drowsy)은 그대로 1.0,
+    # 규칙 플래그·끄덕임만은 0.3 으로 — 자세 몫 0.80 × 0.3 = 0.24 (+0.1e) 로 의심(0.40) 아래, still_asleep_delta 0.9 에도 못 미친다.
+    # 0 이 아니라 0.3 인 이유: 모델이 라벨을 놓친(unknown) 구간의 약한 보조 증거로는 남긴다 — 단독으로는 아무 상태도 못 바꾼다.
+    rule_drowsy_delta: 0.3          # 기본 1.0
+    nod_delta_max: 0.3              # 기본 1.0
   pc_ratio_window_sec: 120          # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 900 (PC/비PC 컨텍스트 창)
   elapsed:
     reset_on_rest: true             # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 10-25 부터 보드 기본도 true (휴식 뒤 경과 시간 초기화)

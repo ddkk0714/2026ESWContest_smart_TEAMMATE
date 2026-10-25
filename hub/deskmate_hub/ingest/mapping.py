@@ -120,7 +120,14 @@ def _tof_posture_signal(data: dict[str, Any], cfg: dict[str, Any]) -> Signal:
     phi = max(float(phi_table.get(posture, 0.0)), motion * float(cfg["motion_phi_weight"]))
     nod = data.get("nod_rate_hz")
     nod_delta = _ramp(nod, 0.0, float(cfg["nod_rate_full_hz"])) if nod is not None else 0.0
-    delta = max(float(delta_table.get(posture, 0.0)), nod_delta, 1.0 if data.get("drowsy") else 0.0)
+    nod_delta = min(nod_delta, float(cfg.get("nod_delta_max", 1.0)))        # 0x03 끄덕임 증거 상한(시연 프로파일 0.3)
+    if data.get("drowsy_model"):
+        flag_delta = 1.0                                                       # 자세 모델(서비스)이 drowsy 라고 했다 — 라벨 증거와 같은 힘
+    elif data.get("drowsy"):
+        flag_delta = float(cfg.get("rule_drowsy_delta", 1.0))                 # ESP32 0x03 규칙 플래그만 — 상한(시연 프로파일 0.3)
+    else:
+        flag_delta = 0.0
+    delta = max(float(delta_table.get(posture, 0.0)), nod_delta, flag_delta)
     return Signal(phi=_clip(phi), delta=_clip(delta), available=True)
 
 
@@ -178,6 +185,7 @@ def _tof_with_model(view: CacheView, tof_data: dict[str, Any], now: float, cfg: 
             return dict(tof_data, posture=str(svc.data["posture"]),
                         posture_confidence=float(svc.data.get("posture_confidence") or 0.0),
                         drowsy=bool(tof_data.get("drowsy")) or bool(svc.data.get("drowsy")),
+                        drowsy_model=bool(svc.data.get("drowsy")),      # 모델 라벨 drowsy 는 상한 없이 1.0(_tof_posture_signal)
                         misplaced=bool(svc.data.get("misplaced", False)), posture_source="service")
         source = str((tcfg.get("service") or {}).get("fallback", "mlp"))
     if source != "mlp":

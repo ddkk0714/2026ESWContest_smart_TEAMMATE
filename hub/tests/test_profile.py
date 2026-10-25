@@ -67,8 +67,9 @@ def test_shipped_profiles_only_touch_keys_the_engine_knows():
     # demo-b-study = demo-b 전부 + 수험생 자세 가중치(10-25)
     study = load_profile("demo-b-study")
     assert study["fsm"] == b["fsm"] and study["personalize"] == b["personalize"]
-    assert {k: v for k, v in study["ingest"].items() if k != "tof"} == b["ingest"]
+    assert {k: v for k, v in study["ingest"].items() if k != "tof"} == {k: v for k, v in b["ingest"].items() if k != "tof"}
     tof = study["ingest"]["tof"]
+    assert {k: v for k, v in tof.items() if k not in ("posture_phi", "posture_delta")} == b["ingest"]["tof"]   # 규칙 플래그·끄덕임 상한 0.3 은 공통
     assert tof["posture_phi"] == {"lean_forward": 0.0, "forward_head": 0.1, "chin_rest": 0.3}
     assert tof["posture_delta"] == {"lean_forward": 0.0, "forward_head": 0.05, "chin_rest": 0.3}
 
@@ -104,7 +105,10 @@ def test_env_profile_overlays_live_hub(monkeypatch):
     assert hub.learning_cfg["keep_floor"] == 0.70 and hub.learner is not None and hub.learner.c["keep_floor"] == 0.70
     # 건드리지 않은 부분은 기본과 같다
     # 건드리지 않은 부분은 기본과 같다(focus 가중치·tof). fatigue 가중치는 10-25 엎드림 시연을 위해 프로파일이 얹는다
-    assert hub.fsm_cfg["weights"]["focus"] == load_config()["weights"]["focus"] and hub.ingest_cfg["tof"] == load_ingest_config()["tof"]
+    assert hub.fsm_cfg["weights"]["focus"] == load_config()["weights"]["focus"]
+    capped = {"rule_drowsy_delta", "nod_delta_max"}                     # 시연은 0x03 플래그·끄덕임 δ 상한만 0.3 으로 (10-25)
+    assert {k: v for k, v in hub.ingest_cfg["tof"].items() if k not in capped} == {k: v for k, v in load_ingest_config()["tof"].items() if k not in capped}
+    assert hub.ingest_cfg["tof"]["rule_drowsy_delta"] == 0.3 == hub.ingest_cfg["tof"]["nod_delta_max"]
     assert hub.fsm_cfg["weights"]["fatigue"]["npc"]["posture"] == 0.80
 
     monkeypatch.setenv(PROFILE_ENV, "demo-b-study")

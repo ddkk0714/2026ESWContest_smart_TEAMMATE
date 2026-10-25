@@ -24,6 +24,7 @@ fsm:
     conf_auto: 0.55                 # 기본 0.75
   thresholds:
     still_asleep_delta: 0.9
+    monitor_recovered_below: 0.30   # 기본 null. 점수가 회복 수준(recovery_success)이면 진입 대비 부호 잡음으로 격상하지 않는다(PC 시뮬 10-25)
     fatigue_confirm: 0.60           # 기본 0.70
 learning:
   keep_floor: 0.60                 # 확정 기준을 넘은 점수는 학습기가 끌어내리지 못함 — PC 리허설 10-25 근거(keep_floor 0.60 → demo-B 첫 깨우기 662/292/102 s → 102/102/102 s). 기본 0.85 = 이 프로파일의 fsm thresholds.fatigue_confirm
@@ -36,6 +37,12 @@ ingest:
   elapsed:
     reset_on_rest: true             # 10-25 부터 보드 기본도 true
   tof:
+    # 10-25 PC 시뮬: 자세 몫 0.80 에서 ESP32 0x03 규칙 졸음 플래그·끄덕임(δ 1.0)이 깨어 있는 사람(턱 괴기·타이핑)에게 무드등을
+    # 헛켰다(턱 괴기 600 s 플래그 49/60 tick → C 0.81). posture_source: service 라 자세 모델 라벨(face_down·drowsy)은 그대로 1.0,
+    # 규칙 플래그·끄덕임만은 0.3 으로 — 자세 몫 0.80 × 0.3 = 0.24 (+0.1e) 로 의심(0.40) 아래, still_asleep_delta 0.9 에도 못 미친다.
+    # 0 이 아니라 0.3 인 이유: 모델이 라벨을 놓친(unknown) 구간의 약한 보조 증거로는 남긴다 — 단독으로는 아무 상태도 못 바꾼다.
+    rule_drowsy_delta: 0.3          # 기본 1.0
+    nod_delta_max: 0.3              # 기본 1.0
     posture_phi:
       lean_forward: 0.0             # 시연 전용 — 시뮬 근거(수험생 페르소나). 기본 0.2. 책 읽는 숙임을 집중 저하로 안 본다
       forward_head: 0.1             # 기본 0.3. v4 가 독서 59 % 를 거북목으로 봄

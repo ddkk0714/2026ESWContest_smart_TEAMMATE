@@ -270,8 +270,14 @@ class FSMEngine:
             # TODO(9월): C_fatigue trend 를 5~10분 윈도우로 측정. 지금은 진입 대비 부호로 판정.
             # timers.monitor_window_sec(없으면 0 = 다음 tick 에 바로 판정): 개입 효과가 나타날 시간을 기다린 뒤 판정한다.
             asleep = self._asleep(frame)
+            recovered_below = self.th.get("monitor_recovered_below")
             if (now - self._state_since) < self.tm.get("monitor_window_sec", 0):
                 pass
+            elif recovered_below is not None and not asleep and c.c_fatigue < float(recovered_below):
+                # thresholds.monitor_recovered_below(시연): 점수가 이미 회복 수준이면 진입 대비 부호(0.03 vs 0.05 같은 잡음)로
+                # 격상하지 않는다 — PC 시뮬 10-25: 깬 뒤 C 0.03~0.08 인데 MONITOR→ESCALATE→ACTION_BREAK→REST 로 이어졌다.
+                self._goto(State.RECOVERY, now)
+                actions += ["reward:+", "update_ai_policy"]
             elif asleep or (asleep is not None and self._last_cause == "posture"):
                 # thresholds.still_asleep_delta: 점수는 30 s 안에 거의 안 움직여 부호 판정이 잡음이다(PC life_sim 10-24) — 자세로 판정.
                 # 아직 졸음이면 어떤 원인이든 격상, 깨어 있으면 자세 원인일 때만 회복(다른 원인은 지금처럼 점수 부호)

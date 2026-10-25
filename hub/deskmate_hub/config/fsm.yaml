@@ -30,6 +30,7 @@ thresholds:
   recovery_success: 0.30     # 회복 승인
   recovery_fail: 0.70        # 회복 실패 → 격상
   still_asleep_delta: null    # (시연) MONITOR·RECOVERY 판정을 자세로: 자세 delta 가 이 이상(졸음·엎드림 1.0)이면 격상. null = 점수 부호(지금 동작)
+  monitor_recovered_below: null   # (시연) MONITOR 에서 점수가 이 아래면(깨어 있고) 진입 대비 부호와 무관하게 RECOVERY. null = 지금 동작(부호 판정만)
 
 gate:
   conf_auto: 0.75      # 이상 → 자동 제어

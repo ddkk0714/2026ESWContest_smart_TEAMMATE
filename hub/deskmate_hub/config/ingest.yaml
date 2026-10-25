@@ -76,7 +76,8 @@ tof:
   #   rule    — ESP32 TofPosture 추정기(firmware/.../preprocess/tof)의 자세 enum (0x03). 모델이 없거나 낡으면 자동으로 이쪽.
   # motion_score·nod_rate_hz 는 언제나 0x03 규칙 값이다. drowsy 는 0x03 플래그 또는 서비스 라벨 drowsy.
   # phi(집중 저하 증거) = max(posture_phi[posture], motion_score × motion_phi_weight)
-  # delta(피로 증거)   = max(posture_delta[posture], nod_rate_hz / nod_rate_full_hz, drowsy 면 1.0)
+  # delta(피로 증거)   = max(posture_delta[posture], min(nod_rate_hz / nod_rate_full_hz, nod_delta_max), 졸음 플래그)
+  #   졸음 플래그: 자세 모델(서비스) 라벨 drowsy 면 1.0, ESP32 0x03 규칙 플래그만이면 rule_drowsy_delta(기본 1.0)
   # 값은 전부 실측 전 잠정이다(2026-10-16). 10-12 시뮬에서 규칙 판정 정확도가 48% 라 confidence 로 거른다.
   posture_source: service
   service:
@@ -117,6 +118,9 @@ tof:
     misplaced: 0.0
   motion_phi_weight: 0.5         # 안절부절(motion_score 1.0)이면 phi 0.5
   nod_rate_full_hz: 0.05         # 60 s 에 3번 끄덕이면 delta 1.0
+  nod_delta_max: 1.0             # 0x03 끄덕임 증거의 상한. 시연 프로파일은 0.3 — 깨어 있는 사람의 고개 움직임을 규칙이 끄덕임으로 세어
+                                 # 자세 몫 0.80 과 곱하면 무드등이 헛켜졌다(PC 시뮬 10-25: 턱 괴기 600 s 에 플래그 49/60 tick·끄덕임 2~6)
+  rule_drowsy_delta: 1.0         # 0x03 규칙 졸음 플래그만 있을 때의 delta(모델 라벨 drowsy 는 언제나 1.0). 시연 프로파일 0.3
   mlp:
     # Pi 4 순수 Python MLP (hub/deskmate_hub/posture/tof_mlp.py). 가중치 JSON 은
     # dataset/tof_sim/export_mlp_json.py 가 train_mlp.py 의 .npz 에서 만든다. 파일이 없으면 rule 로 폴백.
