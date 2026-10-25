@@ -1,4 +1,4 @@
-"""Per-service in-memory trial; no credential provider, files, MQTT or scheduling."""
+"""Token-free worker session; native owns credentials, mode authorization and HTTPS."""
 
 import copy
 import os
@@ -29,6 +29,7 @@ class SafeApiFailure(ApiFailure):
                 "invalid_response",
                 "transport_unavailable",
                 "api_error",
+                "authorization_expired_or_revoked",
             }
             else "api_or_network_error"
         )
@@ -143,6 +144,8 @@ class Session:
             self.ctx["uncertain"] = True
             raise StopTrial("backend_changed_requires_new_session")
         self.ctx["backend"] = backend
+        if backend not in ("fixture", "live_read_only", "live_manual"):
+            raise StopTrial("invalid_backend")
         op = request.get("op")
         allowed = {
             "op",
@@ -153,9 +156,12 @@ class Session:
             "approved",
             "physical_online_confirmed",
             "no_external_change",
+            "auth_session_id",
         }
         if set(request) - allowed:
             raise StopTrial("unexpected_request_fields")
+        if backend == "live_read_only" and op != "read":
+            raise StopTrial("read_only_operation_blocked")
         if op == "enable_fixture_post":
             if request.get("backend", "fixture") != "fixture":
                 raise StopTrial("live_arming_forbidden")
@@ -176,8 +182,10 @@ class Session:
             self.ctx["physical"] = request["value"]
             return {
                 "status": "user_attestation_recorded",
-                "physical_confirmed": False,
-                "physical_evidence": "fixture_user_attestation_only",
+                "physical_confirmed": backend == "live_manual",
+                "physical_evidence": "user_attestation"
+                if backend == "live_manual"
+                else "fixture_user_attestation_only",
             }
         if op not in ("prepare", "execute"):
             raise StopTrial("unsupported_operation")
@@ -294,7 +302,9 @@ class Session:
             public = {"status": "error", "error": "safe_internal_error"}
         public.update(
             backend=request.get("backend", "fixture"),
-            post_enabled=self.ctx["enabled"] and not self.ctx["uncertain"],
+            post_enabled=self.ctx["enabled"]
+            and not self.ctx["uncertain"]
+            and request.get("backend", "fixture") in ("fixture", "live_manual"),
             automatic_control=False,
         )
         if hasattr(self.sdk, "wind"):

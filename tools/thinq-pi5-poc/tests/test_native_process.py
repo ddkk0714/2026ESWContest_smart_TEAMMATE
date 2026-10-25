@@ -126,3 +126,18 @@ def test_worker_timeout_consumes_approval_in_parent(tmp_path):
         assert r.call(op="prepare", value="LOW")["status"] == "blocked"
     finally:
         r.close()
+
+
+def test_rejected_secret_rpc_never_spawns_a_python_child(tmp_path):
+    marker = tmp_path / "worker-was-executed"
+    wrapper = tmp_path / "python-wrapper"
+    wrapper.write_text('#!/bin/sh\ntouch "' + str(marker) + '"\nexit 7\n')
+    wrapper.chmod(0o700)
+    runner = Runner(str(wrapper))
+    try:
+        result = runner.call(op="read", PAT="synthetic-rejected-input")
+        assert result["error"] == "unexpected_request_fields"
+        assert not marker.exists()
+        assert "synthetic-rejected-input" not in json.dumps(result)
+    finally:
+        runner.close()

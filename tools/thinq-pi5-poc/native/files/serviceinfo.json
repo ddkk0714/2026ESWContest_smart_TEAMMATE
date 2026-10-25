@@ -1,9 +1,9 @@
 {
   "id": "com.deskmate.thinqpoc1",
   "name": "deskmate_thinq_poc",
-  "description": "Isolated fixture trial; Live blocked pending credential and policy validation",
+  "description": "Isolated ThinQ credential-session prototype; unverified platform bindings block Live",
   "entry": "deskmate_thinq_poc",
   "type": "native",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "run_after_installation": false
 }

@@ -1,4 +1,7 @@
 #include "https.h"
+#include "auth.h"
+#include "bindings.h"
+#include <pwd.h>
 #include "embedded.h"
 #ifndef POC_HOST_TEST
 #include <sdbus-c++/sdbus-c++.h>
@@ -12,6 +15,8 @@
 #include <chrono>
 #include <iostream>
 #include <thread>
+#include <set>
+int runCredentialHelper(int,char**);
 using Clock=std::chrono::steady_clock;
 namespace {
 volatile sig_atomic_t stopped=0;
@@ -33,22 +38,39 @@ bool sendLine(int fd,const std::string& line,Clock::time_point deadline) {
  }
  return n==line.size();
 }
-struct RuntimeAccess {
- Credentials credentials;
- bool callerPolicyVerified=false;
-};
-// Deliberate integration boundary: no credential source or policy attestation is invented.
-// A separately approved board-specific provider must replace this empty result.
-RuntimeAccess verifiedRuntimeAccess() { return {}; }
-Json worker(const Json& request,Json& context,const char* python,bool host) {
- const auto access=verifiedRuntimeAccess();
+RoleBindings loadBindings(){
+ RoleBindings b;
+ if(!kBindingsConfigured)return b;
+ auto uid=[](const char* name)->uid_t {const auto* p=getpwnam(name);return p?p->pw_uid:static_cast<uid_t>(-1);};
+ b.service=uid(kServiceUser);b.operatorUid=uid(kOperatorUser);b.ui=uid(kUiUser);
+ const auto missing=static_cast<uid_t>(-1);
+ b.verified=b.service!=0 && b.operatorUid!=0 && b.ui!=0 && b.service!=missing && b.operatorUid!=missing && b.ui!=missing &&
+   getuid()==geteuid() && getuid()==b.service && b.service!=b.operatorUid && b.service!=b.ui && b.operatorUid!=b.ui;
+ b.readOnly=b.verified && kReadOnlyVerified;b.manual=b.readOnly && kManualVerified;return b;
+}
+Json worker(const Json& request,Json& context,const char* python,bool host,AuthStore* auth=nullptr,uid_t caller=static_cast<uid_t>(-1)) {
  if(!request.is_object()) return failure("invalid_request");
  const auto backend=request.value("backend",Json("fixture"));
- const bool live=backend=="live";
- if(backend!="fixture" && !live) return failure("invalid_backend");
- if(live && (!access.credentials.verifiedProvider || !access.callerPolicyVerified))
-  return failure("live_credentials_and_policy_unverified");
+ const bool live=backend=="live_read_only" || backend=="live_manual";
+ if(backend=="live")return failure("live_credentials_and_policy_unverified"); // old ambiguous mode never enabled
+ if(backend!="fixture" && !live)return failure("invalid_backend");
+ std::shared_ptr<Lease> lease;
+ if(live){
+  if(!auth || !auth->bindings().verified)return failure("live_credentials_and_policy_unverified");
+  lease=auth->lease(request.value("auth_session_id",std::string()),backend.get<std::string>(),caller);
+  if(!lease)return failure("credential_session_or_caller_denied");
+  if(backend=="live_read_only" && request.value("op",Json())!="read")return failure("read_only_operation_blocked");
+  // New credential/mode authorization discards old nonces, retaining only same-session target pin.
+  if(context.value("auth_session_id",std::string())!=lease->id || context.value("backend",Json())!=backend){
+   Json target=context.value("private_target",Json());const bool same=context.value("auth_session_id",std::string())==lease->id;
+   context=Json::object();if(same && target.is_string())context["private_target"]=target;
+  }
+  context["auth_session_id"]=lease->id;context["backend"]=backend;context["enabled"]=backend=="live_manual";
+ }else if(context.contains("auth_session_id"))context=Json::object();
  if(request.dump().size()>4096 || context.dump().size()>16384)return failure("request_too_large");
+ const std::set<std::string> allowed{"op","backend","enabled","value","nonce","approved","physical_online_confirmed","no_external_change","auth_session_id"};
+ for(auto it=request.begin();it!=request.end();++it)if(!allowed.count(it.key()))return failure("unexpected_request_fields");
+ if(request.contains("value") && request["value"]!="LOW" && request["value"]!="AUTO")return failure("invalid_control_value");
  auto childContext=context;
  if(request.value("op",Json())=="execute") { context.erase("challenge");context["uncertain"]=true; }
  int input[2],output[2];if(pipe2(input,O_CLOEXEC)!=0)return failure("pipe_failed");
@@ -74,10 +96,16 @@ Json worker(const Json& request,Json& context,const char* python,bool host) {
  auto cleanup=[&](){close(input[1]);close(output[0]);reap(pid);};
  if(!sendLine(input[1],Json{{"request",request},{"context",childContext}}.dump()+"\n",deadline)) {cleanup();return failure("worker_input_failed");}
  std::string buffer;Json result=failure("worker_timeout_or_runtime_unavailable");
- GuardedHttps https(access.credentials);
+ // No plaintext credential copies exist before fork. Mapped token pages are DONTFORK.
+ Credentials credentials;
+ if(live){
+  credentials=lease->credentials();
+  credentials.authorized=[lease](){return lease->valid() && !stopped;};
+ }
+ GuardedHttps https(std::move(credentials));
  bool postAttempted=false;
  int httpCalls=0;
- while(!stopped && Clock::now()<deadline) {
+ while(!stopped && Clock::now()<deadline && (!live || lease->valid())) {
   pollfd p{output[0],POLLIN,0};if(poll(&p,1,100)<=0)continue;
   char chunk[4096];const auto n=read(output[0],chunk,sizeof(chunk));if(n<=0)break;
   buffer.append(chunk,static_cast<size_t>(n));if(buffer.size()>1024*1024){result=failure("output_limit");break;}
@@ -109,17 +137,29 @@ Json worker(const Json& request,Json& context,const char* python,bool host) {
      https.approve(value.get<std::string>());
     }
     const auto response=https.request({method,frame["path"].get<std::string>(),payload});
+    if(response.value("http_status",Json())==401 || response.value("http_status",Json())==403){
+     auth->revoke();context=Json::object();result={{"status","api_error"},{"http_status",response["http_status"]},{"post_enabled",false},{"automatic_resend",false}};goto done;
+    }
     if(!sendLine(input[1],response.dump()+"\n",deadline)){result=failure("worker_input_failed");goto done;}
    }
   }
  }
- done: cleanup();return result;
+ done:
+ if(live && !lease->valid()){
+  context=Json::object();
+  if(!result.contains("http_status"))result=failure("authorization_expired_or_revoked");
+  result["outcome_unknown"]=postAttempted;result["automatic_resend"]=false;
+ }
+ cleanup();return result;
 }
 }
 int main(int argc,char** argv) {
+ if(argc>1 && std::string(argv[1])=="--credential-stdin")return runCredentialHelper(argc-1,argv+1);
  std::signal(SIGINT,stop);std::signal(SIGTERM,stop);std::signal(SIGPIPE,SIG_IGN);
  Json context=Json::object();
  try {
+ RoleBindings bindings=loadBindings();if(!hardenProcess())bindings.verified=false;
+ AuthStore auth(bindings);
 #ifdef POC_HOST_TEST
   if(argc==3 && std::string(argv[1])=="--stdio-host-fixture") {
    std::string line;while(!stopped && std::getline(std::cin,line)) {
@@ -128,17 +168,30 @@ int main(int argc,char** argv) {
    return 0;
   }
 #else
-  (void)argc;(void)argv;
+  if(argc!=1)return 64;
 #endif
  #ifndef POC_HOST_TEST
   auto bus=sdbus::createSystemBusConnection(sdbus::ServiceName{id});
+  CredentialServer credentials(auth,credentialEndpoint(getuid(),getpid()));
   auto object=sdbus::createObject(*bus,sdbus::ObjectPath{"/com/deskmate/thinqpoc1"});
   object->addVTable(sdbus::registerMethod("Exchange").implementedAs([&](const std::string& input){
-   try{return worker(Json::parse(input),context,"/restricted/python3/usr/bin/python3",false).dump();}
+   try{
+    const auto caller=object->getCurrentlyProcessedMessage().getCredsEuid();
+    if(!bindings.verified || caller==0 || caller!=bindings.ui)return failure("caller_policy_unverified_or_denied").dump();
+    return worker(Json::parse(input),context,"/restricted/python3/usr/bin/python3",false,&auth,caller).dump();
+   }
    catch(...){return failure("invalid_request").dump();}
+  }),sdbus::registerMethod("AuthStatus").implementedAs([&](){
+   try{
+    const auto caller=object->getCurrentlyProcessedMessage().getCredsEuid();
+    if(bindings.verified && caller!=0 && (caller==bindings.ui || caller==bindings.operatorUid))return auth.status().dump();
+    return failure("caller_policy_unverified_or_denied").dump();
+   }catch(...){return failure("caller_identity_unavailable").dump();}
   })).forInterface(sdbus::InterfaceName{id});
+  if(bindings.verified && !credentials.start())return 1;
   bus->enterEventLoopAsync();const auto deadline=Clock::now()+std::chrono::minutes(10);
-  while(!stopped && Clock::now()<deadline)std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  while(!stopped && Clock::now()<deadline){auth.tick();std::this_thread::sleep_for(std::chrono::milliseconds(100));}
+  credentials.stop();
   bus->leaveEventLoop();return 0;
 #else
   return 64;

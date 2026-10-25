@@ -9,6 +9,9 @@ class Fake implements PocClient {
   final calls = <Map<String, dynamic>>[];
   Map<String, dynamic>? readResult;
   @override
+  Future<Map<String, dynamic>> authStatus() async =>
+      {'status': 'platform_binding_unverified', 'post_enabled': false};
+  @override
   Future<void> close() async {}
   @override
   Future<Map<String, dynamic>> exchange(Map<String, dynamic> r) async {
@@ -117,5 +120,35 @@ void main() {
     expect(find.text('pm1: 8 · ok'), findsOneWidget);
     expect(find.text('monitoring_mode: ON_WORKING · ok'), findsOneWidget);
     expect(find.textContaining('조회한 풍량: AUTO'), findsOneWidget);
+  });
+  testWidgets('Live read-only without lease never sends GET or POST',
+      (tester) async {
+    final c = Fake();
+    await tester.pumpWidget(PocApp(client: c));
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('live_read_only').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Live 목록·Profile·State GET'));
+    await tester.pumpAndSettle();
+    expect(c.calls, isEmpty);
+    expect(find.textContaining('credential_session_or_mode_unavailable'),
+        findsOneWidget);
+    expect(tester.widget<Switch>(find.byType(Switch)).onChanged, isNull);
+  });
+  testWidgets('Live manual selection alone cannot arm control', (tester) async {
+    final c = Fake();
+    await tester.pumpWidget(PocApp(client: c));
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('live_manual').last);
+    await tester.pumpAndSettle();
+    expect(
+        tester
+            .widget<FilledButton>(
+                find.widgetWithText(FilledButton, 'LOW 승인 시험'))
+            .onPressed,
+        isNull);
+    expect(c.calls, isEmpty);
   });
 }

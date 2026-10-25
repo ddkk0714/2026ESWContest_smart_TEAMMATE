@@ -45,3 +45,6 @@ venv/
 CMakeCache.txt
 CMakeFiles/
 compile_commands.json
+
+# Generated per-install non-secret account policy; source template stays tracked.
+native/files/dbus/*.conf

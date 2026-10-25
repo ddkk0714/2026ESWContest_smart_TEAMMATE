@@ -27,18 +27,54 @@ class _TrialPageState extends State<TrialPage> {
   Map<String, dynamic>? _state;
   bool _busy = false;
   bool _enabled = false;
+  String _mode = 'fixture';
+  Map<String, dynamic> _auth = {};
+  bool get _liveReady =>
+      _auth['status'] == 'credential_active' &&
+      _auth['mode'] == _mode &&
+      _auth['session_id'] is String &&
+      (_auth['expires_in_seconds'] as num? ?? 0) > 0;
+  Future<void> _refreshAuth() async {
+    final result = await widget.client.authStatus();
+    if (!mounted) return;
+    setState(() {
+      _auth = result;
+      _enabled = _mode == 'live_manual' &&
+          _liveReady &&
+          result['post_enabled'] == true;
+    });
+  }
+
   Future<Map<String, dynamic>> _exchange(Map<String, dynamic> command) async {
     if (_busy) return {'status': 'busy'};
+    if (_mode != 'fixture' && command['backend'] != 'live') {
+      await _refreshAuth();
+      if (!mounted ||
+          !_liveReady ||
+          (_mode == 'live_read_only' && command['op'] != 'read')) {
+        if (mounted) {
+          setState(() => _result = {
+                'status': 'blocked',
+                'error': 'credential_session_or_mode_unavailable'
+              });
+        }
+        return _result;
+      }
+    }
     setState(() => _busy = true);
-    final result =
-        await widget.client.exchange({'backend': 'fixture', ...command});
+    final result = await widget.client.exchange({
+      'backend': _mode,
+      if (_mode != 'fixture') 'auth_session_id': _auth['session_id'],
+      ...command
+    });
     if (!mounted) return result;
     setState(() {
       _busy = false;
       _result = result;
       if (result['received_at'] != null) _receivedAt = result['received_at'];
       if (result.containsKey('api_accepted')) _lastExecution = result;
-      _enabled = result['post_enabled'] == true;
+      _enabled = result['post_enabled'] == true &&
+          (_mode == 'fixture' || (_mode == 'live_manual' && _liveReady));
       if (result['fields'] is Map) {
         _fields = Map<String, dynamic>.from(result['fields']);
       }
@@ -62,14 +98,16 @@ class _TrialPageState extends State<TrialPage> {
         context: context,
         builder: (context) => StatefulBuilder(
             builder: (context, update) => AlertDialog(
-                  title: Text('Fixture windStrength → $value'),
+                  title: Text(
+                      '${_mode == 'fixture' ? 'Fixture' : 'Live manual'} windStrength → $value'),
                   content: Column(mainAxisSize: MainAxisSize.min, children: [
-                    const Text(
-                        '가상 시험입니다. 실제 ThinQ POST·가전 제어를 실행하지 않습니다. 승인 유효시간 30초.'),
+                    Text(_mode == 'fixture'
+                        ? '가상 시험입니다. 실제 ThinQ POST·가전 제어를 실행하지 않습니다. 승인 유효시간 30초.'
+                        : '실제 풍량 변경 요청입니다. 별도 실기 승인과 현재 본체 상태 확인이 필요합니다. 승인 유효시간 30초.'),
                     CheckboxListTile(
                         value: checked,
-                        title:
-                            const Text('가상 POWER_ON / CLEAN 상태와 외부 조작 없음을 확인'),
+                        title: Text(
+                            '${_mode == 'fixture' ? '가상 ' : ''}POWER_ON / CLEAN 상태와 외부 조작 없음을 확인'),
                         onChanged: (value) =>
                             update(() => checked = value == true)),
                   ]),
@@ -101,18 +139,47 @@ class _TrialPageState extends State<TrialPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('독립 ThinQ PoC · Fixture ONLY')),
+        appBar: AppBar(title: Text('독립 ThinQ PoC · $_mode')),
         body: SingleChildScrollView(
             padding: const EdgeInsets.all(16),
             child:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('실측 아님 · Live GET/POST 차단 · 자동 제어 없음',
+              Text(
+                  _mode == 'fixture'
+                      ? '실측 아님 · Live GET/POST 차단 · 자동 제어 없음'
+                      : 'Live 권한은 서비스에서 재검사 · 자동 제어 없음',
                   style: TextStyle(color: Colors.deepOrange, fontSize: 20)),
               const Text('AS183HWWA / AIR_910604_WW — PM 단위·PM2 의미·측정 시각 미확인'),
+              DropdownButton<String>(
+                  value: _mode,
+                  items: const ['fixture', 'live_read_only', 'live_manual']
+                      .map((m) => DropdownMenuItem(value: m, child: Text(m)))
+                      .toList(),
+                  onChanged: _busy
+                      ? null
+                      : (mode) {
+                          if (mode == null) return;
+                          setState(() {
+                            _mode = mode;
+                            _auth = {};
+                            _enabled = false;
+                            _fields = {};
+                            _state = null;
+                            _receivedAt = null;
+                            _result = {'status': 'not_read'};
+                            _lastExecution = {};
+                          });
+                        }),
+              TextButton(
+                  onPressed: _busy ? null : _refreshAuth,
+                  child: const Text('자격 세션 상태 확인 (토큰 없음)')),
+              Text('자격 상태: ${_auth['status'] ?? 'unverified'}'),
               Wrap(spacing: 8, children: [
                 FilledButton(
                     onPressed: _busy ? null : () => _exchange({'op': 'read'}),
-                    child: const Text('Fixture 목록·Profile·State GET')),
+                    child: Text(_mode == 'fixture'
+                        ? 'Fixture 목록·Profile·State GET'
+                        : 'Live 목록·Profile·State GET')),
                 OutlinedButton(
                     onPressed: _busy
                         ? null
@@ -120,9 +187,11 @@ class _TrialPageState extends State<TrialPage> {
                     child: const Text('Live 차단 사유 확인')),
               ]),
               SwitchListTile(
-                  title: const Text('Fixture POST 시험 활성화 (기본 OFF)'),
+                  title: Text(_mode == 'fixture'
+                      ? 'Fixture POST 시험 활성화 (기본 OFF)'
+                      : 'Live POST는 별도 터미널 승인과 검증된 서비스만 허용'),
                   value: _enabled,
-                  onChanged: _busy
+                  onChanged: _busy || _mode != 'fixture'
                       ? null
                       : (v) => _exchange(
                           {'op': 'enable_fixture_post', 'enabled': v})),
@@ -170,11 +239,15 @@ class _TrialPageState extends State<TrialPage> {
                               'approved': true,
                               'value': _result['value']
                             }),
-                    child: const Text('가상 본체 확인 기록')),
+                    child: Text(_mode == 'fixture'
+                        ? '가상 본체 확인 기록'
+                        : '실제 본체 동작 사용자 확인 기록')),
               ]),
               Text(
                   'POST 접수: ${_lastExecution['api_accepted'] ?? '미확인'} / 별도 GET 일치: ${_lastExecution['state_match'] ?? '미확인'}'),
               const Text('실제 물리 동작 확인: 미검증 — Fixture 응답은 실기 성공 근거가 아닙니다.'),
+              if (_result['physical_evidence'] == 'user_attestation')
+                const Text('사용자가 본체 동작 확인을 기록함 · 자동 검증 아님'),
               if (_busy) const LinearProgressIndicator(),
             ])),
       );

@@ -7,16 +7,17 @@ call was made in this work. Fixture results are never evidence of real control.
 - App/package: `com.atlas.app.deskmate_thinq_poc`
 - Native service/package: `com.deskmate.thinqpoc1`
 - D-Bus path/interface: `/com/deskmate/thinqpoc1`, `com.deskmate.thinqpoc1`
-- Method: `Exchange(s) -> s`, fixed operation vocabulary, no token/device-ID input.
+- Methods: `Exchange(s) -> s` and metadata-only `AuthStatus() -> s`; no token/device-ID input.
 - Source reuse: `PROVENANCE.json`, copied verbatim from ThinQ commit `1ee37c6`.
 - Controls: only `airFlow.windStrength` LOW then AUTO, no windStrengthDetail write.
 
-**Live GET and POST are deliberately blocked.** `verifiedRuntimeAccess()` returns
-no credential provider or verified caller policy. No RPC, environment variable,
-UI switch, runtime file or command argument can bypass this boundary. The UI switch
-only enables clearly labelled Fixture POST. This is NOT a ready-to-run real-device
-trial or a completed Live Gateway. No SDK wheels, PAT, real identifiers, user
-credentials, account data, private API key, D-Bus .conf or AppArmor policy is shipped.
+**Default IPKs keep Live GET/POST and the credential receiver blocked.**
+The new conditional A prototype uses verified SSH stdin, a nonroot same-binary
+helper and a peer-credential-checked Unix socket. It never puts PAT in D-Bus,
+Flutter, files, argv or environment. Account bindings/AppArmor/CA remain unverified;
+no real token, board or Cloud call was used. Review
+[credential design](docs/CREDENTIAL-DELIVERY.md) and
+[board gates](docs/BOARD-TRIAL.md) before any separate trial approval.
 
 ## Architecture and execution evidence
 
@@ -33,9 +34,9 @@ The C++ HTTPS code follows installed official SDK 1.0.14 request endpoints/heade
 including response envelope and `x-conditional-control`, TLS peer/host verification,
 no redirects/proxy inheritance, fixed KR host, pinned target, bounded response and
 single-use POST permit. No actual TLS handshake or Cloud response is verified here.
-The service has no verified credential source: installing these IPKs cannot fix
-that missing integration. A separately approved secure provider + caller policy,
-then another review/test/build, is required before Live use.
+The credential source has Fake-Token host evidence only. Installing the default
+IPKs cannot establish platform roles, policy loading, helper permissions or TLS.
+A separately approved binding/profile review and build precede any Live trial.
 
 Existing Python SDK reuse was considered first. Its aiohttp/cryptography/AWS native
 extensions have not been verified for a new Pi 5 service profile/ARM64. We reuse the
@@ -74,25 +75,26 @@ explicitly reconstructed, not new real measurements. UI snapshots are labelled.
 ## Build and tests
 
 Use the existing `deskmate-atlas-atlas-dev-1` container/image and SDK, never /workspace.
-Build working copy is `/tmp/deskmate-thinq-poc-20261025`, marked `.poc-only`.
-Do not recreate the container. Artifacts/logs stay outside team Git repositories.
+Every build creates a NEW marked container /tmp directory, never /workspace,
+and requires a NEW output directory so original IPKs/validation are preserved.
 
 ```bash
-./scripts/prepare_workspace.sh
-./scripts/build.sh
-python3 scripts/inspect_packages.py
+./scripts/build.sh --output-dir /absolute/path/to/NEW-artifact-directory
+python3 scripts/inspect_packages.py --directory /absolute/path/to/NEW-artifact-directory
 ```
 
-The script fails if the private marker is absent. First-time workspace setup must
-use a new empty directory, verify no collision and place that marker deliberately.
-The SDK / Flutter plugin cache must already exist; no system dependency install.
-`artifacts/package-inspection.json` records actual SHA-256 and ELF dependencies.
+The existing SDK/Flutter dependency cache must already exist. No container creation,
+package installation, system dependency install or board invocation is included.
+The output's `container-workspace.txt` and `package-inspection.json` record exact
+working path, hashes and AArch64 ELF dependencies. Default builds explicitly ignore
+external binding variables; no guessed account or concrete policy is shipped.
 No install/activation command is hidden in the build script. The independent
 repository has no remote or shared Git object directory. Local commits require
 explicit user approval.
 
 See `docs/BOARD-TRIAL.md` for the separate approval and platform/security gates.
-See `artifacts/validation.json` for final host/build evidence and current limits.
+Initial evidence remains in `artifacts/validation.json` unchanged. New evidence
+is under `artifacts/pat-security-20261025-*/`; it does not replace initial records.
 
 State comparisons detect visible configuration changes, not an unobservable
 change-away-and-back history. User no-external-operation attestation remains
@@ -106,3 +108,7 @@ The selected private device ID and backend mode are pinned across child RPCs in
 the parent's in-memory context, stripped from public replies. Same-model device
 replacement and Fixture-to-Live authorization reuse are blocked. No private
 context is written to disk or broadcast over D-Bus.
+
+PAT-session implementation evidence and limitations: [host validation](docs/PAT-HOST-VALIDATION-20261025.md).
+
+Team snapshot provenance and re-executed validation: [TEAM-PORT-VALIDATION](docs/TEAM-PORT-VALIDATION.md).

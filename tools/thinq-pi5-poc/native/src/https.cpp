@@ -17,10 +17,14 @@ size_t append(char* data, size_t size, size_t n, void* dest) {
  out.append(data,bytes); return bytes;
 }
 }
+Credentials::~Credentials(){
+ for(auto* s:{&pat,&clientId,&apiKey}) {volatile char* p=s->empty()?nullptr:&(*s)[0];for(size_t i=0;i<s->size();i++)p[i]=0;}
+}
 Json GuardedHttps::request(const HttpsRequest& r) {
  std::string permit;
  if(r.method=="POST") { permit=std::move(permit_);permit_.clear(); }
- if(!credentials_.verifiedProvider || !safeHeader(credentials_.pat) ||
+ if(credentials_.verifiedProvider && credentials_.authorized && !credentials_.authorized())return denied("authorization_expired_or_revoked");
+ if(!credentials_.valid() || !safeHeader(credentials_.pat) ||
     !safeHeader(credentials_.clientId) || !safeHeader(credentials_.apiKey)) return denied("credentials_provider_unverified");
  std::smatch match;
  const bool list=r.path=="/devices";
@@ -30,9 +34,11 @@ Json GuardedHttps::request(const HttpsRequest& r) {
   if(selected_.empty() || selected_!=match[1]) return denied("target_changed");
  }
  if(r.method=="GET") {
+  if(credentials_.mode!="live_read_only" && credentials_.mode!="live_manual")return denied("mode_blocked");
   if(!list && match[2]=="control") return denied("method_blocked");
   if(!r.payload.is_null()) return denied("get_payload_blocked");
  } else if(r.method=="POST") {
+  if(credentials_.mode!="live_manual")return denied("read_only_post_blocked");
   // Permit was consumed before validation and I/O, including rejected attempts.
   if(list || match[2]!="control" || (permit!="LOW" && permit!="AUTO") ||
      r.payload!=Json{{"airFlow",{{"windStrength",permit}}}}) return denied("post_not_approved");
@@ -40,6 +46,7 @@ Json GuardedHttps::request(const HttpsRequest& r) {
  return execute_(r,credentials_); // exactly one call; no retry or automatic cleanup POST
 }
 Json curlRequest(const HttpsRequest& r,const Credentials& c) {
+ if(!c.valid())return denied("authorization_expired_or_revoked");
  auto easy=std::unique_ptr<CURL,decltype(&curl_easy_cleanup)>(curl_easy_init(),curl_easy_cleanup);
  if(!easy) return denied("transport_unavailable");
  unsigned char random[16]; unsigned char encoded[25]{};
@@ -47,11 +54,18 @@ Json curlRequest(const HttpsRequest& r,const Credentials& c) {
  EVP_EncodeBlock(encoded,random,16);
  std::string message(reinterpret_cast<char*>(encoded),22);
  std::replace(message.begin(),message.end(),'+','-'); std::replace(message.begin(),message.end(),'/','_');
- curl_slist* raw=nullptr;
- for(const auto& header:std::vector<std::string>{"Authorization: Bearer "+c.pat,"x-country: KR","x-message-id: "+message,
-    "x-client-id: "+c.clientId,"x-api-key: "+c.apiKey,"x-service-phase: OP","Content-Type: application/json"}) raw=curl_slist_append(raw,header.c_str());
- if(r.method=="POST") raw=curl_slist_append(raw,"x-conditional-control: true");
- auto headers=std::unique_ptr<curl_slist,decltype(&curl_slist_free_all)>(raw,curl_slist_free_all);
+ auto freeHeaders=[](curl_slist* h){for(auto* p=h;p;p=p->next){if(p->data){volatile char* b=p->data;for(size_t i=0,n=std::char_traits<char>::length(p->data);i<n;i++)b[i]=0;}}curl_slist_free_all(h);};
+ auto headers=std::unique_ptr<curl_slist,decltype(freeHeaders)>(nullptr,freeHeaders);
+ auto add=[&](std::string header){
+  auto* next=curl_slist_append(headers.get(),header.c_str());
+  volatile char* p=header.empty()?nullptr:&header[0];for(size_t i=0;i<header.size();i++)p[i]=0;
+  if(!next)throw std::runtime_error("header_allocation_failed");
+  (void)headers.release();headers.reset(next);
+ };
+ // Standard SDK headers only; no cookies or arbitrary caller-provided headers.
+ add("Authorization: Bearer "+c.pat);add("x-country: KR");add("x-message-id: "+message);
+ add("x-client-id: "+c.clientId);add("x-api-key: "+c.apiKey);add("x-service-phase: OP");add("Content-Type: application/json");
+ if(r.method=="POST")add("x-conditional-control: true");
  std::string body; const auto url="https://api-kic.lgthinq.com"+r.path; const auto payload=r.payload.dump();
  curl_easy_setopt(easy.get(),CURLOPT_URL,url.c_str());
  curl_easy_setopt(easy.get(),CURLOPT_HTTPHEADER,headers.get());
@@ -67,10 +81,17 @@ Json curlRequest(const HttpsRequest& r,const Credentials& c) {
  curl_easy_setopt(easy.get(),CURLOPT_CONNECTTIMEOUT_MS,5000L);
  curl_easy_setopt(easy.get(),CURLOPT_TIMEOUT_MS,10000L);
  curl_easy_setopt(easy.get(),CURLOPT_NOSIGNAL,1L);
+ curl_easy_setopt(easy.get(),CURLOPT_NOPROGRESS,0L);
+ curl_easy_setopt(easy.get(),CURLOPT_XFERINFODATA,&c);
+ curl_easy_setopt(easy.get(),CURLOPT_XFERINFOFUNCTION,+[](void* v,curl_off_t,curl_off_t,curl_off_t,curl_off_t)->int{
+  return static_cast<const Credentials*>(v)->valid()?0:1;
+ });
  curl_easy_setopt(easy.get(),CURLOPT_WRITEFUNCTION,append);
  curl_easy_setopt(easy.get(),CURLOPT_WRITEDATA,&body);
  if(r.method=="POST") {curl_easy_setopt(easy.get(),CURLOPT_POST,1L);curl_easy_setopt(easy.get(),CURLOPT_POSTFIELDS,payload.c_str());}
+ if(!c.valid())return denied("authorization_expired_or_revoked");
  const auto code=curl_easy_perform(easy.get());
+ if(code==CURLE_ABORTED_BY_CALLBACK || !c.valid())return denied("authorization_expired_or_revoked");
  if(code!=CURLE_OK) return denied(code==CURLE_OPERATION_TIMEDOUT?"network_timeout":"network_or_tls_error");
  long status=0;curl_easy_getinfo(easy.get(),CURLINFO_RESPONSE_CODE,&status);
  auto data=Json::parse(body,nullptr,false);

@@ -13,11 +13,18 @@ add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/embedded.h
     ${POC_ROOT}/tools/thinq_connect/probe.py ${POC_ROOT}/tools/thinq_connect/manual_trial.py
     ${POC_ROOT}/tools/thinq_connect/air_quality.py)
 add_custom_target(embed_worker DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/embedded.h)
-add_executable(${PROJECT_NAME} src/main.cpp src/https.cpp)
+execute_process(COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/configure_bindings.py "$ENV{POC_BINDINGS_FILE}" ${CMAKE_CURRENT_BINARY_DIR}/bindings.h ${CMAKE_CURRENT_SOURCE_DIR}/files/dbus/com.deskmate.thinqpoc1.conf
+  COMMAND_ERROR_IS_FATAL ANY)
+add_library(poc_auth STATIC src/auth.cpp src/https.cpp)
+target_include_directories(poc_auth PUBLIC src)
+target_compile_options(poc_auth PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(poc_auth PUBLIC CURL::libcurl OpenSSL::Crypto Threads::Threads)
+# ARC 0.5 bundles ONLY serviceinfo.name executable; helper is a nonroot subcommand.
+add_executable(${PROJECT_NAME} src/main.cpp src/credential_helper.cpp)
 add_dependencies(${PROJECT_NAME} embed_worker)
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_BINARY_DIR} src)
 target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -Werror)
-target_link_libraries(${PROJECT_NAME} PRIVATE SDBusCpp::sdbus-c++ CURL::libcurl OpenSSL::Crypto Threads::Threads)
+target_link_libraries(${PROJECT_NAME} PRIVATE poc_auth SDBusCpp::sdbus-c++)
 install(TARGETS ${PROJECT_NAME} DESTINATION ${CMAKE_INSTALL_PREFIX}/services/com.deskmate.thinqpoc1)
 install(FILES files/serviceinfo.json files/.apptype DESTINATION ${CMAKE_INSTALL_PREFIX}/services/com.deskmate.thinqpoc1)
 install(FILES files/dbus/com.deskmate.thinqpoc1.service DESTINATION ${CMAKE_INSTALL_PREFIX}/share/dbus-1/system-services)

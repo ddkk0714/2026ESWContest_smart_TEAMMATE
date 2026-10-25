@@ -6,7 +6,8 @@ int main() {
  auto fake=[&](const HttpsRequest&,const Credentials&){++calls;return Json{{"response",Json::object()}};};
  GuardedHttps blocked(Credentials{},fake);
  assert(blocked.request({"GET","/devices",nullptr}).contains("error"));assert(calls==0);
- GuardedHttps api(Credentials{"fixture-token","fixture-client","fixture-application",true},fake);
+ Credentials manual{"fixture-token","fixture-client","fixture-application",true};manual.mode="live_manual";
+ GuardedHttps api(std::move(manual),fake);
  assert(!api.request({"GET","/devices",nullptr}).contains("error"));
  assert(!api.request({"GET","/devices/fixture/profile",nullptr}).contains("error"));
  for(const auto& path:{"/devices/other/state","https://invalid.example/devices","/devices/fixture/state?x=1","/devices/fixture/../control"})

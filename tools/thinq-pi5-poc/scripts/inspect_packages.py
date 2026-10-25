@@ -1,5 +1,6 @@
 """Inspect only locally built IPKs. Never installs or activates anything."""
 
+import argparse
 import hashlib
 import io
 import json
@@ -10,12 +11,16 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--directory", type=Path, required=True)
+args = parser.parse_args()
+output = args.directory.resolve(strict=True)
 report = []
 for name, kind in [
     ("com.deskmate.thinqpoc1", "service"),
     ("com.atlas.app.deskmate_thinq_poc", "app"),
 ]:
-    path = ROOT / "artifacts" / (name + ".ipk")
+    path = output / (name + ".ipk")
     members = subprocess.check_output(["ar", "t", str(path)]).decode().splitlines()
     data_name = next(x for x in members if x.startswith("data.tar"))
     control_name = next(x for x in members if x.startswith("control.tar"))
@@ -32,7 +37,18 @@ for name, kind in [
     assert not any(x.endswith(".conf") or "apparmor" in x.lower() for x in files)
     assert not any(x.endswith((".log", ".env", ".pem", ".key")) for x in files)
     suspicious = []
+    forbidden = (
+        b"fixture-token",
+        b"fixture-client",
+        b"fixture-application",
+        b"--host-fixture",
+        b"synthetic-rejected-input",
+        b"synthetic-canary-not-a-token",
+    )
     for file, body in files.items():
+        assert not any(marker in body for marker in forbidden), (
+            "host test credential/entrypoint in package"
+        )
         assert b"com.atlas.app.deskmate_display" not in body, (
             "original app ID leaked into payload"
         )
@@ -49,6 +65,7 @@ for name, kind in [
     )
     meta = json.loads(files[meta_name])
     assert meta["id"] == name
+    assert meta["version"] == "0.2.0"
     if kind == "service":
         assert meta["run_after_installation"] is False
         activation = next(x for x in files if x.endswith(name + ".service"))
@@ -108,6 +125,6 @@ for name, kind in [
             "dbus_policy_included": False,
         }
     )
-(ROOT / "artifacts/package-inspection.json").write_text(json.dumps(report, indent=2))
+(output / "package-inspection.json").write_text(json.dumps(report, indent=2))
 for r in report:
     print(r["package"], r["size"], r["sha256"], "ARM64; Live BLOCKED; board NOT tested")

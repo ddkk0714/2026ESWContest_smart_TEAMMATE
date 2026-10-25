@@ -253,3 +253,37 @@ def test_fixture_authorization_cannot_move_to_live_backend():
     assert not result["post_enabled"]
     assert other.calls == []
     assert "challenge" not in second.ctx
+
+
+@pytest.mark.parametrize(
+    "op", ["enable_fixture_post", "prepare", "execute", "physical_confirmation"]
+)
+def test_live_read_only_cannot_inherit_control_permission(op):
+    sdk = FixtureSdk(copy.deepcopy(FIXTURE))
+    session = Session(sdk, {"backend": "live_read_only", "enabled": True})
+    result = call(session, op, backend="live_read_only", value="LOW", approved=True)
+    assert result["status"] == "blocked"
+    assert sdk.calls == []
+    assert result["post_enabled"] is False
+
+
+def test_live_manual_mock_preserves_nonce_readback_and_no_resend():
+    sdk = FixtureSdk(copy.deepcopy(FIXTURE))
+    session = Session(sdk, {"backend": "live_manual", "enabled": True})
+    plan = call(session, "prepare", backend="live_manual", value="LOW")
+    sdk.response_loss = True
+    request = dict(
+        backend="live_manual",
+        nonce=plan["nonce"],
+        approved=True,
+        physical_online_confirmed=True,
+        no_external_change=True,
+    )
+    result = call(session, "execute", **request)
+    assert result["status"] == "outcome_unconfirmed"
+    assert result["api_accepted"] is False
+    assert result["state_match"] is True
+    assert sdk.calls.count("post") == 1
+    assert "state" in sdk.calls[sdk.calls.index("post") + 1 :]
+    assert call(session, "execute", **request)["status"] == "blocked"
+    assert sdk.calls.count("post") == 1
