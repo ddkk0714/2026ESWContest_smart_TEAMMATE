@@ -88,6 +88,7 @@ tof:
     min_online_sensors: 1         # 살아 있는 센서가 이보다 적으면 서비스 판정을 쓰지 않는다
     poller: auto                  # auto(DESKMATE_NATIVE_MQTT=1 인 보드는 끔) | on | off
   min_confidence: 0.3            # posture_confidence 가 이보다 낮으면 unknown 으로 본다
+  min_confidence_by_label: {}    # 라벨별 추가 하한(예 {face_down: 0.99}). 보드 기본 없음 — 시연 프로파일만 (10-25 PC 시뮬: 글쓰기 오판 거르기)
   posture_phi:
     unknown: 0.0
     upright: 0.0

@@ -43,7 +43,7 @@ def _run(hub, cache, posture: str, *, horizon_s: float):
     seen = []
     while t <= horizon_s:
         cache.put("mmwave", mm(t, level=5)); cache.put("env", env(t, co2=700))
-        cache.put("tof_service", svc(t, posture=posture, conf=0.92))
+        cache.put("tof_service", svc(t, posture=posture, conf=1.0))
         hub.tick_once(t)
         st = hub.engine.state
         seen.append(st)
@@ -127,7 +127,7 @@ def test_after_waking_upright_score_falls_so_monitor_recovers_not_escalates(tmp_
     scores_after = []
     while t <= float(hub.fsm_cfg["timers"]["baseline_sec"]) + 600:
         cache.put("mmwave", mm(t, level=5 if posture == "face_down" else 40)); cache.put("env", env(t, co2=700))
-        cache.put("tof_service", svc(t, posture=posture, conf=0.92))
+        cache.put("tof_service", svc(t, posture=posture, conf=1.0))
         hub.tick_once(t)
         if lamp_at is None and hub.mock_plug is not None and "desk_lamp" in hub.mock_plug.state:
             lamp_at = t

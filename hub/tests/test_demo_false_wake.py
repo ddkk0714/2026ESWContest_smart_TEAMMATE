@@ -30,7 +30,7 @@ def _run(hub, cache, timeline, *, horizon_s: float):
         label, flag, nod, typing = timeline(t)
         cache.put("mmwave", mm(t, level=40 if typing else 5)); cache.put("env", env(t, co2=700))
         cache.put("tof", tof(t, posture="upright", drowsy=flag, nod=nod))           # ESP32 0x03 규칙 특징(플래그·끄덕임)
-        cache.put("tof_service", svc(t, posture=label, conf=0.92))                  # 자세 모델 라벨
+        cache.put("tof_service", svc(t, posture=label, conf=1.0))                  # 자세 모델 라벨
         if typing:
             cache.put("keystroke", ks(t, idle=0.2, cv=0.3))
         hub.tick_once(t)
@@ -149,3 +149,71 @@ def test_monitor_recovered_below_stops_sign_noise_escalation(key, expected):
     noisy = {"posture": {"delta": 0.06}, "elapsed": {"delta": 0.06}, "keystroke": {"delta": 0.06}}
     e.tick(fsm_frame(t2 + 20, sig=noisy))
     assert e.state is expected
+
+@pytest.mark.parametrize("profile", PROFILES)
+def test_writing_misread_as_face_down_at_low_confidence_is_ignored(tmp_path, profile):
+    """수험생 하루: 깨어 글 쓰는 사람을 GRU 가 face_down(conf 0.8)으로 읽음 → 하한 0.99 에 걸려 unknown, 램프·확정 없음."""
+    hub, cache, _ = _hub(tmp_path, profile)
+    assert hub.ingest_cfg["tof"]["min_confidence_by_label"] == {"face_down": 0.99}
+    base = float(hub.fsm_cfg["timers"]["baseline_sec"])
+    period, t, lamp_at, seen, c_max, focus_at = hub.period, 0.0, None, [], 0.0, None
+    while t <= base + 600:
+        cache.put("mmwave", mm(t, level=20)); cache.put("env", env(t, co2=700))
+        cache.put("tof", tof(t, posture="upright", drowsy=False, nod=None))
+        cache.put("tof_service", svc(t, posture="face_down", conf=0.8))
+        hub.tick_once(t); seen.append(hub.engine.state)
+        if focus_at is None and hub.engine.state in (State.FOCUS_PC, State.FOCUS_MIXED, State.FOCUS_NPC):
+            focus_at = t
+        if focus_at is not None and hub._last_result is not None:
+            c_max = max(c_max, float(hub._last_result.scores.c_fatigue))
+        if lamp_at is None and hub.mock_plug is not None and "desk_lamp" in hub.mock_plug.state:
+            lamp_at = t
+        t += period
+    assert focus_at is not None and lamp_at is None and State.FATIGUE not in seen
+    assert c_max < hub.fsm_cfg["thresholds"]["fatigue_suspect_low"], c_max
+
+
+@pytest.mark.parametrize("profile", PROFILES)
+def test_real_face_down_then_writing_misread_recovers_instead_of_false_rest(tmp_path, profile):
+    """실제 엎드림(conf 1.0) → 램프 → 깨어 글 쓰는데 모델이 face_down 0.87 로 오판 → still_asleep 에 안 걸려 RECOVERY, 헛 강제 휴식 없음."""
+    hub, cache, _ = _hub(tmp_path, profile)
+    base = float(hub.fsm_cfg["timers"]["baseline_sec"])
+    state = {"lamp_at": None}
+
+    def timeline(t):
+        if state["lamp_at"] is None and hub.mock_plug is not None and "desk_lamp" in hub.mock_plug.state:
+            state["lamp_at"] = t
+        if state["lamp_at"] is not None:
+            return ("face_down", 0.87)                                   # 깬 뒤 글쓰기 오판(신뢰도 낮음)
+        return ("face_down", 1.0)                                        # 실제 엎드림
+    period, t, seen = hub.period, 0.0, []
+    while t <= base + 600:
+        label, conf = timeline(t)
+        cache.put("mmwave", mm(t, level=5 if conf == 1.0 else 25)); cache.put("env", env(t, co2=700))
+        cache.put("tof", tof(t, posture="upright", drowsy=False, nod=None))
+        cache.put("tof_service", svc(t, posture=label, conf=conf))
+        hub.tick_once(t); seen.append(hub.engine.state)
+        if (hub.engine.state in (State.FOCUS_NPC, State.FOCUS_MIXED, State.FOCUS_PC)
+                and state["lamp_at"] is not None and t > state["lamp_at"] + 30):
+            break
+        t += period
+    assert state["lamp_at"] is not None and State.ACTION_POSTURE in seen, seen[-10:]
+    after = seen[seen.index(State.ACTION_POSTURE):]
+    assert State.RECOVERY in after and State.ESCALATE not in after and State.REST not in after, after
+    f = build_frame(cache.snapshot(), t, hub.ingest_cfg, SessionTracker(), fsm_state=State.MONITOR)
+    assert f.get("posture").delta == 0.0                                 # 0.87 짜리 face_down 은 unknown 으로 걸러졌다
+
+
+def test_label_floor_filters_model_drowsy_too_and_default_has_no_floor():
+    ingest = load_ingest_config()
+    assert ingest["tof"]["min_confidence_by_label"] == {}
+    cache = SensorCache()
+    cache.put("mmwave", mm(100.0, level=5)); cache.put("tof", tof(100.0, posture="upright"))
+    cache.put("tof_service", svc(100.0, posture="face_down", conf=0.8))
+    assert build_frame(cache.snapshot(), 100.0, ingest, SessionTracker(), fsm_state=State.FOCUS_NPC).get("posture").delta == 1.0   # 기본: 하한 없음
+    demo = dict(ingest, tof=dict(ingest["tof"], min_confidence_by_label={"face_down": 0.99, "drowsy": 0.99}))
+    assert build_frame(cache.snapshot(), 100.0, demo, SessionTracker(), fsm_state=State.FOCUS_NPC).get("posture").delta == 0.0
+    cache.put("tof_service", svc(100.0, posture="drowsy", conf=0.8))        # 모델 drowsy 라벨도 하한에 걸리면 플래그 경로로 새지 않는다
+    assert build_frame(cache.snapshot(), 100.0, demo, SessionTracker(), fsm_state=State.FOCUS_NPC).get("posture").delta == 0.0
+    cache.put("tof_service", svc(100.0, posture="drowsy", conf=1.0))
+    assert build_frame(cache.snapshot(), 100.0, demo, SessionTracker(), fsm_state=State.FOCUS_NPC).get("posture").delta == 1.0

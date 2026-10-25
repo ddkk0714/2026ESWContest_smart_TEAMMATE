@@ -37,6 +37,10 @@ ingest:
     # 헛켰다(턱 괴기 600 s 플래그 49/60 tick → C 0.81). posture_source: service 라 자세 모델 라벨(face_down·drowsy)은 그대로 1.0,
     # 규칙 플래그·끄덕임만은 0.3 으로 — 자세 몫 0.80 × 0.3 = 0.24 (+0.1e) 로 의심(0.40) 아래, still_asleep_delta 0.9 에도 못 미친다.
     # 0 이 아니라 0.3 인 이유: 모델이 라벨을 놓친(unknown) 구간의 약한 보조 증거로는 남긴다 — 단독으로는 아무 상태도 못 바꾼다.
+    # 10-25 PC 시뮬(수험생 하루): 깨어서 글 쓰는 사람을 GRU 가 face_down 으로 읽어(중앙값 conf 0.87, p10 0.34) MONITOR 가 C 0.88~0.94 로
+    # ESCALATE → 깬 지 30~50 s 뒤 헛 강제 휴식(demo-b 3회·study 2회). 실제 엎드림의 conf p10 은 1.00 → 하한 0.99 로 실제 96 % 유지·오판 9 % 만 통과.
+    # **0.99 는 시뮬 값 — 실기에서 엎드린 채 /api/state 의 conf 를 보고 더 낮으면 현장에서 이 값만 낮춘다(설정만).** 보드 기본엔 키 없음.
+    min_confidence_by_label: {face_down: 0.99}
     rule_drowsy_delta: 0.3          # 기본 1.0
     nod_delta_max: 0.3              # 기본 1.0
   pc_ratio_window_sec: 120          # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 900 (PC/비PC 컨텍스트 창)
