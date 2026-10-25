@@ -16,7 +16,7 @@ fsm:
     baseline_sec: 10                # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 300 (START 기준선 측정)
     fatigue_elevated_hold_sec: 20   # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 180
     fatigue_confirm_hold_sec: 20    # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 180
-    monitor_window_sec: 30          # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 0
+    monitor_window_sec: 60          # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 0. PC 시뮬 10-25 0fcda8f: 수험생 하루 깬 뒤 거짓 휴식 권유 6220 s 제거, 깸 시각·fd_only 62~72 s·a1 102 s 불변. 첫 깨우기에 안 깨면 첫 휴식 권유 820→850 s
     rest_min_sec: 60                # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 300
     fatigue_hold_min_frac: 0.8      # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 1.0 (지난 hold 초 tick 중 이 비율 이상 임계 위면 유지 성립, 1fd856d)
   gate:
