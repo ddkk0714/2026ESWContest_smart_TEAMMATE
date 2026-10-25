@@ -1,0 +1,9 @@
+{
+  "id": "com.atlas.app.deskmate_thinq_poc",
+  "type": "flutter",
+  "name": "ThinQ PoC — Fixture",
+  "description": "Independent ThinQ trial; Live blocked pending board security verification",
+  "entry": "thinq_poc --bundle=./ --fullscreen -a com.atlas.app.deskmate_thinq_poc",
+  "version": "0.1.0",
+  "required_permissions": {}
+}
