@@ -53,6 +53,11 @@ def test_shipped_profiles_only_touch_keys_the_engine_knows():
         # 정책 문턱은 FSM 자동 문턱과 같아야 한다 — 다르면 정책이 FSM 자동을 제안으로 낮춘다(10-24 PC 리허설 결함)
         assert prof["personalize"]["gate"]["conf_auto"] == prof["fsm"]["gate"]["conf_auto"]
     assert learning["keep_floor"] == 0.85                                  # 보드 기본은 그대로
+    assert fsm["weights"]["fatigue"]["npc"]["posture"] == 0.40            # 보드 기본 가중치도 그대로(엎드림 가중은 시연 프로파일만)
+    for name in available():
+        w = load_profile(name)["fsm"]["weights"]["fatigue"]
+        assert w["npc"]["posture"] == 0.80 and w["pc"]["posture"] == 0.60 and set(w["pc"]) == set(w["npc"]) == set(fsm["weights"]["fatigue"]["pc"])
+        assert abs(sum(w["pc"].values()) - 1.0) < 1e-9 and abs(sum(w["npc"].values()) - 1.0) < 1e-9
     a, b = load_profile("demo-a"), load_profile("demo-b")
     assert a["fsm"]["timers"]["monitor_window_sec"] == 30 and a["ingest"]["elapsed"]["reset_on_rest"] is True
     assert "baseline_sec" not in a["fsm"]["timers"] and b["fsm"]["timers"]["baseline_sec"] == 10
@@ -98,7 +103,9 @@ def test_env_profile_overlays_live_hub(monkeypatch):
     # learning: 절 — 학습기가 실제로 그 keep_floor 로 선다
     assert hub.learning_cfg["keep_floor"] == 0.70 and hub.learner is not None and hub.learner.c["keep_floor"] == 0.70
     # 건드리지 않은 부분은 기본과 같다
-    assert hub.fsm_cfg["weights"] == load_config()["weights"] and hub.ingest_cfg["tof"] == load_ingest_config()["tof"]
+    # 건드리지 않은 부분은 기본과 같다(focus 가중치·tof). fatigue 가중치는 10-25 엎드림 시연을 위해 프로파일이 얹는다
+    assert hub.fsm_cfg["weights"]["focus"] == load_config()["weights"]["focus"] and hub.ingest_cfg["tof"] == load_ingest_config()["tof"]
+    assert hub.fsm_cfg["weights"]["fatigue"]["npc"]["posture"] == 0.80
 
     monkeypatch.setenv(PROFILE_ENV, "demo-b-study")
     hub_s = LiveHub(SensorCache(), out=io.StringIO())

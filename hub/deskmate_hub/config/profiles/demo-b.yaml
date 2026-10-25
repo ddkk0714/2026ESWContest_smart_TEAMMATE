@@ -3,6 +3,15 @@
 # 함정: baseline_sec 만 줄이면 기준선이 안 잡혀 점수가 0.62 에서 멈추고 개입이 안 나온다 — 그래서 normalization linear 와
 # fatigue_confirm 0.60 을 함께 둔다(셋을 같이 바꿔야 한다).
 fsm:
+  # 10-25 PC 폐루프 시뮬: 엎드림(face_down δ 1.0)만으로는 기본 가중치(npc posture 0.40, 호흡 꺼져 재정규화 → 0.53)가
+  # 확정 기준에 못 미쳐 무드등이 안 켜졌다(실측 끄덕임 recall 0.16 이라 시연은 엎드림으로 간다). 자세 몫을 올린다 — 보드 기본(fsm.yaml)은 그대로.
+  # 점수(Σw·δ/Σw, 키 입력 없음 → keystroke 제외, 환경 δ 0, 경과 e): face_down 0.80+0.1e · recline/chin_rest(δ 0.6) 0.48+0.1e ·
+  #   demo-b-study chin_rest(δ 0.3) 0.24+0.1e — pc(타이핑 멈춤)·npc·MIXED 모두 자세 몫 0.80 으로 같다. 타이핑 중(keystroke δ 0.1) face_down pc 0.63.
+  #   → 엎드림만 0.60 확정을 여유 있게 넘고, 기대기(0.48)는 의심(0.40)엔 들지만 확정은 안 된다(경과 90 분에도 0.58). 기본 face_down 0.53.
+  weights:
+    fatigue:
+      pc:  {keystroke: 0.25, posture: 0.60, respiration: 0.0, environment: 0.075, elapsed: 0.075}   # 기본 0.35/0.25/0.15/0.10/0.15
+      npc: {keystroke: 0.00, posture: 0.80, respiration: 0.0, environment: 0.10, elapsed: 0.10}     # 기본 0.00/0.40/0.25/0.20/0.15
   timers:
     baseline_sec: 10                # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 300 (START 기준선 측정)
     fatigue_elevated_hold_sec: 20   # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 180
