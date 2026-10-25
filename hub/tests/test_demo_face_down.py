@@ -112,3 +112,33 @@ def test_score_table_matches_the_profile_comment(profile):
     assert typing == pytest.approx(0.63, abs=0.02)
     late_recline = compute_scores(_frame(0.6, elapsed=1.0, keystroke=None, pc_ratio=0.1), Context.NPC, fsm).c_fatigue
     assert late_recline < 0.60                                             # 90 분 기대기도 demo-b 확정(0.60) 아래
+
+
+@pytest.mark.parametrize("profile", PROFILES)
+def test_after_waking_upright_score_falls_so_monitor_recovers_not_escalates(tmp_path, profile):
+    """PC 시뮬 a1(끄덕임+키 입력 저하)에서는 깬 뒤에도 점수가 0.61 에 머물러 MONITOR → ESCALATE → 강제 휴식이 됐다.
+    시연 가중치는 자세가 지배(0.80)하므로 엎드림 → 램프 → 바로 앉으면(upright δ 0) 점수가 한 tick 에 ~0.1 로 떨어지고
+    MONITOR(창 30 s)가 RECOVERY 로 간다. 학습기(−0.05)는 keep_floor 아래에서만 깎으므로 여기 영향 없다."""
+    hub, cache, _ = _hub(tmp_path, profile)
+    period, t = hub.period, 0.0
+    lamp_at = None
+    posture = "face_down"
+    seen_after = []
+    scores_after = []
+    while t <= float(hub.fsm_cfg["timers"]["baseline_sec"]) + 600:
+        cache.put("mmwave", mm(t, level=5 if posture == "face_down" else 40)); cache.put("env", env(t, co2=700))
+        cache.put("tof_service", svc(t, posture=posture, conf=0.92))
+        hub.tick_once(t)
+        if lamp_at is None and hub.mock_plug is not None and "desk_lamp" in hub.mock_plug.state:
+            lamp_at = t
+            posture = "upright"                                   # 램프가 켜지자 9 s 뒤 깨어 앉았다(PC a1 과 같이)
+        elif lamp_at is not None:
+            seen_after.append(hub.engine.state)
+            scores_after.append(float(hub._last_result.scores.c_fatigue))
+            if hub.engine.state is State.RECOVERY:
+                break
+        t += period
+    assert lamp_at is not None and State.RECOVERY in seen_after, seen_after[-10:]
+    assert State.ESCALATE not in seen_after and State.REST not in seen_after
+    assert min(scores_after) < 0.2, scores_after                  # 앉은 뒤 점수가 바로 떨어진다(엎드림 0.80 → ~0.1)
+    assert t - lamp_at <= 90, (lamp_at, t)                        # ACTION 완료 + MONITOR 창 30 s 안에 회복 판정
