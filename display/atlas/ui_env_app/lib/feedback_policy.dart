@@ -62,6 +62,20 @@ class IlinkLampFeedback {
   DateTime? _lastOkAt;
   Object? _lastError;
   Future<void> _writes = Future.value();
+  int _revision = 0;
+  int _selectionGeneration = 0;
+  int _connectionGeneration = 0;
+  int get selectionGeneration => _selectionGeneration;
+  int get connectionGeneration => _connectionGeneration;
+  bool _manualOverride = false;
+  bool _environmentOwnsLamp = false;
+  bool get manualOverride => _manualOverride;
+  void resumeAutomaticControl() {
+    _revision++;
+    _selectionGeneration++;
+    _manualOverride = false;
+    _environmentOwnsLamp = false;
+  }
 
   bool get configured => _address?.isNotEmpty ?? false;
   String? get address => _address;
@@ -71,8 +85,29 @@ class IlinkLampFeedback {
 
   void select(String address) {
     if (_address == address) return;
+    _revision++;
+    _selectionGeneration++;
     _address = address;
     _connection = null;
+    _lastOkAt = null;
+    _lastError = null;
+  }
+
+  /// Invalidate authorization even when the same physical device is rebound.
+  void invalidateUndo() {
+    _revision++;
+    _selectionGeneration++;
+  }
+
+  void disconnect() {
+    invalidateUndo();
+    _connectionGeneration++;
+    _connection = null;
+  }
+
+  void forget() {
+    disconnect();
+    _address = null;
     _lastOkAt = null;
     _lastError = null;
   }
@@ -88,11 +123,19 @@ class IlinkLampFeedback {
   Future<bool>? _connecting;
 
   Future<bool> _connect() async {
+    final address = _address!;
+    final generation = _selectionGeneration;
     try {
-      _connection = await _bluetooth.connectLamp(_address!);
+      final connection = await _bluetooth.connectLamp(address);
+      if (_address != address || generation != _selectionGeneration) {
+        return false;
+      }
+      _connection = connection;
       _lastError = null;
       return true;
     } catch (error) {
+      if (generation != _selectionGeneration) return false;
+      _connectionGeneration++;
       _connection = null;
       _lastError = error;
       return false;
@@ -103,30 +146,59 @@ class IlinkLampFeedback {
     await writeFrames(ilinkFramesForPhase(phase));
   }
 
-  Future<bool> setBrightness(int value) => writeFrames([
-        ilinkFrame([0x01, 0x08, 0x05, 0x01]),
-        ilinkFrame([0x01, 0x08, 0x01, value]),
-      ]);
+  Future<bool> setBrightness(int value) {
+    _revision++;
+    _selectionGeneration++;
+    _manualOverride = true;
+    final revision = _revision;
+    return _queueFrames([
+      ilinkFrame([0x01, 0x08, 0x05, 0x01]),
+      ilinkFrame([0x01, 0x08, 0x01, value]),
+    ], null, () => revision == _revision);
+  }
 
   /// Phase feedback and explicit commands must not interleave BLE frames.
-  Future<bool> writeFrames(List<List<int>> frames, {num? expiresTsMs}) {
-    final next = _writes.then((_) => _writeFrames(frames, expiresTsMs));
+  Future<bool> writeFrames(List<List<int>> frames,
+      {num? expiresTsMs,
+      bool control = false,
+      bool Function()? stillAuthorized}) {
+    if (_manualOverride || (!control && _environmentOwnsLamp)) {
+      return Future.value(false);
+    }
+    if (control) {
+      _environmentOwnsLamp = true;
+      _revision++;
+    }
+    final revision = _revision;
+    return _queueFrames(
+        frames,
+        expiresTsMs,
+        () =>
+            revision == _revision &&
+            !_manualOverride &&
+            (stillAuthorized?.call() ?? true));
+  }
+
+  Future<bool> _queueFrames(
+      List<List<int>> frames, num? expiresTsMs, bool Function() valid) {
+    final next = _writes.then((_) => _writeFrames(frames, expiresTsMs, valid));
     _writes = next.then<void>((_) {});
     return next;
   }
 
-  Future<bool> _writeFrames(List<List<int>> frames, num? expiresTsMs) async {
+  Future<bool> _writeFrames(
+      List<List<int>> frames, num? expiresTsMs, bool Function() valid) async {
     if (!configured || frames.isEmpty) return false;
     bool expired() =>
         expiresTsMs != null &&
         DateTime.now().millisecondsSinceEpoch >= expiresTsMs;
     // 끊긴 GATT 세션은 재사용하지 않고 한 번만 새 세션으로 되풀이한다.
     for (var attempt = 0; attempt < 2; attempt++) {
-      if (expired()) return false;
+      if (expired() || !valid()) return false;
       if (!await connect()) continue;
       try {
         for (final frame in frames) {
-          if (expired()) return false;
+          if (expired() || !valid()) return false;
           await _bluetooth.writeCharacteristic(_connection!,
               serviceId: ilinkServiceUuid,
               characteristicId: ilinkWriteUuid,
@@ -136,6 +208,7 @@ class IlinkLampFeedback {
         _lastError = null;
         return true;
       } catch (error) {
+        _connectionGeneration++;
         _connection = null;
         _lastError = error;
       }
@@ -166,9 +239,11 @@ class FeedbackCoordinator {
   set enabled(bool value) {
     if (_enabled == value) return;
     _enabled = value;
+    if (value) lamp.resumeAutomaticControl();
     _lastLampKey = null;
     _lastMusicKey = null;
     _acceptedAction = null;
+    _lastControls.clear();
   }
 
   String? _lastLampKey;
@@ -177,6 +252,34 @@ class FeedbackCoordinator {
   bool _applying = false;
   DisplayState? _latest;
   final _commandResults = <String, Future<Map<String, dynamic>>>{};
+  // Internal epochs only: no BLE identity is added to MQTT or logs.
+  final Map<String, ({String id, int selection, int connection})>
+      _lastControls = {};
+
+  int _selection(String target) => target == 'desk_lamp'
+      ? lamp.selectionGeneration
+      : fan!.selectionGeneration;
+  int _connection(String target) => target == 'desk_lamp'
+      ? lamp.connectionGeneration
+      : fan!.connectionGeneration;
+  bool _connected(String target) =>
+      target == 'desk_lamp' ? lamp.connected : fan!.connected;
+
+  void _remember(Map<String, dynamic> command, int selection, int connection) {
+    final target = command['target_id'] as String;
+    if (command['gate'] == 'undo') {
+      _lastControls.remove(target); // A completed undo cannot itself be undone.
+    } else if (_selection(target) == selection &&
+        _connection(target) == connection &&
+        _connected(target)) {
+      _lastControls[target] = (
+        id: command['command_id'] as String,
+        selection: selection,
+        connection: connection
+      );
+    }
+  }
+
   String? lastControlError;
   Object? lastAudioError;
 
@@ -272,7 +375,9 @@ class FeedbackCoordinator {
   Future<Map<String, dynamic>?> handleControlCommand(
       Map<String, dynamic> command) async {
     final target = command['target_id'];
-    final isFan = target == 'vent_fan' && (fan?.configured ?? false);
+    final isFan = target == 'vent_fan' &&
+        fan != null &&
+        (fan!.configured || command['gate'] == 'undo');
     if (target != 'desk_lamp' && !isFan) return null;
     final id = command['command_id'];
     if (id is! String || id.isEmpty) return null;
@@ -288,20 +393,37 @@ class FeedbackCoordinator {
   }
 
   Map<String, dynamic> _result(Map<String, dynamic> command, String status,
-      {Object? actual, String? error}) {
+      {Object? actual, String? error, String? confirmation}) {
     lastControlError = error;
     return {
       'command_id': command['command_id'],
       'status': status,
-      if (status == 'succeeded' || actual != null) 'actual_value': actual,
+      if (actual != null) 'actual_value': actual,
+      if (status == 'executing') 'confirmation': 'transport_only',
+      if (confirmation != null) 'confirmation': confirmation,
       if (error != null) 'error_code': error,
-      'completed_ts_ms': DateTime.now().millisecondsSinceEpoch,
+      'completed_ts_ms':
+          status == 'executing' ? null : DateTime.now().millisecondsSinceEpoch,
     };
   }
 
-  /// Checks every target shares: the feedback switch, gate, confirmation, expiry.
+  /// Shared gates never infer device acceptance from a successful GATT write.
   String? _rejection(Map<String, dynamic> command) {
+    if (command['execution_mode'] == 'mock') return 'mock_command_blocked';
     if (!enabled) return 'feedback_disabled';
+    if (command['gate'] == 'undo') {
+      final target = command['target_id'] as String;
+      final previous = _lastControls[target];
+      if (previous == null || command['undo_of_command_id'] != previous.id) {
+        return 'superseded_command';
+      }
+      if (previous.selection != _selection(target) ||
+          previous.connection != _connection(target) ||
+          !_connected(target)) {
+        _lastControls.remove(target);
+        return 'superseded_command';
+      }
+    }
     final expires = command['expires_ts_ms'];
     if (expires is! num ||
         !expires.isFinite ||
@@ -313,10 +435,21 @@ class FeedbackCoordinator {
     return null;
   }
 
+  Map<String, dynamic> _refused(Map<String, dynamic> command, String reason) =>
+      _result(
+          command,
+          ['mock_command_blocked', 'superseded_command'].contains(reason)
+              ? 'cancelled'
+              : 'failed',
+          error: reason);
+
   Future<Map<String, dynamic>> _executeLampCommand(
       Map<String, dynamic> command) async {
     final rejected = _rejection(command);
-    if (rejected != null) return _result(command, 'failed', error: rejected);
+    if (rejected != null) return _refused(command, rejected);
+    if (lamp.manualOverride) {
+      return _result(command, 'cancelled', error: 'manual_override');
+    }
     final expires = command['expires_ts_ms'] as num;
     if (!lamp.configured) {
       return _result(command, 'failed', error: 'lamp_not_configured');
@@ -337,15 +470,31 @@ class FeedbackCoordinator {
         ilinkFrame([0x01, 0x08, 0x05, value == 'on' ? 1 : 0])
       ];
     } else {
-      return _result(command, 'failed', error: 'unsupported_operation_or_value');
+      return _result(command, 'failed',
+          error: 'unsupported_operation_or_value');
     }
-    if (!await lamp.writeFrames(frames, expiresTsMs: expires)) {
+    final selection = lamp.selectionGeneration;
+    final connection = lamp.connectionGeneration;
+    if (!await lamp.writeFrames(frames,
+        expiresTsMs: expires,
+        control: true,
+        stillAuthorized: () =>
+            lamp.selectionGeneration == selection &&
+            _rejection(command) == null)) {
+      final rejection = _rejection(command);
+      if (rejection != null) return _refused(command, rejection);
+      if (lamp.manualOverride) {
+        return _result(command, 'cancelled', error: 'manual_override');
+      }
+      if (!enabled) {
+        return _result(command, 'cancelled', error: 'feedback_disabled');
+      }
       return _result(command, 'failed',
           error: expires <= DateTime.now().millisecondsSinceEpoch
               ? 'expired'
               : 'bluetooth_write_failed');
     }
-    // Sound failure must not turn a successful lamp command into a failure.
+    _remember(command, selection, connection);
     if (command['gate'] != 'undo' && _latest?.phase == 'fatigue') {
       try {
         await _playFatigueMusic();
@@ -353,35 +502,46 @@ class FeedbackCoordinator {
         lastAudioError = error;
       }
     }
-    return _result(command, 'succeeded', actual: value);
+    return _result(command, 'executing', error: 'device_state_unconfirmed');
   }
 
-  /// set_power on|off · set_level 0~3 · set_speed 0~100 · set_mode normal|natural · set_timer 초.
   Future<Map<String, dynamic>> _executeFanCommand(
       Map<String, dynamic> command) async {
     final rejected = _rejection(command);
-    if (rejected != null) return _result(command, 'failed', error: rejected);
+    if (rejected != null) return _refused(command, rejected);
     final expires = command['expires_ts_ms'] as num;
     final operation = command['operation'];
     final value = command['value'];
     final frame = fanFrame(operation, value);
     if (frame == null) {
-      return _result(command, 'failed', error: 'unsupported_operation_or_value');
-    }
-    final sent = await fan!.send(frame, expiresTsMs: expires);
-    if (!sent.written) {
       return _result(command, 'failed',
-          error: expires <= DateTime.now().millisecondsSinceEpoch
-              ? 'expired'
-              : 'bluetooth_write_failed');
+          error: 'unsupported_operation_or_value');
     }
+    final selection = fan!.selectionGeneration;
+    final connection = fan!.connectionGeneration;
+    final sent = await fan!.send(frame,
+        control: true,
+        expiresTsMs: expires,
+        stillAuthorized: () => _rejection(command) == null);
+    if (!sent.written) {
+      final rejection = _rejection(command);
+      if (rejection != null) return _refused(command, rejection);
+      return _result(command, 'failed', error: 'bluetooth_write_failed');
+    }
+    _remember(command, selection, connection);
     final state = sent.state;
-    // 상태를 못 읽었으면 램프처럼 쓰기 완료를 성공으로 본다.
-    if (state == null) return _result(command, 'succeeded', actual: value);
+    // The firmware has no independent per-command acceptance ACK. Readback
+    // confirms reported state, never motor motion or a fabricated requested value.
+    if (state == null) {
+      return _result(command, 'executing', error: 'device_state_unconfirmed');
+    }
     if (!state.matches(operation, value)) {
       return _result(command, 'failed',
-          actual: state.actualFor(operation), error: 'state_mismatch');
+          actual: state.actualFor(operation),
+          error: 'state_mismatch',
+          confirmation: 'state_readback');
     }
-    return _result(command, 'succeeded', actual: state.actualFor(operation));
+    return _result(command, 'succeeded',
+        actual: state.actualFor(operation), confirmation: 'state_readback');
   }
 }

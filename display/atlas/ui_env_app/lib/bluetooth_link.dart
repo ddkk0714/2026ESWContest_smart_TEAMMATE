@@ -123,6 +123,7 @@ class BluetoothLinkManager extends ChangeNotifier {
     final lamp = _lamp;
     if (lamp == null || lampBusy) return false;
     feedback.lamp.select(lamp.address);
+    feedback.lamp.invalidateUndo();
     _lampPhase = _Phase.connecting;
     _lampError = null;
     _notify();
@@ -140,6 +141,7 @@ class BluetoothLinkManager extends ChangeNotifier {
     final fan = feedback.fan;
     if (saved == null || fan == null || fanBusy) return false;
     fan.select(saved.address);
+    fan.invalidateUndo();
     _fanPhase = _Phase.connecting;
     _fanError = null;
     _notify();
@@ -174,6 +176,7 @@ class BluetoothLinkManager extends ChangeNotifier {
   /// 검색 결과의 BLE 램프를 고르고 저장한 뒤 연결을 미리 맺는다.
   Future<bool> selectLamp(BluetoothDeviceInfo device) async {
     _lamp = _saved(device);
+    feedback.lamp.select(_lamp!.address);
     _persist();
     return reconnectLamp();
   }
@@ -181,6 +184,7 @@ class BluetoothLinkManager extends ChangeNotifier {
   /// 검색 결과의 DESKMATE-FAN 을 선풍기로 고르고 저장한 뒤 연결을 미리 맺는다.
   Future<bool> selectFan(BluetoothDeviceInfo device) async {
     _fan = _saved(device);
+    feedback.fan?.select(_fan!.address);
     _persist();
     return reconnectFan();
   }
@@ -200,6 +204,7 @@ class BluetoothLinkManager extends ChangeNotifier {
       _speakerPhase = _Phase.idle;
       _speakerError = null;
     } else if (id == LinkId.lamp) {
+      feedback.lamp.forget();
       _lamp = null;
       _lampPhase = _Phase.idle;
       _lampError = null;
@@ -324,9 +329,8 @@ class BluetoothLinkManager extends ChangeNotifier {
     next = _lamp == null
         ? next.copyWith(clearLamp: true)
         : next.copyWith(lamp: _lamp);
-    next = _fan == null
-        ? next.copyWith(clearFan: true)
-        : next.copyWith(fan: _fan);
+    next =
+        _fan == null ? next.copyWith(clearFan: true) : next.copyWith(fan: _fan);
     settings.save(next);
   }
 

@@ -141,12 +141,22 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('dev-suggest-env')));
     await tester.pumpAndSettle();
     expect(find.textContaining('ACTION_ENV · gate suggest'), findsOneWidget);
-    expect(find.text('적용할게요'), findsOneWidget); // 미리보기 안의 제안 카드
+    expect(find.byKey(const ValueKey('control-accept')), findsOneWidget);
+    expect(
+        tester
+            .widget<FilledButton>(find.byKey(const ValueKey('control-accept')))
+            .onPressed,
+        isNull); // 미리보기 안의 제안 카드
 
     await tester.tap(find.byTooltip('상태'));
     await tester.pumpAndSettle();
-    expect(find.text('적용할게요'), findsOneWidget);
-    expect(find.textContaining('뒤 닫혀요'), findsOneWidget);
+    expect(find.byKey(const ValueKey('control-accept')), findsOneWidget);
+    expect(
+        tester
+            .widget<FilledButton>(find.byKey(const ValueKey('control-accept')))
+            .onPressed,
+        isNull);
+    expect(find.textContaining('계획 누락'), findsOneWidget);
   });
 
   testWidgets('연결 배지는 5초 뒤 사라진다', (tester) async {

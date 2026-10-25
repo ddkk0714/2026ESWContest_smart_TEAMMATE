@@ -18,7 +18,8 @@ const _fanInfo = BluetoothDeviceInfo(
     connected: false);
 
 /// Firmware state bytes: [version, power, speed, level, mode, dir, timer lo, hi].
-List<int> _state({bool power = true, int speed = 60, int level = 2, int timer = 0}) =>
+List<int> _state(
+        {bool power = true, int speed = 60, int level = 2, int timer = 0}) =>
     [1, power ? 1 : 0, speed, level, 0, 0, timer & 0xff, timer >> 8];
 
 void main() {
@@ -133,12 +134,117 @@ void main() {
       expect(result?['actual_value'], 'off');
     });
 
-    test('an unreadable state still counts the write, like the lamp', () async {
+    test('unreadable state is transport only and never fabricates actual state',
+        () async {
       fan.select(_fanAddress);
       bluetooth.state = null; // read throws
       final result = await coordinator.handleControlCommand(_command('c4'));
+      expect(result?['status'], 'executing');
+      expect(result?['confirmation'], 'transport_only');
+      expect(result?['error_code'], 'device_state_unconfirmed');
+      expect(result?['completed_ts_ms'], isNull);
+      expect(result?.containsKey('actual_value'), isFalse);
+      expect(bluetooth.frames, [
+        [1, 1]
+      ]);
+    });
+
+    test('valid readback explicitly identifies reported state confirmation',
+        () async {
+      fan.select(_fanAddress);
+      bluetooth.state = _state();
+      final result =
+          await coordinator.handleControlCommand(_command('readback'));
+      expect(result?['confirmation'], 'state_readback');
       expect(result?['status'], 'succeeded');
       expect(result?['actual_value'], 'on');
+    });
+
+    test('malformed state cannot become a confirmed power-off', () async {
+      fan.select(_fanAddress);
+      bluetooth.state = [1, 2, 0, 0, 0, 0, 0, 0];
+      final result = await coordinator
+          .handleControlCommand({..._command('malformed'), 'value': 'off'});
+      expect(result?['status'], 'executing');
+      expect(result?.containsKey('actual_value'), isFalse);
+    });
+
+    test('Mock and stale undo never reach the selected fan', () async {
+      fan.select(_fanAddress);
+      bluetooth.state = _state();
+      final mock = await coordinator.handleControlCommand(
+          {..._command('mock-fan'), 'execution_mode': 'mock'});
+      final undo = await coordinator.handleControlCommand({
+        ..._command('undo-old'),
+        'gate': 'undo',
+        'undo_of_command_id': 'unknown'
+      });
+      expect(mock?['error_code'], 'mock_command_blocked');
+      expect(undo?['error_code'], 'superseded_command');
+      expect(bluetooth.frames, isEmpty);
+    });
+
+    test('matching fan undo is bound to its own latest command', () async {
+      fan.select(_fanAddress);
+      bluetooth.state = _state();
+      await coordinator.handleControlCommand(_command('fan-parent'));
+      bluetooth.state = _state(power: false, level: 0);
+      final undo = await coordinator.handleControlCommand({
+        ..._command('fan-undo'),
+        'gate': 'undo',
+        'undo_of_command_id': 'fan-parent',
+        'value': 'off'
+      });
+      expect(undo?['status'], 'succeeded');
+      expect(bluetooth.frames.length, 2);
+    });
+
+    test('countdown reports the read value rather than requested seconds',
+        () async {
+      fan.select(_fanAddress);
+      bluetooth.state = _state(timer: 599);
+      final result = await coordinator.handleControlCommand(
+          {..._command('timer'), 'operation': 'set_timer', 'value': 600});
+      expect(result?['status'], 'succeeded');
+      expect(result?['actual_value'], 599);
+      expect(result?['confirmation'], 'state_readback');
+    });
+
+    test('disabled feedback during connect cancels the pending fan write',
+        () async {
+      fan.select(_fanAddress);
+      bluetooth.connectDelay = const Duration(milliseconds: 40);
+      final pending =
+          coordinator.handleControlCommand(_command('disable-race'));
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      coordinator.enabled = false;
+      expect((await pending)?['error_code'], 'feedback_disabled');
+      expect(bluetooth.frames, isEmpty);
+    });
+
+    test('expiry while connecting is rechecked immediately before writing',
+        () async {
+      fan.select(_fanAddress);
+      bluetooth.connectDelay = const Duration(milliseconds: 40);
+      final result = await coordinator.handleControlCommand({
+        ..._command('expiry-race'),
+        'expires_ts_ms': DateTime.now()
+            .add(const Duration(milliseconds: 10))
+            .millisecondsSinceEpoch
+      });
+      expect(result?['error_code'], 'expired');
+      expect(bluetooth.frames, isEmpty);
+    });
+
+    test('selecting another fan invalidates the pending write', () async {
+      fan.select(_fanAddress);
+      bluetooth.connectDelay = const Duration(milliseconds: 40);
+      final pending =
+          coordinator.handleControlCommand(_command('selection-race'));
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      fan.select('AA:BB:CC:00:00:FB');
+      await pending;
+      expect(bluetooth.frames, isEmpty);
     });
 
     test('a dropped connection is retried once on a new session', () async {
@@ -278,6 +384,7 @@ Map<String, dynamic> _command(String id) => {
 
 // implements는 실제 시스템 D-Bus 클라이언트를 생성하지 않는다.
 class _FakeBluetooth implements AtlasBluetoothService {
+  Duration connectDelay = Duration.zero;
   int connects = 0;
   int connectFailuresRemaining = 0;
   int scans = 0;
@@ -289,11 +396,13 @@ class _FakeBluetooth implements AtlasBluetoothService {
   @override
   Future<GattConnection> connectLamp(String address) async {
     connects++;
+    if (connectDelay != Duration.zero) await Future<void>.delayed(connectDelay);
     if (connectFailuresRemaining > 0) {
       connectFailuresRemaining--;
       throw StateError('Failed to connect with remote device');
     }
-    return GattConnection(adapter: 'test-adapter', clientId: 'client-$connects');
+    return GattConnection(
+        adapter: 'test-adapter', clientId: 'client-$connects');
   }
 
   @override
