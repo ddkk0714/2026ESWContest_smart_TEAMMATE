@@ -45,6 +45,34 @@ std::string resetsJson(const ResetStats& r, int64_t now_ms, const DeviceConfig& 
 
 DevicePosture::DevicePosture(DeviceConfig cfg) : cfg_(cfg) {
     if (cfg_.rate_hz <= 0) cfg_.rate_hz = kModelRateHz;
+    fd_ = FaceDownRule(cfg_.fd);
+}
+
+// 모델 입력 변환. 1) radial: 유효 칸(d ≥ 0, status 5·6·9·10) d × √(1 + x² + y²), x = (col+0.5)·2·tan22.5°/8 − tan22.5°(행도 같게).
+//    실기 L8 은 센서 면에 수직인 거리, 시뮬(학습)은 빔 방향 거리라 가장자리가 최대 11 % 짧게 들어온다. 대칭이라 뒤집기와 무관.
+// 2) fill: status 255(타깃 없음) 칸을 fill_notarget_mm·status 5 로. 시뮬엔 늘 2.3~3.8 m 뒤 벽·천장이 있어 빈 배경을 misplaced 로 읽는다.
+//    3000 은 radial 로 바꾸지 않는다.
+void DevicePosture::modelInput(const TofFrame& f, int16_t* d, uint8_t* st) const {
+    static const float* kFactor = [] {
+        static float t[kMaxZones];
+        const double tan_half = std::tan(22.5 * 3.14159265358979323846 / 180.0);
+        for (int r = 0; r < 8; ++r)
+            for (int c = 0; c < 8; ++c) {
+                const double x = (c + 0.5) * 2.0 * tan_half / 8.0 - tan_half;
+                const double y = (r + 0.5) * 2.0 * tan_half / 8.0 - tan_half;
+                t[r * 8 + c] = static_cast<float>(std::sqrt(1.0 + x * x + y * y));
+            }
+        return t;
+    }();
+    const int n = f.w * f.h;
+    for (int i = 0; i < n; ++i) {
+        d[i] = f.d[i]; st[i] = f.st[i];
+        if (cfg_.radial && f.w == 8 && f.h == 8 && zoneValid(d[i], st[i])) {
+            const double v = static_cast<double>(d[i]) * kFactor[i];
+            d[i] = static_cast<int16_t>(v + 0.5 > 32767.0 ? 32767.0 : v + 0.5);
+        }
+        if (cfg_.fill_notarget_mm > 0 && st[i] == 255) { d[i] = static_cast<int16_t>(cfg_.fill_notarget_mm); st[i] = 5; }
+    }
 }
 
 bool DevicePosture::loadModel(const std::string& path, std::string* err) {
@@ -168,6 +196,21 @@ void DevicePosture::feed(int sensor, const TofLine& line, int64_t now_ms) {
     if (line.sensor_id >= 0) s.st.sensor_id = line.sensor_id;
     s.raw = f;
     ++frames_total_;
+    // 엎드림 규칙: A(센서 0)·B(센서 1) 의 같은 ts_ms 원본 격자 쌍 (/raw 그대로, 뒤집기 전)
+    if ((cfg_.facedown_rule || cfg_.seated_upright) && f.w == 8 && f.h == 8) {
+        const int id = line.sensor_id >= 0 ? line.sensor_id : sensor;
+        if (id == 0 || id == 1) {
+            PendingRaw& me = pending_[id];
+            me.has = true; me.ms = f.ms;
+            for (int i = 0; i < kMaxZones; ++i) { me.d[i] = f.raw_d[i]; me.st[i] = f.raw_st[i]; }
+            const PendingRaw& other = pending_[1 - id];
+            if (other.has && other.ms == f.ms) {
+                const PendingRaw& a = id == 0 ? me : other;
+                const PendingRaw& b = id == 0 ? other : me;
+                fd_.update(static_cast<double>(f.ms) / 1000.0, a.d, a.st, b.d, b.st);
+            }
+        }
+    }
     s.last = f;
     // 장착 방향 보정: row 0 = 위, col 0 = 센서 기준 왼쪽으로. 설정(TOFPOSTURE_FLIP_*)이 있으면 그것, 없으면 프레임의 b2/b3.
     const bool fr = cfg_.flip_rows >= 0 ? cfg_.flip_rows != 0 : f.flip_rows_hint > 0;
@@ -284,7 +327,13 @@ bool DevicePosture::tick(int64_t now_ms) {
     for (Slot& s : slots_) {
         if (!s.st.online) continue;
         if (s.used_once && s.last.seq == s.last_used_seq) ++s.st.reused;
-        s.net.step(s.last.d, s.last.st, logits);
+        if (cfg_.radial || cfg_.fill_notarget_mm > 0) {
+            int16_t din[kMaxZones]; uint8_t sin[kMaxZones];
+            modelInput(s.last, din, sin);
+            s.net.step(din, sin, logits);
+        } else {
+            s.net.step(s.last.d, s.last.st, logits);
+        }
         s.last_used_seq = s.last.seq; s.used_once = true;
         ++s.st.steps;
         softmax(logits, C, s.st.probs);
@@ -338,8 +387,33 @@ bool DevicePosture::tick(int64_t now_ms) {
         da = sa;
         res_.gated = false;
     }
+    // 시연 규칙: 엎드림이 켜져 있으면 face_down(conf 고정), 아니면 모델 misplaced ∧ seated → upright
+    res_.fd_on = false; res_.seated_applied = false;
+    if (cfg_.facedown_rule && fd_.on() && C > kForwardHeadIndex - 5) {           // C ≥ 4 (face_down 인덱스 3)
+        const float conf = std::min(0.999999f, std::max(0.f, cfg_.facedown_conf));
+        float rest = 0.f;
+        for (int i = 0; i < C; ++i) if (i != 3) rest += res_.display[i];
+        for (int i = 0; i < C; ++i) res_.display[i] = i == 3 ? conf : (rest > 1e-6f ? res_.display[i] / rest * (1.f - conf) : 0.f);
+        da = 3;
+        res_.fd_on = true;
+    } else if (cfg_.seated_upright && sa == kMisplacedIndex && C > kMisplacedIndex && fd_.pairs() > 0 && fd_.last().seated) {
+        res_.display[0] += res_.display[kMisplacedIndex];
+        res_.display[kMisplacedIndex] = 0.f;
+        da = 0;
+        for (int i = 1; i < C; ++i) if (res_.display[i] > res_.display[da]) da = i;
+        res_.seated_applied = true;
+    }
     if (da != res_.display_argmax) { res_.display_argmax = da; res_.display_since_ms = now_ms; }
     return true;
+}
+
+FaceDownState DevicePosture::faceDownState() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    FaceDownState s;
+    s.enabled = cfg_.facedown_rule; s.seated_enabled = cfg_.seated_upright;
+    s.on = fd_.on(); s.share = fd_.share(); s.pairs = fd_.pairs(); s.last_t_s = fd_.lastT(); s.last = fd_.last();
+    s.conf = cfg_.facedown_conf;
+    return s;
 }
 
 // ---- 베이스라인 ----
@@ -443,6 +517,7 @@ void DevicePosture::resetLocked(const char* why, int64_t now_ms) {
     for (Slot& s : slots_) { s.net.reset(); ++s.st.resets; s.used_once = false; }
     res_.smooth_argmax = -1; res_.label_since_ms = -1;
     res_.display_argmax = -1; res_.display_since_ms = -1;
+    fd_.reset();                                                 // 규칙 창도 비운다 (PC 기준 구현의 reset() 과 같게)
     const int64_t since = res_.resets.last_reset_ms >= 0 ? now_ms - res_.resets.last_reset_ms : -1;
     res_.resets.last_reset_ms = now_ms;
     std::fprintf(stderr, "tofposture: reset (%s) after %.1f s, coverage %.3f, sensors %zu\n", why,
@@ -477,6 +552,7 @@ std::vector<SensorStatus> DevicePosture::sensors(int64_t now_ms) const {
 std::string DevicePosture::stateJson(int64_t now_ms) const {
     const DeviceResult r = result();
     const std::vector<SensorStatus> ss = sensors(now_ms);
+    const FaceDownState fds = faceDownState();
     std::string model_file, placement, baseline_source;
     int C = 0;
     bool has_baseline = false, capturing = false;
@@ -512,6 +588,15 @@ std::string DevicePosture::stateJson(int64_t now_ms) const {
     o << "],\"moved_candidate\":" << (r.moved_candidate ? "true" : "false") << ",\"moved_held_ms\":" << r.moved_held_ms
       << ",\"device_moved\":" << (r.device_moved ? "true" : "false")
       << ",\"model_misplaced\":" << (r.model_misplaced ? "true" : "false") << ",\"gated\":" << (r.gated ? "true" : "false") << "}"
+      << ",\"radial\":" << (cfg_.radial ? "true" : "false") << ",\"fill_notarget_mm\":" << cfg_.fill_notarget_mm
+      << ",\"rule\":{\"enabled\":" << (fds.enabled ? "true" : "false") << ",\"face_down\":" << (fds.on ? "true" : "false")
+      << ",\"applied\":" << (r.fd_on ? "true" : "false") << ",\"conf\":" << fds.conf << ",\"share\":" << fds.share
+      << ",\"flag\":" << (fds.last.flag ? "true" : "false") << ",\"up\":" << fds.last.up << ",\"lo\":" << fds.last.lo
+      << ",\"topA\":" << fds.last.topA << ",\"topB\":" << fds.last.topB
+      << ",\"dlo\":" << (fds.last.has_dlo ? fds.last.dlo : -1.0) << ",\"dup\":" << (fds.last.has_dup ? fds.last.dup : -1.0)
+      << ",\"seated\":" << (fds.last.seated ? "true" : "false") << ",\"seated_upright\":" << (fds.seated_enabled ? "true" : "false")
+      << ",\"seated_applied\":" << (r.seated_applied ? "true" : "false") << ",\"pairs\":" << fds.pairs
+      << ",\"last_pair_ms\":" << (fds.last_t_s >= 0 ? static_cast<long long>(fds.last_t_s * 1000.0 + 0.5) : -1LL) << "}"
       << ",\"online_sensors\":" << r.online_sensors << ",\"ticks\":" << r.ticks;
     if (!placement.empty()) o << ",\"placement\":\"" << jsonEscape(placement) << "\"";
     o << ",\"present_rule\":" << (r.present_rule ? "true" : "false") << ",\"coverage\":[";

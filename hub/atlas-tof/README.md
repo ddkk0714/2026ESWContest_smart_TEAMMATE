@@ -92,6 +92,10 @@ arc build hub/atlas-tof          # -> hub/atlas-tof/build/arm64/ipk/com.deskmate
 | `TOFPOSTURE_PRESENT_MIN_MM` / `_MAX_MM` | 150 / 1300 | 재실 coverage 에 세는 zone 의 거리 범위(mm) |
 | `TOFPOSTURE_PRESENT_MIN_COVERAGE` | 0.06 | 두 센서 중 큰 coverage(status 5·6·9·10 이고 거리 범위 안인 zone / 64)가 이 이상이면 재실(64칸 중 4칸) |
 | `TOFPOSTURE_STDOUT` | change | `change` 자세 바뀔 때 / `tick` 매 스텝 / `off` |
+| `TOFPOSTURE_RADIAL` | 0 | 1 이면 모델 입력의 유효 칸 d × √(1+x²+y²) (x = (col+0.5)·2·tan22.5°/8 − tan22.5°, y 는 행). 실기 L8 은 수직 거리, 시뮬은 빔 방향 거리. 모델 입력에만 — `/raw`·규칙은 원본 |
+| `TOFPOSTURE_FILL_NOTARGET_MM` | 0 (끔) | N 이면 모델 입력에서 status 255 칸을 N mm·status 5 로(radial 뒤, N 은 변환 안 함). 보드 3000 — 왼쪽 자리 빈 배경 → misplaced 과다의 주원인 |
+| `TOFPOSTURE_FACEDOWN_RULE` / `TOFPOSTURE_FD_CONF` | 0 / 0.995 | 시연용 엎드림 규칙(d): 두 센서 원본 격자 기하, 4 s 창 0.7 켜짐 / 0.4 유지. 켜진 동안 face_down·conf 고정·present true. 문턱 `TOFPOSTURE_FD_*`(main.cpp 머리 주석) |
+| `TOFPOSTURE_SEATED_UPRIGHT` | 0 | 1 이면 규칙이 꺼져 있고 모델이 misplaced 인데 격자가 착석(up ≥ 8, topA·topB ≤ 3)이면 upright |
 | `TOFPOSTURE_MISPLACED_RULE` | off | `off` 모델 misplaced 그대로(10-26 이전 동작) · `and` 모델 misplaced ∧ 베이스라인 변화 규칙(10 s 유지)일 때만 misplaced, 아니면 misplaced 를 뺀 나머지 중 최대 · `never` misplaced 를 절대 표시 안 함. 아래 "misplaced 게이트" |
 | `TOFPOSTURE_BASELINE_FILE` | `<exe>/baseline.json` | 설치 베이스라인(센서별 칸 중앙값·σ·유효). 캡처가 끝나면 저장, 시작 때 읽음 |
 | `TOFPOSTURE_BASELINE_CAPTURE_S` / `_AUTO_S` | 10 / 0 | `POST /api/baseline/capture` 기본 길이 / 파일이 없을 때 첫 프레임부터 자동 캡처(0 = 끔) |
@@ -121,6 +125,19 @@ arc build hub/atlas-tof          # -> hub/atlas-tof/build/arm64/ipk/com.deskmate
   0 = A 왼쪽·1 = B 오른쪽; USB·파일 입력은 자리 번호), 격자는 **받은 그대로**(모델 입력용 뒤집기 전, 표준 배치는 -1 = 없음),
   없는 센서는 `{"id":n,"have":false}`. `other`(mmWave 등) 는 없다. 앱 파서(`display/atlas/ui_env_app/lib/tof_raw_client.dart`)는
   have·id·w·h·dist_mm·status·age_ms 만 읽는다.
+
+## 시연 경로 — 엎드림 규칙(d)·upright 치환·모델 입력 변환 (10-26)
+
+10-26 실측(왼쪽 자리)에서 모델이 엎드림을 거의 못 내고(P ≤ 0.005) 빈 배경을 misplaced 로 읽었다. 수요일 시연은 다음 넷을 켠다(env 기본은 전부 꺼짐):
+
+- `TOFPOSTURE_RADIAL=1` → `TOFPOSTURE_FILL_NOTARGET_MM=3000`: 모델 입력에만. 순서는 radial 다음 fill.
+- `TOFPOSTURE_FACEDOWN_RULE=1`: `src/facedown_rule.{h,cpp}` — PC 기준 구현 `dataset/tof_sim_v5/real_facedown_rule.py`(fork tools/real-scoring-1026 @ 04527fb)와
+  프레임 단위로 같다(실측 4종 14 040 쌍, 정수·flag·on·seated 불일치 0, 실수 차 0). A·B 같은 ts_ms 원본 격자 쌍마다 평가. 켜진 동안
+  posture face_down·conf `TOFPOSTURE_FD_CONF`·present true, 모델 출력은 `instant`·`model_output` 에. `/api/state.rule{enabled,face_down,applied,conf,share,
+  flag,up,lo,topA,topB,dlo,dup,seated,seated_upright,seated_applied,pairs,last_pair_ms}`, `radial`, `fill_notarget_mm`. `POST /api/reset` 은 규칙 창도 비운다.
+- `TOFPOSTURE_SEATED_UPRIGHT=1`: 모델 misplaced ∧ 착석 격자 → upright.
+- 리플레이(`docs/FACEDOWN_RULE_REAL_20261026.md`): face_down 단계 100 %(left1·left2·left2_facedown), check_close30 엎드림 두 구간 켜짐·앉음 꺼짐,
+  combo acc 0.514(left1)·0.549(left2). PC 기준 구현은 `/raw` 의 ESP32 ts 를 `/api/state` 의 Pi 시계로 옮겨 라벨이 11 s 늦게 정렬된다(그 정렬로는 80~81 %).
 
 ## misplaced 게이트 — 설치 베이스라인 ∧ 모델 (10-26)
 
@@ -221,7 +238,7 @@ cd hub/atlas-tof
 # export 산출물을 test/ 에 (커밋 안 함): posture_net.bin, golden.txt, 선택 replay_s0.jsonl replay_s1.jsonl
 cmake -S . -B build/host -DBUILD_TESTING=ON && cmake --build build/host && (cd build/host && ctest --output-on-failure)
 # cmake 가 없으면
-g++ -O2 -std=c++17 -pthread -o build/host_test src/host_test.cpp src/http_server.cpp src/tof_line.cpp src/device_posture.cpp src/placement.cpp src/baseline.cpp
+g++ -O2 -std=c++17 -pthread -o build/host_test src/host_test.cpp src/http_server.cpp src/tof_line.cpp src/device_posture.cpp src/placement.cpp src/baseline.cpp src/facedown_rule.cpp
 build/host_test test/posture_net.bin test/golden.txt test/replay_s0.jsonl test/replay_s1.jsonl
 # 서비스 자체를 파일 입력으로
 TOFPOSTURE_PORTS=test/replay_s0.jsonl,test/replay_s1.jsonl TOFPOSTURE_MODEL=test/posture_net.bin \
@@ -242,11 +259,12 @@ TOFPOSTURE_EXIT_ON_EOF=1 build/deskmate_tofposture
 | `src/line_source.{h,cpp}` | tty(raw, 보드율 자동)·TCP(`tcp:<port>`)·파일 읽기 스레드, 끊기면 다시 연결 |
 | `src/device_posture.{h,cpp}` | 센서 N개 × 모델, 10 Hz 스텝, 방향 보정, offline 처리, 융합, EMA, 상태 JSON |
 | `src/placement.{h,cpp}` | 장치 위치(left·center·right)별 모델 맵·파일·`/api/placement` JSON, 모델 교체는 `DevicePosture::switchModel` |
+| `src/facedown_rule.{h,cpp}` | 시연 엎드림 규칙(d)·착석 판정 — 두 센서 원본 8×8 기하, 4 s 창 이력. PC 기준 구현과 프레임 단위 일치 |
 | `src/baseline.{h,cpp}` | 설치 베이스라인(캡처 누적·칸 중앙값/σ/유효·파일)과 장치 이동 규칙 `movedFraction`. 게이트는 `device_posture.cpp` tick 끝 |
-| `src/real_replay.cpp` | 호스트 도구: 실측 녹화(`rec_toflines.jsonl` + 실제 시각 라벨)를 off/and/never 로 돌려 단계별 라벨 분포, `--board` 로 보드 기록과 비교 |
+| `src/real_replay.cpp` | 호스트 도구: 실측 녹화(`rec_raw.jsonl`·`rec_toflines.jsonl` + 실제 시각 라벨)를 변형(off·radial·fill·radial+fill·combo 등)으로 돌려 acc/F1·단계별 라벨 분포·보드 기록 비교, `--golden` 으로 엎드림 규칙을 PC 골든과 프레임 대조, `--clock state`·`--warmup-skip` |
 | `src/http_server.{h,cpp}` | `/health` `/api/state` `/api/reset` `/raw` `/api/placement` `/api/baseline*` (두 번째 포트는 `/raw` 만) |
 | `src/main.cpp` | 설정(`tofposture.env`)·포트 자동 탐색(5초마다)·루프·stdout. sdbus-c++ 가 있으면 D-Bus 이름 소유 |
-| `src/host_test.cpp` | 파서·골든·리셋 규칙(주기·자리 비움·끔=골든과 일치)·`/raw` JSON·HTTP 리스너·장치 위치 모델 전환·베이스라인/misplaced 게이트·리플레이 테스트 (보드에서는 `tofposture_selftest`) |
+| `src/host_test.cpp` | 파서·골든·리셋 규칙(주기·자리 비움·끔=골든과 일치)·`/raw` JSON·HTTP 리스너·장치 위치 모델 전환·베이스라인/misplaced 게이트·엎드림 규칙·모델 입력 변환·리플레이 테스트 (보드에서는 `tofposture_selftest`) |
 | `board/start.sh` `stop.sh` `status.sh` `selftest.sh` `tofposture.env.example` | A 경로에서 보드에 함께 올리는 스크립트(BusyBox sh) |
 | `tools/build_static_aarch64.sh` | A 경로 정적 빌드(Zig) |
 | `tools/deploy-pi4.ps1` / `deploy-pi4.sh` | A 경로: PC → 보드 복사·자가 시험·시작 |

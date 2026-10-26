@@ -11,6 +11,9 @@
 //     같은 키 재요청, 교체 뒤 첫 스텝 EMA = 그 프레임 확률, 기능 꺼짐 = /api/state 에 placement 없음(골든 동일은 3-c)
 // 4''') 베이스라인·misplaced 게이트(baseline.h): 누적기 중앙값·σ·유효, movedFraction(가림 제외·멀어짐·사라짐·σ 문턱·배경 아닌 칸 제외),
 //     파일 저장/읽기, 캡처→규칙→device_moved(10 s 유지), 모드 off = 표시 == 평활, never = misplaced 0 재정규화, and 는 규칙에 따라, HTTP extra 경로
+// 4-d) 시연 엎드림 규칙(facedown_rule.h): near 경계·status·행 집계·numpy 중앙값·두 분기·seated, 4 s 창 0.7/0.4 이력, 서비스에서
+//     face_down conf 0.995 고정·모델 출력 보존·rule 필드, 모델 입력 변환 radial(가운데 1.003 ~ 모서리 1.124)·fill(255 → N mm·status 5) 이
+//     PostureNet 에 직접 넣은 것과 비트 단위로 같은지, 끄면 그대로인지
 // 5) 리플레이(있으면): 시뮬 세션을 두 센서 파일로 넣어 DevicePosture 전체 경로를 가상 시계로 돌리고
 //    파일의 "label" 과 비교 (dataset/tof_sim_v5/tools/sim_to_toflines.py 가 만든 파일). 기본 설정과 리셋 끔 두 번. 끝에 /raw 확인
 #include <arpa/inet.h>
@@ -31,6 +34,7 @@
 
 #include "baseline.h"
 #include "device_posture.h"
+#include "facedown_rule.h"
 #include "http_server.h"
 #include "placement.h"
 #include "posture_net.h"
@@ -1074,6 +1078,191 @@ void testBaselineHttp(const std::string& bin) {
     check(nf.rfind("HTTP/1.0 404", 0) == 0, "baseline http: unknown path still 404 through the extra handler");
 }
 
+// 8×8 격자 두 개(A·B)를 칸별로 채우는 도우미
+struct Grid { int16_t d[64]; uint8_t s[64]; };
+Grid emptyGrid() { Grid g; for (int i = 0; i < 64; ++i) { g.d[i] = -1; g.s[i] = 255; } return g; }
+void setRow(Grid& g, int row, int n, int16_t mm, uint8_t st = 5) { for (int c = 0; c < n; ++c) { g.d[row * 8 + c] = mm; g.s[row * 8 + c] = st; } }
+
+void testFaceDownRule() {
+    tof::FaceDownParams p;
+    // near 경계: 150·1200 은 제외, status 5·9 만, 6·10 은 아님
+    Grid a = emptyGrid(), b = emptyGrid();
+    a.d[0] = 150; a.s[0] = 5; a.d[1] = 151; a.s[1] = 5; a.d[2] = 1199; a.s[2] = 9; a.d[3] = 1200; a.s[3] = 5; a.d[4] = 600; a.s[4] = 6;
+    a.d[5] = 600; a.s[5] = 10;
+    auto f = tof::faceDownFeatures(a.d, a.s, b.d, b.s, p);
+    check(f.up == 2 && f.lo == 0 && f.topA == 0 && f.topB == 8 && !f.has_dlo && f.has_dup && std::fabs(f.dup - 0.675) < 1e-12 && !f.flag,
+          "facedown: near = status 5|9 and 150 < d < 1200 (bounds excluded), topA = first row with >= 2, even-count median = mean of middle two");
+    // 몸이 아래(엎드림): 위 4행 비고, A·B 아래 4행에 near 각 14칸 (lo 28) 거리 500 → flag
+    a = emptyGrid(); b = emptyGrid();
+    for (int r = 4; r < 8; ++r) { setRow(a, r, r < 6 ? 4 : 3, 500); setRow(b, r, r < 6 ? 4 : 3, 520); }
+    f = tof::faceDownFeatures(a.d, a.s, b.d, b.s, p);
+    check(f.up == 0 && f.lo == 28 && f.topA == 4 && f.topB == 4 && f.has_dlo && std::fabs(f.dlo - 0.51) < 1e-12 && !f.has_dup && f.flag && !f.seated,
+          "facedown: low-body branch (up 0, lo 28, dlo 0.51, top rows 4/4) flags");
+    a.d[3 * 8 + 0] = 500; a.s[3 * 8 + 0] = 5; a.d[3 * 8 + 1] = 500; a.s[3 * 8 + 1] = 5;     // A 3행에 near 2칸 → topA 3
+    f = tof::faceDownFeatures(a.d, a.s, b.d, b.s, p);
+    check(f.topA == 3 && f.up == 2 && !f.flag, "facedown: topA < 4 breaks the low-body branch");
+    // 몸이 가까움: lo ≥ 30, dlo ≤ 0.40, 위쪽 near 의 중앙값 ≤ 0.45
+    a = emptyGrid(); b = emptyGrid();
+    for (int r = 4; r < 8; ++r) { setRow(a, r, 8, 350); setRow(b, r, 8, 380); }
+    setRow(a, 1, 8, 440); setRow(b, 1, 8, 440);                       // up 16 (몸이 아래 분기는 실패), dup 0.44
+    f = tof::faceDownFeatures(a.d, a.s, b.d, b.s, p);
+    check(f.lo == 64 && f.up == 16 && std::fabs(f.dlo - 0.365) < 1e-12 && std::fabs(f.dup - 0.44) < 1e-12 && f.flag,
+          "facedown: near-body branch (lo 64, dlo 0.365, dup 0.44) flags even with an upper body");
+    setRow(a, 1, 8, 460); setRow(b, 1, 8, 460);
+    check(!tof::faceDownFeatures(a.d, a.s, b.d, b.s, p).flag, "facedown: near-body branch needs dup <= 0.45");
+    // 착석: up ≥ 8, topA·topB ≤ 3
+    a = emptyGrid(); b = emptyGrid();
+    for (int r = 2; r < 8; ++r) { setRow(a, r, 4, 650); setRow(b, r, 4, 680); }
+    f = tof::faceDownFeatures(a.d, a.s, b.d, b.s, p);
+    check(f.seated && f.up == 16 && f.topA == 2 && f.topB == 2 && !f.flag, "facedown: seated geometry (up 16, top rows 2/2)");
+    // 창: 5 Hz, flag 비율 ≥ 0.7 에서 켜지고 ≥ 0.4 동안 유지, t ≥ now − 4.0 포함
+    Grid down_a = emptyGrid(), down_b = emptyGrid(), up_a = emptyGrid(), up_b = emptyGrid();
+    for (int r = 4; r < 8; ++r) { setRow(down_a, r, 7, 500); setRow(down_b, r, 7, 500); }
+    for (int r = 2; r < 8; ++r) { setRow(up_a, r, 4, 650); setRow(up_b, r, 4, 680); }
+    tof::FaceDownRule rule;
+    std::vector<bool> on;
+    for (int k = 0; k < 40; ++k) {                       // 8 s 엎드림
+        rule.update(k * 0.2, down_a.d, down_a.s, down_b.d, down_b.s);
+        on.push_back(rule.on());
+    }
+    check(on[0] && rule.share() == 1.0, "facedown window: first flagged frame alone is share 1.0 -> on");
+    // 10 프레임 착석 → 50 프레임 엎드림 → 40 프레임 착석. 켜짐은 share 가 처음 ≥ 0.7 인 프레임, 꺼짐은 처음 < 0.4 인 프레임이고,
+    // 그 사이에는 share < 0.7 이어도 켜져 있다(이력). 창은 t ≥ now − 4.0 (부동소수 경계는 기준 구현과 같은 double 비교)
+    tof::FaceDownRule r2;
+    std::vector<double> sh;
+    std::vector<bool> o2;
+    for (int k = 0; k < 100; ++k) {
+        const bool down = k >= 10 && k < 60;
+        r2.update(k * 0.2, down ? down_a.d : up_a.d, down ? down_a.s : up_a.s, down ? down_b.d : up_b.d, down ? down_b.s : up_b.s);
+        sh.push_back(r2.share()); o2.push_back(r2.on());
+    }
+    int first_on = -1, first_off = -1;
+    bool held_below = false, ok_hyst = true;
+    for (int k = 1; k < 100; ++k) {
+        if (first_on < 0 && o2[k]) first_on = k;
+        if (first_on >= 0 && first_off < 0 && !o2[k]) first_off = k;
+        if (o2[k] && sh[k] < 0.7) held_below = true;
+        if (o2[k] != (sh[k] >= (o2[k - 1] ? 0.4 : 0.7))) ok_hyst = false;
+    }
+    check(first_on > 10 && sh[first_on] >= 0.7 && sh[first_on - 1] < 0.7 && first_on <= 25,
+          "facedown window: turns on at the first frame whose 4 s share reaches 0.7");
+    check(first_off > 60 && sh[first_off] < 0.4 && sh[first_off - 1] >= 0.4 && held_below && ok_hyst,
+          "facedown window: stays on while share >= 0.4 (hysteresis), off when it drops below");
+    r2.reset();
+    check(!r2.on() && r2.share() == 0.0, "facedown window: reset clears");
+}
+
+// 모델 입력 변환: 서비스(센서 1개)의 센서 확률 == 같은 변환을 손으로 한 입력을 PostureNet 에 직접 넣은 것
+void testModelInputTransforms(const std::string& bin) {
+    const double tan_half = std::tan(22.5 * 3.14159265358979323846 / 180.0);
+    auto factor = [&](int r, int c) {
+        const double x = (c + 0.5) * 2.0 * tan_half / 8.0 - tan_half, y = (r + 0.5) * 2.0 * tan_half / 8.0 - tan_half;
+        return std::sqrt(1.0 + x * x + y * y);
+    };
+    check(std::fabs(factor(3, 3) - 1.0027) < 1e-4 && std::fabs(factor(0, 0) - 1.1237) < 1e-4 && std::fabs(factor(7, 7) - factor(0, 0)) < 1e-12,
+          "radial factor: centre 1.003, corner 1.124, symmetric");
+    int16_t d[64]; uint8_t st[64];
+    for (int i = 0; i < 64; ++i) {
+        d[i] = (int16_t)(500 + 37 * i); st[i] = (uint8_t)(i % 7 == 0 ? 255 : i % 11 == 0 ? 2 : 5);
+        if (st[i] == 255) d[i] = -1;
+    }
+    for (int mode = 0; mode < 4; ++mode) {
+        const bool radial = mode & 1;
+        const int fill = (mode & 2) ? 3000 : 0;
+        tof::DeviceConfig cfg;
+        cfg.radial = radial; cfg.fill_notarget_mm = fill;
+        tof::DevicePosture dev(cfg);
+        std::string err;
+        dev.loadModel(bin, &err);
+        const int s = dev.addSensor("t");
+        tof::PostureNet net;
+        net.load(bin, &err);
+        int16_t din[64]; uint8_t sin[64];
+        for (int i = 0; i < 64; ++i) {
+            din[i] = d[i]; sin[i] = st[i];
+            if (radial && tof::zoneValid(din[i], sin[i])) din[i] = (int16_t)(din[i] * factor(i / 8, i % 8) + 0.5);
+            if (fill && sin[i] == 255) { din[i] = (int16_t)fill; sin[i] = 5; }
+        }
+        float logits[tof::kMaxClasses], probs[tof::kMaxClasses];
+        double maxd = 0.0;
+        for (int k = 0; k < 5; ++k) {
+            tof::TofLine l = gridFrame(k + 1, 100 * k, d, st);
+            for (int i = 0; i < 64; ++i) { l.frame.raw_d[i] = d[i]; l.frame.raw_st[i] = st[i]; }
+            dev.feed(s, l, 100 * k);
+            dev.tick(100 * k);
+            net.step(din, sin, logits);
+            tof::softmax(logits, net.classes, probs);
+            const auto ss = dev.sensors(100 * k);
+            for (int c = 0; c < net.classes; ++c) maxd = std::max(maxd, std::fabs((double)ss[0].probs[c] - probs[c]));
+        }
+        char what[160];
+        std::snprintf(what, sizeof what, "model input (radial %d, fill %d): service == hand-transformed input to PostureNet (max |dp| %.1g)", radial, fill, maxd);
+        check(maxd == 0.0, what);
+        // /raw 는 원본 그대로
+        const std::string raw = dev.rawJson(500);
+        check(raw.find("\"dist_mm\":[-1,537,574") != std::string::npos, "model input transforms leave /raw as received");
+        const std::string sj = dev.stateJson(500);
+        char want[96];
+        std::snprintf(want, sizeof want, "\"radial\":%s,\"fill_notarget_mm\":%d", radial ? "true" : "false", fill);
+        check(sj.find(want) != std::string::npos, "state: radial and fill_notarget_mm fields");
+    }
+}
+
+// 서비스에서 규칙: A·B 같은 ts 짝마다 평가, 켜지면 face_down conf 0.995·present true, 모델 출력은 model_output/instant 에
+void testFaceDownService(const std::string& bin) {
+    Grid down_a = emptyGrid(), down_b = emptyGrid();
+    for (int r = 4; r < 8; ++r) { setRow(down_a, r, 7, 500); setRow(down_b, r, 7, 500); }
+    auto frame = [&](int id, uint32_t ms, const Grid& g) {
+        tof::TofLine l = gridFrame(ms / 100 + 1, ms, g.d, g.s);
+        l.sensor_id = id;
+        for (int i = 0; i < 64; ++i) { l.frame.raw_d[i] = g.d[i]; l.frame.raw_st[i] = g.s[i]; }
+        return l;
+    };
+    tof::DeviceConfig cfg;
+    cfg.facedown_rule = true;
+    tof::DevicePosture dev(cfg);
+    std::string err;
+    dev.loadModel(bin, &err);
+    const int s0 = dev.addSensor("a"), s1 = dev.addSensor("b");
+    for (int k = 0; k < 10; ++k) {
+        const uint32_t ms = 200 * k;
+        dev.feed(s0, frame(0, ms, down_a), ms);
+        dev.feed(s1, frame(1, ms, down_b), ms);
+        dev.tick(ms); dev.tick(ms + 100);
+    }
+    const auto r = dev.result();
+    const auto fs = dev.faceDownState();
+    const std::string sj = dev.stateJson(2000);
+    check(fs.pairs == 10 && fs.on && r.fd_on && r.display_argmax == 3 && std::fabs(r.display[3] - 0.995f) < 1e-6f,
+          "facedown service: A/B pairs evaluated, rule on -> posture face_down with conf 0.995");
+    float sum = 0.f;
+    for (int i = 0; i < dev.classes(); ++i) sum += r.display[i];
+    check(std::fabs(sum - 1.f) < 1e-4f && sj.find("\"posture\":\"face_down\"") != std::string::npos && sj.find("\"present\":true") != std::string::npos &&
+              sj.find("\"rule\":{\"enabled\":true,\"face_down\":true,\"applied\":true,\"conf\":0.995") != std::string::npos &&
+              sj.find("\"model_output\":{\"posture\":\"" + std::string(tof::DevicePosture::labelName(r.smooth_argmax)) + "\"") != std::string::npos,
+          "facedown service: probs sum to 1, present true, state rule block, model output kept in model_output");
+    // 한쪽 센서만 오면 평가 안 함, ts 가 다르면 짝 아님
+    tof::DevicePosture d2(cfg);
+    d2.loadModel(bin, &err);
+    const int t0 = d2.addSensor("a"), t1 = d2.addSensor("b");
+    d2.feed(t0, frame(0, 100, down_a), 100);
+    d2.feed(t1, frame(1, 300, down_b), 300);
+    d2.feed(t0, frame(0, 500, down_a), 500);
+    check(d2.faceDownState().pairs == 0, "facedown service: frames with different ts_ms are not a pair");
+    // 끈 기본 설정: 짝도 안 만들고 rule.enabled false
+    tof::DevicePosture d3;
+    d3.loadModel(bin, &err);
+    const int u0 = d3.addSensor("a"), u1 = d3.addSensor("b");
+    d3.feed(u0, frame(0, 100, down_a), 100);
+    d3.feed(u1, frame(1, 100, down_b), 100);
+    d3.tick(100);
+    check(d3.faceDownState().pairs == 0 && !d3.result().fd_on && d3.stateJson(100).find("\"rule\":{\"enabled\":false") != std::string::npos,
+          "facedown service: off by default (no evaluation, display = model)");
+    // 리셋(POST /api/reset)은 규칙 창도 비운다
+    dev.reset(5000);
+    check(!dev.faceDownState().on && dev.faceDownState().share == 0.0, "facedown service: reset clears the rule window");
+}
+
 struct ReplayLine { uint32_t ms; int sensor; tof::TofLine line; };
 
 void testReplay(const std::string& bin, const std::vector<std::string>& files, tof::DeviceConfig cfg, const char* tag) {
@@ -1172,6 +1361,9 @@ int main(int argc, char** argv) {
     testPlacementHttp(argv[1]);
     testBaseline(argv[1]);
     testBaselineHttp(argv[1]);
+    testFaceDownRule();
+    testModelInputTransforms(argv[1]);
+    testFaceDownService(argv[1]);
     if (argc > 3) {
         const std::vector<std::string> files(argv + 3, argv + argc);
         testReplay(argv[1], files, tof::DeviceConfig{}, "defaults (resets off)");

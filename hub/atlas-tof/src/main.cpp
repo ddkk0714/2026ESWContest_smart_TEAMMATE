@@ -48,6 +48,16 @@
 //   TOFPOSTURE_MOVED_FRAC / TOFPOSTURE_MOVED_HOLD_S   0.5 / 10. 지금 유효한 배경 칸 중 변한 비율이 FRAC 이상으로 HOLD_S 이어지면 device_moved
 //                      (사람이 가려 가까워진 칸(≤ TOFPOSTURE_PRESENT_MAX_MM)과 무효가 된 칸은 안 센다 — baseline.h)
 //   TOFPOSTURE_MOVED_MIN_ZONES 4. 지금 유효한 배경 칸이 이보다 적으면 판단 보류
+//   TOFPOSTURE_RADIAL   0(기본). 1 이면 모델 입력의 유효 칸을 d × √(1+x²+y²) 로(빔 방향 거리, 시뮬과 같게; 가운데 1.003 ~ 모서리 1.124).
+//                      실기 L8 은 수직 거리라 가장자리가 짧다. 배포 env 는 1 권장. /raw·규칙은 원본 그대로
+//   TOFPOSTURE_FILL_NOTARGET_MM 0(끔). N 이면 모델 입력에서 status 255(타깃 없음) 칸을 N mm·status 5 로(radial 뒤). 보드 3000 권장 —
+//                      왼쪽 자리의 빈 배경(칸 23~47 % 가 255)이 misplaced 과다의 주원인(시뮬엔 늘 뒤 벽이 있다). PC: left1 acc 0.166→0.483
+//   TOFPOSTURE_FACEDOWN_RULE 0(기본). 1 이면 시연용 엎드림 규칙(facedown_rule.h, 두 센서 원본 격자 기하, 4 s 창 0.7/0.4) 이 켜진 동안
+//                      posture=face_down·conf=TOFPOSTURE_FD_CONF(0.995)·present=true. 모델 출력은 instant·model_output 에. /api/state "rule"
+//   TOFPOSTURE_SEATED_UPRIGHT 0(기본). 1 이면 규칙이 꺼져 있고 모델이 misplaced 인데 격자가 착석(up ≥ 8 ∧ topA ≤ 3 ∧ topB ≤ 3)이면 upright
+//   TOFPOSTURE_FD_NEAR_MIN_MM/NEAR_MAX_MM 150/1200 · FD_UP_MAX 4 · FD_LO_MIN 26 · FD_DLO_MAX_M 0.60 · FD_TOP_MIN 4 · FD_NEAR_LO_MIN 30 ·
+//   FD_NEAR_DLO_MAX_M 0.40 · FD_NEAR_DUP_MAX_M 0.45 · FD_WINDOW_S 4 · FD_ON_SHARE 0.7 · FD_OFF_SHARE 0.4 · FD_SEATED_UP_MIN 8 · FD_SEATED_TOP_MAX 3
+//                      (약 0.65 m 설치에 맞춘 값)
 //   TOFPOSTURE_STDOUT   change(기본: 자세가 바뀔 때만) | tick(매 스텝) | off
 //   TOFPOSTURE_EXIT_ON_EOF 1 이면 리플레이 파일이 끝났을 때 종료 (테스트용)
 // 같은 키를 <실행파일 폴더>/tofposture.env (KEY=VALUE 한 줄씩) 에 적어도 된다 — D-Bus 로 뜬 서비스는
@@ -216,6 +226,25 @@ int main() {
     cfg.moved.min_eval_zones = envInt("TOFPOSTURE_MOVED_MIN_ZONES", 4);
     cfg.moved.person_max_mm = cfg.present_max_mm;
     cfg.baseline_capture_s = std::max(1, envInt("TOFPOSTURE_BASELINE_CAPTURE_S", 10));
+    cfg.radial = envInt("TOFPOSTURE_RADIAL", 0) != 0;
+    cfg.fill_notarget_mm = std::max(0, envInt("TOFPOSTURE_FILL_NOTARGET_MM", 0));
+    cfg.facedown_rule = envInt("TOFPOSTURE_FACEDOWN_RULE", 0) != 0;
+    cfg.facedown_conf = static_cast<float>(envDouble("TOFPOSTURE_FD_CONF", 0.995));
+    cfg.seated_upright = envInt("TOFPOSTURE_SEATED_UPRIGHT", 0) != 0;
+    cfg.fd.near_min_mm = envInt("TOFPOSTURE_FD_NEAR_MIN_MM", 150);
+    cfg.fd.near_max_mm = envInt("TOFPOSTURE_FD_NEAR_MAX_MM", 1200);
+    cfg.fd.up_max = envInt("TOFPOSTURE_FD_UP_MAX", 4);
+    cfg.fd.lo_min = envInt("TOFPOSTURE_FD_LO_MIN", 26);
+    cfg.fd.dlo_max_m = envDouble("TOFPOSTURE_FD_DLO_MAX_M", 0.60);
+    cfg.fd.top_min = envInt("TOFPOSTURE_FD_TOP_MIN", 4);
+    cfg.fd.near_lo_min = envInt("TOFPOSTURE_FD_NEAR_LO_MIN", 30);
+    cfg.fd.near_dlo_max_m = envDouble("TOFPOSTURE_FD_NEAR_DLO_MAX_M", 0.40);
+    cfg.fd.near_dup_max_m = envDouble("TOFPOSTURE_FD_NEAR_DUP_MAX_M", 0.45);
+    cfg.fd.window_s = envDouble("TOFPOSTURE_FD_WINDOW_S", 4.0);
+    cfg.fd.on_share = envDouble("TOFPOSTURE_FD_ON_SHARE", 0.7);
+    cfg.fd.off_share = envDouble("TOFPOSTURE_FD_OFF_SHARE", 0.4);
+    cfg.fd.seated_up_min = envInt("TOFPOSTURE_FD_SEATED_UP_MIN", 8);
+    cfg.fd.seated_top_max = envInt("TOFPOSTURE_FD_SEATED_TOP_MAX", 3);
     const int baseline_auto_s = envInt("TOFPOSTURE_BASELINE_AUTO_S", 0);
     std::string baseline_file = envOr("TOFPOSTURE_BASELINE_FILE", exe_dir + "/baseline.json");
     if (!baseline_file.empty() && baseline_file[0] != '/') baseline_file = exe_dir + "/" + baseline_file;
@@ -256,6 +285,8 @@ int main() {
         } else if (baseline_auto_s > 0) {
             std::cerr << "tofposture: no baseline (" << err << "); will auto-capture " << baseline_auto_s << " s after the first frames\n";
         }
+        std::cerr << "tofposture: model input radial " << cfg.radial << ", fill_notarget_mm " << cfg.fill_notarget_mm
+                  << "; facedown rule " << cfg.facedown_rule << " (conf " << cfg.facedown_conf << "), seated->upright " << cfg.seated_upright << "\n";
         std::cerr << "tofposture: misplaced rule " << tof::misplacedRuleName(cfg.misplaced_rule) << " (bg >= " << cfg.moved.bg_min_mm
                   << " mm, thr max(" << cfg.moved.moved_min_mm << ", " << cfg.moved.moved_sigma << " sigma), frac " << cfg.moved.moved_frac_min
                   << ", hold " << cfg.moved.hold_s << " s)\n";
@@ -379,7 +410,8 @@ int main() {
                 std::cerr << "tofposture: " << tof::DevicePosture::labelName(r.display_argmax) << " ("
                           << tof::DevicePosture::labelKo(r.display_argmax) << ") conf "
                           << (r.display_argmax >= 0 ? r.display[r.display_argmax] : 0.f)
-                          << " online " << r.online_sensors << (r.gated ? " (model misplaced, gated)" : "") << "\n";
+                          << " online " << r.online_sensors << (r.gated ? " (model misplaced, gated)" : "")
+                          << (r.fd_on ? " (face_down rule)" : "") << (r.seated_applied ? " (seated -> upright)" : "") << "\n";
                 last_label = r.display_argmax;
             }
         }

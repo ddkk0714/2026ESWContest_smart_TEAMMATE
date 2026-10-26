@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "baseline.h"
+#include "facedown_rule.h"
 #include "posture_net.h"
 #include "tof_line.h"
 
@@ -50,6 +51,14 @@ struct DeviceConfig {
     MisplacedRule misplaced_rule = MisplacedRule::Off;
     MovedRuleParams moved;          // 베이스라인 변화 규칙 문턱 (TOFPOSTURE_BASELINE_BG_MM·MOVED_*)
     int baseline_capture_s = 10;    // POST /api/baseline/capture 기본 캡처 길이
+    // 모델 입력 변환 (원본 격자·/raw·규칙은 그대로). 순서: radial → fill
+    bool radial = false;            // TOFPOSTURE_RADIAL: 유효 칸 d × √(1+x²+y²) (실기 L8 은 수직 거리, 시뮬은 빔 방향 거리)
+    int fill_notarget_mm = 0;       // TOFPOSTURE_FILL_NOTARGET_MM: status 255 칸을 이 거리·status 5 로 (0 = 끔). 왼쪽 자리의 빈 배경 → misplaced 과다 원인
+    // 시연용 엎드림 규칙·upright 치환 (facedown_rule.h). 원본 격자(뒤집기·radial·fill 전)로 판정
+    bool facedown_rule = false;     // TOFPOSTURE_FACEDOWN_RULE
+    float facedown_conf = 0.995f;   // TOFPOSTURE_FD_CONF: 규칙이 켜진 동안 내는 conf
+    bool seated_upright = false;    // TOFPOSTURE_SEATED_UPRIGHT: 모델 misplaced ∧ seated → upright
+    FaceDownParams fd;              // TOFPOSTURE_FD_*
 };
 
 // 리셋: 모든 센서의 GRU h 를 0 으로, 융합 EMA 를 비움(smooth_argmax=-1 → 다음 스텝은 그 스텝의 융합 확률로 시작),
@@ -128,6 +137,19 @@ struct DeviceResult {
     bool moved_candidate = false;   // moved_frac_max ≥ moved_frac_min
     int64_t moved_held_ms = 0;      // 후보가 이어진 시간
     bool device_moved = false;      // 후보가 hold_s 이상 이어짐 = 규칙 참
+    bool fd_on = false;             // 엎드림 규칙이 켜져 있어 face_down 을 냈다
+    bool seated_applied = false;    // 모델 misplaced 를 seated 로 upright 치환했다
+};
+
+// 엎드림 규칙 상태 스냅숏 (/api/state "rule", 리플레이 도구의 골든 비교)
+struct FaceDownState {
+    bool enabled = false, seated_enabled = false;
+    bool on = false;
+    double share = 0.0;
+    uint64_t pairs = 0;
+    double last_t_s = -1.0;         // 마지막 프레임 쌍의 ts_ms / 1000
+    FaceDownFeatures last;
+    float conf = 0.995f;
 };
 
 class DevicePosture {
@@ -149,6 +171,7 @@ public:
     void clearBaseline();
     Baseline baseline() const;
     std::string baselineJson(int64_t now_ms) const;         // GET /api/baseline (캡처 상태·규칙 상태 포함)
+    FaceDownState faceDownState() const;
     int addSensor(const std::string& name);                 // 센서 번호를 돌려준다
     void renameSensor(int sensor, const std::string& name);
     int sensorCount() const { return static_cast<int>(slots_.size()); }
@@ -206,6 +229,10 @@ private:
     int64_t moved_since_ms_ = -1;   // 이동 후보가 시작된 시각
     int slotId(size_t i) const { const int id = slots_[i].st.sensor_id; return id >= 0 ? id : static_cast<int>(i); }
     void finishCaptureLocked(int64_t now_ms);
+    // 엎드림 규칙: 센서 0(A)·1(B) 의 같은 ts_ms 프레임 쌍을 feed 에서 모아 평가
+    FaceDownRule fd_;
+    struct PendingRaw { bool has = false; uint32_t ms = 0; int16_t d[kMaxZones]; uint8_t st[kMaxZones]; } pending_[2];
+    void modelInput(const TofFrame& f, int16_t* d, uint8_t* st) const;   // radial → fill
     int net_H_ = 0, net_W_ = 0, net_hidden_ = 0;
     std::string devLabel_;
     uint64_t frames_total_ = 0;

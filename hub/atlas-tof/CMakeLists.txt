@@ -15,7 +15,7 @@ find_package(Threads REQUIRED)
 # 없어도(호스트 빌드) 서비스는 그대로 돈다 — camsvc 도 sdbus 없이 Pi 5 에서 동작했다.
 find_package(sdbus-c++ 2.0 QUIET)
 
-set(TOFPOSTURE_CORE src/tof_line.cpp src/device_posture.cpp src/placement.cpp src/baseline.cpp)
+set(TOFPOSTURE_CORE src/tof_line.cpp src/device_posture.cpp src/placement.cpp src/baseline.cpp src/facedown_rule.cpp)
 
 add_executable(${PROJECT_NAME} src/main.cpp src/line_source.cpp src/http_server.cpp ${TOFPOSTURE_CORE})
 target_link_libraries(${PROJECT_NAME} PRIVATE Threads::Threads)
