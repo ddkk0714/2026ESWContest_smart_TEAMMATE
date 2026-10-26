@@ -64,6 +64,9 @@ def test_board_1026_upright_typing_frame_scores(profile):
     assert ingest["keystroke"] == {"idle_ratio_low": 0.99, "idle_ratio_high": 1.0, "flight_cv_low": 1.2, "flight_cv_high": 2.0,
                                    "correction_rate_high": 0.6}
     low, recover = fsm["thresholds"]["fatigue_focus_low"], fsm["thresholds"]["natural_recovery"]
+    for conf in (0.78, 0.5):                                                  # 수락 기준: 서비스 upright 는 conf ≥ 0.5 면 어떤 값이든
+        g = _frame(ingest, elapsed_s=1560, conf=conf)
+        assert g.get("posture").delta == 0.0 and compute_scores(g, Context.PC, fsm).c_fatigue < recover, conf
     f = _frame(ingest, elapsed_s=1560)
     assert f.get("keystroke").delta == pytest.approx(0.028, abs=0.005) and f.get("keystroke").phi == 0.0
     assert f.get("environment").delta == 1.0 and f.get("posture").delta == 0.0
@@ -102,7 +105,7 @@ def _run(hub, cache, timeline, *, horizon_s: float):
     c_max, seen = 0.0, []
     while t <= horizon_s:
         label, flag, nod, typing = timeline(t)
-        _fill(cache, t, label=label, conf=1.0 if label == "face_down" else 0.78, flag=flag, nod=nod, typing=typing)
+        _fill(cache, t, label=label, conf=1.0 if label == "face_down" else 0.5, flag=flag, nod=nod, typing=typing)   # upright 는 conf 0.5(수락 기준 하한)
         hub.tick_once(t)
         st = hub.engine.state
         seen.append(st)
