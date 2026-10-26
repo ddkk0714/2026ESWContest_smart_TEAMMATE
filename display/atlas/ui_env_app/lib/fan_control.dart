@@ -87,7 +87,7 @@ class FanState {
 
 class BleFanControl {
   BleFanControl(this._bluetooth,
-      {this.connectAttempts = 8,
+      {this.connectAttempts = 3,
       this.retryDelay = const Duration(seconds: 3),
       this.rescanFor = const Duration(seconds: 6)});
   final AtlasBluetoothService _bluetooth;
@@ -133,6 +133,24 @@ class BleFanControl {
     _address = null;
     _connection = null;
     _lastState = null;
+  }
+
+  /// 시작 복원용: 한 번만 붙어 본다(검색·재시도 없음). 실패한 연결마다 시스템 팝업이 뜬다(10-26).
+  /// 다시 붙는 길은 hub 명령([send])과 블루투스 탭의 "다시 연결"([connect])뿐이다.
+  Future<bool> connectOnce() async {
+    if (!configured) return false;
+    if (_connection != null) return true;
+    final pending = _connecting;
+    if (pending != null) return pending;
+    try {
+      _connection = await _bluetooth.connectLamp(_address!);
+      _lastError = null;
+      return true;
+    } catch (error) {
+      _connection = null;
+      _lastError = error;
+      return false;
+    }
   }
 
   /// 동시에 불러도 GATT Connect 는 한 번 — 두 번째는 "Already Connected" 로 실패한다.
