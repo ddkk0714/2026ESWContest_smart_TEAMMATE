@@ -14,6 +14,26 @@ irreversible_operations: [set_power_off, power_cycle]   # 사용자 확인 없�
 # REST 진입 알림(deskmate_hub/rest_notice.py, 2026-10-26) — FSM 이 어떤 길(휴식 제안 수락·개입 실패 뒤 강제·졸음 재시도)로든 REST 에
 # 들어가면 interaction/request kind rest_notice(닫기만 있는 안내 카드) + control/cmd target speaker operation speak {text, lang}.
 # 10-26 실기: 다시 엎드려 강제 휴식이 됐는데 허브가 아무 말도 안 했다. 사용자 첫 설정 sound_pref 가 off 면 카드만.
+# 밴딧이 고른 기기 없는 arm(자세 카드·알림음·음성 안내·휴식 제안)의 전달(deskmate_hub/arm_notice.py, 2026-10-26).
+# AUTO 게이트에서도 안내 카드(interaction/request, auto: true, options [dismiss])로 보이고, channel voice 는 speaker speak,
+# channel sound 는 speaker chime {pattern, volume}(volume = 사용자 sound_pref). sound_pref off 면 카드만. 기본 램프는 정책 결정이 없을 때만.
+arm_notice:
+  enabled: true
+  expires_in_s: 60          # 안내 카드 표시 시간(초). 제안 카드는 fsm focus_break_poll_sec 를 따른다
+  lang: ko
+  chime_pattern: double     # 알림음 패턴(앱 계약: single | double | triple)
+  voice_text:               # channel voice 의 음성 문구. {label} = arm label_ko
+    posture_voice: "자세를 바로 해 볼까요? 허리를 펴고 고개를 들어 주세요."
+    default: "{label}"
+  card_text:                # 안내 카드 문구. 없으면 {label}
+    posture_card: "자세를 바로 해 볼까요?"
+    sound_cue: "잠깐, 자세와 집중을 확인해 주세요."
+    posture_voice: "자세를 바로 해 볼까요?"
+    break_short: "5분만 쉬어 가요."
+    break_long: "조금 길게 쉬어 가요."
+    ventilate_suggest: "창문을 잠깐 열어 환기해요."
+    default: "{label}"
+
 rest_notice:
   enabled: true
   expires_in_s: 60          # 카드 표시 시간(초)

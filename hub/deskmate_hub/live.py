@@ -27,6 +27,7 @@ from .fatigue.live import build_fatigue_runtime, load_fatigue_config
 from .co2_window import CARD_KIND as CO2_CARD_KIND, PROMPT_CODE as CO2_PROMPT, ARM_ID as CO2_ARM, ARM_LABEL as CO2_ARM_LABEL
 from .co2_window import Co2WindowRule, load_co2_window_config
 from .rest_notice import RestNotifier
+from .arm_notice import ArmDeliverer
 from .personalization import PersonalizationRuntime, load_personalization_config
 from .personalization.privacy import PersonalizationPrivacy, load_privacy_config
 from .personalization.ondevice import OnDeviceLearner, load_ondevice_config
@@ -206,6 +207,10 @@ class LiveHub:
         # 음성은 제어 명령 경로(publish_control; mock 어댑터면 그쪽)로 — 사용자 sound_pref off 면 카드만. 문구 변형은 프로파일 이름(study)으로.
         speak_sink = self._publish_control if self._publish_control is not None else (
             self.mock_plug.handle_command if self.mock_plug is not None else None)
+        # 밴딧이 고른 기기 없는 arm(카드·알림음·음성)의 전달(arm_notice.py, control.yaml arm_notice:) — AUTO 에서도 사람에게 닿게
+        self.arm_deliverer = ArmDeliverer(self.control_cfg.get("arm_notice"), boot_id=self.boot_id,
+                                          publish_request=self.publish_request, publish_control=speak_sink,
+                                          on_log=lambda m: print(m, file=self.out, flush=True))
         self.rest_notifier = RestNotifier(
             self.control_cfg.get("rest_notice"), fsm_cfg=self.fsm_cfg, boot_id=self.boot_id,
             publish_request=self.publish_request, publish_control=speak_sink,
@@ -225,6 +230,9 @@ class LiveHub:
                     self.personalize_recorder.on_manual_adjust(feedback, ts=now if received is None else min(now, received))
                 continue
             feedback_now = now if received is None else min(now, received)
+            if self.arm_deliverer.owns(feedback.get("request_id")):
+                self.arm_deliverer.on_feedback(str(feedback.get("verdict")), feedback.get("request_id"), feedback_now)
+                continue
             if self.rest_notifier.owns(feedback.get("request_id")):
                 # 휴식 안내 카드의 닫기·만료 — 질문이 아니므로 FSM·제어·ESM 에 넣지 않는다
                 self.rest_notifier.on_feedback(str(feedback.get("verdict")), feedback.get("request_id"), feedback_now)
@@ -337,13 +345,12 @@ class LiveHub:
                 summary["personalize"] = self.personalize_recorder.last_view
         if self.control is not None:
             # 제어 에피소드: ACTION_ENV 는 control.yaml 기본 명령으로, 다른 ACTION_* 는 정책이 기기 arm(조명 등)을
-            # 골랐을 때만(specs 비어 있지 않음). ACTION_POSTURE 는 2026-10-24 부터 정책 spec 이 없어도 control.yaml
-            # `actions.posture`(졸음 → 무드등 밝게)가 있으면 그것으로 — 정책 spec 이 있으면 그쪽이 우선이고, 설정에
-            # `actions.posture` 가 없으면 예전과 같이 명령 없음. 자동이면 바로 실행하고 되돌리기 창이 열린다.
+            # 골랐을 때만(specs 비어 있지 않음). ACTION_POSTURE 는 정책 결정이 아예 없을 때(specs None: 정책 꺼짐·fallback·
+            # fsm_fixed)만 control.yaml `actions.posture`(졸음 → 무드등 밝게)로 간다. 밴딧이 기기 없는 arm(카드·알림음·음성)을
+            # 골랐으면(specs == []) 기본 램프를 쓰지 않고 아래 arm_deliverer 가 그 arm 을 전달한다(10-26: 개인화가 실제로 고른다).
             entered = result.state in self._REQUEST_STATES and result.state is not prev_state
-            if (entered and result.state is State.ACTION_POSTURE and not specs
+            if (entered and result.state is State.ACTION_POSTURE and specs is None
                     and self.control.has_default_actions(result.state.value, result.cause)):
-                # 정책이 기기 arm 을 안 줬다(정책 없음, 또는 화면·음성 arm) → control.yaml 기본 명령으로
                 self.control.on_enter_action(result.state.value, result.cause, result.gate, now, specs=None)
             elif entered and (result.state is State.ACTION_ENV or specs):
                 self.control.on_enter_action(result.state.value, result.cause, result.gate, now, specs=specs)
@@ -355,9 +362,7 @@ class LiveHub:
             if self.personalize_recorder is not None:          # 이번 tick 에 나간 무드등 명령 → '밝힘 뒤 직접 어둡게' 추적
                 self.personalize_recorder.observe_control(self.control, now)
         # REST 진입 알림 — 어떤 길(수락·강제·졸음 재시도)로든 REST 에 들어오면 카드 + 음성. 리포트·요약에도 남긴다
-        sound_pref = None
-        if self.personalize_recorder is not None and isinstance(self.personalize_recorder.user_profile, dict):
-            sound_pref = self.personalize_recorder.user_profile.get("sound_pref")
+        sound_pref = self._sound_pref()
         for item in self.rest_notifier.on_tick(result, prev_state, frame, now, seq=self.seq, sound_pref=sound_pref,
                                               c_fatigue=float(result.scores.c_fatigue),
                                               cause=result.cause or getattr(self.engine, "_last_cause", None)):
@@ -365,6 +370,7 @@ class LiveHub:
                 self.seq += 1
                 self._mark_card(now, item["data"]["expires_in_s"], "rest_notice")   # 안내가 떠 있는 동안 환기·확인 카드는 기다린다
         summary["rest_notice"] = self.rest_notifier.snapshot()
+        summary["arm_notice"] = self.arm_deliverer.snapshot()
         if self.tracker.baseline is not None:
             snap = self.tracker.baseline.snapshot()
             summary["baseline"] = {"calibrating": snap["calibrating"], "ready": sorted(snap["session"]),
@@ -402,6 +408,7 @@ class LiveHub:
         self.seq += 1
         self.publish(envelope)
         self._maybe_request(result, prev_state, now)
+        self._deliver_deviceless_arm(result, prev_state, specs, now, self._sound_pref())
         if (self.personalize_recorder is not None and self.personalize_recorder.last_episode_id
                 and self.pending_request is not None):
             self.personalize_recorder.link_request(self.pending_request["data"]["request_id"])
@@ -465,6 +472,40 @@ class LiveHub:
     def active_profile_id(self) -> str:
         """지금 사용자의 불투명 profile_id(이름 아님). 개인화 정책·반응 학습·피로 보정이 같은 값을 쓴다(identity.py 가 기본값)."""
         return self.personalize_recorder.active_profile_id if self.personalize_recorder is not None else self.profile_id
+
+    def _sound_pref(self) -> str | None:
+        """사용자 첫 설정의 소리 선호(off|low|mid|high). 프로필이 없으면 None(= 소리 허용)."""
+        rec = self.personalize_recorder
+        if rec is not None and isinstance(rec.user_profile, dict):
+            return rec.user_profile.get("sound_pref")
+        return None
+
+    def _deliver_deviceless_arm(self, result, prev_state, specs, now: float, sound_pref: str | None) -> None:
+        """ACTION_* 에 새로 들어온 tick 에 밴딧이 기기 없는 arm 을 골랐으면(specs == []) 그 arm 을 사람에게 전달한다 —
+        AUTO 면 안내 카드(auto: true), channel voice/sound 면 speaker speak/chime(sound_pref off 면 안 냄). SUGGEST 는 제안 카드가
+        이미 arm 을 싣고 나갔으므로 소리만 더한다. 기기 arm(specs 비어 있지 않음)은 디스패처가, 결정이 없으면(None) 기본 명령이 맡는다."""
+        if specs is None or specs:
+            return
+        if result.state not in self._REQUEST_STATES or result.state is prev_state:
+            return
+        rec = self.personalize_recorder
+        view = rec.last_view if rec is not None else None
+        if not view or not view.get("arm") or view.get("source") not in ("bandit", "rule_sleep"):
+            return
+        arm = str(view["arm"])
+        spec = self.personalize_policy.arms.get(arm) if self.personalize_policy is not None else None
+        channel = str(getattr(spec, "channel", "display") or "display")
+        kind, prompt = self._REQUEST_STATES[result.state]
+        expires = float(self.fsm_cfg["timers"].get("focus_break_poll_sec", 180))
+        emitted = self.arm_deliverer.deliver(
+            state=result.state.value, kind=kind, prompt_code=prompt, gate=result.gate.value, arm=arm,
+            label=str(view.get("arm_label") or arm), channel=channel, explanation=view.get("explanation"),
+            cause=result.cause, now=now, seq=self.seq, sound_pref=sound_pref,
+            c_fatigue=float(result.scores.c_fatigue), expires_in_s=expires)
+        for item in emitted:
+            if item.get("data", {}).get("auto"):
+                self.seq += 1
+                self._mark_card(now, item["data"]["expires_in_s"], kind)      # 안내가 떠 있는 동안 환기·확인 카드는 기다린다
 
     def _control_owns(self, state: State) -> bool:
         """이 상태의 완료(action_done)를 제어 결과가 정하는가. ACTION_ENV 는 언제나, ACTION_POSTURE 는 이번 진입에

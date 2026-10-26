@@ -195,6 +195,10 @@ class EpisodeRecorder:
                 data = _tof_with_mlp(view, tof.data, now, self.ingest_cfg)
                 label = str(data.get("posture") or "unknown")
             drowsy = bool(tof.data.get("drowsy"))
+            # 10-26: 자세 모델이 엎드림(face_down)·졸음(drowsy) 라벨을 내면 그것도 졸음 특징이다 — wake_light prior 는 졸음일 때만 앞선다.
+            # (FSM 과 같은 라벨·신뢰도 필터를 거친 값. 0x03 플래그만으로는 전과 같다)
+            if label in ("face_down", "drowsy"):
+                drowsy = True
         mm = view.fresh("mmwave", now, fresh.get("mmwave", 3)) if fresh else None
         if mm is not None and str(mm.data.get("drowsy_state") or "") == "DROWSY":
             drowsy = True

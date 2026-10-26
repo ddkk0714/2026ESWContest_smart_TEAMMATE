@@ -504,7 +504,10 @@ def test_live_hub_manual_adjust_after_posture_lamp(tmp_path):
     cache, states = SensorCache(), []
     hub = LiveHub(cache, fsm_cfg=copy.deepcopy(load_config()), ingest_cfg=dict(load_ingest_config(), normalization="linear"),
                   control_cfg=LAMP_CFG, publish=states.append, out=io.StringIO(), profile="",
-                  personalize_cfg=_cfg(log_dir=str(tmp_path)), personalize_log_path=str(tmp_path / "p.jsonl"),
+                  # 10-26 부터 밴딧이 고른 arm 이 실행된다(기기 없는 arm 이면 램프가 안 나간다) — 자세 arm 을 wake_light 로만 두어 램프 경로를 본다
+                  personalize_cfg=_cfg(log_dir=str(tmp_path), arms=[a for a in load_personalize_config()["arms"]
+                                                                   if "posture" not in a["causes"] or a["id"] == "wake_light"]),
+                  personalize_log_path=str(tmp_path / "p.jsonl"),
                   personalize_policy_path=str(tmp_path / "policy.json"))
     period, baseline = hub.period, float(hub.fsm_cfg["timers"]["baseline_sec"])
     t = 0.0

@@ -33,6 +33,8 @@ control:
     cooldown_sec: 30                # 기본 120. 시연은 REST 가 60 s 라 재진입이 빠르다
     reminder_after_sec: 120         # 기본 600. 휴식(60 s)을 넘겨 계속 쉬면 한 번 더
 personalize:
+  cold_start:
+    explore_scale_global: 0.2       # 10-26 보드: n_personal 0 에서 Thompson 탐색 잡음(계수 σ≈0.5)이 온보딩 prior(차이 0.2)를 묻어 sound_cue 가 1.32 로 뽑혔다. 기본 1.0
   gate:
     conf_auto: 0.55                 # 시연 전용 — PC 리허설 10-24 근거. 기본 0.75. FSM gate.conf_auto 와 같은 값으로 맞춘 것 — 다르면 정책이 FSM 자동을 제안(personalize:ask)으로 낮춰 무드등이 자동으로 안 켜진다
 ingest:

@@ -153,7 +153,8 @@ def posture_configs(tmp_path):
     icfg = dict(load_ingest_config(), normalization="linear")
     fcfg = copy.deepcopy(load_config())
     # 비PC 컨텍스트: 자세 0.40·환경 0.20 이 지배 → 졸음(delta 1.0)+CO₂ 로 피로 확정, dominant 는 posture
-    pcfg = dict(load_personalize_config(), log_dir=str(tmp_path))
+    # 정책은 끈다(기본 명령 경로 검사) — 10-26 부터 정책이 켜지면 밴딧이 고른 arm 이 실행된다(test_arm_delivery.py)
+    pcfg = dict(load_personalize_config(), enabled=False, log_dir=str(tmp_path))
     return fcfg, icfg, pcfg
 
 
@@ -181,12 +182,16 @@ def test_demo_b_profile_keeps_policy_gate_auto_so_lamp_goes_on_without_a_card(tm
     from deskmate_hub.personalize import load_personalize_config
 
     cache, states = SensorCache(), []
+    # Pi 4 기본(정책 켬). 10-26 부터 밴딧이 고른 arm 이 실행되므로 수험생 온보딩(밝은 조명 선호·소리 작게)을 얹고 평균만 쓰게(greedy)
+    # 해 wake_light 가 결정되게 한다 — 그래야 램프 경로가 정책을 통해서도 자동으로 나간다
     pcfg = dict(load_personalize_config(), log_dir=str(tmp_path))
+    pcfg["bandit"] = dict(pcfg["bandit"], algorithm="greedy")
     assert pcfg["enabled"] is True and pcfg["gate"]["conf_auto"] == 0.75           # Pi 4 배포판 기본
     hub = LiveHub(cache, control_cfg=CFG, publish=states.append, out=io.StringIO(), profile="demo-b",
                   personalize_cfg=pcfg, personalize_log_path=str(tmp_path / "p.jsonl"),
                   personalize_policy_path=str(tmp_path / "policy.json"))
     assert hub.personalize_policy is not None and hub.personalize_cfg["gate"]["conf_auto"] == 0.55
+    hub.personalize_policy.apply_user_profile({"light_pref": "high", "sound_pref": "low", "wind_pref": "off"})
     assert hub.fsm_cfg["gate"]["conf_auto"] == 0.55 and hub.engine.tm["baseline_sec"] == 10
     seen, accepted = _drive_to_monitor(hub, cache, co2=2000)
     assert State.ACTION_POSTURE in seen and State.MONITOR in seen, seen[-10:]

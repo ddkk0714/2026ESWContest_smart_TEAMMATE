@@ -28,7 +28,8 @@ PROFILES = ("demo-a", "demo-b", "demo-b-study")
 
 def _hub(tmp_path, profile: str):
     cache, states = SensorCache(), []
-    pcfg = dict(load_personalize_config(), log_dir=str(tmp_path))          # Pi 4 기본: 정책 켬(wake_light arm)
+    # 정책은 끈다 — 이 파일은 FSM 가중치·램프 기본 명령 경로를 본다. 정책이 켜지면 밴딧이 고른 arm 이 실행된다(test_arm_delivery.py)
+    pcfg = dict(load_personalize_config(), enabled=False, log_dir=str(tmp_path))
     hub = LiveHub(cache, control_cfg=CONTROL_CFG, publish=states.append, out=io.StringIO(), profile=profile,
                   personalize_cfg=pcfg, personalize_log_path=str(tmp_path / "p.jsonl"),
                   personalize_policy_path=str(tmp_path / "policy.json"))
