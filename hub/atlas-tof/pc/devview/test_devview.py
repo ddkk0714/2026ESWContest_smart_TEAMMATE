@@ -5,6 +5,8 @@ import json
 import socket
 import struct
 import threading
+import time
+import urllib.error
 import urllib.request
 
 import pytest
@@ -377,7 +379,7 @@ def test_fake_scenario_runs_fsm_and_lamp_command():
     assert snap["posture"]["placement"] == "center"
     assert snap["face_down"]["max"]["smooth"] >= 0.99 and snap["face_down"]["hits"]["smooth"] > 0
     assert all(s["rows"] for s in snap["sections"])  # 0x20·0x10·0x03·0x04·0xF0·키 입력 모두 채워짐
-    assert snap["profile"] == "hub demo-b · 첫 설정 u-7f3a"
+    assert snap["profile"] == "hub demo-b · 개인화 u-7f3a · 첫 설정 u-7f3a"   # 가짜 hub 가 받은 프로필을 되돌려 준다
     assert snap["phase"]["explanation"] != "-"
 
 
@@ -500,6 +502,255 @@ def test_video_view_bar_fields():
     assert dv.video_view(ph, None, {"headline": "x", "status": "✓ 실행됨", "time": "12:00:01"})["decision_status"] ==         "✓ 실행됨 · 12:00:01"
     e = dv.video_view(None, None, {})
     assert e["posture"] == "-" and e["chips"] == ["허브", "-", "-"] and e["env"] == "-"
+
+
+# ----------------------------------------------------------------- 가상 기기 (Pi 5 앱 규칙)
+
+@pytest.mark.parametrize("current,percent,min_raw,expected", [
+    # display/atlas/ui_env_app/test/feedback_policy_test.dart 의 adjustBrightness 기대값 그대로
+    (110, 60, None, (110, 176)), (110, -50, None, (110, 55)), (110, -90, None, (110, 30)), (200, 60, None, (200, 255)),
+    (None, 60, None, (30, 48)), (30, 1, None, (30, 40)), (250, 1, None, (250, 253)), (254, 1, None, (254, 255)),
+    (255, 10, None, (255, 255)), (30, -20, None, (30, 30)), (90, 0, None, (90, 90)), (10, 50, None, (30, 45)),
+    (48, 60, 153, (48, 153)), (200, 10, 153, (200, 220)), (None, 60, 153, (30, 153)),
+])
+def test_adjust_brightness_matches_pi5_app(current, percent, min_raw, expected):
+    assert dv.adjust_brightness(current, percent, min_raw=min_raw) == expected
+
+
+def test_fan_valid_matches_fan_frame():
+    ok = [("set_power", "on"), ("set_power", "off"), ("set_level", 3), ("set_speed", 100), ("set_mode", "natural"),
+          ("set_timer", 65535)]
+    bad = [("set_power", "1"), ("set_level", 4), ("set_level", True), ("set_speed", -1), ("set_mode", "turbo"),
+           ("set_brightness", 10)]
+    assert all(dv.fan_valid(o, v) for o, v in ok) and not any(dv.fan_valid(o, v) for o, v in bad)
+
+
+def phase_env(fsm, phase, gate="none", cause=None, **pers):
+    return env({"fsm_state": fsm, "phase": phase, "gate": gate, "cause": cause,
+                "sensor_summary": {"personalize": pers} if pers else {}})
+
+
+def cmd_env(cid, target, op, value, gate="auto", cause="posture", origin="ACTION_POSTURE", at=100.0):
+    return env({"command_id": cid, "target_id": target, "operation": op, "value": value, "gate": gate, "cause": cause,
+                "origin_state": origin, "requires_confirmation": False, "expires_ts_ms": int((at + 15) * 1000)})
+
+
+def test_virtual_phase_lighting_rules():
+    h = dv.VirtualHome()
+    h.on_phase(phase_env("FOCUS_PC", "focus"), 1.0)
+    assert h.lamp["power"] is True and h.lamp["brightness"] == 110
+    h.on_phase(phase_env("FATIGUE", "fatigue"), 2.0)          # 피로 국면이지만 ACTION_* 아님 → 그대로
+    assert h.lamp["brightness"] == 110 and h.speaker["music"] is False
+    h.on_phase(phase_env("ACTION_POSTURE", "fatigue", "suggest"), 3.0)   # 제안, 수락 전 → 그대로
+    assert h.lamp["brightness"] == 110
+    h.on_phase(phase_env("ACTION_POSTURE", "fatigue", "auto"), 4.0)      # 자동 → 피로 조명 180 + 음악
+    assert h.lamp["brightness"] == 180 and h.speaker["music"] is True
+    h.on_phase(phase_env("RECOVERY", "recovery"), 5.0)
+    assert h.lamp["brightness"] == 90 and h.speaker["music"] is False
+    h.on_phase(phase_env("END", "end"), 6.0)
+    assert h.lamp["power"] is False
+    assert [e["text"] for e in h.timeline if e["kind"] == "phase_light"][-1] == "단계 조명 end → 무드등 꺼짐"
+
+
+def test_virtual_suggest_accept_applies_phase_outputs():
+    h = dv.VirtualHome()
+    h.on_phase(phase_env("FOCUS_PC", "focus"), 1.0)
+    h.on_phase(phase_env("ACTION_POSTURE", "fatigue", "suggest"), 2.0)
+    h.on_request(env({"request_id": "r1", "kind": "posture_suggest", "cause": "posture", "expires_in_s": 180,
+                      "arm": "posture_voice", "explanation": "허리를 펴 볼까요?"}), 2.5)
+    assert h.speaker["voice"] == "음성 안내: 허리를 펴 볼까요?"
+    assert h.pending_card(3.0)["request_id"] == "r1"
+    h.on_feedback(env({"request_id": "r1", "verdict": "accept"}, node="laptop-devview"), 3.0)
+    assert h.lamp["brightness"] == 180 and h.speaker["music"] is True and h.pending_card(3.1) is None
+
+
+def test_virtual_commands_lamp_fan_air_and_real_result():
+    h = dv.VirtualHome()
+    h.on_phase(phase_env("FOCUS_PC", "focus", arm="wake_light", decision_source="policy",
+                         explanation="졸음 6회"), 99.0)
+    e = h.on_cmd(cmd_env("c1", "desk_lamp", "adjust_brightness", {"percent": 60, "min_raw": 153}), at=100.0)
+    assert e["virtual"] == {"status": "succeeded", "actual_value": 176, "actual": 176, "previous": 110}
+    assert e["text"] == "자세 개입(자세 원인) → iLink 무드등 밝기 +60 % (최소 153) (110→176)"
+    assert e["arm"] == "wake_light" and e["decision_source"] == "policy" and e["reason"] == "졸음 6회"
+    assert h.on_cmd(cmd_env("c1", "desk_lamp", "adjust_brightness", {"percent": 60}), at=100.5) is e   # 중복 → 한 번만
+    h.on_result(env({"command_id": "c1", "status": "failed", "error_code": "feedback_disabled"}, node="display-control"))
+    tl = h.view(101.0)["timeline"][0]
+    assert tl["real"] == "failed feedback_disabled (display-control)" and tl["real_ok"] is False and tl["virtual_ok"] is True
+    f = h.on_cmd(cmd_env("c2", "vent_fan", "set_level", 2, cause="environment", origin="ACTION_ENV"), at=100.0)
+    assert f["virtual"]["status"] == "succeeded" and h.fan["level"] == 2 and f["arm"] is None   # wake_light 는 무드등 arm
+    assert h.on_cmd(cmd_env("c3", "vent_fan", "set_level", 9), at=100.0)["virtual"]["error_code"] == \
+        "unsupported_operation_or_value"
+    air = h.on_cmd(cmd_env("c4", "air_purifier", "set_mode", "high", cause="environment"), at=100.0)
+    assert air["virtual"]["status"] == "succeeded" and h.air["mode"] == "high"
+    # 꺼진 램프에 +60 %: previous 0(꺼짐), 기준은 하한 30 → 48 → min_raw 153
+    h.on_phase(phase_env("END", "end"), 102.0)
+    g = h.on_cmd(cmd_env("c5", "desk_lamp", "adjust_brightness", {"percent": 60, "min_raw": 153}, at=103.0), at=103.0)
+    assert g["virtual"]["previous"] == 0 and g["virtual"]["actual"] == 153
+
+
+def test_virtual_rejects_like_app():
+    h = dv.VirtualHome()
+    bad = env({"command_id": "x", "target_id": "desk_lamp", "operation": "set_power", "value": "on", "gate": "auto"})
+    assert h.on_cmd(bad, 1.0)["virtual"]["error_code"] == "invalid_command"          # expires·requires_confirmation 없음
+    late = cmd_env("y", "desk_lamp", "set_power", "on", at=0.0)
+    assert h.on_cmd(late, 100.0)["virtual"]["error_code"] == "expired"
+
+
+def test_virtual_vent_card_opens_window_and_undo_window():
+    h = dv.VirtualHome()
+    h.on_request(env({"request_id": "v1", "kind": "vent_suggest", "ventilate_minutes": 5, "expires_in_s": 120}), 10.0)
+    h.on_feedback(env({"request_id": "v1", "verdict": "accept"}), 11.0)
+    assert h.window["open"] is True and h.window["minutes"] == 5
+    h.on_cmd(cmd_env("a1", "desk_lamp", "set_power", "on", at=20.0), at=20.0)
+    assert h.undoable(50.0)["command_id"] == "a1" and h.undoable(81.0) is None   # 60 s 되돌리기 창
+
+
+def test_request_headline_uses_chosen_arm():
+    c = dv.ControlTracker()
+    c.on_message(dv.TOPIC_REQUEST, env({"request_id": "r", "kind": "env_suggest", "cause": "environment",
+                                        "arm": "fan_on", "expires_in_s": 30}), at=1.0)
+    assert c.view(None, now=2.0)["headline"] == "제안 카드 · 환경 → Pico 2 W 선풍기 (BLE) 켬"
+
+
+# ----------------------------------------------------------------- 보내기(프로필·카드 응답)
+
+class FakePub(dv.Publisher):
+    def __init__(self):
+        super().__init__("test")
+        self.sent = []
+
+    def publish(self, topic, data):
+        if topic not in dv.PUBLISH_TOPICS:
+            raise ValueError(topic)
+        self.sent.append((topic, data))
+        return self.envelope(data)
+
+
+def test_validate_profile_and_personas():
+    import re
+    for key, p in dv.PERSONAS.items():
+        prof, err = dv.validate_profile({"profile_id": dv.new_profile_id(), **p["data"]})
+        assert prof is not None, (key, err)
+    assert dv.validate_profile({"profile_id": "bad id!"})[0] is None
+    assert dv.validate_profile({"profile_id": "p1", "light_pref": "ultra"})[1] == "light_pref 값 오류"
+    assert dv.validate_profile({"profile_id": "p1", "bedtime": "25:00"})[1] == "bedtime 는 HH:MM"
+    assert dv.validate_profile({"profile_id": "p1", "focus_help": ["light", "dance"]})[1] == "focus_help 값 오류"
+    prof, _ = dv.validate_profile({"profile_id": "p1", "name": "지우", "job": "수험생", "age_band": "10s"})
+    assert prof == {"profile_id": "p1", "age_band": "10s"}   # 이름·직업 같은 식별 단서는 버린다
+    assert re.fullmatch(r"p[0-9a-f]{16}", dv.new_profile_id())
+
+
+def test_send_profile_and_hub_ack():
+    st = dv.Store()
+    st.publisher = FakePub()
+    assert st.send_profile({"profile_id": "pabc", "age_band": "20s"}, "대학생") == {"ok": True, "error": None}
+    assert st.publisher.sent == [(dv.TOPIC_PROFILE, {"profile_id": "pabc", "age_band": "20s"})]
+    assert st.persona_view()["ack"] is False
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "FOCUS_PC", "sensor_summary": {
+        "personalization": {"active_profile_id": "pabc", "decision_source": "prior"}}}))
+    pv = st.persona_view()
+    assert pv["ack"] is True and pv["hub_active"] == "pabc" and pv["hub_fields"]["decision_source"] == "prior"
+    st.publisher = None
+    assert st.send_profile({"profile_id": "pabc"})["ok"] is False
+
+
+def test_send_feedback_card_and_undo():
+    st = dv.Store()
+    st.publisher = FakePub()
+    assert st.send_feedback("r9", "accept")["error"].startswith("지금 떠 있는 카드가 아님")
+    now = time.time()
+    st.on_mqtt(dv.TOPIC_REQUEST, payload({"request_id": "r9", "kind": "posture_suggest", "expires_in_s": 180}), at=now - 2)
+    assert st.send_feedback("r9", "maybe")["ok"] is False
+    assert st.send_feedback("r9", "accept")["ok"] is True
+    topic, data = st.publisher.sent[-1]
+    assert topic == dv.TOPIC_FEEDBACK and data["request_id"] == "r9" and data["verdict"] == "accept"
+    assert data["kind"] == "posture_suggest" and 1500 <= data["response_ms"] <= 10000
+    assert st.send_feedback(None, "undo")["error"].startswith("되돌릴 자동 실행이 없음")
+    st.on_mqtt(dv.TOPIC_CMD, payload({"command_id": "a1", "target_id": "desk_lamp", "operation": "set_power",
+                                      "value": "on", "gate": "auto", "requires_confirmation": False,
+                                      "expires_ts_ms": int((now + 15) * 1000)}), at=now)
+    assert st.send_feedback(None, "undo")["ok"] is True
+    assert st.publisher.sent[-1] == (dv.TOPIC_FEEDBACK, {"request_id": "atlas-display", "verdict": "reject",
+                                                          "response_ms": 0})
+
+
+def test_publisher_qos1_retain_and_envelope_over_socket():
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    got = {}
+
+    def broker():
+        c, _ = srv.accept()
+        dv.read_packet(c)
+        c.sendall(bytes([0x20, 0x02, 0x00, 0x00]))
+        h, body = dv.read_packet(c)
+        got["h"], got["body"] = h, body
+        tlen = struct.unpack("!H", body[:2])[0]
+        pid = body[2 + tlen:4 + tlen]
+        c.sendall(bytes([0x40, 0x02]) + pid)
+        got["disc"] = dv.read_packet(c)[0]
+        c.close()
+
+    t = threading.Thread(target=broker, daemon=True)
+    t.start()
+    pub = dv.Publisher("127.0.0.1", port)
+    pub.publish(dv.TOPIC_PROFILE, {"profile_id": "pabc", "age_band": "20s"})
+    t.join(2)
+    srv.close()
+    assert got["h"] == 0x33                        # PUBLISH · QoS 1 · retain(profile/user)
+    topic, raw, pid = dv.parse_publish(got["h"] & 0x0F, got["body"])
+    envd = json.loads(raw.decode("utf-8"))
+    assert topic == dv.TOPIC_PROFILE and pid == 2 and got["disc"] == 0xE0
+    assert envd["node"] == "laptop-devview" and envd["data"] == {"profile_id": "pabc", "age_band": "20s"}
+    assert set(envd) == {"schema_version", "ts", "node", "boot_id", "seq", "data"}
+    with pytest.raises(ValueError):
+        pub.publish(dv.TOPIC_CMD, {"target_id": "desk_lamp"})   # 제어 명령은 보낼 수 없다
+
+
+def test_http_post_requires_header_and_routes():
+    st = dv.Store()
+    st.publisher = FakePub()
+    server = dv.ThreadingHTTPServer(("127.0.0.1", 0), dv.make_handler(st))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+
+    def post(path, body, header=True):
+        req = urllib.request.Request(base + path, data=json.dumps(body).encode(), method="POST",
+                                     headers={"Content-Type": "application/json", **({"X-Devview": "1"} if header else {})})
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+    try:
+        assert post("/api/profile", {"data": {"profile_id": "p1"}}, header=False)[0] == 403
+        assert post("/api/profile", {"data": {"profile_id": "p1", "age_band": "20s"}, "label": "대학생"}) == \
+            (200, {"ok": True, "error": None})
+        assert post("/api/feedback", {"request_id": "nope", "verdict": "accept"})[0] == 409
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_fake_card_waits_for_my_answer():
+    st = dv.Store()
+    st.publisher = dv.LoopbackPublisher(st)
+    sc = dv.FakeScenario(st)
+    t = 0.0
+    while t < 32:
+        sc.step(t)
+        t += 0.5
+    card = st.snapshot()["virtual"]["card"]
+    assert card["kind"] == "env_suggest"
+    assert st.send_feedback(card["request_id"], "reject")["ok"] is True
+    while t < 40:
+        sc.step(t)
+        t += 0.5
+    log = st.snapshot()["log"]
+    assert not any(e["text"].startswith("vent_fan") for e in log)   # 거절 → 선풍기 명령 없음, 가짜 앱 자동 수락도 없음
+    assert sum(1 for e in log if e["kind"] == "FEEDBACK") == 1
 
 
 # ----------------------------------------------------------------- 로컬 HTTP

@@ -3,8 +3,10 @@
 결선 시연영상에서 **내부 상태를 보여 주는 화면**이자, 실기 중에 보드의 원값을 실시간으로 보는 개발자 화면이다.
 Pi 5 앱의 개발자 모드와 같은 정보에 센서 원값·엎드림(face_down) 신뢰도 추적을 더해 노트북 브라우저 한 페이지(1920×1080)에 띄운다.
 
-- **보기 전용.** 판단(FSM·개인화)과 제어는 전부 Pi 4·Pi 5 보드에서 한다. 이 프로그램은 Pi 4 브로커를
-  구독하고 자세 서비스에 GET 만 한다 — 발행·제어 명령을 보내지 않는다. 화면 맨 위 띠에도 그렇게 적혀 있다.
+- **보기 전용(예외 둘).** 판단(FSM·개인화)과 제어는 전부 Pi 4·Pi 5 보드에서 한다. 이 프로그램은 Pi 4 브로커를
+  구독하고 자세 서비스에 GET 만 한다. 예외로 **가상 기기 화면에서 사람이 누를 때만** 두 가지를 보낸다(10-26 사용자 요청):
+  첫 설정 프로필 `deskmate/profile/user`(retain)와 카드 응답 `deskmate/feedback/user`. 제어 명령(`control/cmd`)은 보내지 않는다.
+  `--read-only` 로 켜면 이 둘도 끈다(녹화만 할 때).
 - **원시 센서 값은 화면에만.** 받은 값은 메모리에만 두고 `127.0.0.1` 로만 연다. 파일로 쓰지 않는다
   (녹화는 사람이 화면 캡처로 한다).
 - 표준 라이브러리만 쓴다(Python 3.10+). `pip install` 이 필요 없고 외부 CDN 도 없다(오프라인 동작).
@@ -38,7 +40,8 @@ python hub/atlas-tof/pc/devview/devview.py --fake
 | `--mqtt-port` | 1883 | Pi 4 Mosquitto |
 | `--port` | 8790 | 이 화면의 로컬 포트 |
 | `--hub-profile NAME` | | hub 시연 프로파일 이름(예: `demo-b`). 보드가 발행하지 않으므로 프로필 줄에 `(노트북 지정)` 으로 표시 |
-| `--fake` / `--fake-start S` | | 가짜 각본 / S 초부터 |
+| `--read-only` | | 프로필·카드 응답 보내기도 끈다 |
+| `--fake` / `--fake-start S` | | 가짜 각본 / S 초부터(보내기는 브로커 대신 화면 안으로만) |
 
 ## 가져오는 것
 
@@ -88,6 +91,42 @@ hub 시연 프로파일은 `state/phase`·`health/hub`·`:8765/health` 어디에
   CMD 파랑 · RESULT 성공 초록/실패 빨강 · REQUEST·FEEDBACK 노랑. 시각은 노트북 수신 시각.
 - 값이 없는 칸은 `-`. 심박·호흡은 `*_valid=false` 면 `(무효)` 를 붙인다(락온 풀림 ≠ 사람 없음).
 - 열지도 색 눈금은 `pc/posture_view.html`·Pi 5 `tof_heatmap.dart` 와 같다(20 cm 붉음 → 2 m 어둠). 배열은 펌웨어가 방향을 적용한 그대로 그린다(뒤집지 않음).
+
+## 가상 기기 (`/?mode=virtual`) — "기기가 연결돼 있었다면"
+
+오른쪽 위 **가상 기기** 단추, `G` 키, 또는 <http://127.0.0.1:8790/?mode=virtual>. 주변기기(무드등·선풍기·공기청정기·창문 환기·스피커)가
+전부 연결되고 Pi 5 앱의 '상태 기반 조명·음악 피드백' 스위치가 켜져 있다고 보고, hub 가 보낸 것을 **Pi 5 앱과 같은 규칙**으로 가상 기기에 적용한다.
+실제 Pi 5 가 돌려준 결과(예: `failed feedback_disabled`)는 타임라인 오른쪽 끝에 따로 적는다 — 화면 전체에 '가상' 표시.
+
+| 기기 | 규칙(출처) |
+|---|---|
+| iLink 무드등 | 단계 조명 start 48 · focus 110 · fatigue 180 · recovery 90 · idle/end 끔, 피로 국면은 ACTION_* 자동이거나 제안 수락 뒤에만(`feedback_policy.dart` ilinkFramesForPhase·apply·accept). `adjust_brightness {percent, min_raw}` = 지금 밝기(꺼짐·모름이면 하한 30) × (1 + p/100), 하한 30·상한 255, 올리는데 같으면 +10, min_raw 까지(`adjustBrightness`, 앱 테스트 15개를 그대로 골든으로). previous = 꺼짐이면 0, 모르면 없음 |
+| Pico 2 W 선풍기 | `set_power on/off · set_level 0~3 · set_speed 0~100 · set_mode normal/natural · set_timer` 만 실행(`fan_control.dart` fanFrame) |
+| LG 공기청정기 | `set_mode off/auto/low/mid/high`(hub control.yaml) |
+| 창문 환기 | `vent_suggest`(또는 arm `ventilate_suggest`) 카드를 수락하면 '창문 열기 N분' |
+| 스피커·음성 | 피로 국면 조명과 함께 음악 재생, recovery/idle/end 에서 정지, 피로 국면 무드등 명령도 음악(앱 규칙). arm `posture_voice` 카드 = 음성 안내, `sound_cue` = 알림음 |
+
+명령마다 만료(`expires_ts_ms`)·게이트(auto/suggest/undo)·`requires_confirmation` 을 앱처럼 검사하고, 같은 `command_id` 는 한 번만 실행한다.
+타임라인 한 줄: `자세 개입(자세 원인) → iLink 무드등 밝기 +60 % (최소 153) (110→176)` + FSM 상태·원인·자동/제안·개인화 arm·
+decision_source·이유(개인화 설명) + 실제 Pi 5 결과. 이 화면을 켠 뒤부터 쌓인다(그 전 밝기는 '모름').
+
+### 나는 누구? (수험생 / 대학생 / 직접 설정)
+
+고르면 V18 제품 UI(`ui-live display/atlas/ui_demo_app/lib/live/profile_payload.dart` profileData)와 같은 모양의 첫 설정 프로필을
+**확인을 한 번 더 누른 뒤** `deskmate/profile/user` 로 보낸다(retain·QoS 1, node `laptop-devview`, 이름·직업은 싣지 않음).
+- 수험생 = V18 기본 프로필(19세 → `10s` · 수면 7 h · 23:30 → 06:30 · 조명 high · 소리 low · 바람 off · 도움 순서 조명/선풍기/알림음 · 가운데).
+- 대학생 = V18 에 직업이 없어 같은 기본값에 20대(`20s`)와 '수험생 아님' 밝기 규칙(0.45 → 조명 mid).
+- 직접 설정 = 연령대·수면·잠드는/일어나는 시각·조명/소리/바람·장치 위치·도움 순서를 고쳐서.
+- `profile_id` 는 V18 처럼 `p` + 16 hex 난수, 이 브라우저에 페르소나마다 기억(다시 고르면 같은 사람으로 이어 배운다).
+- hub 확인: state/phase 개인화의 `active_profile_id` 가 보낸 id 와 같아지면 '✓ hub 적용 확인'(10 s 주기).
+- hub 시연 프로파일(`DESKMATE_PROFILE` demo-b ↔ demo-b-study)은 hub 재시작이 필요해 여기서 바꾸지 않고 표시만 한다(`--hub-profile`).
+
+### 카드 응답 (수락 / 거절 / 되돌리기)
+
+hub 가 카드(posture·env·break·checkin·vent_suggest)를 띄우면 시한 안에 **수락·거절**, 자동 실행 뒤 60 s(`undo_window_sec`) 안이면
+**되돌리기**. 한 번 누르면 '한 번 더 → 보내기', 4 s 안에 다시 누르면 Pi 5 앱과 같은 `deskmate/feedback/user` data
+(`request_id`·`verdict`·`response_ms`·`kind`, QoS 1)를 보낸다. 되돌리기 = 앱처럼 `reject`(걸린 카드가 없으면 `request_id: atlas-display`) →
+hub 가 auto_undo 로 받아 undo 명령을 낸다. 이 응답이 반응 학습(ReactionLearner)의 라벨이 된다.
 
 ## 영상 모드 (`/?mode=video`)
 

@@ -21,8 +21,9 @@ body { font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", "Seg
 }
 #band { grid-area: band; } #banner { grid-area: banner; } #row1 { grid-area: row1; }
 #row2 { grid-area: row2; } #control { grid-area: control; } #row4 { grid-area: row4; }
-body.video #dev { display: none; }
-body:not(.video) #video { display: none; }
+body:not([data-mode="dev"]) #dev { display: none; }
+body:not([data-mode="video"]) #video { display: none; }
+body:not([data-mode="virtual"]) #virt { display: none; }
 .mono, .num { font-family: Consolas, "D2Coding", "Cascadia Mono", monospace; font-variant-numeric: tabular-nums; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; min-height: 0; overflow: hidden; }
 .ptitle { font-size: 14px; color: var(--dim); margin-bottom: 6px; display: flex; justify-content: space-between; gap: 12px; white-space: nowrap; }
@@ -141,6 +142,65 @@ body:not(.video) #video { display: none; }
 #ksSpark { flex: 1; min-height: 30px; margin-top: 4px; background: #10141c; border-radius: 4px; position: relative; }
 #ksSpark svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 
+/* ---------- 가상 기기(/?mode=virtual): 주변기기가 다 연결돼 있었다면 ---------- */
+#virt { display: grid; height: 100vh; gap: 10px; padding: 0 16px 12px;
+  grid-template-rows: 44px auto auto minmax(0, 1fr); }
+#vband { display: flex; align-items: center; gap: 14px; border-bottom: 1px solid var(--line); margin: 0 -16px; padding: 0 16px; white-space: nowrap; font-size: 15px; color: var(--dim); }
+#vband b { color: var(--fg); font-size: 17px; }
+#vband .virtTag { color: #111; background: var(--accent); border-radius: 4px; padding: 1px 8px; font-weight: 700; }
+#vband .sp { flex: 1; }
+#vtop { display: grid; grid-template-columns: 470px minmax(0, 1fr); gap: 10px; }
+.pbtns { display: flex; gap: 8px; margin: 4px 0 8px; }
+.pbtns button { flex: 1; font: inherit; font-size: 17px; font-weight: 700; padding: 8px 0; border-radius: 8px; border: 1px solid var(--line); background: #1c2130; color: var(--fg); cursor: pointer; }
+.pbtns button.on { background: var(--info); color: #071018; border-color: var(--info); }
+#pform { display: grid; grid-template-columns: 96px minmax(0, 1fr) 96px minmax(0, 1fr); gap: 4px 8px; font-size: 14px; align-items: center; }
+#pform label { color: var(--dim); }
+#pform select, #pform input { font: inherit; font-size: 14px; background: #10141c; color: var(--fg); border: 1px solid var(--line); border-radius: 5px; padding: 2px 4px; min-width: 0; }
+#pform .helps { grid-column: 2 / -1; display: flex; gap: 10px; flex-wrap: wrap; }
+#pform .helps label { color: var(--fg); }
+#pform[aria-disabled="true"] { opacity: .55; pointer-events: none; }
+.prow2 { display: flex; gap: 8px; align-items: center; margin-top: 8px; font-size: 14px; }
+.btn { white-space: nowrap; font: inherit; font-size: 15px; font-weight: 700; padding: 6px 14px; border-radius: 7px; border: 1px solid var(--line); background: #222836; color: var(--fg); cursor: pointer; }
+.btn.go { background: var(--ok); color: #06130c; border-color: var(--ok); }
+.btn.no { background: #3a1418; color: #ffd6d6; border-color: var(--bad); }
+.btn.warn { background: var(--warn); color: #1a1204; border-color: var(--warn); }
+.btn:disabled { opacity: .4; cursor: default; }
+#pconfirm { display: none; margin-top: 8px; background: #10141c; border: 1px dashed var(--warn); border-radius: 8px; padding: 8px; font-size: 12px; }
+#pconfirm pre { margin: 4px 0 6px; white-space: pre-wrap; word-break: break-all; color: var(--dim); max-height: 110px; overflow: auto; }
+#pstatus { margin-top: 8px; font-size: 14px; color: var(--dim); line-height: 1.5; }
+#pstatus b { color: var(--fg); }
+#vnow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px 20px; }
+#vnowState { font-size: 38px; font-weight: 800; }
+#vnowHead { font-size: 18px; font-weight: 700; margin-top: 4px; }
+#vnowMeta { font-size: 14px; color: var(--dim); margin-top: 4px; }
+#cardBox { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: #10141c; }
+#cardBox.live { border-color: var(--warn); box-shadow: 0 0 0 2px rgba(245,185,58,.25) inset; }
+#cardBox .ttl { font-size: 13px; color: var(--dim); }
+#cardText { font-size: 19px; font-weight: 700; margin: 4px 0 8px; }
+#cardBtns { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#cardMsg { font-size: 13px; color: var(--dim); margin-top: 6px; }
+#vdevs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.dcard { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; position: relative; }
+.dcard.on { border-color: rgba(76,195,138,.7); box-shadow: 0 0 18px rgba(76,195,138,.12) inset; }
+.dcard .ic { font-size: 34px; line-height: 1; }
+.dcard .nm { font-size: 16px; font-weight: 700; margin-top: 6px; }
+.dcard .st { font-size: 18px; margin-top: 4px; min-height: 24px; }
+.dcard.on .st { color: var(--ok); }
+.dcard .bar { height: 10px; background: #222836; border-radius: 5px; overflow: hidden; margin-top: 6px; }
+.dcard .bar i { display: block; height: 100%; background: linear-gradient(90deg, #8a6a20, #ffd36b); }
+.dcard .lc { font-size: 13px; color: var(--dim); margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dcard .vb { position: absolute; top: 10px; right: 12px; font-size: 11px; color: var(--accent); }
+#vtl { display: flex; flex-direction: column; min-height: 0; }
+#tl { flex: 1; overflow-y: auto; min-height: 0; font-size: 14px; }
+#tl .row { display: grid; grid-template-columns: 70px 74px minmax(0, 1.5fr) minmax(0, 1.4fr) minmax(0, 1fr); gap: 10px; padding: 5px 0; border-bottom: 1px solid #1e2330; align-items: baseline; }
+#tl .k { font-weight: 700; font-size: 12px; border-radius: 4px; padding: 0 6px; text-align: center; }
+#tl .k.command { background: rgba(92,200,255,.18); color: var(--info); }
+#tl .k.card { background: rgba(245,185,58,.18); color: var(--warn); }
+#tl .k.feedback { background: rgba(143,156,255,.18); color: var(--accent); }
+#tl .k.phase_light { background: #222836; color: var(--dim); }
+#tl .tx { font-weight: 600; }
+#tl .why, #tl .rl { color: var(--dim); font-size: 13px; }
+
 /* ---------- 영상 모드(/?mode=video): 시뮬 영상 하단 띠와 같은 칸, 실제 영상 옆·위에 녹화 ---------- */
 #video { position: fixed; inset: 0; background: #000; }
 #video.green { background: #00b140; }
@@ -192,7 +252,8 @@ button.tg { background: #222836; color: var(--fg); border: 1px solid var(--line)
   <span class="chip"><span class="dot" id="dRaw"></span>ToF raw <span class="num" id="aRaw">-</span></span>
   <span>Pi 4 <span class="num" id="target">-</span></span>
   <span>마지막 수신 <span class="num" id="lastRx">-</span></span>
-  <button class="tg" id="toVideo" title="단축키 V">영상 모드</button>
+  <button class="tg" data-go="virtual" title="단축키 G">가상 기기</button>
+  <button class="tg" data-go="video" title="단축키 V">영상 모드</button>
 </header>
 <div id="banner"></div>
 
@@ -257,9 +318,51 @@ button.tg { background: #222836; color: var(--fg); border: 1px solid var(--line)
 </section>
 </div>
 
+<div id="virt">
+  <header id="vband">
+    <b>기기가 연결돼 있었다면</b><span class="virtTag">가상</span>
+    <span>hub 명령·카드를 Pi 5 앱과 같은 규칙으로 가상 기기에 적용 · 실제 Pi 5 결과는 따로 표시 · 판단은 Pi 4 hub</span>
+    <span class="sp"></span>
+    <span class="chip"><span class="dot" id="vdMqtt"></span>MQTT</span>
+    <span id="vFake2" style="display:none;color:#111;background:var(--warn);padding:0 8px;border-radius:4px;font-weight:700">가짜 데이터(--fake)</span>
+    <button class="tg" data-go="dev" title="단축키 G">개발자 화면</button>
+    <button class="tg" data-go="video">영상 모드</button>
+  </header>
+  <section id="vtop">
+    <div class="panel">
+      <div class="ptitle"><span><b>나는 누구?</b> · 첫 설정 프로필 → hub 개인화 기준(prior)</span><span class="mono" id="pNode">node laptop-devview</span></div>
+      <div class="pbtns" id="pbtns"></div>
+      <div id="pform"></div>
+      <div class="prow2"><button class="btn warn" id="pSend">이 프로필로 보내기…</button><span id="pHint" class="empty"></span></div>
+      <div id="pconfirm"><div>deskmate/profile/user (retain, QoS 1) 로 보냅니다 — 이름·직업은 싣지 않음:</div><pre id="pPreview"></pre>
+        <button class="btn go" id="pYes">확인하고 보내기</button> <button class="btn" id="pNo">취소</button></div>
+      <div id="pstatus">-</div>
+    </div>
+    <div class="panel" id="vnow">
+      <div>
+        <div class="ptitle"><span><b>hub 지금</b> · state/phase</span><span class="mono" id="vnowTime"></span></div>
+        <div id="vnowState">-</div>
+        <div id="vnowHead">-</div>
+        <div id="vnowMeta">-</div>
+      </div>
+      <div id="cardBox">
+        <div class="ttl">hub 가 띄운 카드 · 내 반응이 학습 라벨이 됩니다</div>
+        <div id="cardText">-</div>
+        <div id="cardBtns"></div>
+        <div id="cardMsg"></div>
+      </div>
+    </div>
+  </section>
+  <section id="vdevs"></section>
+  <section class="panel" id="vtl">
+    <div class="ptitle"><span><b>타임라인</b> · 판정 → 가상 기기 조작 (최근 30) · 오른쪽 끝 = 실제 Pi 5 결과</span><span class="mono" id="tlCount"></span></div>
+    <div id="tl"></div>
+  </section>
+</div>
+
 <div id="video">
   <div id="vTag"><b>DESKMATE</b> · 보드 실시간 센서 · 판단·제어는 Pi 4·Pi 5 보드 <span id="vFake" style="display:none;color:#111;background:var(--warn);padding:0 8px;border-radius:4px;font-weight:700">가짜 데이터(--fake)</span></div>
-  <div id="vToggle"><button class="tg" id="toDev" title="단축키 V">개발자 화면</button></div>
+  <div id="vToggle"><button class="tg" data-go="dev" title="단축키 V">개발자 화면</button></div>
   <div id="vBar">
     <div><div class="vcap">ToF 8×8 두 개</div><div class="vtofs"><div class="vtof" id="vtof0"></div><div class="vtof" id="vtof1"></div></div></div>
     <div><div class="vcap">센서가 본 자세</div><div id="vPosture">-</div><div id="vConf">-</div></div>
@@ -456,18 +559,169 @@ function renderVideo(d) {
   $("vDecStatus").textContent = v.decision_status === "-" ? "" : v.decision_status;
 }
 
-// 화면 전환: /?mode=video · 단추 · V 키. &bg=green 이면 크로마키 초록 배경
+// 화면 전환: /?mode=video|virtual · 단추 · V(영상)·G(가상 기기) 키. &bg=green 이면 크로마키 초록 배경
 const Q = new URLSearchParams(location.search);
-function setMode(video) {
-  document.body.classList.toggle("video", video);
-  if (video) Q.set("mode", "video"); else Q.delete("mode");
+function setMode(mode) {
+  document.body.dataset.mode = mode;
+  if (mode === "dev") Q.delete("mode"); else Q.set("mode", mode);
   history.replaceState(null, "", location.pathname + (Q.toString() ? "?" + Q : ""));
 }
-setMode(Q.get("mode") === "video");
+setMode(["video", "virtual"].includes(Q.get("mode")) ? Q.get("mode") : "dev");
 if (Q.get("bg") === "green") $("video").classList.add("green");
-$("toVideo").onclick = () => setMode(true);
-$("toDev").onclick = () => setMode(false);
-document.addEventListener("keydown", e => { if (e.key === "v" || e.key === "V") setMode(!document.body.classList.contains("video")); });
+document.querySelectorAll("[data-go]").forEach(b => b.onclick = () => setMode(b.dataset.go));
+document.addEventListener("keydown", e => {
+  if (e.target.closest && e.target.closest("input,select,textarea")) return;
+  const m = document.body.dataset.mode;
+  if (e.key === "v" || e.key === "V") setMode(m === "video" ? "dev" : "video");
+  if (e.key === "g" || e.key === "G") setMode(m === "virtual" ? "dev" : "virtual");
+});
+
+// ---------------- 가상 기기 화면
+async function post(path, body) {
+  // X-Devview: 다른 사이트가 이 로컬 서버로 몰래 보내지 못하게(서버가 이 머리글을 요구)
+  const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json", "X-Devview": "1"}, body: JSON.stringify(body)});
+  return r.json();
+}
+const LS = (() => { try { return window.localStorage; } catch (e) { return null; } })();
+function pid(key) {
+  // 페르소나마다 고정 profile_id(V18 과 같은 'p'+16 hex 난수). 이 브라우저에만 기억 — 다시 고르면 같은 사람으로 이어 배운다
+  let v = null;
+  try { v = LS && LS.getItem("devview.pid." + key); } catch (e) {}
+  if (!v) {
+    const b = new Uint8Array(8); crypto.getRandomValues(b);
+    v = "p" + Array.from(b, x => x.toString(16).padStart(2, "0")).join("");
+    try { LS && LS.setItem("devview.pid." + key, v); } catch (e) {}
+  }
+  return v;
+}
+const OPT = {age_band: ["10s", "20s", "30s", "40s", "50s+"], light_pref: ["low", "mid", "high"], sound_pref: ["off", "low", "mid", "high"],
+  wind_pref: ["off", "low", "mid", "high"], placement: ["left", "center", "right"]};
+const LAB = {age_band: "연령대", sleep_hours: "수면 h", bedtime: "잠드는 시각", wake_time: "일어나는 시각", light_pref: "조명", sound_pref: "소리",
+  wind_pref: "바람", placement: "장치 위치", focus_help: "도움 순서"};
+const HELP = [["light", "조명"], ["wind", "선풍기"], ["sound", "알림음"], ["voice", "음성 안내"], ["break", "휴식"]];
+let persona = null, presets = null, custom = null, pending = null;
+function personaKeys() { return [["student_exam", "수험생"], ["student_univ", "대학생"], ["custom", "직접 설정"]]; }
+function formData() {
+  const f = $("pform"), d = {};
+  for (const k of Object.keys(OPT)) d[k] = f.querySelector(`[name=${k}]`).value;
+  d.sleep_hours = Number(f.querySelector("[name=sleep_hours]").value);
+  d.bedtime = f.querySelector("[name=bedtime]").value;
+  d.wake_time = f.querySelector("[name=wake_time]").value;
+  d.focus_help = Array.from(f.querySelectorAll("[name=help]:checked"), x => x.value);
+  return d;
+}
+function buildForm(data, editable) {
+  const sel = k => `<label>${LAB[k]}</label><select name="${k}">${OPT[k].map(o => `<option ${o === data[k] ? "selected" : ""}>${o}</option>`).join("")}</select>`;
+  $("pform").innerHTML = sel("age_band") + `<label>${LAB.sleep_hours}</label><input name="sleep_hours" type="number" min="3" max="12" step="0.5" value="${data.sleep_hours}">` +
+    `<label>${LAB.bedtime}</label><input name="bedtime" type="time" value="${data.bedtime}">` + `<label>${LAB.wake_time}</label><input name="wake_time" type="time" value="${data.wake_time}">` +
+    sel("light_pref") + sel("sound_pref") + sel("wind_pref") + sel("placement") +
+    `<label>${LAB.focus_help}</label><div class="helps">${HELP.map(([k, n]) => `<label><input type="checkbox" name="help" value="${k}" ${(data.focus_help || []).includes(k) ? "checked" : ""}> ${n}</label>`).join("")}</div>`;
+  $("pform").setAttribute("aria-disabled", editable ? "false" : "true");
+}
+function pickPersona(key) {
+  persona = key;
+  pending = null; $("pconfirm").style.display = "none";
+  const data = key === "custom" ? (custom || presets.student_univ.data) : presets[key].data;
+  buildForm(data, key === "custom");
+  $("pHint").textContent = key === "custom" ? "값을 고친 뒤 보내기" : "V18 기본 페르소나 값(바꾸려면 직접 설정)";
+  renderPersonaButtons();
+}
+function renderPersonaButtons() {
+  $("pbtns").innerHTML = personaKeys().map(([k, n]) => `<button data-p="${k}" class="${k === persona ? "on" : ""}">${n}</button>`).join("");
+  $("pbtns").querySelectorAll("button").forEach(b => b.onclick = () => pickPersona(b.dataset.p));
+}
+$("pSend").onclick = () => {
+  if (!persona) return;
+  const data = Object.assign({profile_id: pid(persona)}, persona === "custom" ? formData() : presets[persona].data);
+  if (persona === "custom") custom = formData();
+  pending = {data, label: personaKeys().find(x => x[0] === persona)[1]};
+  $("pPreview").textContent = JSON.stringify(data, null, 1);
+  $("pconfirm").style.display = "block";
+};
+$("pNo").onclick = () => { pending = null; $("pconfirm").style.display = "none"; };
+$("pYes").onclick = async () => {
+  if (!pending) return;
+  const p = pending; pending = null; $("pconfirm").style.display = "none";
+  $("pHint").textContent = "보내는 중…";
+  const r = await post("/api/profile", p).catch(e => ({ok: false, error: e.message}));
+  $("pHint").textContent = r.ok ? `${p.label} 보냄 — hub 확인 대기(state/phase 10 s 주기)` : `보내기 실패: ${r.error}`;
+};
+
+let cardMsg = "", armed = null, cardKey = "";
+const VLABEL = {accept: "수락", reject: "거절", undo: "되돌리기"};
+// 한 번 누르면 '한 번 더 눌러 보내기'(4 s), 두 번째에 보낸다 — 실수로 hub 에 라벨을 보내지 않게
+async function answer(rid, verdict) {
+  const now = Date.now();
+  if (!armed || armed.verdict !== verdict || armed.rid !== rid || now > armed.until) {
+    armed = {verdict, rid, until: now + 4000};
+    cardMsg = `'${VLABEL[verdict]}' — 한 번 더 누르면 hub 에 보냅니다(deskmate/feedback/user, 학습 라벨)`;
+    cardKey = ""; return;
+  }
+  armed = null; cardKey = "";
+  const r = await post("/api/feedback", {request_id: rid, verdict}).catch(e => ({ok: false, error: e.message}));
+  const n = new Date(), z = x => String(x).padStart(2, "0");
+  cardMsg = r.ok ? `${VLABEL[verdict]} 보냄 ${z(n.getHours())}:${z(n.getMinutes())}:${z(n.getSeconds())}` : `보내기 실패: ${r.error}`;
+}
+
+function renderVirtual(d) {
+  const v = d.virtual, P = d.persona, ph = d.phase;
+  $("vFake2").style.display = d.mode === "fake" ? "inline" : "none";
+  $("vdMqtt").className = "dot" + (d.links.mqtt.ok ? " on" : "");
+  if (!presets) { presets = P.presets; pickPersona("student_exam"); }
+  $("pSend").disabled = !P.enabled;
+  const sent = P.sent;
+  $("pstatus").innerHTML =
+    `보낸 프로필: ${sent ? `<b>${esc(sent.label || "-")}</b> <span class="mono">${esc(sent.profile_id)}</span> · ${sent.t}` : "아직 없음"}<br>` +
+    `hub 가 쓰는 프로필: <span class="mono">${esc(P.hub_active)}</span> ` +
+    (sent ? (P.ack ? `<span class="ok">✓ hub 적용 확인</span>` : `<span class="pend">… 확인 대기</span>`) : "") +
+    (Object.keys(P.hub_fields).length ? `<br><span class="empty">hub 개인화: ${esc(Object.entries(P.hub_fields).map(([k, x]) => k + " " + x).join(" · "))}</span>` : "") +
+    `<br>hub 시연 프로파일(DESKMATE_PROFILE): <b>${esc(P.hub_profile)}</b> <span class="empty">— demo-b ↔ demo-b-study 는 hub 재시작이 필요해 여기서 바꾸지 않음(hub.env)</span>` +
+    (P.enabled ? "" : `<br><span class="bad">보내기 꺼짐(--read-only)</span>`);
+  // hub 지금
+  $("vnowState").textContent = `${FSM_KO_JS[ph.fsm_state] || ph.fsm_state}`;
+  $("vnowState").style.color = PHASE_COLOR[ph.phase] || "var(--fg)";
+  $("vnowTime").textContent = `${ph.fsm_state} · seq ${ph.seq ?? "-"}`;
+  $("vnowHead").textContent = d.control.headline;
+  $("vnowMeta").textContent = `피로도 ${ph.fatigue_text} · 원인 ${ph.cause} · 게이트 ${ph.gate} · 개인화 ${ph.explanation}`;
+  // 카드·되돌리기
+  const c = v.card, u = v.undo;
+  $("cardBox").className = c ? "live" : "";
+  $("cardText").textContent = c ? `${c.text}` : "지금 떠 있는 카드 없음";
+  // 단추는 카드·되돌리기 대상이 바뀔 때만 다시 만든다(250 ms 마다 갈면 누르는 순간 사라질 수 있다)
+  const key = `${c ? c.request_id : ""}|${u ? u.command_id : ""}|${armed ? armed.verdict : ""}|${P.enabled}`;
+  if (key !== cardKey) {
+    cardKey = key;
+    const lab = a => armed && armed.verdict === a ? "한 번 더 → 보내기" : VLABEL[a];
+    let btns = "";
+    if (c) btns += `<button class="btn go" data-a="accept">${lab("accept")}</button><button class="btn no" data-a="reject">${lab("reject")}</button>` +
+      `<span class="empty">${esc(c.kind)}${c.arm_label ? " · " + esc(c.arm_label) : ""} · 남은 <span id="cardLeft"></span> s</span>`;
+    if (u) btns += `<button class="btn warn" data-a="undo">${lab("undo")}</button><span class="empty">자동 실행 되돌리기 · <span id="undoLeft"></span> s 안</span>`;
+    $("cardBtns").innerHTML = btns || `<span class="empty">카드·자동 실행이 오면 여기서 답합니다</span>`;
+    $("cardBtns").querySelectorAll("[data-a]").forEach(b => { b.disabled = !P.enabled; b.onclick = () => answer(c ? c.request_id : null, b.dataset.a); });
+  }
+  if (c && $("cardLeft")) $("cardLeft").textContent = c.left_s ?? "-";
+  if (u && $("undoLeft")) $("undoLeft").textContent = u.left_s;
+  if (armed && Date.now() > armed.until) { armed = null; cardMsg = ""; cardKey = ""; }
+  $("cardMsg").textContent = cardMsg || (P.enabled ? "" : "보내기 꺼짐(--read-only)");
+  // 기기 카드
+  $("vdevs").innerHTML = v.devices.map(x => `<div class="dcard ${x.on ? "on" : ""}"><span class="vb">가상</span><div class="ic">${x.icon}</div>` +
+    `<div class="nm">${esc(x.name)}</div><div class="st">${esc(x.state)}</div>` +
+    (x.level != null ? `<div class="bar"><i style="width:${(x.level * 100).toFixed(0)}%"></i></div>` : "") +
+    `<div class="lc">${x.last ? esc(x.last) + " · " + x.time : "아직 바뀐 적 없음"}</div></div>`).join("");
+  // 타임라인
+  const KIND = {command: "명령", card: "카드", feedback: "응답", phase_light: "단계 조명"};
+  $("tlCount").textContent = `${v.timeline.length}`;
+  $("tl").innerHTML = v.timeline.length ? v.timeline.map(e => {
+    const why = [e.fsm_state && (FSM_KO_JS[e.fsm_state] || e.fsm_state), e.cause && ("원인 " + e.cause), e.gate && (e.gate === "auto" ? "자동" : e.gate === "suggest" ? "제안" : e.gate),
+      e.arm_label && ("arm " + e.arm_label), e.decision_source && ("결정 " + e.decision_source), e.reason].filter(Boolean).join(" · ");
+    const real = e.kind === "command" ? (e.real ? `<span class="${e.real_ok ? "ok" : "bad"}">Pi 5 실제: ${esc(e.real)}</span>` : `<span class="pend">Pi 5 실제: 결과 대기</span>`) +
+      ` · <span class="${e.virtual_ok ? "ok" : "bad"}">가상 ${e.virtual_ok ? "✓" : "✗"}</span>` : "";
+    return `<div class="row"><span class="mono empty">${e.t}</span><span class="k ${e.kind}">${KIND[e.kind] || e.kind}</span><span class="tx">${esc(e.text)}</span><span class="why">${esc(why)}</span><span class="rl">${real}</span></div>`;
+  }).join("") : `<div class="empty">아직 hub 명령·카드 없음 — 오면 여기에 '판정 → 기기' 로 쌓입니다</div>`;
+}
+const FSM_KO_JS = {IDLE: "대기", START: "시작", CONTEXT_DETECT: "맥락 판정", FOCUS_PC: "집중(PC)", FOCUS_MIXED: "집중(혼합)", FOCUS_NPC: "집중(책·필기)",
+  FOCUS_BREAK: "집중 저하", FATIGUE_SUSPECT: "피로 의심", FATIGUE: "피로 확정", CAUSE_ANALYSIS: "원인 분석", MONITOR: "효과 확인", ESCALATE: "재시도",
+  RECOVERY: "회복", ACTION_ENV: "환경 개입", ACTION_POSTURE: "자세 개입", ACTION_BREAK: "휴식 개입", REST: "휴식", END: "종료"};
 
 let logKey = "";
 function renderLog(log) {
@@ -527,6 +781,7 @@ async function tick() {
     renderControl(d.control, d.phase);
     renderKeystroke(d.keystroke);
     renderVideo(d);
+    renderVirtual(d);
     renderLog(d.log);
     renderTopics(d.topics);
   } catch (e) {

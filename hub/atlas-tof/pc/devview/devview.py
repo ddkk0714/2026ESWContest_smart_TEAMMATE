@@ -1,10 +1,12 @@
-"""노트북 개발자 화면 — Pi 4 의 판단·제어 상태를 녹화용으로 한 페이지에 보여 준다.
+"""노트북 개발자 화면 — Pi 4 의 판단·제어 상태를 녹화용으로 한 페이지에 보여 준다(+ 가상 기기 /?mode=virtual).
 
     python devview.py --pi4 172.20.10.3     # 핫스팟에서 Pi 4 에 붙는다
     python devview.py --fake                # 보드 없이 가짜 각본(녹화 연습)
 
 브라우저로 http://127.0.0.1:8790/ 를 연다. 이 프로그램은 **보기 전용**이다:
-  - Pi 4 브로커(1883)의 `deskmate/#` 를 구독만 한다(발행하지 않는다).
+  - Pi 4 브로커(1883)의 `deskmate/#` 를 구독한다. 예외: 가상 기기 화면에서 사람이 확인을 누를 때만 첫 설정 프로필
+    (`deskmate/profile/user`)과 카드 응답(`deskmate/feedback/user`)을 보낸다(10-26 사용자 요청, `--read-only` 면 끔).
+    제어 명령은 보내지 않는다.
   - 자세 서비스 `:8771/api/state`(1 s)·`:8772/raw`(0.2 s, 없으면 `:8771/raw`) 를 GET 만 한다.
   - 받은 값은 메모리에만 두고 127.0.0.1 로만 연다. 파일로 쓰거나 다른 곳으로 보내지 않는다.
 판단(FSM·개인화)과 제어는 전부 Pi 4·Pi 5 보드에서 한다.
@@ -640,6 +642,27 @@ ACTION_PLAN = {
     "environment": [("vent_fan", "set_power", "on"), ("desk_lamp", "adjust_brightness", {"percent": 30})],
     "cognitive": [],
 }
+# 개인화 arm → 하는 일(hub config/personalize.yaml arms 의 device·label_ko). 카드 머리줄을 원인 전체가 아니라 고른 arm 으로.
+ARM_ACTION = {
+    "light_cool_bright": [("desk_lamp", "adjust_brightness", {"percent": 50})],
+    "light_warm_dim": [("desk_lamp", "adjust_brightness", {"percent": -50})],
+    "air_fan_up": [("air_purifier", "set_mode", "high")],
+    "fan_on": [("vent_fan", "set_power", "on")],
+    "wake_light": [("desk_lamp", "adjust_brightness", {"percent": 60, "min_raw": 153})],
+    "ventilate_suggest": "창문 환기", "posture_card": "자세 안내 카드", "posture_voice": "자세 음성 안내",
+    "sound_cue": "알림음", "break_short": "5분 휴식", "break_long": "긴 휴식", "sleep_suggest": "취침 권유",
+}
+
+
+def arm_text(arm: Any) -> str | None:
+    a = ARM_ACTION.get(str(arm))
+    if a is None:
+        return None
+    if isinstance(a, str):
+        return a
+    return " + ".join(f"{DEVICE_REAL.get(t, t)} {op_text(o, v)}" for t, o, v in a)
+
+
 FSM_KO = {"IDLE": "대기", "START": "시작", "CONTEXT_DETECT": "맥락 판정", "FOCUS_PC": "집중", "FOCUS_MIXED": "집중",
           "FOCUS_NPC": "집중", "FOCUS_BREAK": "집중 저하", "FATIGUE_SUSPECT": "피로 의심", "FATIGUE": "피로",
           "CAUSE_ANALYSIS": "원인 분석", "MONITOR": "효과 확인", "ESCALATE": "재시도", "RECOVERY": "회복",
@@ -735,7 +758,7 @@ class ControlTracker:
         recent_req = req is not None and now - req["at"] <= RECENT_CONTROL_S
         if recent_req and (not recent_cmd or req["at"] >= last_cmd["at"]):
             cause = req.get("cause")
-            devices = _plan_text(cause) or "기기 제어 없음"
+            devices = arm_text(req.get("arm")) or _plan_text(cause) or "기기 제어 없음"
             verdict = {"accept": "수락 → 실행", "reject": "거절", "timeout": "응답 없음"}.get(req.get("verdict") or "",
                                                                                    "응답 대기")
             return {
@@ -847,6 +870,399 @@ def video_view(phase_env: Any, posture: Any, control: dict[str, Any]) -> dict[st
     }
 
 
+# --------------------------------------------------------------------------- 가상 기기 ("기기가 연결돼 있었다면")
+
+# Pi 5 ui_env_app 의 값 그대로(lamp_defaults.dart · feedback_policy.dart ilinkFramesForPhase · fan_control.dart fanFrame).
+LAMP_FLOOR = 30          # kLampBrightnessFloorDefault (설정 lamp_brightness_floor 가 없을 때)
+LAMP_MIN_STEP = 10       # kLampAdjustMinStep
+PHASE_LIGHT = {"idle": None, "end": None, "start": 48, "focus": 110, "fatigue": 180, "recovery": 90}  # None = 끔
+UNDO_WINDOW_S = 60       # hub control.yaml undo_window_sec
+# 개인화 arm → 채널(hub config/personalize.yaml arms). 기기 명령이 없는 voice·sound·display arm 을 화면 기기로 보여 줄 때 쓴다.
+ARM_CHANNEL = {"light_cool_bright": "lamp", "light_warm_dim": "lamp", "air_fan_up": "air", "fan_on": "fan",
+               "ventilate_suggest": "display", "posture_card": "display", "wake_light": "lamp",
+               "posture_voice": "voice", "sound_cue": "sound", "break_short": "display", "break_long": "display",
+               "sleep_suggest": "display"}
+AIR_MODES = ("off", "auto", "low", "mid", "high")   # control.yaml: air_purifier set_mode off|auto|low|mid|high
+
+
+def dart_round(x: float) -> int:
+    """Dart num.round(): .5 는 0 에서 먼 쪽으로(파이썬 round 는 짝수 쪽 — 252.5 가 252 가 된다)."""
+    return int(math.floor(abs(x) + 0.5)) * (1 if x >= 0 else -1)
+
+
+def adjust_brightness(current: int | None, percent: int, floor: int = LAMP_FLOOR, min_step: int = LAMP_MIN_STEP,
+                      min_raw: int | None = None) -> tuple[int, int]:
+    """feedback_policy.dart adjustBrightness 와 같은 계산 → (계산 기준 base, 새 값 actual)."""
+    lo = max(0, min(255, floor))
+    base = max(lo, min(255, lo if current is None else current))
+    nxt = max(lo, min(255, dart_round(base * (1 + percent / 100))))
+    if percent > 0 and nxt <= base and base < 255:
+        nxt = min(255, base + min_step)
+    if min_raw is not None and nxt < min_raw:
+        nxt = max(lo, min(255, min_raw))
+    return base, nxt
+
+
+def fan_valid(op: Any, value: Any) -> bool:
+    """fan_control.dart fanFrame 이 프레임을 만드는 조합만 실행된다."""
+    def up_to(m: int) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= m
+    return ((op == "set_power" and value in ("on", "off")) or (op == "set_level" and up_to(3))
+            or (op == "set_speed" and up_to(100)) or (op == "set_mode" and value in ("normal", "natural"))
+            or (op == "set_timer" and up_to(65535)))
+
+
+class VirtualHome:
+    """주변기기가 전부 연결·'상태 기반 조명·음악 피드백' 스위치가 켜져 있다고 보고, hub 가 보낸 것을 Pi 5 앱과 같은 규칙으로
+    가상 기기에 적용한다. 실제 Pi 5 가 돌려준 결과(feedback_disabled 등)는 따로 붙여 둔다 — 화면은 가상임을 밝힌다.
+    """
+
+    def __init__(self) -> None:
+        # 무드등(iLink): 아직 한 번도 안 썼으면 밝기·전원 모름(None) — 앱과 같음
+        self.lamp: dict[str, Any] = {"power": None, "brightness": None, "last": None, "at": None}
+        self.fan: dict[str, Any] = {"power": False, "level": None, "speed": None, "mode": None, "timer": None,
+                                    "last": None, "at": None}
+        self.air: dict[str, Any] = {"mode": None, "last": None, "at": None}
+        self.window: dict[str, Any] = {"open": False, "minutes": None, "last": None, "at": None}
+        self.speaker: dict[str, Any] = {"music": False, "voice": None, "last": None, "at": None}
+        self.timeline: deque[dict[str, Any]] = deque(maxlen=60)
+        self._phase_key: str | None = None
+        self._accepted_action: str | None = None
+        self._latest: dict[str, Any] = {}
+        self._by_cmd: dict[str, dict[str, Any]] = {}
+        self._requests: dict[str, dict[str, Any]] = {}
+
+    # ---------------------------------------------------------------- 공통
+    def _stamp(self, dev: dict[str, Any], text: str, at: float) -> None:
+        dev["last"], dev["at"] = text, at
+
+    def _event(self, at: float, **kw: Any) -> dict[str, Any]:
+        ph = self._latest
+        e = {"t": time.strftime("%H:%M:%S", time.localtime(at)), "at": at, "fsm_state": ph.get("fsm_state"),
+             "cause": ph.get("cause"), **kw}
+        self.timeline.append(e)
+        return e
+
+    def _music(self, on: bool, at: float, why: str) -> None:
+        if self.speaker["music"] != on:
+            self.speaker["music"] = on
+            self._stamp(self.speaker, ("음악 재생 · " if on else "음악 정지 · ") + why, at)
+
+    # ---------------------------------------------------------------- state/phase → 단계 조명·음악 (FeedbackCoordinator.apply)
+    def on_phase(self, env: Any, at: float) -> None:
+        data = _map(_map(env).get("data"))
+        if not data:
+            return
+        ss = _map(data.get("sensor_summary"))
+        pers = _map(ss.get("personalize")) or _map(ss.get("personalization"))
+        self._latest = {"fsm_state": str(data.get("fsm_state") or ""), "phase": str(data.get("phase") or ""),
+                        "gate": data.get("gate"), "cause": data.get("cause"),
+                        "decision_source": pers.get("decision_source") or pers.get("source"),
+                        "explanation": pers.get("explanation"), "arm": pers.get("arm"), "arm_label": pers.get("arm_label")}
+        fsm, phase, gate = self._latest["fsm_state"], self._latest["phase"], self._latest["gate"]
+        if fsm != self._accepted_action:
+            self._accepted_action = None
+        # 피로 국면인데 ACTION_ENV(명령이 맡음)·ACTION_* 아님·자동 아닌데 수락 전이면 조명·소리를 바꾸지 않는다
+        if phase == "fatigue" and (fsm == "ACTION_ENV" or not fsm.startswith("ACTION_")
+                                   or (gate != "auto" and fsm != self._accepted_action)):
+            return
+        self._apply_outputs(phase, at, why=f"단계 {phase}")
+
+    def _apply_outputs(self, phase: str, at: float, why: str) -> None:
+        if phase != self._phase_key and phase in PHASE_LIGHT:
+            self._phase_key = phase
+            before = self._lamp_text()
+            level = PHASE_LIGHT[phase]
+            if level is None:
+                self.lamp["power"] = False
+            else:
+                self.lamp["power"], self.lamp["brightness"] = True, level
+            after = self._lamp_text()
+            if before != after:
+                self._stamp(self.lamp, f"단계 조명({phase}) {before}→{after}", at)
+                self._event(at, kind="phase_light", text=f"단계 조명 {phase} → 무드등 {after}", source="Pi 5 앱 단계 조명 규칙")
+        if phase == "fatigue":
+            self._music(True, at, why)
+        elif phase in ("recovery", "idle", "end"):
+            self._music(False, at, why)
+
+    def _lamp_text(self) -> str:
+        if self.lamp["power"] is False:
+            return "꺼짐"
+        return "모름" if self.lamp["brightness"] is None else str(self.lamp["brightness"])
+
+    # ---------------------------------------------------------------- control/cmd → 가상 실행 (handleControlCommand)
+    def on_cmd(self, env: Any, at: float) -> dict[str, Any] | None:
+        c = _map(_map(env).get("data"))
+        target, op, value, cid = c.get("target_id"), c.get("operation"), c.get("value"), c.get("command_id")
+        if not target or not op:
+            return None
+        if isinstance(cid, str) and cid in self._by_cmd:   # QoS 1 중복 — 두 번 실행하지 않는다
+            return self._by_cmd[cid]
+        res = self._execute(c, at)
+        line = self._command_line(c, res)
+        arm, arm_label = self._arm_for(str(target), at)
+        e = self._event(at, kind="command", target=target, operation=op, gate=c.get("gate"),
+                        origin_state=c.get("origin_state"), cause=c.get("cause") or self._latest.get("cause"),
+                        arm=arm, arm_label=arm_label,
+                        decision_source=self._latest.get("decision_source"), reason=self._latest.get("explanation"),
+                        virtual=res, real=None, text=line, command_id=cid)
+        if isinstance(cid, str):
+            self._by_cmd[cid] = e
+            while len(self._by_cmd) > 64:
+                self._by_cmd.pop(next(iter(self._by_cmd)))
+        return e
+
+    _CHANNEL_TARGET = {"lamp": "desk_lamp", "fan": "vent_fan", "air": "air_purifier"}
+
+    def _arm_for(self, target: str, at: float) -> tuple[Any, Any]:
+        """이 명령을 고른 개인화 arm: 최근(200 s) 수락한 카드의 arm, 아니면 지금 state/phase 의 arm — 대상 기기가 맞을 때만."""
+        for req in reversed(list(self._requests.values())):
+            if at - req["at"] > 200:
+                break
+            if req.get("verdict") == "accept" and self._CHANNEL_TARGET.get(ARM_CHANNEL.get(str(req.get("arm")), "")) == target:
+                return req.get("arm"), req.get("arm_label")
+        arm = self._latest.get("arm")
+        if self._CHANNEL_TARGET.get(ARM_CHANNEL.get(str(arm), "")) == target:
+            return arm, self._latest.get("arm_label")
+        return None, None
+
+    def _reject(self, c: dict[str, Any], at: float) -> str | None:
+        """FeedbackCoordinator._rejection — 스위치는 켜졌다고 본다(가상)."""
+        exp = c.get("expires_ts_ms")
+        if (not isinstance(exp, (int, float)) or c.get("gate") not in ("auto", "suggest", "undo")
+                or c.get("requires_confirmation") is not False):
+            return "invalid_command"
+        if exp <= at * 1000:
+            return "expired"
+        return None
+
+    def _execute(self, c: dict[str, Any], at: float) -> dict[str, Any]:
+        target, op, value = c.get("target_id"), c.get("operation"), c.get("value")
+        err = self._reject(c, at)
+        if err:
+            return {"status": "failed", "error_code": err}
+        if target == "desk_lamp":
+            previous = 0 if self.lamp["power"] is False else self.lamp["brightness"]
+            if op == "set_brightness" and isinstance(value, int) and 0 <= value <= 255:
+                self.lamp["power"], self.lamp["brightness"] = True, value
+                out = {"status": "succeeded", "actual_value": value}
+            elif op == "adjust_brightness" and _num(_map(value).get("percent")) is not None:
+                v = _map(value)
+                mr = v.get("min_raw")
+                _, actual = adjust_brightness(None if self.lamp["power"] is False else self.lamp["brightness"],
+                                              dart_round(v["percent"]),
+                                              min_raw=mr if isinstance(mr, int) and 0 <= mr <= 255 else None)
+                self.lamp["power"], self.lamp["brightness"] = True, actual
+                out = {"status": "succeeded", "actual_value": actual, "actual": actual}
+                if previous is not None:
+                    out["previous"] = previous
+            elif op == "set_power" and value in ("on", "off"):
+                self.lamp["power"] = value == "on"
+                out = {"status": "succeeded", "actual_value": value}
+            else:
+                return {"status": "failed", "error_code": "unsupported_operation_or_value"}
+            self._stamp(self.lamp, op_text(str(op), value) + (f" ({previous}→{out.get('actual', out['actual_value'])})"
+                                                                if op == "adjust_brightness" else ""), at)
+            if c.get("gate") != "undo" and self._latest.get("phase") == "fatigue":
+                self._music(True, at, "무드등 명령(피로 국면)")
+            return out
+        if target == "vent_fan":
+            if not fan_valid(op, value):
+                return {"status": "failed", "error_code": "unsupported_operation_or_value"}
+            key = {"set_power": "power", "set_level": "level", "set_speed": "speed", "set_mode": "mode",
+                   "set_timer": "timer"}[str(op)]
+            self.fan[key] = (value == "on") if op == "set_power" else value
+            self._stamp(self.fan, op_text(str(op), value), at)
+            return {"status": "succeeded", "actual_value": value}
+        if target == "air_purifier":
+            if op != "set_mode" or value not in AIR_MODES:
+                return {"status": "failed", "error_code": "unsupported_operation_or_value"}
+            self.air["mode"] = value
+            self._stamp(self.air, f"모드 {value}", at)
+            return {"status": "succeeded", "actual_value": value}
+        return {"status": "failed", "error_code": "unknown_target"}
+
+    def _command_line(self, c: dict[str, Any], res: dict[str, Any]) -> str:
+        origin = c.get("origin_state") or self._latest.get("fsm_state") or "-"
+        cause = c.get("cause") or self._latest.get("cause")
+        head = f"{FSM_KO.get(str(origin), origin)}({CAUSE_KO.get(cause, cause or '-')} 원인)"
+        dev = DEVICE_REAL.get(str(c.get("target_id")), str(c.get("target_id"))).split(" (")[0]
+        act = op_text(str(c.get("operation")), c.get("value"))
+        if res.get("status") == "succeeded":
+            tail = (f" ({res['previous']}→{res['actual']})" if res.get("previous") is not None and "actual" in res
+                    else f" (모름→{res['actual']})" if "actual" in res else "")
+        else:
+            tail = f" ✗ {res.get('error_code')}"
+        return f"{head} → {dev} {act}{tail}"
+
+    def on_result(self, env: Any) -> None:
+        d = _map(_map(env).get("data"))
+        e = self._by_cmd.get(d.get("command_id"))
+        if e is not None:
+            e["real"] = {"status": d.get("status"), "error_code": d.get("error_code"), "previous": d.get("previous"),
+                         "actual": d.get("actual"), "node": _map(env).get("node")}
+
+    # ---------------------------------------------------------------- 카드·응답
+    def on_request(self, env: Any, at: float) -> None:
+        d = _map(_map(env).get("data"))
+        rid = d.get("request_id")
+        if not rid:
+            return
+        arm = d.get("arm")
+        ch = ARM_CHANNEL.get(str(arm))
+        expl = d.get("explanation")
+        req = {**d, "at": at, "verdict": None}
+        self._requests[str(rid)] = req
+        while len(self._requests) > 32:
+            self._requests.pop(next(iter(self._requests)))
+        if ch in ("voice", "sound"):   # 음성 안내·알림음 arm 은 카드와 함께 소리로(가상 스피커)
+            self.speaker["voice"] = ("음성 안내: " + str(expl or d.get("prompt_code") or "")) if ch == "voice" else "알림음"
+            self._stamp(self.speaker, self.speaker["voice"], at)
+        self._event(at, kind="card", text=f"카드 {d.get('kind')} — {expl or d.get('prompt_code') or ''}".strip(),
+                    request_id=rid, gate="suggest", cause=d.get("cause") or self._latest.get("cause"), arm=arm,
+                    arm_label=d.get("arm_label"), decision_source=self._latest.get("decision_source"), reason=expl)
+
+    def on_feedback(self, env: Any, at: float) -> None:
+        d = _map(_map(env).get("data"))
+        verdict, rid = d.get("verdict"), d.get("request_id")
+        if verdict not in ("accept", "reject", "timeout"):
+            return
+        req = self._requests.get(str(rid)) if rid else None
+        if req is not None:
+            req["verdict"] = verdict
+        who = _map(env).get("node") or "?"
+        if verdict == "accept" and req is not None:
+            kind = req.get("kind")
+            if kind == "vent_suggest" or req.get("arm") == "ventilate_suggest":
+                self.window.update(open=True, minutes=req.get("ventilate_minutes"))
+                self._stamp(self.window, f"창문 열기{'' if req.get('ventilate_minutes') is None else ' ' + str(req['ventilate_minutes']) + '분'}", at)
+            # FeedbackCoordinator.accept: 제안(ACTION_ENV 제외) 수락이면 그 국면의 조명·소리를 바로 적용
+            ph = self._latest
+            if ph.get("gate") == "suggest" and str(ph.get("fsm_state", "")).startswith("ACTION_") and \
+                    ph.get("fsm_state") != "ACTION_ENV":
+                self._accepted_action = ph["fsm_state"]
+                self._phase_key = None
+                self._apply_outputs(str(ph.get("phase")), at, why="제안 수락")
+        self._event(at, kind="feedback", text=f"응답 {verdict} ({who})" + (f" · 카드 {req.get('kind')}" if req else ""),
+                    request_id=rid, verdict=verdict)
+
+    def pending_card(self, now: float) -> dict[str, Any] | None:
+        """응답 안 했고 시한 전인 마지막 카드."""
+        for req in reversed(list(self._requests.values())):
+            exp = _num(req.get("expires_in_s"))
+            if req.get("verdict") is None and (exp is None or now <= req["at"] + exp):
+                return {"request_id": req.get("request_id"), "kind": req.get("kind"),
+                        "text": req.get("explanation") or req.get("prompt_code") or "-",
+                        "arm_label": req.get("arm_label"), "cause": req.get("cause"),
+                        "left_s": None if exp is None else max(0, round(req["at"] + exp - now)),
+                        "options": req.get("options") or ["accept", "reject"], "shown_at": req["at"]}
+            if req.get("verdict") is None:
+                continue
+            break
+        return None
+
+    def undoable(self, now: float) -> dict[str, Any] | None:
+        """되돌리기 창(60 s) 안의 마지막 자동 실행 명령 — Pi 5 앱은 이때 reject 를 보내 hub 가 undo 명령을 낸다."""
+        for e in reversed(self.timeline):
+            if e.get("kind") == "command" and e.get("gate") == "auto" and now - e["at"] <= UNDO_WINDOW_S:
+                return {"text": e["text"], "command_id": e.get("command_id"), "left_s": round(UNDO_WINDOW_S - (now - e["at"]))}
+        return None
+
+    def view(self, now: float) -> dict[str, Any]:
+        def age(d: dict[str, Any]) -> str | None:
+            return None if d["at"] is None else time.strftime("%H:%M:%S", time.localtime(d["at"]))
+        lamp = self.lamp
+        fan = self.fan
+        devices = [
+            {"key": "lamp", "icon": "💡", "name": "iLink 무드등", "on": lamp["power"] is True,
+             "state": "꺼짐" if lamp["power"] is False else "모름(아직 안 켬)" if lamp["brightness"] is None
+             else f"켜짐 · 밝기 {lamp['brightness']}/255 ({round(lamp['brightness'] / 255 * 100)} %)",
+             "level": None if lamp["power"] is not True or lamp["brightness"] is None else lamp["brightness"] / 255,
+             "last": lamp["last"], "time": age(lamp)},
+            {"key": "fan", "icon": "🌀", "name": "Pico 2 W 선풍기", "on": bool(fan["power"]),
+             "state": ("켜짐" if fan["power"] else "꺼짐") + "".join(
+                 f" · {lab} {fan[k]}" for k, lab in (("level", "풍량"), ("speed", "속도"), ("mode", "모드"), ("timer", "타이머 s"))
+                 if fan[k] is not None),
+             "level": None, "last": fan["last"], "time": age(fan)},
+            {"key": "air", "icon": "🍃", "name": "LG 공기청정기", "on": self.air["mode"] not in (None, "off"),
+             "state": "모름" if self.air["mode"] is None else f"모드 {self.air['mode']}", "level": None,
+             "last": self.air["last"], "time": age(self.air)},
+            {"key": "window", "icon": "🪟", "name": "창문 환기(카드)", "on": self.window["open"],
+             "state": ("열기" + ("" if self.window["minutes"] is None else f" {self.window['minutes']}분")) if self.window["open"]
+             else "닫힘", "level": None, "last": self.window["last"], "time": age(self.window)},
+            {"key": "speaker", "icon": "🔊", "name": "스피커·음성", "on": self.speaker["music"],
+             "state": ("음악 재생 중" if self.speaker["music"] else "조용함") + (f" · {self.speaker['voice']}" if self.speaker["voice"] else ""),
+             "level": None, "last": self.speaker["last"], "time": age(self.speaker)},
+        ]
+        tl = []
+        for e in list(self.timeline)[-30:]:
+            real = e.get("real")
+            tl.append({k: e.get(k) for k in ("t", "kind", "text", "fsm_state", "cause", "gate", "arm", "arm_label",
+                                              "decision_source", "reason", "verdict", "request_id")} |
+                      {"real": None if real is None else (f"{real['status']}" + (f" {real['error_code']}" if real.get("error_code") else "")
+                                                         + (f" ({real['node']})" if real.get("node") else "")),
+                       "real_ok": None if real is None else real.get("status") == "succeeded",
+                       "virtual_ok": None if e.get("virtual") is None else e["virtual"].get("status") == "succeeded"})
+        return {"devices": devices, "timeline": tl[::-1], "card": self.pending_card(now), "undo": self.undoable(now)}
+
+
+# --------------------------------------------------------------------------- 사용자 프로필(페르소나) — V18 profileData 와 같은 모양
+
+PROFILE_ENUMS = {"age_band": ("10s", "20s", "30s", "40s", "50s+"), "light_pref": ("low", "mid", "high"),
+                 "sound_pref": ("off", "low", "mid", "high"), "wind_pref": ("off", "low", "mid", "high"),
+                 "placement": ("left", "center", "right")}   # hub personalize/onboarding.py ENUMS
+FOCUS_HELP = ("light", "sound", "wind", "break", "voice")    # onboarding.py FOCUS_HELP
+# V18(ui-live display/atlas/ui_demo_app) 기본 페르소나를 profileData 규칙으로 옮긴 값:
+#  수험생 = 기본 프로필 '지우'(19세 · 수면 7 h · 23:30 · 백색 소음 · 조명/선풍기/알림 · 수험생 밝기 0.85 → light high ·
+#           선풍기 끔 → wind off · 볼륨 0.3 → sound low). 대학생 = V18 에 직업이 없어, 같은 기본값에 20대 · 수험생 아님 밝기 0.45 → light mid.
+PERSONAS = {
+    "student_exam": {"label": "수험생", "data": {"age_band": "10s", "sleep_hours": 7, "bedtime": "23:30", "wake_time": "06:30",
+                                              "light_pref": "high", "sound_pref": "low", "wind_pref": "off",
+                                              "focus_help": ["light", "wind", "sound"], "placement": "center"}},
+    "student_univ": {"label": "대학생", "data": {"age_band": "20s", "sleep_hours": 7, "bedtime": "23:30", "wake_time": "06:30",
+                                              "light_pref": "mid", "sound_pref": "low", "wind_pref": "off",
+                                              "focus_help": ["light", "wind", "sound"], "placement": "center"}},
+}
+_HHMM = __import__("re").compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+_PID = __import__("re").compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+def validate_profile(data: Any) -> tuple[dict[str, Any] | None, str]:
+    """화면이 보낸 프로필 → hub 가 받는 키만(onboarding.parse_profile 과 같은 범위). (data, 오류)"""
+    d = _map(data)
+    pid = d.get("profile_id")
+    if not isinstance(pid, str) or not _PID.match(pid):
+        return None, "profile_id 형식 오류"
+    out: dict[str, Any] = {"profile_id": pid}
+    for k, allowed in PROFILE_ENUMS.items():
+        if k in d:
+            if d[k] not in allowed:
+                return None, f"{k} 값 오류"
+            out[k] = d[k]
+    if "sleep_hours" in d:
+        v = d["sleep_hours"]
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or not 3 <= v <= 12:
+            return None, "sleep_hours 는 3~12"
+        out["sleep_hours"] = v
+    for k in ("bedtime", "wake_time"):
+        if k in d:
+            if not isinstance(d[k], str) or not _HHMM.match(d[k]):
+                return None, f"{k} 는 HH:MM"
+            out[k] = d[k]
+    if "focus_help" in d:
+        helps = d["focus_help"]
+        if not isinstance(helps, list) or any(h not in FOCUS_HELP for h in helps):
+            return None, "focus_help 값 오류"
+        out["focus_help"] = list(dict.fromkeys(helps))
+    return out, ""
+
+
+def new_profile_id() -> str:
+    """V18 newProfileId 와 같은 모양: 'p' + 16 hex (이름과 무관한 난수)."""
+    return "p" + os.urandom(8).hex()
+
+
 # --------------------------------------------------------------------------- 상태 저장소
 
 class Store:
@@ -867,6 +1283,11 @@ class Store:
         self.face_down = FaceDownTracker()
         self.keystroke = KeystrokeTracker()
         self.control = ControlTracker()
+        self.virtual = VirtualHome()
+        # 화면에서 보내기(프로필·카드 응답). None 이면 보내기 끔
+        self.publisher: Publisher | None = None
+        self.sent: deque[dict[str, Any]] = deque(maxlen=20)
+        self.profile_sent: dict[str, Any] | None = None
         # 연결별 상태: ok, reason, last(마지막 수신 epoch)
         self.links: dict[str, dict[str, Any]] = {
             k: {"ok": False, "reason": "아직 연결 시도 전", "last": None} for k in ("mqtt", "posture", "raw")}
@@ -898,6 +1319,15 @@ class Store:
             if topic == TOPIC_PHASE:
                 self.phase = env
                 self.control.on_phase(env)
+                self.virtual.on_phase(env, at)
+            elif topic == TOPIC_CMD:
+                self.virtual.on_cmd(env, at)
+            elif topic == TOPIC_RESULT:
+                self.virtual.on_result(env)
+            elif topic == TOPIC_REQUEST:
+                self.virtual.on_request(env, at)
+            elif topic == TOPIC_FEEDBACK:
+                self.virtual.on_feedback(env, at)
             elif topic == TOPIC_HEALTH_HUB:
                 self.health_hub = env
             elif topic == TOPIC_PROFILE:
@@ -913,6 +1343,74 @@ class Store:
                 self.log.append(entry)
             if topic in (TOPIC_CMD, TOPIC_RESULT):
                 self.board.on_message(topic, env)
+
+    # ---------------------------------------------------------------- 화면에서 보내기(사용자 요청: 프로필·카드 응답만)
+    def _send(self, topic: str, data: dict[str, Any], what: str) -> dict[str, Any]:
+        pub = self.publisher
+        if pub is None:
+            return {"ok": False, "error": "보내기 꺼짐(--read-only)"}
+        try:
+            pub.publish(topic, data)     # 네트워크는 lock 밖에서
+            res = {"ok": True, "error": None}
+        except (OSError, ConnectionError, ValueError) as e:
+            res = {"ok": False, "error": _reason(e)}
+        with self.lock:
+            self.sent.append({"t": time.strftime("%H:%M:%S"), "topic": topic, "what": what, **res})
+        return res
+
+    def send_profile(self, data: Any, label: str = "") -> dict[str, Any]:
+        prof, err = validate_profile(data)
+        if prof is None:
+            return {"ok": False, "error": err}
+        res = self._send(TOPIC_PROFILE, prof, f"프로필 {label or prof['profile_id']}")
+        if res["ok"]:
+            with self.lock:
+                self.profile_sent = {"profile_id": prof["profile_id"], "label": label, "at": time.time(), "data": prof}
+        return res
+
+    def send_feedback(self, request_id: Any, verdict: Any) -> dict[str, Any]:
+        """Pi 5 앱과 같은 data: {request_id, verdict, response_ms(, kind)}. 되돌리기 = 자동 실행 뒤 reject."""
+        if verdict not in ("accept", "reject", "undo"):
+            return {"ok": False, "error": "verdict 는 accept|reject|undo"}
+        now = time.time()
+        with self.lock:
+            card = self.virtual.pending_card(now)
+            undo = self.virtual.undoable(now)
+        if verdict == "undo":
+            if undo is None:
+                return {"ok": False, "error": "되돌릴 자동 실행이 없음(60 s 창)"}
+            # 앱은 지금 걸린 질문이 없으면 'atlas-display' 를 싣는다 — hub 는 자동 실행 뒤 reject 를 auto_undo 로 받는다
+            rid = card["request_id"] if card else "atlas-display"
+            return self._send(TOPIC_FEEDBACK, {"request_id": rid, "verdict": "reject", "response_ms": 0},
+                              f"되돌리기 — {undo['text']}")
+        if card is None or card["request_id"] != request_id:
+            return {"ok": False, "error": "지금 떠 있는 카드가 아님(만료·응답됨)"}
+        data = {"request_id": card["request_id"], "verdict": verdict,
+                "response_ms": max(0, int((now - card["shown_at"]) * 1000))}
+        if card.get("kind"):
+            data["kind"] = card["kind"]
+        res = self._send(TOPIC_FEEDBACK, data, f"카드 {card.get('kind')} {verdict}")
+        if res["ok"]:
+            # 브로커를 돌아 내 응답이 다시 들어오기 전에도 이 카드는 답한 것 — 바로 이은 되돌리기가 이 카드를 겨누지 않게
+            with self.lock:
+                req = self.virtual._requests.get(str(card["request_id"]))
+                if req is not None and req.get("verdict") is None:
+                    req["verdict"] = verdict
+        return res
+
+    def persona_view(self) -> dict[str, Any]:
+        """프로필 보내기 상태와 hub 확인(state/phase 개인화의 active_profile_id 가 보낸 id 와 같으면 적용됨)."""
+        data = _map(_map(self.phase).get("data"))
+        pers = _map(_map(data.get("sensor_summary")).get("personalize")) or             _map(_map(data.get("sensor_summary")).get("personalization"))
+        hub_id = pers.get("active_profile_id")
+        sent = self.profile_sent
+        return {"enabled": self.publisher is not None, "presets": PERSONAS,
+                "sent": None if sent is None else {k: sent[k] for k in ("profile_id", "label", "data")} |
+                {"t": time.strftime("%H:%M:%S", time.localtime(sent["at"]))},
+                "hub_active": hub_id or DASH,
+                "hub_fields": {k: pers[k] for k in ("mode", "status", "decision_source", "active_profile_id") if k in pers},
+                "ack": bool(sent and hub_id == sent["profile_id"]),
+                "hub_profile": self.hub_profile or DASH, "sent_log": list(self.sent)[::-1][:8]}
 
     def set_posture(self, j: Any, at: float | None = None) -> None:
         with self.lock:
@@ -930,6 +1428,8 @@ class Store:
                      for k, v in self.links.items()}
             control = self.control.view(self.phase, now)
             return {
+                "virtual": self.virtual.view(now),
+                "persona": self.persona_view(),
                 "control": control,
                 "keystroke": self.keystroke.view(now),
                 "video": video_view(self.phase, self.posture, control),
@@ -1044,6 +1544,65 @@ def mqtt_loop(host: str, port: int, store: Store, stop: threading.Event, topic: 
         stop.wait(2.0)
 
 
+PUBLISH_NODE = "laptop-devview"
+# 화면에서 보낼 수 있는 토픽은 이 둘뿐이다(사용자 요청 10-26: 프로필 고르기·카드 응답). 나머지는 계속 읽기만.
+PUBLISH_TOPICS = {TOPIC_PROFILE: True, TOPIC_FEEDBACK: False}   # topic → retain
+
+
+class Publisher:
+    """짧은 연결로 하나 보내고 끊는다: CONNECT → PUBLISH(QoS 1) → PUBACK 기다림 → DISCONNECT.
+
+    envelope 는 Pi 5 앱·V18 과 같은 공통 모양(schema_version·ts·node·boot_id·seq·data), node = laptop-devview.
+    """
+
+    def __init__(self, host: str, port: int = 1883, timeout: float = 3.0) -> None:
+        self.host, self.port, self.timeout = host, port, timeout
+        self.boot_id = f"devview-{int(time.time() * 1000)}"
+        self.seq = 0
+        self.lock = threading.Lock()
+
+    def envelope(self, data: dict[str, Any]) -> bytes:
+        self.seq += 1
+        env = {"schema_version": "1.0", "ts": round(time.time(), 3), "node": PUBLISH_NODE, "boot_id": self.boot_id,
+               "seq": self.seq, "data": data}
+        return json.dumps(env, ensure_ascii=False).encode("utf-8")
+
+    def publish(self, topic: str, data: dict[str, Any]) -> bytes:
+        if topic not in PUBLISH_TOPICS:
+            raise ValueError(f"보낼 수 없는 토픽: {topic}")
+        with self.lock:
+            payload = self.envelope(data)
+            pid = self.seq % 65535 + 1
+            header = 0x32 | (0x01 if PUBLISH_TOPICS[topic] else 0)   # PUBLISH, QoS 1, retain
+            with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
+                sock.settimeout(self.timeout)
+                sock.sendall(connect_packet(f"devview-pub-{os.getpid()}", 10))
+                h, body = read_packet(sock)
+                if h >> 4 != 2 or len(body) < 2 or body[1] != 0:
+                    raise ConnectionError("CONNACK 거부")
+                sock.sendall(_packet(header, _mqtt_str(topic) + struct.pack("!H", pid) + payload))
+                h, body = read_packet(sock)
+                if h >> 4 != 4 or body[:2] != struct.pack("!H", pid):
+                    raise ConnectionError("PUBACK 없음")
+                sock.sendall(b"\xe0\x00")   # DISCONNECT
+            return payload
+
+
+class LoopbackPublisher(Publisher):
+    """--fake: 브로커 대신 store 로 바로 넣는다(화면·각본이 같은 길을 탄다)."""
+
+    def __init__(self, store: "Store") -> None:
+        super().__init__("loopback")
+        self.store = store
+
+    def publish(self, topic: str, data: dict[str, Any]) -> bytes:
+        if topic not in PUBLISH_TOPICS:
+            raise ValueError(f"보낼 수 없는 토픽: {topic}")
+        payload = self.envelope(data)
+        self.store.on_mqtt(topic, payload)
+        return payload
+
+
 def _reason(e: BaseException) -> str:
     if isinstance(e, socket.timeout) or "timed out" in str(e):
         return "시간 초과(핫스팟 So 에 붙어 있는지 확인)"
@@ -1104,18 +1663,23 @@ class FakeScenario:
     """보드 없이 화면을 채우는 각본(40 s 반복). 실제 수신 경로(Store.on_mqtt·set_raw·set_posture)를 그대로 탄다.
 
     0–6 s START · 6–16 FOCUS_PC · 16–22 FATIGUE_SUSPECT · 22–27 FATIGUE · 27–40 ACTION_POSTURE
-    27 s 에 무드등 adjust_brightness +60% 명령, 28 s 에 결과(110→176), 32 s 부터 엎드림(face_down 0.90→0.995),
-    33 s 제안 카드, 35 s 피드백. /raw other(0x20·0x10·0x03·0x04·0xF0)·키 입력 토픽·프로필도 낸다.
+    27 s 에 무드등 adjust_brightness +60 %(min_raw 153) 자동 명령과 앱 규칙 결과(110→176), 31 s 선풍기 제안 카드
+    (화면에서 답하거나 39 s 에 가짜 앱이 수락 → 선풍기 켬), 32 s 부터 엎드림(face_down 0.90→0.995). /raw other(0x20·0x10·0x03·0x04·0xF0)·키 입력 토픽·프로필도 낸다.
     """
 
     STAGES = [(0, "START", "start"), (6, "FOCUS_PC", "focus"), (16, "FATIGUE_SUSPECT", "fatigue"),
-              (22, "FATIGUE", "fatigue"), (27, "ACTION_POSTURE", "action")]
+              (22, "FATIGUE", "fatigue"), (27, "ACTION_POSTURE", "fatigue")]   # hub presentation._PHASE_BY_STATE: ACTION_* = fatigue
 
     def __init__(self, store: Store) -> None:
         self.store = store
         self.seq = 0
         self.cycle = -1
         self.fired: set[str] = set()
+
+    def _active_profile(self) -> str:
+        """가짜 hub: 마지막으로 받은 profile/user 의 profile_id(없으면 default) — 보드 hub 의 active_profile_id 와 같은 뜻."""
+        prof = _map(_map(self.store.profile_user).get("data"))
+        return str(prof.get("profile_id") or "default")
 
     def stage(self, t: float) -> str:
         name = self.STAGES[0][1]
@@ -1249,9 +1813,10 @@ class FakeScenario:
                 "co2_ppm": 820 + int(u * 6), "temp_c": 24.6, "humidity_pct": 41, "lux": 180 if u < 27 else 310,
                 "keystroke": {"typing_active": state == "FOCUS_PC", "idle_ratio": 0.2 if state == "FOCUS_PC" else 0.9,
                               "correction_rate": 0.04, "flight_mean_ms": 180},
-                "personalize": {"arm": "lamp_up", "arm_label": "무드등 밝게",
-                                "explanation": "지난 졸음 때 무드등 밝기 올림이 가장 잘 깨움(성공 4/5) → 같은 방법"}
-                if state == "ACTION_POSTURE" else {},
+                "personalize": {"active_profile_id": self._active_profile(), "decision_source": "policy",
+                                **({"arm": "wake_light", "arm_label": "무드등 밝혀 깨우기",
+                                    "explanation": "지난 졸음 때 무드등 밝기 올림이 가장 잘 깨움(성공 4/5) → 같은 방법"}
+                                   if state == "ACTION_POSTURE" else {})},
             }
             if u >= 22:
                 summary["env_flags"] = ["co2_rising"]
@@ -1260,30 +1825,55 @@ class FakeScenario:
                 "c_fatigue": round(fatigue, 3), "c_focus": focus, "gate": gate, "cause": cause,
                 "reasons": ["tof_drowsy", "mmwave_still"] if drowsy else [],
                 "sensor_summary": summary}))
-        cid = f"fk{cycle:04d}lamp"
+        cid, rid, fid = f"fk{cycle:04d}lamp", f"fk{cycle:04d}req", f"fk{cycle:04d}fan"
+        exp = int((time.time() + 15) * 1000)   # dispatcher: expires_ts_ms = 보낸 시각 + result_timeout_sec(15)
         events = [
+            # control.yaml actions.posture 와 같은 명령
             (27.0, "cmd", TOPIC_CMD, {"command_id": cid, "target_id": "desk_lamp", "operation": "adjust_brightness",
-                                     "value": {"percent": 60}, "gate": "auto", "cause": "posture",
-                                     "origin_state": "ACTION_POSTURE"}, "hub"),
-            (28.0, "res", TOPIC_RESULT, {"command_id": cid, "status": "succeeded", "previous": 110, "actual": 176,
-                                        "actual_value": 176}, "display-control"),
-            (33.0, "req", TOPIC_REQUEST, {"request_id": f"fk{cycle:04d}req", "kind": "env_suggest",
+                                     "value": {"percent": 60, "min_raw": 153}, "gate": "auto", "cause": "posture",
+                                     "origin_state": "ACTION_POSTURE", "requires_confirmation": False,
+                                     "expires_ts_ms": exp}, "hub"),
+            (27.3, "res", TOPIC_RESULT, None, "display-control"),
+            (31.0, "req", TOPIC_REQUEST, {"request_id": rid, "kind": "env_suggest",
                                          "prompt_code": "adjust_environment", "cause": "environment",
                                          "evidence": ["co2_rising"], "options": ["accept", "reject"],
                                          "explanation": "CO₂ 가 계속 오름 — 선풍기를 켜 환기할까요?",
-                                         "arm_label": "선풍기 켜기", "expires_in_s": 30}, "hub"),
-            (35.0, "fb", TOPIC_FEEDBACK, {"request_id": f"fk{cycle:04d}req", "verdict": "accept"}, "display"),
-            (35.5, "cmd2", TOPIC_CMD, {"command_id": f"fk{cycle:04d}fan", "target_id": "vent_fan",
-                                      "operation": "set_power", "value": "on", "gate": "suggest",
-                                      "cause": "environment", "origin_state": "ACTION_ENV"}, "hub"),
-            (36.0, "res2", TOPIC_RESULT, {"command_id": f"fk{cycle:04d}fan", "status": "succeeded",
-                                         "actual_value": "on"}, "display-control"),
+                                         "arm": "fan_on", "arm_label": "환기팬(선풍기) 켜기", "expires_in_s": 30}, "hub"),
+            # 아무도 답하지 않으면 39 s 에 가짜 Pi 5 가 수락한다(화면에서 먼저 누르면 그 답을 따른다)
+            (39.0, "fb", TOPIC_FEEDBACK, {"request_id": rid, "verdict": "accept", "response_ms": 8000,
+                                         "kind": "env_suggest"}, "display"),
         ]
         for at, key, topic, data, node in events:
             if u >= at and key not in self.fired:
+                if key == "fb" and self._answered(rid) is not None:
+                    self.fired.add(key)
+                    continue
                 self.fired.add(key)
                 self.seq += 1
+                if topic == TOPIC_RESULT:
+                    data = self._result_like_app(cid)
                 st.on_mqtt(topic, _fake_env(self.seq, data, node))
+        # 제안을 수락하면(화면·가짜 앱 누구든) hub 가 선풍기를 켠다 — suggest 게이트는 수락 뒤 실행
+        if self._answered(rid) == "accept" and "cmd2" not in self.fired:
+            self.fired.add("cmd2")
+            self.seq += 1
+            st.on_mqtt(TOPIC_CMD, _fake_env(self.seq, {
+                "command_id": fid, "target_id": "vent_fan", "operation": "set_power", "value": "on", "gate": "suggest",
+                "cause": "environment", "origin_state": "ACTION_ENV", "requires_confirmation": False,
+                "expires_ts_ms": exp}, "hub"))
+            self.seq += 1
+            st.on_mqtt(TOPIC_RESULT, _fake_env(self.seq, self._result_like_app(fid), "display-control"))
+
+    def _answered(self, rid: str) -> str | None:
+        with self.store.lock:
+            req = self.store.virtual._requests.get(rid)
+            return None if req is None else req.get("verdict")
+
+    def _result_like_app(self, cid: str) -> dict[str, Any]:
+        """가짜 Pi 5 의 결과 = 앱 규칙으로 돌린 가상 실행 결과(VirtualHome 이 이미 같은 규칙으로 계산했다)."""
+        with self.store.lock:
+            e = self.store.virtual._by_cmd.get(cid) or {}
+        return {"command_id": cid, **(e.get("virtual") or {"status": "failed", "error_code": "unknown"})}
 
 
 def fake_loop(store: Store, stop: threading.Event, start: float = 0.0) -> None:
@@ -1321,6 +1911,29 @@ def make_handler(store: Store) -> type[BaseHTTPRequestHandler]:
             else:
                 self._send(404, b"not found", "text/plain")
 
+        def do_POST(self) -> None:  # noqa: N802
+            """프로필 보내기·카드 응답. 다른 사이트가 몰래 부르지 못하게 X-Devview 머리글을 요구한다
+            (사용자 정의 머리글이 있으면 브라우저가 사전 요청(OPTIONS)을 하는데 여기서는 받지 않는다)."""
+            path = self.path.split("?")[0]
+            if self.headers.get("X-Devview") != "1":
+                self._send(403, b"forbidden", "text/plain")
+                return
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(min(n, 16384)).decode("utf-8")) if n else {}
+            except (ValueError, UnicodeDecodeError):
+                self._send(400, b"bad json", "text/plain")
+                return
+            if path == "/api/profile":
+                res = store.send_profile(_map(body).get("data"), str(_map(body).get("label") or "")[:20])
+            elif path == "/api/feedback":
+                res = store.send_feedback(_map(body).get("request_id"), _map(body).get("verdict"))
+            else:
+                self._send(404, b"not found", "text/plain")
+                return
+            self._send(200 if res["ok"] else 409, json.dumps(res, ensure_ascii=False).encode("utf-8"),
+                       "application/json; charset=utf-8")
+
         def log_message(self, *args: Any) -> None:
             pass
 
@@ -1328,12 +1941,14 @@ def make_handler(store: Store) -> type[BaseHTTPRequestHandler]:
 
 
 def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(description="DESKMATE 노트북 개발자 화면(보기 전용)")
+    ap = argparse.ArgumentParser(description="DESKMATE 노트북 개발자 화면(보기 전용 — 프로필·카드 응답만 보냄)")
     ap.add_argument("--pi4", default="172.20.10.3", help="Pi 4 주소(핫스팟 So 기준 172.20.10.3)")
     ap.add_argument("--mqtt-port", type=int, default=1883)
     ap.add_argument("--port", type=int, default=8790, help="이 화면의 로컬 포트")
     ap.add_argument("--hub-profile", default="", metavar="NAME",
                     help="hub 시연 프로파일 이름(예: demo-b). 보드가 발행하지 않아서 화면에 '(노트북 지정)' 으로 표시")
+    ap.add_argument("--read-only", action="store_true",
+                    help="화면에서 보내기(프로필·카드 응답)도 끈다 — 녹화만 할 때")
     ap.add_argument("--fake", action="store_true", help="보드 없이 가짜 각본으로")
     ap.add_argument("--fake-start", type=float, default=0.0, metavar="S",
                     help=f"가짜 각본을 S 초부터(0–{FAKE_PERIOD:.0f}, 예: 26 = 졸음→무드등 직전)")
@@ -1344,11 +1959,14 @@ def main(argv: list[str] | None = None) -> None:
     threads: list[threading.Thread] = []
     if args.fake:
         store.mode, store.target = "fake", "가짜 데이터"
+        store.hub_profile = args.hub_profile or "demo-b"
+        store.publisher = None if args.read_only else LoopbackPublisher(store)
         threads.append(threading.Thread(target=fake_loop, args=(store, stop, args.fake_start), daemon=True))
     else:
         h = args.pi4
         store.target = h
         store.hub_profile = args.hub_profile
+        store.publisher = None if args.read_only else Publisher(h, args.mqtt_port)
         threads += [
             threading.Thread(target=mqtt_loop, args=(h, args.mqtt_port, store, stop), daemon=True),
             threading.Thread(target=poll_loop, args=("posture", [f"http://{h}:8771/api/state"], 0.3,
