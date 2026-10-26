@@ -37,6 +37,7 @@ python hub/atlas-tof/pc/devview/devview.py --fake
 | `--pi4` | `172.20.10.3` | Pi 4 주소(핫스팟 So) |
 | `--mqtt-port` | 1883 | Pi 4 Mosquitto |
 | `--port` | 8790 | 이 화면의 로컬 포트 |
+| `--hub-profile NAME` | | hub 시연 프로파일 이름(예: `demo-b`). 보드가 발행하지 않으므로 프로필 줄에 `(노트북 지정)` 으로 표시 |
 | `--fake` / `--fake-start S` | | 가짜 각본 / S 초부터 |
 
 ## 가져오는 것
@@ -67,7 +68,12 @@ python hub/atlas-tof/pc/devview/devview.py --fake
 
 보드 hub 는 UART 로 받은 센서를 MQTT 로 다시 내보내지 않는다(`deskmate/sensor/#` 는 구독만). 그래서 `other` 블록을 주는
 UART 중계기(`relay/uart_relay_board`)의 `/raw` 가 가장 원본에 가깝고, 자세 서비스 `/raw`(PR #72) 처럼 `other` 가 없으면
-hub 요약으로 내려간다 — 0x04·하트비트는 그때 '아직 없음'.
+hub 요약으로 내려간다 — 0x04·하트비트는 그때 '출처 없음'.
+
+10-26 실기(hub c3441f4, demo-b)에서 실제로 받은 것: MQTT 는 `state/phase`·`session/report`·`health/hub`·`health/pc-collector`·
+`sensor/keystroke` 뿐(`deskmate/sensor/#` 에는 keystroke 만). `:8772/raw` 는 자세 서비스(`other` 없음). 그래서 mmWave·환경·ToF 규칙
+특징은 `sensor_summary`(+ `tof_service`·`co2_window`) 에서, 키 입력은 MQTT 원값에서 나오고, 0x04·하트비트는 볼 수 없다.
+hub 시연 프로파일은 `state/phase`·`health/hub`·`:8765/health` 어디에도 실리지 않는다 → `--hub-profile`.
 
 ### 엎드림 face_down 칸
 

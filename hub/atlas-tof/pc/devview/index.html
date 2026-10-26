@@ -89,20 +89,26 @@ body {
 .meter .lab .num { color: var(--fg); font-size: 22px; font-weight: 700; }
 .meter .track { height: 14px; background: #222836; border-radius: 7px; overflow: hidden; }
 .meter .track i { display: block; height: 100%; border-radius: 7px; transition: width .3s; }
-.kv { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 1px 10px; font-size: 16px; align-content: start; margin: 0; }
+.kv { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 0 10px; font-size: 15px; align-content: start; margin: 0; }
 .kv dt { color: var(--dim); white-space: nowrap; }
 .kv dd { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .place { display: inline-flex; gap: 4px; vertical-align: middle; }
 .place span { padding: 0 12px; border: 1px solid var(--line); border-radius: 5px; color: var(--faint); font-size: 14px; }
 .place span.on { background: var(--info); color: #071018; border-color: var(--info); font-weight: 700; }
 
-#raw { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 16px; align-content: start; }
+#raw { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 16px; align-content: start; }
 .sec { min-width: 0; }
-.sec.wide { grid-column: span 2; }
+/* 고정 배치: 긴 환경(co2_window 포함)은 세로로 길게, 0x03·키 입력은 두 칸 폭 */
+.sec-mmwave { grid-column: 1; grid-row: 1; }
+.sec-env { grid-column: 2; grid-row: 1 / span 3; }
+.sec-tof_feature { grid-column: 3 / span 2; grid-row: 1; }
+.sec-tof_posture { grid-column: 1; grid-row: 2; }
+.sec-heartbeat { grid-column: 1; grid-row: 3; }
+.sec-keystroke { grid-column: 3 / span 2; grid-row: 2 / span 2; }
 .sec h4 { margin: 0 0 2px; font-size: 14px; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sec .src { font-size: 12px; color: var(--faint); margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sec .src.stale { color: var(--bad); }
-.rkv { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr); gap: 0 10px; font-size: 14px; line-height: 18px; }
+.rkv { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr); gap: 0 10px; font-size: 13px; line-height: 16px; }
 .sec.wide .rkv { grid-template-columns: minmax(0, auto) minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr); }
 .rkv span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rkv .k { color: var(--dim); }
@@ -291,6 +297,7 @@ function renderJudge(ph, p, profile) {
     ["프로필", esc(profile)],
     ["개인화", esc(ph.explanation)],
     ["제어 에피소드", esc(ph.episode)],
+    ["반응 학습", esc(ph.learning)],
   ]);
 }
 
@@ -303,8 +310,8 @@ function renderRaw(sections) {
   $("raw").innerHTML = sections.map(s => {
     const stale = s.age_s != null && s.age_s > 15;
     const src = `${esc(s.source)}${s.meta ? " · " + esc(s.meta) : ""}${s.age_s != null ? ` · ${s.age_s.toFixed(1)} s 전` : ""}`;
-    const rows = s.rows.length ? s.rows.map(([k, v]) => `<span class="k">${esc(k)}</span>${rawCell(v)}`).join("") : `<span class="empty">아직 없음</span>`;
-    return `<div class="sec ${WIDE[s.key] ? "wide" : ""}"><h4>${esc(s.title)}</h4><div class="src ${stale ? "stale" : ""}">${src}</div><div class="rkv mono">${rows}</div></div>`;
+    const rows = s.rows.length ? s.rows.map(([k, v]) => `<span class="k">${esc(k)}</span>${rawCell(v)}`).join("") : (s.source === "-" ? `<span class="empty">출처 없음 — /raw 에 other 블록이 없고 MQTT 토픽·hub 요약에도 없음</span>` : `<span class="empty">아직 없음</span>`);
+    return `<div class="sec sec-${s.key} ${WIDE[s.key] ? "wide" : ""}"><h4>${esc(s.title)}</h4><div class="src ${stale ? "stale" : ""}">${src}</div><div class="rkv mono">${rows}</div></div>`;
   }).join("");
 }
 

@@ -118,6 +118,19 @@ def phase_view(envelope: Any) -> dict[str, Any]:
 
     reasons = data.get("reasons")
     explanation = pers.get("explanation") or pers.get("arm_label") or pers.get("arm")
+    if not explanation and pers:
+        # 기록 전용 모드처럼 설명이 없을 때: 보드 hub(c3441f4)는 personalization{mode,status,decision_source} 만 싣는다
+        explanation = " · ".join(f"{k} {pers[k]}" for k in ("mode", "status", "decision_source") if pers.get(k))
+    learning = _map(ss.get("learning"))
+    learn = DASH
+    if learning:
+        bits = ["켜짐" if learning.get("enabled") else "꺼짐"]
+        for k, label in (("n_labels", "라벨"), ("acc_ai", "AI 정확"), ("acc_fsm", "FSM 정확"), ("p", "p"),
+                         ("pending", "대기")):
+            if learning.get(k) is not None:
+                v = learning[k]
+                bits.append(f"{label} {v:.2f}" if isinstance(v, float) else f"{label} {raw_value(v)}")
+        learn = " · ".join(bits)
     control = _map(ss.get("control"))
     episode = DASH
     if control.get("active"):
@@ -145,11 +158,16 @@ def phase_view(envelope: Any) -> dict[str, Any]:
         "mmwave_distance": _txt(_num(mm.get("distance_cm")), "{:.0f}", " cm"),
         "explanation": str(explanation) if explanation else DASH,
         "episode": episode,
+        "learning": learn,
     }
 
 
-def profile_text(phase_env: Any, profile_env: Any, health_env: Any) -> str:
-    """프로필 한 줄: hub 시연 프로파일(demo-a|b, 실려 있으면) · 개인화가 쓰는 사람 id · Pi 5 첫 설정 프로필 id."""
+def profile_text(phase_env: Any, profile_env: Any, health_env: Any, hint: str = "") -> str:
+    """프로필 한 줄: hub 시연 프로파일(demo-a|b) · 개인화가 쓰는 사람 id · Pi 5 첫 설정 프로필 id.
+
+    보드 hub(c3441f4)는 시연 프로파일을 어느 토픽·HTTP 에도 싣지 않는다 — 그땐 노트북에서 --hub-profile 로 적은
+    값을 '(노트북 지정)' 표시와 함께 보여 준다(보드가 말한 값이 아니라는 뜻).
+    """
     data = _map(_map(phase_env).get("data"))
     ss = _map(data.get("sensor_summary"))
     pers = _map(ss.get("personalize")) or _map(ss.get("personalization"))
@@ -158,6 +176,8 @@ def profile_text(phase_env: Any, profile_env: Any, health_env: Any) -> str:
     demo = data.get("profile") or ss.get("profile") or health.get("profile")
     if demo:
         parts.append(f"hub {demo}")
+    elif hint:
+        parts.append(f"hub {hint} (노트북 지정)")
     if pers.get("active_profile_id"):
         parts.append(f"개인화 {pers['active_profile_id']}")
     user = _map(_map(profile_env).get("data"))
@@ -191,13 +211,21 @@ def _flat(d: dict, prefix: str = "") -> list[list[str]]:
     return rows
 
 
-_SUMMARY_ENV_KEYS = ("co2_ppm", "temp_c", "humidity_pct", "lux", "env_flags")
+_SUMMARY_ENV_KEYS = ("co2_ppm", "temp_c", "humidity_pct", "lux", "env_flags", "co2_window")
+
+
+def _summary_tof(ss: dict) -> dict:
+    """hub 가 쓴 ToF 요약(0x03 규칙 특징 + 자세) 뒤에 hub 가 본 자세 서비스(tof_service.*)를 붙인다."""
+    out = dict(_map(ss.get("tof")))
+    if _map(ss.get("tof_service")):
+        out["tof_service"] = ss["tof_service"]
+    return out
 # (키, 화면 제목, /raw other 키, MQTT 토픽 접두어, state/phase sensor_summary 에서 꺼내는 함수)
 SECTIONS: list[tuple[str, str, str | None, str | None, Callable[[dict], dict]]] = [
     ("mmwave", "mmWave C1001 · 0x20", "mmwave", "deskmate/sensor/mmwave", lambda ss: _map(ss.get("mmwave"))),
     ("env", "환경 SCD41·DHT22·BH1750 · 0x10", "env", "deskmate/sensor/env",
      lambda ss: {k: ss[k] for k in _SUMMARY_ENV_KEYS if k in ss}),
-    ("tof_feature", "ToF 노드 규칙 특징 · 0x03", "tof_feature", "deskmate/sensor/tof", lambda ss: _map(ss.get("tof"))),
+    ("tof_feature", "ToF 노드 규칙 특징 · 0x03", "tof_feature", "deskmate/sensor/tof", _summary_tof),
     ("tof_posture", "ToF 노드 자세 · 0x04", "tof_posture", None, lambda ss: {}),
     ("heartbeat", "ESP32 하트비트 · 0xF0", "heartbeat", "deskmate/health/esp32", lambda ss: {}),
     ("keystroke", "키 입력 · PC 수집기", None, "deskmate/sensor/keystroke", lambda ss: _map(ss.get("keystroke"))),
@@ -543,6 +571,7 @@ class Store:
             k: {"ok": False, "reason": "아직 연결 시도 전", "last": None} for k in ("mqtt", "posture", "raw")}
         self.mode = "board"
         self.target = ""
+        self.hub_profile = ""  # --hub-profile: 보드가 싣지 않는 시연 프로파일을 노트북에서 적은 값
 
     def link(self, name: str, ok: bool, reason: str = "") -> None:
         with self.lock:
@@ -597,7 +626,7 @@ class Store:
                 "now": time.strftime("%H:%M:%S"),
                 "links": links,
                 "phase": phase_view(self.phase),
-                "profile": profile_text(self.phase, self.profile_user, self.health_hub),
+                "profile": profile_text(self.phase, self.profile_user, self.health_hub, self.hub_profile),
                 "posture": posture_view(self.posture) if self.posture is not None else None,
                 "face_down": self.face_down.view(now),
                 "raw": parse_raw(self.raw),
@@ -978,6 +1007,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--pi4", default="172.20.10.3", help="Pi 4 주소(핫스팟 So 기준 172.20.10.3)")
     ap.add_argument("--mqtt-port", type=int, default=1883)
     ap.add_argument("--port", type=int, default=8790, help="이 화면의 로컬 포트")
+    ap.add_argument("--hub-profile", default="", metavar="NAME",
+                    help="hub 시연 프로파일 이름(예: demo-b). 보드가 발행하지 않아서 화면에 '(노트북 지정)' 으로 표시")
     ap.add_argument("--fake", action="store_true", help="보드 없이 가짜 각본으로")
     ap.add_argument("--fake-start", type=float, default=0.0, metavar="S",
                     help=f"가짜 각본을 S 초부터(0–{FAKE_PERIOD:.0f}, 예: 26 = 졸음→무드등 직전)")
@@ -992,6 +1023,7 @@ def main(argv: list[str] | None = None) -> None:
     else:
         h = args.pi4
         store.target = h
+        store.hub_profile = args.hub_profile
         threads += [
             threading.Thread(target=mqtt_loop, args=(h, args.mqtt_port, store, stop), daemon=True),
             threading.Thread(target=poll_loop, args=("posture", [f"http://{h}:8771/api/state"], 0.3,

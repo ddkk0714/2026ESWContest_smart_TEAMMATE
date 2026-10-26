@@ -166,6 +166,30 @@ def test_profile_and_episode_text():
     assert dv.phase_view(PHASE_FULL)["episode"] == "ACTION_POSTURE · posture · auto · pending · 사용자 응답 대기"
 
 
+def test_board_c3441f4_summary_shape():
+    """10-26 실기 hub(c3441f4) 의 sensor_summary 모양: personalization{mode,status,decision_source}, learning, tof_service,
+    co2_window. 시연 프로파일은 어디에도 실리지 않는다."""
+    ph = env({"fsm_state": "FOCUS_BREAK", "sensor_summary": {
+        "tof": {"posture": "face_down", "posture_source": "service"},
+        "tof_service": {"posture": "recline", "posture_confidence": 0.67, "valid": True, "online_sensors": 2},
+        "co2_ppm": 636, "co2_window": {"co2_avg": 640.5, "waiting": False, "counts": {"open": 1}},
+        "personalization": {"mode": "record", "status": "idle", "decision_source": "prior"},
+        "learning": {"enabled": True, "n_labels": 3, "acc_ai": 0.5, "acc_fsm": 0.25, "p": 0.5, "pending": False},
+        "control": {"active": False}}})
+    v = dv.phase_view(ph)
+    assert v["explanation"] == "mode record · status idle · decision_source prior"
+    assert v["learning"] == "켜짐 · 라벨 3 · AI 정확 0.50 · FSM 정확 0.25 · p 0.50 · 대기 false"
+    assert v["episode"] == "없음"
+    assert dv.profile_text(ph, None, env({"status": "online"}), hint="demo-b") == "hub demo-b (노트북 지정)"
+    assert dv.profile_text(ph, None, None) == "-"
+    secs = {s["key"]: s for s in dv.sensor_sections({"frames": 1, "sensors": []}, {}, ph, 0.0)}
+    tof = dict(secs["tof_feature"]["rows"])
+    assert tof["tof_service.posture"] == "recline" and tof["tof_service.online_sensors"] == "2"
+    env_rows = dict(secs["env"]["rows"])
+    assert env_rows["co2_window.co2_avg"] == "640.5" and env_rows["co2_window.counts.open"] == "1"
+    assert secs["heartbeat"]["source"] == "-"
+
+
 def test_raw_value_literals():
     assert [dv.raw_value(v) for v in (None, True, False, 0.5, 1.23456, 3, [1, 2], "a")] == \
         ["null", "true", "false", "0.5", "1.235", "3", "1, 2", "a"]
