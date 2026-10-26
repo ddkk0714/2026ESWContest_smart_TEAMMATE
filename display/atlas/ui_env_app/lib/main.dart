@@ -23,6 +23,7 @@ import 'keystroke_page.dart';
 import 'link_status.dart';
 import 'music_playback.dart';
 import 'mqtt_watchdog.dart';
+import 'notice_banner.dart';
 import 'posture_screen.dart';
 import 'preview_page.dart';
 import 'command_log.dart';
@@ -39,6 +40,7 @@ import 'settings_store.dart';
 import 'state_source.dart';
 import 'privacy_page.dart';
 import 'privacy_state.dart';
+import 'voice_alert.dart';
 
 const _hubUrl = String.fromEnvironment('DESKMATE_HUB_URL');
 const _mqttHost = String.fromEnvironment('DESKMATE_MQTT_HOST');
@@ -130,6 +132,9 @@ class _DashboardPageState extends State<DashboardPage> {
   _AppView _view = _AppView.dashboard;
   // 개발자 모드의 명령 로그. MQTT 소스가 네 토픽의 envelope 를 넘기면 줄로 쌓는다(최근 200줄).
   final _commandLog = CommandLog();
+
+  // 화면 알림(쉬기 알림·자동 정보 카드·TTS 대신 띄운 문구). 한 번에 한 장.
+  final _notices = NoticeBoard();
   // 기기별 현재 상태(hub 마지막 명령 기준). 블루투스가 안 붙어도 "선풍기 ON" 처럼 표기한다.
   final _deviceBoard = DeviceStateBoard();
   // 장치 위치(왼쪽·가운데·오른쪽): 저장값과 Pi 4 자세 서비스(:8771 /api/placement) 동기화.
@@ -187,6 +192,9 @@ class _DashboardPageState extends State<DashboardPage> {
       lamp: IlinkLampFeedback(_bluetooth),
       bluetooth: _bluetooth,
       fan: BleFanControl(_bluetooth),
+      alerts: AtlasAlertSound(),
+      speech: AtlasSpeech(),
+      notices: _notices,
     );
     HardwareKeyboard.instance.addHandler(_onKey);
     _settingsStore = widget.settings ?? SettingsStore();
@@ -484,6 +492,8 @@ class _DashboardPageState extends State<DashboardPage> {
       MqttStateSource(host,
           port: port,
           onControlCommand: _feedbackController.handleControlCommand,
+          onNotice: (data) =>
+              _notices.show(ScreenNotice.fromRequest(data, DateTime.now())),
           onTopicEvent: (topic, envelope) {
             _commandLog.addMessage(topic, envelope);
             _deviceBoard.addMessage(topic, envelope);
@@ -590,6 +600,22 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   /// 같은 주소로 MQTT 클라이언트를 새로 만든다. 화면은 유지한다.
+  /// 알림 닫기. hub 가 보낸 알림(request_id 있음)이면 feedback/user 에 dismiss 를 보낸다.
+  void _dismissNotice() {
+    final now = DateTime.now();
+    final notice = _notices.dismiss(now);
+    final requestId = notice?.requestId;
+    if (notice == null || requestId == null) return;
+    unawaited(_source
+        .publishFeedbackData(buildFeedbackData(
+            requestId: requestId,
+            verdict: 'dismiss',
+            responseMs: now.difference(notice.shownAt).inMilliseconds))
+        .catchError((Object error) {
+      diag.write('알림 닫기 전송 실패: $error');
+    }));
+  }
+
   void _reconnectMqtt({bool auto = false}) {
     final source = _source;
     if (source is! MqttStateSource) return;
@@ -868,6 +894,7 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void dispose() {
     _timer?.cancel();
+    _notices.dispose();
     _commandLog.dispose();
     _deviceBoard.dispose();
     _placement.dispose();
@@ -948,6 +975,22 @@ class _DashboardPageState extends State<DashboardPage> {
                             setState(() => _statusBar.dismiss(_links)),
                       ),
                     ],
+                    // 쉬기 알림·자동 정보 카드·TTS 대신 띄운 문구. 남은 시간은 1초 갱신을 따라 준다.
+                    ListenableBuilder(
+                      listenable: _notices,
+                      builder: (context, _) {
+                        final now = DateTime.now();
+                        final notice = _notices.current(now);
+                        if (notice == null) return const SizedBox.shrink();
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: NoticeBanner(
+                              notice: notice,
+                              now: now,
+                              onDismiss: _dismissNotice),
+                        );
+                      },
+                    ),
                     const SizedBox(height: 12),
                     Expanded(
                         child: switch (_view) {

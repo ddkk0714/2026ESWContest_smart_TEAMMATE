@@ -5,6 +5,7 @@ import 'display_state.dart';
 import 'fan_control.dart';
 import 'lamp_defaults.dart';
 import 'music_playback.dart';
+import 'voice_alert.dart';
 
 const ilinkServiceUuid = '0000a032-0000-1000-8000-00805f9b34fb';
 const ilinkWriteUuid = '0000a040-0000-1000-8000-00805f9b34fb';
@@ -204,6 +205,9 @@ class FeedbackCoordinator {
     required this.lamp,
     required this.bluetooth,
     this.fan,
+    this.alerts,
+    this.speech,
+    this.notices,
   });
   final MusicPlayback music;
   final IlinkLampFeedback lamp;
@@ -211,6 +215,14 @@ class FeedbackCoordinator {
 
   /// `vent_fan` 실물(블루투스 선풍기). 고르지 않았으면 vent_fan 명령에 대답하지 않는다.
   final BleFanControl? fan;
+
+  /// `speaker` 명령(speak·chime)의 소리·말·화면 문구. 없으면 speaker 명령은 speaker_unavailable 로 답한다.
+  final AlertSound? alerts;
+  final SpeechOutput? speech;
+  final NoticeBoard? notices;
+
+  /// TTS 가 안 될 때 화면에 문구를 띄워 두는 시간.
+  static const speakFallbackShowFor = Duration(seconds: 20);
 
   /// adjust_brightness 의 하한(원시 0~255). 설정 `lamp_brightness_floor`, 없으면 [kLampBrightnessFloorDefault].
   int brightnessFloor = kLampBrightnessFloorDefault;
@@ -328,13 +340,17 @@ class FeedbackCoordinator {
       Map<String, dynamic> command) async {
     final target = command['target_id'];
     final isFan = target == 'vent_fan' && (fan?.configured ?? false);
-    if (target != 'desk_lamp' && !isFan) return null;
+    final isSpeaker = target == 'speaker';
+    if (target != 'desk_lamp' && !isFan && !isSpeaker) return null;
     final id = command['command_id'];
     if (id is! String || id.isEmpty) return null;
     final cached = _commandResults[id];
     if (cached != null) return cached;
-    final result =
-        isFan ? _executeFanCommand(command) : _executeLampCommand(command);
+    final result = isSpeaker
+        ? _executeSpeakerCommand(command)
+        : isFan
+            ? _executeFanCommand(command)
+            : _executeLampCommand(command);
     _commandResults[id] = result;
     if (_commandResults.length > 128) {
       _commandResults.remove(_commandResults.keys.first);
@@ -361,7 +377,7 @@ class FeedbackCoordinator {
     final expires = command['expires_ts_ms'];
     if (expires is! num ||
         !expires.isFinite ||
-        !['auto', 'suggest', 'undo'].contains(command['gate']) ||
+        !['auto', 'suggest', 'undo', 'notice'].contains(command['gate']) ||
         command['requires_confirmation'] != false) {
       return 'invalid_command';
     }
@@ -464,5 +480,63 @@ class FeedbackCoordinator {
           actual: state.actualFor(operation), error: 'state_mismatch');
     }
     return _result(command, 'succeeded', actual: state.actualFor(operation));
+  }
+
+  /// speak: TTS 로 읽고, 안 되면 알림음 + 화면 문구로 대신한 뒤 failed·tts_unavailable 과 함께
+  /// 무엇으로 대신했는지(fallback: chime_text | text) 답한다. chime: 알림음 하나.
+  Future<Map<String, dynamic>> _executeSpeakerCommand(
+      Map<String, dynamic> command) async {
+    final rejected = _rejection(command);
+    if (rejected != null) return _result(command, 'failed', error: rejected);
+    final operation = command['operation'];
+    final value = command['value'];
+    final alerts = this.alerts;
+    if (operation == 'chime') {
+      if (alerts == null) {
+        return _result(command, 'failed', error: 'speaker_unavailable');
+      }
+      final pattern = value is Map ? value['pattern'] : null;
+      try {
+        await alerts.play(chimeAssetFor(pattern));
+      } on Object {
+        return _result(command, 'failed', error: 'audio_failed');
+      }
+      return _result(command, 'succeeded',
+          actual: {'pattern': pattern?.toString() ?? 'soft'});
+    }
+    if (operation != 'speak') {
+      return _result(command, 'failed', error: 'unsupported_operation_or_value');
+    }
+    final text = value is Map ? value['text'] : null;
+    if (text is! String || text.trim().isEmpty) {
+      return _result(command, 'failed', error: 'unsupported_operation_or_value');
+    }
+    final lang = value is Map && value['lang'] is String ? value['lang'] as String : 'ko';
+    final speech = this.speech;
+    if (speech != null) {
+      try {
+        await speech.speak(text.trim(), lang: lang);
+        return _result(command, 'succeeded', actual: {'mode': 'tts'});
+      } on Object {
+        // 이 보드에는 TTS 가 없다 — 아래로 넘어가 소리와 글로 알린다.
+      }
+    }
+    notices?.show(ScreenNotice(
+        text: text.trim(),
+        shownAt: DateTime.now(),
+        showFor: speakFallbackShowFor,
+        kind: 'speak'));
+    var chimed = false;
+    if (alerts != null) {
+      try {
+        await alerts.play(kChimeSoft);
+        chimed = true;
+      } on Object {
+        // 소리도 안 나면 화면 문구만 남는다.
+      }
+    }
+    return _result(command, 'failed',
+        error: 'tts_unavailable',
+        extra: {'fallback': chimed ? 'chime_text' : 'text'});
   }
 }

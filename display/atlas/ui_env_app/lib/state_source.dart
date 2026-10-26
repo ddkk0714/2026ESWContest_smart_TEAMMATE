@@ -6,6 +6,7 @@ import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 
 import 'display_state.dart';
+import 'voice_alert.dart' show ScreenNotice;
 import 'session_report.dart';
 import 'privacy_state.dart';
 
@@ -278,7 +279,10 @@ class HttpStateSource implements StateSource {
 /// 주지 않는다.
 class MqttStateSource implements StateSource, PrivacySource {
   MqttStateSource(this._host,
-      {required this.port, this.onControlCommand, this.onTopicEvent})
+      {required this.port,
+      this.onControlCommand,
+      this.onTopicEvent,
+      this.onNotice})
       : _bootId = 'display-${DateTime.now().microsecondsSinceEpoch}',
         _client = MqttServerClient.withPort(
           _host,
@@ -315,6 +319,10 @@ class MqttStateSource implements StateSource, PrivacySource {
   /// 이 콜백이 있으면 result·feedback 토픽도 구독한다(앱이 낸 결과도 브로커를 거쳐 돌아온다).
   final void Function(String topic, Map<String, dynamic> envelope)?
       onTopicEvent;
+
+  /// 닫기만 있는 `interaction/request`(rest_notice, `auto: true` 정보 카드)를 받는다.
+  /// 이런 요청은 수락·거절 카드(pendingRequest)로 두지 않는다.
+  final void Function(Map<String, dynamic> data)? onNotice;
   static const _loggedTopics = {
     _controlTopic,
     _controlResultTopic,
@@ -560,7 +568,10 @@ class MqttStateSource implements StateSource, PrivacySource {
           }
         } else if (received.topic == _requestTopic) {
           final data = envelope['data'];
-          if (data is Map<String, dynamic>) {
+          if (data is Map<String, dynamic> && ScreenNotice.isNoticeRequest(data)) {
+            // 시작할 때 retain 으로 다시 오는 지난 알림은 띄우지 않는다.
+            if (publish.header?.retain != true) onNotice?.call(data);
+          } else if (data is Map<String, dynamic>) {
             final requestId = data['request_id'];
             if (requestId is String && requestId.isNotEmpty) {
               _pendingRequestId = requestId;

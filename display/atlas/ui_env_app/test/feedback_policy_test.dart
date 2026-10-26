@@ -6,6 +6,7 @@ import 'package:deskmate_display/display_state.dart';
 import 'package:deskmate_display/feedback_policy.dart';
 import 'package:deskmate_display/lamp_defaults.dart';
 import 'package:deskmate_display/music_playback.dart';
+import 'package:deskmate_display/voice_alert.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
 
@@ -526,6 +527,105 @@ void main() {
           'lamp_not_configured');
     });
   });
+
+  group('speaker commands', () {
+    Map<String, dynamic> speakerCommand(
+            String id, String operation, Object? value) =>
+        {
+          'command_id': id,
+          'target_id': 'speaker',
+          'operation': operation,
+          'value': value,
+          'origin_state': 'REST',
+          'gate': 'notice',
+          'requires_confirmation': false,
+          'expires_ts_ms': DateTime.now().millisecondsSinceEpoch + 15000,
+        };
+    FeedbackCoordinator coordinator(
+            _FakeAlerts alerts, SpeechOutput? speech, NoticeBoard notices) =>
+        FeedbackCoordinator(
+            music: _FakeMusic(),
+            lamp: IlinkLampFeedback(_FakeBluetooth()),
+            bluetooth: _FakeBluetooth(),
+            alerts: alerts,
+            speech: speech,
+            notices: notices)
+          ..enabled = true;
+
+    test('speak without TTS falls back to a chime and the text on screen',
+        () async {
+      // 10-26 Pi 5: com.atlas.VoiceManager1 is not on this board image.
+      final alerts = _FakeAlerts();
+      final notices = NoticeBoard();
+      final result = await coordinator(alerts, _NoSpeech(), notices)
+          .handleControlCommand(speakerCommand(
+              's1', 'speak', {'text': '1분만 일어나서 쉬어 가세요.', 'lang': 'ko'}));
+      expect(result?['status'], 'failed');
+      expect(result?['error_code'], 'tts_unavailable');
+      expect(result?['fallback'], 'chime_text');
+      expect(alerts.played, [kChimeSoft]);
+      expect(notices.current(DateTime.now())?.text, '1분만 일어나서 쉬어 가세요.');
+      expect(notices.current(DateTime.now())?.requestId, isNull);
+    });
+
+    test('speak with TTS succeeds without a chime', () async {
+      final alerts = _FakeAlerts();
+      final speech = _RecordingSpeech();
+      final notices = NoticeBoard();
+      final result = await coordinator(alerts, speech, notices)
+          .handleControlCommand(
+              speakerCommand('s2', 'speak', {'text': '쉬어 가세요', 'lang': 'ko'}));
+      expect(result?['status'], 'succeeded');
+      expect(result?['actual_value'], {'mode': 'tts'});
+      expect(speech.spoken, [('쉬어 가세요', 'ko')]);
+      expect(alerts.played, isEmpty);
+      expect(notices.current(DateTime.now()), isNull);
+    });
+
+    test('chime plays the sound for its pattern', () async {
+      final alerts = _FakeAlerts();
+      final c = coordinator(alerts, null, NoticeBoard());
+      final alert = await c.handleControlCommand(
+          speakerCommand('c1', 'chime', {'pattern': 'alert'}));
+      expect(alert?['status'], 'succeeded');
+      expect(alert?['actual_value'], {'pattern': 'alert'});
+      final plain = await c.handleControlCommand(speakerCommand('c2', 'chime', {}));
+      expect(plain?['actual_value'], {'pattern': 'soft'});
+      expect(alerts.played, [kChimeAlert, kChimeSoft]);
+      alerts.fail = true;
+      expect(
+          (await c.handleControlCommand(speakerCommand('c3', 'chime', null)))?[
+              'error_code'],
+          'audio_failed');
+    });
+
+    test('speaker commands follow the switch and reject bad values', () async {
+      final c = coordinator(_FakeAlerts(), null, NoticeBoard());
+      c.enabled = false;
+      expect(
+          (await c.handleControlCommand(
+              speakerCommand('d1', 'speak', {'text': 'x'})))?['error_code'],
+          'feedback_disabled');
+      c.enabled = true;
+      expect(
+          (await c.handleControlCommand(
+              speakerCommand('d2', 'speak', {'text': '  '})))?['error_code'],
+          'unsupported_operation_or_value');
+      expect(
+          (await c.handleControlCommand(speakerCommand('d3', 'beep', null)))?[
+              'error_code'],
+          'unsupported_operation_or_value');
+      final noSpeaker = FeedbackCoordinator(
+          music: _FakeMusic(),
+          lamp: IlinkLampFeedback(_FakeBluetooth()),
+          bluetooth: _FakeBluetooth())
+        ..enabled = true;
+      expect(
+          (await noSpeaker.handleControlCommand(
+              speakerCommand('d4', 'chime', null)))?['error_code'],
+          'speaker_unavailable');
+    });
+  });
 }
 
 // implements는 실제 시스템 D-Bus 클라이언트를 생성하지 않는다.
@@ -614,3 +714,28 @@ DisplayState _state(String fsm,
         reasons: const [],
         sequence: 1,
         timestamp: DateTime(2026, 10, 12));
+
+class _FakeAlerts implements AlertSound {
+  final played = <String>[];
+  bool fail = false;
+
+  @override
+  Future<void> play(String asset) async {
+    if (fail) throw StateError('no audio');
+    played.add(asset);
+  }
+}
+
+class _NoSpeech implements SpeechOutput {
+  @override
+  Future<void> speak(String text, {required String lang}) async =>
+      throw StateError('org.freedesktop.DBus.Error.ServiceUnknown');
+}
+
+class _RecordingSpeech implements SpeechOutput {
+  final spoken = <(String, String)>[];
+
+  @override
+  Future<void> speak(String text, {required String lang}) async =>
+      spoken.add((text, lang));
+}
