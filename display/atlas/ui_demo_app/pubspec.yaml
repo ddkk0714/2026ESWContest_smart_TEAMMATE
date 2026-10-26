@@ -1,0 +1,60 @@
+name: deskmate_ui_demo
+description: DESKMATE V26 display UI for Atlas Pi 5 — follows the board over MQTT, in-memory when unreachable.
+publish_to: none
+version: 0.26.0+26
+environment:
+  sdk: ^3.6.2
+dependencies:
+  flutter:
+    sdk: flutter
+  # V18 보드 연결. ui_env_app 과 같은 버전으로 고정한다(Atlas Dart 3.6.2 호환 상한, 10.8.1+ 는 Dart 3.8 요구).
+  mqtt_client: 10.5.1
+  dbus: ^0.7.12
+  audioplayers: ^6.0.0
+  audioplayers_atlas:
+    path: /opt/flutter-atlas-plugins/packages/flutter-plugin-atlas-audioplayers
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+flutter:
+  uses-material-design: true
+  fonts:
+    - family: High1
+      fonts:
+        - asset: assets/fonts/High1WonchuriBodyB.ttf
+    - family: LGText
+      fonts:
+        - asset: assets/fonts/LGEITextTTF-Regular.ttf
+    - family: LGClock
+      fonts:
+        - asset: assets/fonts/LGEIHeadlineVF.ttf
+    - family: High1Wonchuri
+      fonts:
+        - asset: assets/fonts/High1WonchuriBodyB.ttf
+          weight: 700
+    - family: ComicNeue
+      fonts:
+        - asset: assets/fonts/ComicNeue-Regular.ttf
+    - family: HakgyoansimGeurimilgi
+      fonts:
+        - asset: assets/fonts/HakgyoansimGeurimilgi-Regular.ttf
+    - family: LGEIText
+      fonts:
+        - asset: assets/fonts/LGEITextTTF-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/LGEITextTTF-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/LGEITextTTF-Bold.ttf
+          weight: 700
+    - family: LGEIHeadline
+      fonts:
+        - asset: assets/fonts/LGEIHeadlineVF.ttf
+  assets:
+    - assets/audio/
+    - assets/avatars/
+    - assets/fonts/ComicNeue-LICENSE.txt
+    - assets/config/co2_bands.json
+    - assets/mascot/irumae-atlas-soft.png
+    - assets/config/demo.json
+    - assets/fonts/NOTICE.md

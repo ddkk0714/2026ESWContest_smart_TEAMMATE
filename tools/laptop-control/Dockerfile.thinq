@@ -1,0 +1,7 @@
+FROM python:3.12.15-slim
+RUN pip install --no-cache-dir thinqconnect==1.0.14
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY thinq_vendor /app/thinq_vendor
+COPY thinq_host.py /app/thinq_host.py
+CMD ["python", "thinq_host.py", "--allow-control"]
