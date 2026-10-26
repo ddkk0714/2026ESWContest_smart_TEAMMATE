@@ -210,10 +210,11 @@ class _BluetoothControlPageState extends State<BluetoothControlPage> {
                       contentPadding: EdgeInsets.zero,
                       title: const Text('상태 기반 조명·음악 피드백'),
                       subtitle: const Text(
-                          '제안 수락·자동 개입 뒤 실행, recovery/idle/end에서 음악 정지. 허브의 램프·선풍기 명령도 이 스위치가 켜져 있어야 실행'),
+                          '제안 수락·자동 개입 뒤 실행, recovery/idle/end에서 음악 정지. 허브의 램프·선풍기 명령도 이 스위치가 켜져 있어야 실행. '
+                          '켜고 끈 상태는 저장되어 앱을 다시 켜도 그대로입니다(처음에는 켜짐).'),
                       value: widget.feedback.enabled,
-                      onChanged: (value) =>
-                          setState(() => widget.feedback.enabled = value),
+                      onChanged: (value) => setState(
+                          () => widget.links.setFeedbackEnabled(value)),
                     ),
                     Row(children: [
                       const Icon(Icons.volume_up_rounded),

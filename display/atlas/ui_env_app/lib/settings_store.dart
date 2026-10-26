@@ -45,6 +45,7 @@ class DeskmateSettings {
     this.placement,
     this.placementAsked = false,
     this.lampBrightnessFloor,
+    this.feedbackEnabled,
   });
 
   final String? mqttHost;
@@ -72,6 +73,9 @@ class DeskmateSettings {
   /// adjust_brightness 의 하한(원시 0~255). null 이면 lamp_defaults 의 기본값.
   final int? lampBrightnessFloor;
 
+  /// 블루투스 탭의 "상태 기반 조명·음악 피드백" 스위치. null 이면 켠 채로 시작한다(시연 기본값).
+  final bool? feedbackEnabled;
+
   static const empty = DeskmateSettings();
 
   bool get isEmpty =>
@@ -85,7 +89,8 @@ class DeskmateSettings {
       !devModeDefault &&
       placement == null &&
       !placementAsked &&
-      lampBrightnessFloor == null;
+      lampBrightnessFloor == null &&
+      feedbackEnabled == null;
 
   DeskmateSettings copyWith({
     String? mqttHost,
@@ -108,6 +113,7 @@ class DeskmateSettings {
     bool? placementAsked,
     int? lampBrightnessFloor,
     bool clearLampBrightnessFloor = false,
+    bool? feedbackEnabled,
   }) =>
       DeskmateSettings(
         mqttHost: clearMqttHost ? null : mqttHost ?? this.mqttHost,
@@ -123,6 +129,7 @@ class DeskmateSettings {
         lampBrightnessFloor: clearLampBrightnessFloor
             ? null
             : lampBrightnessFloor ?? this.lampBrightnessFloor,
+        feedbackEnabled: feedbackEnabled ?? this.feedbackEnabled,
       );
 
   Map<String, Object?> toJson() {
@@ -160,6 +167,9 @@ class DeskmateSettings {
     if (lampBrightnessFloor != null) {
       json['lamp_brightness_floor'] = lampBrightnessFloor;
     }
+    if (feedbackEnabled != null) {
+      json['feedback_enabled'] = feedbackEnabled;
+    }
     return json;
   }
 
@@ -184,6 +194,9 @@ class DeskmateSettings {
       placement: validPlacement(json['placement']),
       placementAsked: json['placement_asked'] == true,
       lampBrightnessFloor: _byte(json['lamp_brightness_floor']),
+      feedbackEnabled: json['feedback_enabled'] is bool
+          ? json['feedback_enabled'] as bool
+          : null,
     );
   }
 

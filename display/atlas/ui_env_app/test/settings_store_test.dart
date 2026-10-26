@@ -85,6 +85,20 @@ void main() {
     expect(DeskmateSettings.fromJson({'lamp_brightness_floor': 0}).lampBrightnessFloor, 0);
   });
 
+  test('feedback_enabled round-trips and is absent until the switch is used', () {
+    expect(DeskmateSettings.empty.feedbackEnabled, isNull);
+    expect(DeskmateSettings.empty.toJson().containsKey('feedback_enabled'), isFalse);
+    const off = DeskmateSettings(feedbackEnabled: false);
+    expect(off.toJson()['feedback_enabled'], isFalse);
+    expect(off.isEmpty, isFalse);
+    expect(SettingsStore(candidates: [path('feedback')]).save(off), isTrue);
+    final loaded = SettingsStore(candidates: [path('feedback')]).load();
+    expect(loaded.feedbackEnabled, isFalse);
+    expect(loaded.copyWith(feedbackEnabled: true).feedbackEnabled, isTrue);
+    expect(loaded.copyWith(mqttHost: '10.0.0.2').feedbackEnabled, isFalse);
+    expect(DeskmateSettings.fromJson({'feedback_enabled': 'yes'}).feedbackEnabled, isNull);
+  });
+
   test('missing and malformed files return empty without throwing', () {
     final missing = SettingsStore(candidates: [path('missing')]);
     expect(missing.load().isEmpty, isTrue);

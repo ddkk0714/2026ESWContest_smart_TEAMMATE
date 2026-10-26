@@ -88,6 +88,7 @@ class BluetoothLinkManager extends ChangeNotifier {
   /// 실패했는데, 같은 기기를 하나씩 다시 연결하면 셋 다 붙었다.
   Future<void> restore() async {
     final saved = settings.load();
+    feedback.enabled = saved.feedbackEnabled ?? true;
     _speaker = saved.speaker;
     _lamp = saved.lamp;
     _fan = saved.fan;
@@ -95,6 +96,14 @@ class BluetoothLinkManager extends ChangeNotifier {
     if (_speaker != null) await reconnectSpeaker();
     if (_lamp != null) await reconnectLamp();
     if (_fan != null) await reconnectFan();
+  }
+
+  /// 상태 기반 피드백 스위치를 바꾸고 설정 파일에 기억한다. 10-26 Pi 5: 앱이 켜질 때마다
+  /// 꺼진 채로 시작해 허브의 램프·선풍기 명령이 전부 feedback_disabled 로 돌아왔다.
+  void setFeedbackEnabled(bool on) {
+    feedback.enabled = on;
+    settings.save(settings.load().copyWith(feedbackEnabled: on));
+    _notify();
   }
 
   /// 저장된 스피커에 다시 붙는다(검색 없이).

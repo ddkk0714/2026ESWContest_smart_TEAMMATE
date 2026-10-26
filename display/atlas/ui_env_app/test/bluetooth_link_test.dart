@@ -140,6 +140,29 @@ void main() {
     expect(links.lampStatus.needsAttention, isFalse);
   });
 
+  test('feedback switch starts on when nothing was saved', () async {
+    // 10-26 Pi 5: the switch started off on every app start, so every hub
+    // lamp/fan command came back feedback_disabled.
+    expect(feedback.enabled, isFalse);
+    await manager().restore();
+    expect(feedback.enabled, isTrue);
+  });
+
+  test('feedback switch is remembered across app starts', () async {
+    final links = manager();
+    await links.restore();
+    links.setFeedbackEnabled(false);
+    expect(feedback.enabled, isFalse);
+    expect(store.load().feedbackEnabled, isFalse);
+
+    feedback.enabled = true;
+    await manager().restore();
+    expect(feedback.enabled, isFalse);
+
+    manager().setFeedbackEnabled(true);
+    expect(store.load().feedbackEnabled, isTrue);
+  });
+
   test('restore reconnects saved speaker and lamp without scanning', () async {
     store.save(const DeskmateSettings(
       speaker:
