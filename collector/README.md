@@ -84,7 +84,24 @@ python -m collector
 pytest collector/tests -v
 ```
 
-옵션: `--port`, `--node`, `--window`, `--period`. 환경변수(`DESKMATE_BROKER` 등)로도 지정 가능.
+### 실기(핫스팟) 연동 — 수험생·대학생 개인화 확인 때
+
+노트북을 Pi 4 와 같은 휴대폰 핫스팟에 붙인 뒤 저장소 루트에서:
+
+```bash
+python -m collector --target hotspot    # = --broker 172.20.10.3 (Pi 4 wlan0)
+python -m collector --target lan        # = --broker 172.16.34.199 (연구실 LAN · Pi 5 직결)
+```
+
+- 켜면 `[mqtt] connected → 172.20.10.3:1883` 이 뜨고 1초마다 `[PUB]` 줄이 나온다. 핫스팟이 끊기면 `disconnected (자동 재연결)` 뒤
+  1→30 s 백오프로 다시 붙는다. 그동안 값은 `logs/keystroke.jsonl` 에만 남는다.
+- Pi 4 에서 수신 확인: `ssh pi4-via-pi5 '/data/share/deskmate/bin/mosquitto_sub -h 127.0.0.1 -t deskmate/sensor/keystroke -v'`
+- hub 반영 확인: `deskmate/state/phase` 의 `sensor_summary.keystroke` 가 이 값이고, 타이핑하면 `context` 가 `npc` → `mixed`/`pc` 로
+  간다(demo 프로파일은 `pc_ratio_window_sec` 120 s, 기본 900 s 창의 입력 비율).
+- 대학생 세션은 타이핑 중 켜 둔다. 수험생(책·필기) 세션도 켜 두면 입력이 없어 `context: npc` 로 잡히는지 함께 확인된다.
+- 보내는 것은 타이밍 통계와 keydown 개수뿐이다. 어떤 키인지는 어디에도 남지 않는다.
+
+옵션: `--target {hotspot,lan}`, `--port`, `--node`, `--window`, `--period`. 환경변수(`DESKMATE_BROKER` 등)로도 지정 가능.
 브로커를 생략하면 `localhost:1883`을 사용하며, 연결되지 않아도 `logs/keystroke.jsonl`에
 동일한 MQTT envelope를 기록한다. `logs/`는 수집 데이터이므로 Git에 포함하지 않는다.
 

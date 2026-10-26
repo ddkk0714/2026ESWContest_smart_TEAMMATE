@@ -61,6 +61,10 @@ class Features:
             "input_active": self.input_active,
             "flight_cv": self.flight_cv,
             "mouse_event_rate": self.mouse_event_rate,
+            # hub 피로 특징(hub/deskmate_hub/fatigue/features.py)은 valid 일 때만 키 특징을 읽고,
+            # event_count / window_s 로 분당 타건 수를 만든다(10-26). 개수만이라 키 값은 여전히 없다.
+            "event_count": self.keydown_count,
+            "valid": self.typing_active,
         }
 
 

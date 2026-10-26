@@ -5,6 +5,13 @@ import os
 from dataclasses import dataclass
 
 
+# --target 별칭 → Pi 4 브로커 주소. 핫스팟 So 에서는 Pi 4 wlan0, 연구실 LAN 에서는 eth0(Pi 5 직결) — 10-26 실기
+TARGETS = {
+    "hotspot": "172.20.10.3",
+    "lan": "172.16.34.199",
+}
+
+
 @dataclass
 class Config:
     node: str = "pc-collector"
@@ -30,6 +37,8 @@ class Config:
             publish_period_s=float(os.environ.get("DESKMATE_PERIOD_S", cls.publish_period_s)),
         )
         if args is not None:
+            if getattr(args, "target", None):
+                c.broker_host = TARGETS[args.target]
             if getattr(args, "broker", None):
                 c.broker_host = args.broker
             if getattr(args, "port", None):
