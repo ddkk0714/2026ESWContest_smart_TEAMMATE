@@ -948,9 +948,9 @@ def test_laptop_original_values_survive_a_kill(tmp_path):
 def test_laptop_speaker_to_volume_by_sound_pref():
     st, act, fake = _laptop_store()
     st.profile_sent = {"profile_id": "p", "label": "x", "at": 0.0, "data": {"profile_id": "p", "sound_pref": "mid"}}
-    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "ACTION_POSTURE", "phase": "fatigue", "gate": "auto"}), at=1.0)
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "ACTION_BREAK", "phase": "fatigue", "gate": "auto"}), at=1.0)
     act.tick(5.0)
-    assert fake.v == 0.5                                        # 음악 재생 → sound_pref mid
+    assert fake.v == 0.5                                        # 음악 재생(깨우기 아님) → sound_pref mid
     time.sleep(0.05)
     assert "music" in fake.sounds
     st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "RECOVERY", "phase": "recovery"}), at=2.0)
@@ -961,6 +961,7 @@ def test_laptop_speaker_to_volume_by_sound_pref():
     st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "ACTION_POSTURE", "phase": "fatigue", "gate": "auto"}), at=3.0)
     act.tick(20.0)
     assert fake.v == 0.41                                       # 소리 싫음(off) → 올리지 않음
+    assert act.wake is None                                     # 자세 개입이어도 off 면 깨우기 음량도 안 올림
 
 
 def test_laptop_manual_change_logged_not_published():
@@ -1028,7 +1029,8 @@ def test_speak_command_goes_to_virtual_speaker_and_laptop_tts():
     act.tick(time.time() + 5)                                         # 볼륨 먼저(기본 0.3)
     assert fake.v == dv.DEFAULT_VOLUME
     deadline = time.time() + 5                                        # 볼륨을 올린 뒤(약 1.8 s) 스스로 한 번 말한다
-    while not fake.spoken and time.time() < deadline:
+    said = lambda: any("노트북이 말함" in e["text"] for e in list(st.virtual.timeline) if e["kind"] == "laptop")
+    while not (fake.spoken and said()) and time.time() < deadline:   # 말한 뒤 타임라인 기록까지 기다린다
         time.sleep(0.1)
     assert fake.spoken == ["잠깐 쉬어 가요"]
     assert any("노트북이 말함(Microsoft Heami Desktop)" in e["text"] for e in st.virtual.timeline if e["kind"] == "laptop")
@@ -1094,6 +1096,118 @@ def test_dismiss_rest_notice_and_info_card():
     assert st.send_feedback("b1-42-rest", "dismiss")["ok"] is False          # 두 번은 안 보낸다
     assert st.send_feedback("i1", "dismiss")["ok"] is True
     assert st.snapshot()["virtual"]["info"] == []                             # 닫은 안내는 띠에서 빠진다
+
+
+# ----------------------------------------------------------------- 깨우기: 노트북 음악 음량
+def _b(e):
+    return json.dumps(e, ensure_ascii=False).encode()
+
+
+def _laptop_lines(st):
+    return [e["text"] for e in st.virtual.timeline if e["kind"] == "laptop"]
+
+
+def test_wake_raises_volume_once_and_restores_on_recovery():
+    st, act, fake = _laptop_store()
+    now = time.time()
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "ACTION_POSTURE", "phase": "fatigue", "gate": "auto", "cause": "posture"}), at=now)
+    st.profile_sent = {"data": {"sound_pref": "low"}}                     # 첫 설정 '작게'여도 깨우기는 크게
+    st.on_mqtt(dv.TOPIC_CMD, _b(cmd_env("w1", "desk_lamp", "adjust_brightness", {"percent": 60, "min_raw": 153}, at=now)),
+               at=now)
+    act.tick(now + 5)
+    assert fake.v == 0.8
+    assert [x for x in _laptop_lines(st) if x.startswith("깨우기:")] == ["깨우기: 노트북 음량 41 % → 80 % (자세 개입)"]
+    st.on_mqtt(dv.TOPIC_CMD, _b(cmd_env("w2", "speaker", "chime", {"pattern": "double"}, gate="notice", at=now + 6)),
+               at=now + 6)                                                 # 다시 와도 쌓지 않는다
+    act.tick(now + 10)
+    assert fake.v == 0.8 and act.wake["before"] == 0.41
+    time.sleep(0.2)
+    assert fake.sounds == []                                               # 음악 위에 삑 소리 없음
+    assert any("알림음 생략" in x for x in _laptop_lines(st))
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "MONITOR", "phase": "fatigue"}), at=now + 20)
+    act.tick(now + 21)
+    assert fake.v == 0.8
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "RECOVERY", "phase": "recovery"}), at=now + 30)
+    act.tick(now + 31)
+    assert fake.v == 0.41 and act.wake is None
+    assert "깨우기 끝: 노트북 음량 80 % → 41 % (회복)" in _laptop_lines(st)
+    assert act.view()["wake"] is None
+
+
+def test_wake_keeps_louder_volume_and_times_out():
+    st, act, fake = _laptop_store()
+    fake.v = act.cur["volume"] = 0.9
+    now = time.time()
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "ACTION_POSTURE", "phase": "fatigue", "gate": "auto"}), at=now)
+    st.on_mqtt(dv.TOPIC_CMD, _b(cmd_env("w1", "desk_lamp", "adjust_brightness", {"percent": 60}, at=now)), at=now)
+    act.tick(now + 5)
+    assert fake.v == 0.9 and not any(c[0] == "v" for c in fake.calls)    # 이미 더 크면 그대로(max)
+    act.tick(now + dv.WAKE_MAX_S + 1)                                      # 회복이 안 와도 5분 뒤 되돌림(같은 값)
+    assert act.wake is None
+
+
+def test_rest_speak_wakes_and_still_talks_but_non_wake_chime_keeps_volume():
+    st, act, fake = _laptop_store()
+    now = time.time()
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "REST", "phase": "recovery"}), at=now)
+    st.on_mqtt(dv.TOPIC_CMD, payload(dict(F91_SPEAK, expires_ts_ms=int((now + 15) * 1000))), at=now)
+    act.tick(now + 2)
+    assert fake.v == 0.8 and act.wake["why"] == "휴식 말하기"
+    deadline = time.time() + 4
+    while not fake.spoken and time.time() < deadline:
+        time.sleep(0.05)
+    assert fake.spoken == ["잠깐 눈을 붙여요"]                              # 말하기는 그대로
+    fake.no_voice = True
+    act._chime("speak:다시")
+    assert fake.sounds == []                                               # TTS 실패여도 깨우는 중엔 삑 없음
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "FOCUS_PC", "phase": "focus"}), at=now + 60)
+    act.tick(now + 62)
+    assert fake.v == 0.41
+    st.on_mqtt(dv.TOPIC_CMD, payload({"command_id": "n1", "target_id": "speaker", "operation": "chime",
+                                      "value": {"pattern": "single"}, "gate": "notice", "requires_confirmation": False,
+                                      "expires_ts_ms": int((now + 80) * 1000)}), at=now + 64)
+    deadline = time.time() + 3
+    while "single" not in fake.sounds and time.time() < deadline:
+        time.sleep(0.05)
+    assert "single" in fake.sounds and act.wake is None and fake.v == 0.41  # 깨우기 아닌 알림음은 지금 음량으로
+
+
+def test_wake_disabled_keeps_sound_pref_volume():
+    st = dv.Store()
+    fake = FakeLaptop()
+    act = dv.LaptopActuator(st, fake, wake_volume=None)
+    st.laptop = act
+    act.start(thread=False)
+    now = time.time()
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "ACTION_POSTURE", "phase": "fatigue", "gate": "auto"}), at=now)
+    st.on_mqtt(dv.TOPIC_CMD, _b(cmd_env("w1", "desk_lamp", "adjust_brightness", {"percent": 60}, at=now)), at=now)
+    act.tick(now + 5)
+    assert act.wake is None and fake.v == dv.DEFAULT_VOLUME
+
+
+def test_fake_facedown_wakes_then_restores(hub_cfg):
+    rules = dv.load_hub_rules(hub_cfg, "demo-b")
+    st = dv.Store()
+    fake = FakeLaptop()
+    act = dv.LaptopActuator(st, fake)
+    st.laptop = act
+    act.start(thread=False)
+    sc = dv.FakeHubScenario(st, "facedown", rules)
+    base, real = 1_000_000.0, dv.time.time
+    seen = []
+    try:
+        for i in range(0, 1300):
+            t = i * 0.1
+            dv.time.time = lambda t=t: base + t
+            sc.step(t)
+            act.tick(base + t)
+            seen.append(fake.v)
+    finally:
+        dv.time.time = real
+    lines = _laptop_lines(st)
+    assert any(x.startswith("깨우기: 노트북 음량 41 % → 80 %") for x in lines)
+    assert any(x.startswith("깨우기 끝: 노트북 음량 80 % → 41 %") for x in lines)
+    assert max(seen) == 0.8 and seen[-1] == 0.41
 
 
 def test_chime_command_plays_laptop_sound():

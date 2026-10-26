@@ -1127,6 +1127,7 @@ class VirtualHome:
         self.rest_min_s: float | None = None    # hub fsm timers.rest_min_sec (load_hub_rules 가 넣는다)
         self.rest_counts: str | None = None     # state/phase sensor_summary.rest_notice.counts 요약
         self.info: deque[dict[str, Any]] = deque(maxlen=8)   # 자동 안내 카드(auto: true, options [dismiss]) — 답하지 않는 배너
+        self.current_cmd: dict[str, Any] | None = None       # 실행 중인 control/cmd data — listeners 가 '깨우기'인지 본다
 
     # ---------------------------------------------------------------- 공통
     def _notify(self, key: str, text: str, at: float, tone: str = "info") -> None:
@@ -1303,7 +1304,11 @@ class VirtualHome:
             return None
         if isinstance(cid, str) and cid in self._by_cmd:   # QoS 1 중복 — 두 번 실행하지 않는다
             return self._by_cmd[cid]
-        res = self._execute(c, at)
+        self.current_cmd = c
+        try:
+            res = self._execute(c, at)
+        finally:
+            self.current_cmd = None
         line = self._command_line(c, res)
         arm, arm_label, reason = self._arm_for(str(target), at)
         e = self._event(at, kind="command", target=target, operation=op, gate=c.get("gate"),
@@ -1644,6 +1649,11 @@ LAMP_OFF_PERCENT = 10          # 무드등 '끔' = 화면이 까매지지 않는
 MIN_BRIGHTNESS_INTERVAL_S = 3.0  # 깜빡임 방지: 화면 밝기는 3 s 에 한 번까지(사이 값은 마지막 것만)
 MIN_VOLUME_INTERVAL_S = 1.5
 MANUAL_POLL_S = 5.0
+# 깨우기(블루투스 대신 노트북에서 틀어 둔 음악으로 깨운다): 자세 개입 무드등·자세/휴식 말하기·알림음이 오면 노트북 음량을
+# max(지금, WAKE_VOLUME) 으로 올리고, FSM 이 회복·집중으로 가거나 WAKE_MAX_S 가 지나면 올리기 전 음량으로 되돌린다.
+WAKE_VOLUME = 0.8
+WAKE_MAX_S = 300.0
+WAKE_END_FSM = ("RECOVERY", "FOCUS_PC", "FOCUS_MIXED", "FOCUS_NPC", "IDLE", "END")
 
 
 class LaptopActuator:
@@ -1657,8 +1667,12 @@ class LaptopActuator:
       바꾼 것과 구별할 수 없어서).
     """
 
-    def __init__(self, store: "Store", backend: Any, state_file: str | None = None) -> None:
+    def __init__(self, store: "Store", backend: Any, state_file: str | None = None,
+                 wake_volume: float | None = WAKE_VOLUME, wake_max_s: float = WAKE_MAX_S) -> None:
         self.store, self.b = store, backend
+        # 깨우기 음량(0~1, None 이면 깨우기 없음 = 예전처럼 첫 설정 소리 구간)·최대 유지 시간
+        self.wake_volume, self.wake_max_s = wake_volume, wake_max_s
+        self.wake: dict[str, Any] | None = None   # {before, at, until, why, fsm_seen}
         # 원래 밝기·볼륨을 적어 두는 파일 — 강제 종료로 되돌리지 못했으면 다음 실행이 이 값으로 되돌린다
         self.state_file = state_file
         self.lock = threading.Lock()
@@ -1732,10 +1746,67 @@ class LaptopActuator:
             except OSError:
                 pass
 
+    # ---- 깨우기
+    def _wake_reason(self, c: dict[str, Any] | None) -> str | None:
+        """이 명령이 '깨우기'인가: 자세 개입 무드등 밝기, 자세·휴식에서 온 말하기·알림음."""
+        if not c or self.wake_volume is None:
+            return None
+        origin, cause, op = str(c.get("origin_state") or ""), c.get("cause"), c.get("operation")
+        posture = origin == "ACTION_POSTURE" or cause == "posture"
+        if c.get("target_id") == "desk_lamp" and op in ("adjust_brightness", "set_brightness") and posture:
+            return "자세 개입 무드등"
+        if op in ("speak", "chime") and (posture or origin == "REST"):
+            return ("휴식 " if origin == "REST" else "자세 ") + ("말하기" if op == "speak" else "알림음")
+        return None
+
+    def _wake_start(self, why: str, at: float) -> None:
+        """store.lock·self.lock 밖에서 불러도 되게 값만 적는다. 이미 깨우는 중이면 다시 올리지 않고 시한만 늘린다."""
+        if self._pref_volume() is None:          # 첫 설정에서 소리 '끔'을 고른 사람은 소리로 깨우지 않는다('작게'는 깨운다)
+            return
+        with self.lock:
+            if self.wake is not None:
+                self.wake["until"] = at + self.wake_max_s
+                return
+            before = self.cur["volume"]          # 실제 지금 음량(아직 안 쓴 첫 설정 음량이 아니라)
+            fsm = str(self.store.virtual._latest.get("fsm_state") or "")
+            self.wake = {"before": before, "at": at, "until": at + self.wake_max_s, "why": why,
+                         "fsm_seen": fsm not in WAKE_END_FSM}
+            target = max(float(before or 0.0), float(self.wake_volume))
+            self.want["volume"], self.why["volume"] = target, f"깨우기 · {why}"
+
+    def _wake_check(self, now: float) -> None:
+        """회복·집중으로 가면(깨우는 동안 다른 상태를 한 번은 본 뒤) 또는 시한이 지나면 올리기 전 음량으로."""
+        with self.store.lock:
+            fsm = str(self.store.virtual._latest.get("fsm_state") or "")
+        with self.lock:
+            w = self.wake
+            if w is None:
+                return
+            if fsm not in WAKE_END_FSM:
+                w["fsm_seen"] = True
+                if now < w["until"]:
+                    return
+                end = f"{round(self.wake_max_s / 60)}분 지남"
+            elif w["fsm_seen"]:
+                end = FSM_KO.get(fsm, fsm)
+            elif now < w["until"]:
+                return
+            else:
+                end = f"{round(self.wake_max_s / 60)}분 지남"
+            self.wake = None
+            if w["before"] is not None:
+                self.want["volume"], self.why["volume"] = w["before"], f"깨우기 끝 · {end}"
+
     # ---- 가상 기기가 바뀔 때(store.lock 안에서 불린다 — 여기서는 원하는 값만 적고 실제 쓰기는 스레드가)
     def on_change(self, key: str, dev: dict[str, Any], at: float, text: str) -> None:
         if not self.active:
             return
+        wake = self._wake_reason(self.store.virtual.current_cmd)
+        if (not wake and self.wake_volume is not None and key == "speaker" and dev.get("music")
+                and self.store.virtual.current_cmd is None and self.store.virtual._latest.get("fsm_state") == "ACTION_POSTURE"):
+            wake = "자세 개입"                     # 자동 자세 개입 국면의 음악 — 명령보다 state/phase 가 먼저 온다
+        if wake:
+            self._wake_start(wake, at)
         if key == "lamp":
             if dev.get("power") is False:
                 pct, why = LAMP_OFF_PERCENT, "무드등 끔"
@@ -1758,8 +1829,13 @@ class LaptopActuator:
             else:
                 target, why, sound = self.orig["volume"], "스피커 음악 정지 → 원래 볼륨", None
             with self.lock:
-                if target is not None:
+                waking = self.wake is not None
+                if target is not None and not waking:   # 깨우는 동안은 깨우기 음량을 지킨다(첫 설정 '작게'와 무관)
                     self.want["volume"], self.why["volume"] = target, why
+            if sound and waking and not sound.startswith("speak:"):
+                # 음악 위에 삑 소리를 얹지 않는다 — 틀어 둔 음악을 키워서 깨운다
+                self.store.virtual.log_laptop(f"깨우는 중 — 알림음 생략, 음악 음량으로 깨움 ({text})", at)
+                sound = None
             if sound:
                 threading.Thread(target=self._chime, args=(sound,), daemon=True).start()
 
@@ -1801,8 +1877,10 @@ class LaptopActuator:
                 with self.store.lock:
                     self.store.virtual.log_laptop(f"노트북이 말함({voice}): “{_clip(text, 40)}”", time.time())
                 return
-            except Exception as e:  # noqa: BLE001 — 한국어 목소리 없음·TTS 실패 → 알림음
+            except Exception as e:  # noqa: BLE001 — 한국어 목소리 없음·TTS 실패 → 알림음(깨우는 중이면 생략)
                 self.error = f"음성 실패 → 알림음: {_reason(e)}"
+                if self.wake is not None:
+                    return
                 kind = "voice"
         if kind.startswith("chime:"):
             # hub 알림음 "pattern · volume"(ad76ff0: single|double|triple · low|mid|high). 모르는 패턴은 기본 한 음
@@ -1824,6 +1902,7 @@ class LaptopActuator:
             self._stop.wait(0.2)
 
     def tick(self, now: float) -> None:
+        self._wake_check(now)
         for key, gap, setter, fmt in (("brightness", MIN_BRIGHTNESS_INTERVAL_S, self.b.set_brightness, lambda v: f"{v} %"),
                                       ("volume", MIN_VOLUME_INTERVAL_S, self.b.set_volume, _pct)):
             with self.lock:
@@ -1839,8 +1918,13 @@ class LaptopActuator:
                 self.cur[key], self.last_set[key] = want, now
                 self.count += 1
                 name = "노트북 화면 밝기" if key == "brightness" else "노트북 볼륨"
+                if why.startswith("깨우기"):
+                    head, _, detail = why.partition(" · ")
+                    text = f"{head}: 노트북 음량 {fmt(before)} → {fmt(want)} ({detail})"
+                else:
+                    text = f"{name} {fmt(before)} → {fmt(want)} ({why})"
                 with self.store.lock:
-                    self.store.virtual.log_laptop(f"{name} {fmt(before)} → {fmt(want)} ({why})", now)
+                    self.store.virtual.log_laptop(text, now)
             except Exception as e:  # noqa: BLE001
                 self.error = f"{key} 쓰기 실패: {_reason(e)}"
                 with self.store.lock:
@@ -1858,7 +1942,10 @@ class LaptopActuator:
                 self.cur["brightness"] = real
 
     def view(self) -> dict[str, Any]:
+        w = self.wake
         return {"enabled": self.active, "orig": self.orig, "cur": self.cur, "error": self.error, "count": self.count,
+                "wake_volume": self.wake_volume, "wake_max_s": self.wake_max_s,
+                "wake": None if w is None else {"why": w["why"], "before": w["before"], "left_s": max(0, round(w["until"] - time.time()))},
                 "result_policy": "결과 안 보냄(Pi 5 앱 결과와 섞이지 않게)", "manual_policy": "직접 바꾼 밝기는 화면에만(보고 안 함)"}
 
 
@@ -3064,6 +3151,11 @@ def main(argv: list[str] | None = None) -> None:
                     help="hub 가 자세를 세는 신뢰도 하한(demo-b bd47052). 화면 라벨이 이 아래면 'hub 무시' 표시. 빈 값이면 표시 안 함")
     ap.add_argument("--act-laptop", action="store_true",
                     help="이 노트북을 대역 기기로: 가상 무드등 → 화면 밝기, 가상 스피커 → 볼륨·짧은 소리(Windows). 끝나면 원래대로")
+    ap.add_argument("--wake-volume", type=float, default=WAKE_VOLUME * 100, metavar="PCT",
+                    help="깨우기(자세 개입 무드등·자세/휴식 말하기·알림음) 때 노트북 음량을 max(지금, PCT %%) 로 올린다 — "
+                         "틀어 둔 음악으로 깨우기. 0 이면 깨우기 없음(첫 설정 소리 구간대로)")
+    ap.add_argument("--wake-max-min", type=float, default=WAKE_MAX_S / 60, metavar="MIN",
+                    help="깨우기 음량을 이만큼 지나면 되돌린다(회복·집중으로 가면 그 전에)")
     ap.add_argument("--read-only", action="store_true",
                     help="화면에서 보내기(프로필·카드 응답)도 끈다 — 녹화만 할 때")
     ap.add_argument("--fake", action="store_true", help="보드 없이 가짜 각본으로")
@@ -3106,7 +3198,9 @@ def main(argv: list[str] | None = None) -> None:
         else:
             import laptop_win
             state_file = os.path.join(os.environ.get("LOCALAPPDATA", HERE), "deskmate-devview", "laptop_original.json")
-            store.laptop = LaptopActuator(store, laptop_win, state_file)
+            store.laptop = LaptopActuator(store, laptop_win, state_file,
+                                          wake_volume=(min(100.0, args.wake_volume) / 100) if args.wake_volume > 0 else None,
+                                          wake_max_s=args.wake_max_min * 60)
             store.laptop.start()
             import atexit
             atexit.register(store.laptop.restore)
