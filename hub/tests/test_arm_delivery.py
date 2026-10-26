@@ -178,18 +178,24 @@ def test_demo_profiles_use_greedy_and_board_keeps_thompson():
     assert load_personalize_config()["bandit"]["algorithm"] == "thompson"
 
 
-COLLEGE = {"light_pref": "mid", "sound_pref": "mid", "wind_pref": "mid"}   # 대학생(가정: 중립 선호 — devview 프리셋이 다르면 여기 맞출 것)
+COLLEGE = {"light_pref": "mid", "sound_pref": "low", "wind_pref": "off", "age_band": "20s"}   # 대학생 devview 프리셋(10-26 총괄 확인)
+NEUTRAL = {"light_pref": "mid", "sound_pref": "mid", "wind_pref": "mid"}   # 온보딩이 중립이면 알림음이 램프를 이긴다(온보딩 없음과 같은 평균)
 
 
-@pytest.mark.parametrize("persona,profile,expected", [("수험생", STUDENT, "wake_light"), ("대학생", COLLEGE, "sound_cue")])
-def test_demo_greedy_persona_under_drowsiness_picks_distinct_device(persona, profile, expected):
-    """시연(greedy)에서 온보딩 prior 가 기기를 결정한다 — 수험생(밝은 조명·소리 작게)은 wake_light, 중립 선호 대학생은 sound_cue(알림음)."""
+@pytest.mark.parametrize("persona,profile,expected,margin", [("수험생", STUDENT, "wake_light", 0.20), ("대학생", COLLEGE, "wake_light", 0.10),
+                                                            ("중립", NEUTRAL, "sound_cue", 0.10)])
+def test_demo_greedy_persona_under_drowsiness_picks_expected_device(persona, profile, expected, margin):
+    """시연(greedy)에서 온보딩 prior 가 기기를 결정한다(10-26 측정, demo-b·졸음·엎드림):
+    수험생(light high·sound low·wind off) wake_light 0.55 > sound_cue 0.35 / 대학생(light mid·sound low·wind off) wake_light 0.45 > 0.35 —
+    둘 다 무드등, 여유폭만 0.20 vs 0.10 / 중립(mid·mid·mid, 온보딩 없음과 같은 평균) sound_cue 0.55 > wake_light 0.45 → 알림음."""
     from deskmate_hub.profile import apply_section
     cfg = apply_section(load_personalize_config(), "personalize", "demo-b")
     p = InterventionPolicy(cfg)
     p.apply_user_profile(profile)
     d = p.decide(_sit(), cause="posture", gate="auto", session_id=persona)
     assert d.source == "bandit" and d.arm == expected, (persona, d.arm, d.scores)
+    runner_up = max(v for k, v in d.scores.items() if k != expected)
+    assert d.scores[expected] - runner_up == pytest.approx(margin, abs=0.02), (persona, d.scores)
     # 같은 입력이면 같은 답(결정적) — 새 정책 인스턴스로 다시(같은 인스턴스는 방금 실행한 arm 이 cooldown_sec 300 동안 후보에서 빠진다)
     q = InterventionPolicy(cfg)
     q.apply_user_profile(profile)

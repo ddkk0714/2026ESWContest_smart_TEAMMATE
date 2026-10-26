@@ -36,7 +36,7 @@ personalize:
   # 10-26 총괄 결정: 시연은 온보딩 prior 가 결정적으로 기기를 고르게 평균만 쓴다(greedy). 기본(보드) Thompson 은 n_personal 0 에서
   # 탐색 잡음(계수 σ≈0.5)이 prior 차이(0.2)를 묻어 sound_cue 가 1.32 로 뽑혔고, explore 0.2 로도 wake_light 1위가 41 % 뿐이었다.
   # 피드백 학습은 그대로 평균을 움직인다. **시연은 온보딩(deskmate/profile/user)을 먼저 보내야 한다** — 온보딩이 없으면 평균으로도
-  # 졸음에서 sound_cue 0.55 > wake_light 0.45 라 램프 대신 알림음이 나간다(수험생 prior: wake_light 0.55 > sound_cue 0.35).
+  # 졸음에서 sound_cue 0.55 > wake_light 0.45 라 램프 대신 알림음이 나간다(수험생 prior: wake_light 0.55 > sound_cue 0.35, 대학생 prior: 0.45 > 0.35).
   bandit:
     algorithm: greedy               # 기본 thompson
   gate:
