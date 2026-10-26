@@ -596,9 +596,9 @@ document.addEventListener("keydown", e => {
   if (e.key === "g" || e.key === "G") setMode(m === "virtual" ? "dev" : "virtual");
 });
 
-// ---------------- 글씨 크기: --k 배율(0.8~2.0). 처음엔 창이 좁으면(노트북 1440 폭) 1.3, 1920 이상이면 1.0
-const KSTORE = "devview.k";
-function loadK() { try { const v = parseFloat(localStorage.getItem(KSTORE)); if (v >= 0.8 && v <= 2) return v; } catch (e) {} return innerWidth < 1700 ? 1.3 : 1.0; }
+// ---------------- 글씨 크기: --k 배율(0.8~2.5). 처음엔 창이 좁으면(노트북 1440 폭) 1.6, 1920 이상이면 1.2
+const KSTORE = "devview.k2";
+function loadK() { try { const v = parseFloat(localStorage.getItem(KSTORE)); if (v >= 0.8 && v <= 2.5) return v; } catch (e) {} return innerWidth < 1700 ? 1.6 : 1.2; }
 let K = loadK();
 function applyK() {
   document.documentElement.style.setProperty("--k", K.toFixed(2));
@@ -606,7 +606,7 @@ function applyK() {
   document.body.classList.toggle("narrow", innerWidth / K < 1700);
   document.querySelectorAll(".kval").forEach(e => e.textContent = `${Math.round(K * 100)}%`);
 }
-function stepK(d) { K = Math.min(2, Math.max(0.8, Math.round((K + d * 0.1) * 10) / 10)); try { localStorage.setItem(KSTORE, String(K)); } catch (e) {} applyK(); }
+function stepK(d) { K = Math.min(2.5, Math.max(0.8, Math.round((K + d * 0.1) * 10) / 10)); try { localStorage.setItem(KSTORE, String(K)); } catch (e) {} applyK(); }
 document.querySelectorAll("[data-k]").forEach(b => b.onclick = () => stepK(Number(b.dataset.k)));
 document.addEventListener("keydown", e => {
   if (e.target.closest && e.target.closest("input,select,textarea")) return;
@@ -805,12 +805,14 @@ function renderBand(d) {
   b.innerHTML = down.length ? "연결 안 됨: " + down.join(" · ") + " — 계속 다시 시도 중" : "";
 }
 
-let serverFails = 0;
+let serverFails = 0, pageVersion = null;
 async function tick() {
   try {
     const r = await fetch("/data", {cache: "no-store"});
     const d = await r.json();
     serverFails = 0;
+    // 화면 파일이 바뀌면(업데이트) 스스로 다시 불러온다 — F5 없이 새 화면
+    if (d.page_version != null) { if (pageVersion == null) pageVersion = d.page_version; else if (d.page_version !== pageVersion) { location.reload(); return; } }
     renderBand(d);
     d.raw.sensors.forEach(s => renderTof($("tof" + s.id), s));
     renderSvc(d.posture);

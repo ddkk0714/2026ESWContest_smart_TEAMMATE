@@ -1263,6 +1263,14 @@ def new_profile_id() -> str:
     return "p" + os.urandom(8).hex()
 
 
+def _page_version() -> float | None:
+    """index.html 수정 시각 — 바뀌면 열린 화면이 스스로 다시 불러온다."""
+    try:
+        return os.path.getmtime(os.path.join(HERE, "index.html"))
+    except OSError:
+        return None
+
+
 # --------------------------------------------------------------------------- 상태 저장소
 
 class Store:
@@ -1428,6 +1436,7 @@ class Store:
                      for k, v in self.links.items()}
             control = self.control.view(self.phase, now)
             return {
+                "page_version": _page_version(),
                 "virtual": self.virtual.view(now),
                 "persona": self.persona_view(),
                 "control": control,
