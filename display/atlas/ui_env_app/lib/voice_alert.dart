@@ -13,19 +13,30 @@ import 'package:flutter/foundation.dart';
 
 import 'music_playback.dart' show AtlasMediaPermission;
 
+const kChimeSingle = 'audio/chime_single.mp3';
 const kChimeSoft = 'audio/chime_soft.mp3';
 const kChimeAlert = 'audio/chime_alert.mp3';
 
-/// chime 의 pattern → 소리. alert·warning·urgent 는 짧은 경고음 세 번, 나머지(soft·rest·없음 등)는 두 음 알림.
+/// chime 의 pattern → 소리(hub ad76ff0: single|double|triple). single = 한 음, double = 두 음,
+/// triple = 짧은 경고음 세 번. 예전 이름 alert·warning·urgent 는 triple, 모르는 값·없음은 double.
 String chimeAssetFor(Object? pattern) =>
     switch (pattern?.toString().trim().toLowerCase()) {
-      'alert' || 'warning' || 'urgent' || 'triple' => kChimeAlert,
+      'single' => kChimeSingle,
+      'triple' || 'alert' || 'warning' || 'urgent' => kChimeAlert,
       _ => kChimeSoft,
+    };
+
+/// chime 의 volume(사용자 sound_pref) → 재생 음량 0~1. 출력 장치 음량에 곱해진다. 없거나 모르면 1.
+double chimeVolumeFor(Object? volume) =>
+    switch (volume?.toString().trim().toLowerCase()) {
+      'low' => 0.35,
+      'mid' => 0.65,
+      _ => 1.0,
     };
 
 /// 짧은 소리 하나를 지금 출력 장치(블루투스 스피커가 붙어 있으면 거기)로 낸다.
 abstract interface class AlertSound {
-  Future<void> play(String asset);
+  Future<void> play(String asset, {double volume = 1});
 }
 
 class AtlasAlertSound implements AlertSound {
@@ -35,7 +46,7 @@ class AtlasAlertSound implements AlertSound {
   bool _granted = false;
 
   @override
-  Future<void> play(String asset) async {
+  Future<void> play(String asset, {double volume = 1}) async {
     if (!_granted) {
       final permission = _permission ??= AtlasMediaPermission();
       if (!await permission.ensureGranted()) {
@@ -48,7 +59,7 @@ class AtlasAlertSound implements AlertSound {
     await player.setReleaseMode(ReleaseMode.stop);
     // 음악 재생과 같은 순서: 불러온 뒤 음량, 그다음 재생(Atlas 는 불러올 때 음량을 되돌린다).
     await player.setSource(AssetSource(asset));
-    await player.setVolume(1);
+    await player.setVolume(volume.clamp(0.0, 1.0));
     await player.resume();
   }
 }
@@ -92,9 +103,13 @@ class ScreenNotice {
     this.requestId,
     this.kind,
     this.countdown,
+    this.label,
   });
 
   final String text;
+
+  /// 자동 정보 카드의 `arm_label`(예: "알림음") — 어떤 알림 방식으로 골랐는지. 없으면 null.
+  final String? label;
   final DateTime shownAt;
 
   /// 이만큼 지나면 저절로 사라진다.
@@ -127,6 +142,7 @@ class ScreenNotice {
     final expires = data['expires_in_s'];
     final rest = data['rest_min_sec'];
     final requestId = data['request_id'];
+    final label = data['arm_label'];
     final showFor = expires is num && expires > 0
         ? expires
         : rest is num && rest > 0
@@ -144,6 +160,7 @@ class ScreenNotice {
       requestId: requestId is String && requestId.isNotEmpty ? requestId : null,
       kind: data['kind']?.toString(),
       countdown: count == null ? null : Duration(seconds: count.round()),
+      label: label is String && label.trim().isNotEmpty ? label.trim() : null,
     );
   }
 }

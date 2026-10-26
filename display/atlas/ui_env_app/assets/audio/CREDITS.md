@@ -66,5 +66,5 @@ Beethoven → Mozart → Bach → repeat.
 
 ## Alert chimes
 
-- Files: `chime_soft.mp3` (two-note chime), `chime_alert.mp3` (three short beeps).
+- Files: `chime_single.mp3` (one tone), `chime_soft.mp3` (two-note chime), `chime_alert.mp3` (three short beeps).
 - Synthesized from sine tones for this project on 2026-10-26; no third-party audio.

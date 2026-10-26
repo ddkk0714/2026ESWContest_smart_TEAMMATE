@@ -21,11 +21,35 @@ Map<String, dynamic> _rest() => {
     };
 
 void main() {
-  test('chime pattern picks the alert or the soft sound', () {
-    expect(chimeAssetFor('alert'), kChimeAlert);
+  test('chime pattern and volume map to a sound and a gain', () {
+    expect(chimeAssetFor('single'), kChimeSingle);
+    expect(chimeAssetFor('double'), kChimeSoft);
+    expect(chimeAssetFor('triple'), kChimeAlert);
     expect(chimeAssetFor(' Warning '), kChimeAlert);
-    expect(chimeAssetFor('rest'), kChimeSoft);
     expect(chimeAssetFor(null), kChimeSoft);
+    expect(chimeVolumeFor('low'), 0.35);
+    expect(chimeVolumeFor('mid'), 0.65);
+    expect(chimeVolumeFor('high'), 1.0);
+    expect(chimeVolumeFor(null), 1.0);
+  });
+
+  test('an auto info card keeps its arm label', () {
+    final notice = ScreenNotice.fromRequest({
+      'request_id': 'b1-50-arm',
+      'kind': 'posture_suggest',
+      'prompt_code': 'posture_reset',
+      'auto': true,
+      'options': ['dismiss'],
+      'expires_in_s': 180,
+      'arm': 'chime',
+      'arm_label': '알림음',
+      'channel': 'sound',
+      'explanation': '고개가 오래 숙여져 있어요.',
+    }, _t0);
+    expect(notice.text, '고개가 오래 숙여져 있어요.');
+    expect(notice.label, '알림음');
+    expect(notice.requestId, 'b1-50-arm');
+    expect(notice.showFor, const Duration(seconds: 180));
   });
 
   test('dismiss-only requests are notices, suggestions are not', () {
@@ -78,13 +102,15 @@ void main() {
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
         body: NoticeBanner(
-          notice: ScreenNotice.fromRequest(_rest(), _t0),
+          notice: ScreenNotice.fromRequest(
+              {..._rest(), 'arm_label': '화면 알림'}, _t0),
           now: _t0.add(const Duration(seconds: 5)),
           onDismiss: () => closed++,
         ),
       ),
     ));
     expect(find.text('졸음이 이어지고 있어요. 1분만 일어나서 쉬어 가세요.'), findsOneWidget);
+    expect(find.text('화면 알림'), findsOneWidget);
     expect(tester.widget<Text>(find.byKey(const ValueKey('notice-countdown'))).data,
         '0:55');
     await tester.tap(find.byKey(const ValueKey('notice-dismiss')));

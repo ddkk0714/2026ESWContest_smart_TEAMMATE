@@ -35,6 +35,19 @@ class NoticeBanner extends StatelessWidget {
               size: 20,
               color: DeskmateColors.accentStrong),
           const SizedBox(width: 10),
+          if (notice.label != null) ...[
+            Container(
+              key: const ValueKey('notice-label'),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: DeskmateColors.surfaceRaised,
+                borderRadius: BorderRadius.circular(DeskmateRadius.pill),
+              ),
+              child: Text(notice.label!,
+                  style: Theme.of(context).textTheme.labelMedium),
+            ),
+            const SizedBox(width: 8),
+          ],
           Expanded(
             child: Text(
               notice.text,

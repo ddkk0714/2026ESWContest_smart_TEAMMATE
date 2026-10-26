@@ -625,16 +625,20 @@ void main() {
       expect(notices.current(DateTime.now()), isNull);
     });
 
-    test('chime plays the sound for its pattern', () async {
+    test('chime plays the sound and volume the hub asked for', () async {
+      // hub ad76ff0: pattern single|double|triple, volume low|mid|high (sound_pref).
       final alerts = _FakeAlerts();
       final c = coordinator(alerts, null, NoticeBoard());
-      final alert = await c.handleControlCommand(
-          speakerCommand('c1', 'chime', {'pattern': 'alert'}));
-      expect(alert?['status'], 'succeeded');
-      expect(alert?['actual_value'], {'pattern': 'alert'});
+      final triple = await c.handleControlCommand(speakerCommand(
+          'c1', 'chime', {'pattern': 'triple', 'volume': 'low'}));
+      expect(triple?['status'], 'succeeded');
+      expect(triple?['actual_value'], {'pattern': 'triple', 'volume': 'low'});
+      await c.handleControlCommand(speakerCommand(
+          'c1b', 'chime', {'pattern': 'single', 'volume': 'mid'}));
       final plain = await c.handleControlCommand(speakerCommand('c2', 'chime', {}));
-      expect(plain?['actual_value'], {'pattern': 'soft'});
-      expect(alerts.played, [kChimeAlert, kChimeSoft]);
+      expect(plain?['actual_value'], {'pattern': 'double'});
+      expect(alerts.played, [kChimeAlert, kChimeSingle, kChimeSoft]);
+      expect(alerts.volumes, [0.35, 0.65, 1.0]);
       alerts.fail = true;
       expect(
           (await c.handleControlCommand(speakerCommand('c3', 'chime', null)))?[
@@ -785,12 +789,14 @@ DisplayState _state(String fsm,
 
 class _FakeAlerts implements AlertSound {
   final played = <String>[];
+  final volumes = <double>[];
   bool fail = false;
 
   @override
-  Future<void> play(String asset) async {
+  Future<void> play(String asset, {double volume = 1}) async {
     if (fail) throw StateError('no audio');
     played.add(asset);
+    volumes.add(volume);
   }
 }
 

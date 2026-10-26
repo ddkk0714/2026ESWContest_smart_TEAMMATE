@@ -562,7 +562,7 @@ class FeedbackCoordinator {
   }
 
   /// speak: TTS 로 읽고, 안 되면 알림음 + 화면 문구로 대신한 뒤 failed·tts_unavailable 과 함께
-  /// 무엇으로 대신했는지(fallback: chime_text | text) 답한다. chime: 알림음 하나.
+  /// 무엇으로 대신했는지(fallback: chime_text | text) 답한다. chime {pattern, volume}: 알림음 하나.
   Future<Map<String, dynamic>> _executeSpeakerCommand(
       Map<String, dynamic> command) async {
     final rejected = _rejection(command);
@@ -575,13 +575,17 @@ class FeedbackCoordinator {
         return _result(command, 'failed', error: 'speaker_unavailable');
       }
       final pattern = value is Map ? value['pattern'] : null;
+      final volume = value is Map ? value['volume'] : null;
       try {
-        await alerts.play(chimeAssetFor(pattern));
+        await alerts.play(chimeAssetFor(pattern),
+            volume: chimeVolumeFor(volume));
       } on Object {
         return _result(command, 'failed', error: 'audio_failed');
       }
-      return _result(command, 'succeeded',
-          actual: {'pattern': pattern?.toString() ?? 'soft'});
+      return _result(command, 'succeeded', actual: {
+        'pattern': pattern?.toString() ?? 'double',
+        if (volume != null) 'volume': volume.toString(),
+      });
     }
     if (operation != 'speak') {
       return _result(command, 'failed', error: 'unsupported_operation_or_value');
