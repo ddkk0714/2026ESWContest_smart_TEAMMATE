@@ -109,9 +109,9 @@ def test_env_profile_overlays_live_hub(monkeypatch):
     # 건드리지 않은 부분은 기본과 같다
     # 건드리지 않은 부분은 기본과 같다(focus 가중치·tof). fatigue 가중치는 10-25 엎드림 시연을 위해 프로파일이 얹는다
     assert hub.fsm_cfg["weights"]["focus"] == load_config()["weights"]["focus"]
-    capped = {"rule_drowsy_delta", "nod_delta_max", "min_confidence_by_label"}   # 시연: 0x03 플래그·끄덕임 δ 상한 0.3, face_down 신뢰도 하한 0.99 (10-25)
+    capped = {"rule_drowsy_delta", "nod_delta_max", "min_confidence_by_label"}   # 시연: 0x03 플래그·끄덕임 δ 0(10-25 0.3 → 10-26), face_down 신뢰도 하한 0.99 (10-25)
     assert {k: v for k, v in hub.ingest_cfg["tof"].items() if k not in capped} == {k: v for k, v in load_ingest_config()["tof"].items() if k not in capped}
-    assert hub.ingest_cfg["tof"]["rule_drowsy_delta"] == 0.3 == hub.ingest_cfg["tof"]["nod_delta_max"]
+    assert hub.ingest_cfg["tof"]["rule_drowsy_delta"] == 0.0 == hub.ingest_cfg["tof"]["nod_delta_max"]
     assert hub.fsm_cfg["weights"]["fatigue"]["npc"]["posture"] == 0.80
 
     monkeypatch.setenv(PROFILE_ENV, "demo-b-study")

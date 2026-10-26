@@ -47,9 +47,9 @@ def tof(now, *, present=True, posture="upright", conf=0.9, motion=0.05, nod=None
     })
 
 
-def env(now, *, co2=700, valid=True):
+def env(now, *, co2=700, valid=True, lux=300, temp=25.0):
     return Sample(received=now, ts=now, seq=None, data={
-        "co2_ppm": co2, "temp_c": 25.0, "humidity_pct": 45.0, "lux": 300,
+        "co2_ppm": co2, "temp_c": temp, "humidity_pct": 45.0, "lux": lux,
         "co2_valid": valid, "temp_valid": True, "humidity_valid": True, "lux_valid": True,
     })
 

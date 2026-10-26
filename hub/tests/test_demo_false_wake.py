@@ -1,7 +1,8 @@
 """시연 프로파일에서 0x03 규칙 졸음 플래그·끄덕임만으로는 무드등이 헛켜지지 않는다 (2026-10-25, PC 시뮬 재실행 결함).
 
 자세 몫을 0.80 으로 올리자(becd35f) 규칙 플래그(δ 1.0)·끄덕임이 깨어 있는 사람(턱 괴기·타이핑)에게 램프를 켰다. 시연 프로파일은
-`ingest.tof.rule_drowsy_delta`·`nod_delta_max` 0.3 으로 눌러 플래그·끄덕임만의 점수를 0.24 (< 의심 0.40) 로 둔다. 자세 모델 라벨
+`ingest.tof.rule_drowsy_delta`·`nod_delta_max` 를 10-25 엔 0.3(플래그·끄덕임만 0.24 < 의심 0.40)으로 눌렀고, 10-26 실기에서 타이핑(키 입력
+δ 1.0)과 합쳐 바르게 앉은 사람이 의심(0.485)에 들어 0 으로 뺐다(test_demo_typing_real.py). 자세 모델 라벨
 (face_down·drowsy)은 그대로 1.0. 깬 뒤 플래그가 40 s 남아도 still_asleep(0.9)에 못 미치고, 점수가 회복 수준이면 MONITOR 는
 진입 대비 부호 잡음으로 격상하지 않는다(thresholds.monitor_recovered_below). 보드 기본(상한 1.0·null)은 그대로다.
 """
@@ -100,22 +101,22 @@ def test_nod_then_face_down_then_sit_up_recovers_without_escalate(tmp_path, prof
 
 @pytest.mark.parametrize("profile", PROFILES)
 def test_rule_flag_only_scores_stay_under_suspect(profile):
-    """점수표: 플래그·끄덕임만(δ 0.3) → 0.24 (npc·pc 무타이핑), 타이핑 중 pc 0.21. 모델 face_down 은 그대로 0.80."""
+    """점수표(10-26): 플래그·끄덕임만(δ 0) → 경과만 남아 ≈0 (npc·pc 무타이핑), 타이핑(δ 0.1) 중 pc 0.03. 모델 drowsy 는 그대로 1.0."""
     fsm, ingest, _ = apply_profile(load_config(), load_ingest_config(), profile)
-    assert ingest["tof"]["rule_drowsy_delta"] == 0.3 and ingest["tof"]["nod_delta_max"] == 0.3
+    assert ingest["tof"]["rule_drowsy_delta"] == 0.0 and ingest["tof"]["nod_delta_max"] == 0.0
     cache = SensorCache()
     cache.put("mmwave", mm(100.0, level=5)); cache.put("env", env(100.0, co2=700))
     cache.put("tof", tof(100.0, posture="upright", drowsy=True, nod=0.2))                  # 규칙: 플래그 + 끄덕임 과다
     cache.put("tof_service", svc(100.0, posture="upright", conf=0.92))                     # 모델: 바른 자세
     f = build_frame(cache.snapshot(), 100.0, ingest, SessionTracker(), fsm_state=State.FOCUS_NPC)
-    assert f.get("posture").delta == pytest.approx(0.3)
+    assert f.get("posture").delta == 0.0
     cache.put("tof_service", svc(100.0, posture="drowsy", conf=0.92))                      # 모델이 drowsy 면 1.0 그대로
     assert build_frame(cache.snapshot(), 100.0, ingest, SessionTracker(), fsm_state=State.FOCUS_NPC).get("posture").delta == 1.0
     for ctx, r in ((Context.NPC, 0.1), (Context.PC, 0.9), (Context.MIXED, 0.5)):
-        c = compute_scores(_frame(0.3, elapsed=0.02, keystroke=None, pc_ratio=r), ctx, fsm).c_fatigue
-        assert c == pytest.approx(0.242, abs=0.01) and c < fsm["thresholds"]["fatigue_suspect_low"], (ctx, c)
-    typing = compute_scores(_frame(0.3, elapsed=0.02, keystroke=0.1, pc_ratio=0.9), Context.PC, fsm).c_fatigue
-    assert typing == pytest.approx(0.21, abs=0.02)
+        c = compute_scores(_frame(0.0, elapsed=0.02, keystroke=None, pc_ratio=r), ctx, fsm).c_fatigue
+        assert c == pytest.approx(0.0, abs=0.01) and c < fsm["thresholds"]["fatigue_suspect_low"], (ctx, c)
+    typing = compute_scores(_frame(0.0, elapsed=0.02, keystroke=0.1, pc_ratio=0.9), Context.PC, fsm).c_fatigue
+    assert typing == pytest.approx(0.027, abs=0.01)
 
 
 def test_board_default_rule_flag_still_counts_fully():
