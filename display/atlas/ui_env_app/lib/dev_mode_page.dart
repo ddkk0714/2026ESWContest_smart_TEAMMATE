@@ -155,25 +155,27 @@ class _DevModePageState extends State<DevModePage> {
             onChanged: widget.onDefaultOnStartChanged,
           ),
         ]),
-        // ── 위: 열지도 A · B · 판정 ───────────────────────────────────────────
+        // ── 위: 열지도 B · A · 판정 ───────────────────────────────────────────
         SizedBox(
           height: 226,
           child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            SizedBox(
-              width: 150,
-              child: TofHeatmap(
-                frame: _poller.raw?.sensor(0),
-                title: 'ToF A · 왼쪽',
-                keyPrefix: 'tof-a',
-              ),
-            ),
-            const SizedBox(width: 10),
+            // 칸은 센서가 사람을 보는 방향(사진 방향)이라 사용자 왼손이 오른쪽 열에 나온다. 두 장도 같은
+            // 방향으로 두어 사용자 왼쪽 센서 A 를 화면 오른쪽에 둔다(10-26 사용자: 좌우가 반대로 보임).
             SizedBox(
               width: 150,
               child: TofHeatmap(
                 frame: _poller.raw?.sensor(1),
                 title: 'ToF B · 오른쪽',
                 keyPrefix: 'tof-b',
+              ),
+            ),
+            const SizedBox(width: 10),
+            SizedBox(
+              width: 150,
+              child: TofHeatmap(
+                frame: _poller.raw?.sensor(0),
+                title: 'ToF A · 왼쪽',
+                keyPrefix: 'tof-a',
               ),
             ),
             const SizedBox(width: 14),

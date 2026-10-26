@@ -89,6 +89,9 @@ void main() {
     expect(a0.color, tofZoneColor(300, 5));
     final b63 = tester.widget<ColoredBox>(find.byKey(const ValueKey('tof-b-zone-63')));
     expect(b63.color, tofZoneColor(900, 9));
+    // 사진 방향: 사용자 오른쪽 센서 B 가 화면 왼쪽, 왼쪽 센서 A 가 화면 오른쪽(10-26).
+    expect(tester.getCenter(find.byKey(const ValueKey('tof-b-zone-0'))).dx,
+        lessThan(tester.getCenter(find.byKey(const ValueKey('tof-a-zone-0'))).dx));
     // 판정: 서비스 자세는 보이고 hub 상태는 아직 없어 "-".
     expect(tester.widget<Text>(find.byKey(const ValueKey('judge-posture-svc'))).data,
         'head_down 0.66 (센서 2)');

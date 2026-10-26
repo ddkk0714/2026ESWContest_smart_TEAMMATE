@@ -200,6 +200,9 @@ void main() {
     expect(colorOf('tof-a-zone-7'), kTofInvalidColor);
     expect(colorOf('tof-b-zone-0'), tofZoneColor(900, 9));
     expect(colorOf('tof-b-zone-63'), tofZoneColor(900, 9));
+    // 사진 방향: 사용자 오른쪽 센서 B 가 화면 왼쪽, 왼쪽 센서 A 가 화면 오른쪽(10-26).
+    expect(tester.getCenter(find.byKey(const ValueKey('tof-b-zone-0'))).dx,
+        lessThan(tester.getCenter(find.byKey(const ValueKey('tof-a-zone-0'))).dx));
     expect(find.textContaining('유효 63/64'), findsOneWidget);
     expect(find.textContaining('frames 42'), findsOneWidget);
 
