@@ -3,7 +3,7 @@ param(
   [string]$Pi4 = '',
   [string]$KnownHosts = (Join-Path $env:TEMP 'deskmate-pi-discovery-known-hosts'),
   [int]$Port = 8791,
-  [string]$AppId = 'com.atlas.app.deskmate_ui_v26'
+  [string]$AppId = 'com.atlas.app.deskmate_ui_v27'
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path

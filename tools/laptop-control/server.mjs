@@ -8,7 +8,7 @@ import path from 'node:path';
 
 const run = promisify(execFile);
 const here = path.dirname(fileURLToPath(import.meta.url));
-const app = 'com.atlas.app.deskmate_ui_v26';
+const app = 'com.atlas.app.deskmate_ui_v27';
 const remoteInput = '/tmp/deskmate-laptop-input';
 const remoteFrame = '/tmp/deskmate-laptop-screen.png';
 const PNG = Buffer.from([137,80,78,71,13,10,26,10]);

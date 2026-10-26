@@ -6,6 +6,7 @@ import 'display_state.dart';
 import 'fan_control.dart';
 import 'lamp_defaults.dart';
 import 'music_playback.dart';
+import 'voice_alert.dart';
 
 const ilinkServiceUuid = '0000a032-0000-1000-8000-00805f9b34fb';
 const ilinkWriteUuid = '0000a040-0000-1000-8000-00805f9b34fb';
@@ -59,8 +60,30 @@ List<List<int>> ilinkFramesForPhase(String phase) {
 }
 
 class IlinkLampFeedback {
-  IlinkLampFeedback(this._bluetooth);
+  IlinkLampFeedback(this._bluetooth,
+      {this.rescanFor = const Duration(seconds: 6),
+      this.settleDelay = const Duration(seconds: 3),
+      this.rescanEvery = const Duration(seconds: 30),
+      this.connectRetryAfter = const Duration(seconds: 30)});
   final AtlasBluetoothService _bluetooth;
+
+  /// 연결 실패 뒤 검색 전에 기다리는 시간. Atlas 가 실패를 먼저 돌려준 뒤에도 BlueZ 가 링크를 맺고
+  /// 있을 수 있어, 곧바로 검색하면 그 링크가 끊긴다(선풍기 10-24 확인).
+  final Duration settleDelay;
+
+  /// 검색은 이 간격에 한 번까지. 10-26 0.1.8 은 국면 조명이 매초 검색·연결해 램프 링크가 1→0 을
+  /// 되풀이했고, 시스템 "Bluetooth device disconnected" 창이 96번 뜬 뒤 앱이 죽었다(SEGV).
+  final Duration rescanEvery;
+
+  /// 국면 조명 쓰기는 연결이 막 실패했으면 이 시간 동안 BlueZ 를 건드리지 않는다(명령·버튼은 예외).
+  final Duration connectRetryAfter;
+  DateTime? _connectFailedAt;
+  DateTime? _lastRescanAt;
+
+  /// 램프를 다시 찾는 검색 시간(찾으면 바로 멈춘다). 10-26 Pi 5: 페어링하지 않은 BLE 램프는
+  /// 끊긴 지 30초 뒤 BlueZ 가 잊고, 그 뒤 Gatt.Connect 는 BlueZ 를 부르지도 않고 바로 실패했다
+  /// (hub 명령이 56 ms 만에 bluetooth_write_failed).
+  final Duration rescanFor;
   String? _address;
   GattConnection? _connection;
   DateTime? _lastOkAt;
@@ -68,6 +91,7 @@ class IlinkLampFeedback {
   Future<void> _writes = Future.value();
   int? _lastBrightness;
   bool? _poweredOn;
+
   int _generation = 0;
 
   Future<void> _release(GattConnection? connection) async {
@@ -114,6 +138,8 @@ class IlinkLampFeedback {
     _lastError = null;
     _lastBrightness = null;
     _poweredOn = null;
+    _connectFailedAt = null;
+    _lastRescanAt = null;
     unawaited(_release(old));
   }
 
@@ -153,64 +179,159 @@ class IlinkLampFeedback {
       }
       _connection = connection;
       _lastError = null;
+      _connectFailedAt = null;
       return true;
     } catch (error) {
       if (generation != _generation) return false;
       _connection = null;
       _lastError = error;
+      _connectFailedAt = DateTime.now();
       return false;
     }
+  }
+
+  /// 붙어 있지 않으면 붙고, 실패하면 주소를 한 번 검색해 다시 보이게 한 뒤 한 번 더 붙는다.
+  /// [rediscovered]: null = 검색하지 않음, true = 찾음, false = 못 찾음.
+  /// 검색은 [rescanEvery] 에 한 번까지, 실패 뒤 [settleDelay] 를 기다린 다음에만 한다.
+  Future<({bool ok, bool? rediscovered})> ensureConnected(
+      {num? expiresTsMs}) async {
+    final generation = _generation;
+    if (await connect())
+      return (ok: generation == _generation, rediscovered: null);
+    if (generation != _generation) return (ok: false, rediscovered: null);
+    final last = _lastRescanAt;
+    if (last != null && DateTime.now().difference(last) < rescanEvery) {
+      return (ok: false, rediscovered: null);
+    }
+    if (!await _settle(expiresTsMs)) return (ok: false, rediscovered: null);
+    if (generation != _generation) return (ok: false, rediscovered: null);
+    final recent = _lastRescanAt;
+    if (recent != null && DateTime.now().difference(recent) < rescanEvery) {
+      return (ok: false, rediscovered: null);
+    }
+    _lastRescanAt = DateTime.now();
+    final found = await _rediscover(expiresTsMs);
+    if (generation != _generation) return (ok: false, rediscovered: found);
+    return (
+      ok: await connect() && generation == _generation,
+      rediscovered: found
+    );
+  }
+
+  /// [settleDelay] 를 기다린다. 명령 만료 전에 검색·연결할 시간(4 s)이 안 남으면 기다리지 않고 false.
+  Future<bool> _settle(num? expiresTsMs) async {
+    if (expiresTsMs != null) {
+      final left = expiresTsMs - DateTime.now().millisecondsSinceEpoch;
+      if (left < settleDelay.inMilliseconds + 4000) return false;
+    }
+    if (settleDelay > Duration.zero) await Future<void>.delayed(settleDelay);
+    return true;
+  }
+
+  /// 램프가 보일 때까지 최대 [rescanFor](명령이면 만료 2초 전까지) 검색한다.
+  Future<bool> _rediscover(num? expiresTsMs) async {
+    if (!configured) return false;
+    var limit = rescanFor;
+    if (expiresTsMs != null) {
+      final left = Duration(
+              milliseconds:
+                  (expiresTsMs - DateTime.now().millisecondsSinceEpoch)
+                      .round()) -
+          const Duration(seconds: 2);
+      if (left < limit) limit = left;
+    }
+    if (limit <= Duration.zero) return false;
+    final wanted = _address!.toLowerCase();
+    try {
+      await for (final devices in _bluetooth.scanProgressive(duration: limit)) {
+        if (devices.any((d) => d.address.toLowerCase() == wanted)) return true;
+      }
+    } catch (_) {
+      // 검색이 안 되면 못 찾은 것으로 본다.
+    }
+    return false;
   }
 
   Future<void> apply(String phase) async {
     await writeFrames(ilinkFramesForPhase(phase));
   }
 
+  /// 블루투스 탭의 밝기 시험 버튼 — 사람이 누른 것이라 필요하면 램프를 다시 찾는다.
   Future<bool> setBrightness(int value) => writeFrames([
         ilinkFrame([0x01, 0x08, 0x05, 0x01]),
         ilinkFrame([0x01, 0x08, 0x01, value]),
-      ]);
+      ], rediscover: true);
 
   /// Phase feedback and explicit commands must not interleave BLE frames.
-  Future<bool> writeFrames(List<List<int>> frames, {num? expiresTsMs}) {
+  /// [rediscover] 는 hub 명령·사람이 누른 버튼만 켠다 — 국면 조명은 1초마다 다시 부르므로 검색하지 않는다.
+  Future<bool> writeFrames(List<List<int>> frames,
+          {num? expiresTsMs, bool rediscover = false}) =>
+      writeFramesReport(frames,
+              expiresTsMs: expiresTsMs, rediscover: rediscover)
+          .then((r) => r.ok);
+
+  /// [writeFrames] 와 같고, 램프를 다시 찾았는지도 돌려준다([ensureConnected] 의 rediscovered).
+  Future<({bool ok, bool? rediscovered})> writeFramesReport(
+      List<List<int>> frames,
+      {num? expiresTsMs,
+      bool rediscover = false}) {
     final generation = _generation;
-    final next =
-        _writes.then((_) => _writeFrames(frames, expiresTsMs, generation));
+    final next = _writes
+        .then((_) => _writeFrames(frames, expiresTsMs, rediscover, generation));
     _writes = next.then<void>((_) {});
     return next;
   }
 
-  Future<bool> _writeFrames(
-      List<List<int>> frames, num? expiresTsMs, int generation) async {
-    if (!configured || frames.isEmpty) return false;
+  Future<({bool ok, bool? rediscovered})> _writeFrames(List<List<int>> frames,
+      num? expiresTsMs, bool rediscover, int generation) async {
+    bool? rediscovered;
+    ({bool ok, bool? rediscovered}) failed() =>
+        (ok: false, rediscovered: rediscovered);
+    if (!configured || frames.isEmpty || generation != _generation)
+      return failed();
+    final failedAt = _connectFailedAt;
+    if (!rediscover &&
+        _connection == null &&
+        failedAt != null &&
+        DateTime.now().difference(failedAt) < connectRetryAfter) {
+      return failed();
+    }
     bool expired() =>
         expiresTsMs != null &&
         DateTime.now().millisecondsSinceEpoch >= expiresTsMs;
-    // 끊긴 GATT 세션은 재사용하지 않고 한 번만 새 세션으로 되풀이한다.
+    // 끊긴 GATT 세션은 재사용하지 않고 한 번만 새 세션으로 되풀이한다. 검색은 처음 한 번만.
     for (var attempt = 0; attempt < 2; attempt++) {
-      if (expired() || generation != _generation) return false;
-      if (!await connect()) continue;
+      if (expired() || generation != _generation) return failed();
+      if (rediscover && attempt == 0) {
+        final link = await ensureConnected(expiresTsMs: expiresTsMs);
+        rediscovered = link.rediscovered;
+        if (!link.ok) return failed();
+      } else if (!await connect()) {
+        continue;
+      }
+      if (generation != _generation) return failed();
       try {
         for (final frame in frames) {
-          if (expired() || generation != _generation) return false;
+          if (expired() || generation != _generation) return failed();
           await _bluetooth.writeCharacteristic(_connection!,
               serviceId: ilinkServiceUuid,
               characteristicId: ilinkWriteUuid,
               value: frame);
+          if (generation != _generation) return failed();
           _track(frame);
         }
         _lastOkAt = DateTime.now();
         _lastError = null;
-        return true;
+        return (ok: true, rediscovered: rediscovered);
       } catch (error) {
-        if (generation != _generation) return false;
+        if (generation != _generation) return failed();
         final old = _connection;
         _connection = null;
         _lastError = error;
         await _release(old);
       }
     }
-    return false;
+    return failed();
   }
 }
 
@@ -245,6 +366,9 @@ class FeedbackCoordinator {
     required this.lamp,
     required this.bluetooth,
     this.fan,
+    this.alerts,
+    this.speech,
+    this.notices,
   });
   final MusicPlayback music;
   final IlinkLampFeedback lamp;
@@ -252,6 +376,14 @@ class FeedbackCoordinator {
 
   /// `vent_fan` 실물(블루투스 선풍기). 고르지 않았으면 vent_fan 명령에 대답하지 않는다.
   final BleFanControl? fan;
+
+  /// `speaker` 명령(speak·chime)의 소리·말·화면 문구. 없으면 speaker 명령은 speaker_unavailable 로 답한다.
+  final AlertSound? alerts;
+  final SpeechOutput? speech;
+  final NoticeBoard? notices;
+
+  /// TTS 가 안 될 때 화면에 문구를 띄워 두는 시간.
+  static const speakFallbackShowFor = Duration(seconds: 20);
 
   /// adjust_brightness 의 하한(원시 0~255). 설정 `lamp_brightness_floor`, 없으면 [kLampBrightnessFloorDefault].
   int brightnessFloor = kLampBrightnessFloorDefault;
@@ -369,19 +501,32 @@ class FeedbackCoordinator {
       Map<String, dynamic> command) async {
     final target = command['target_id'];
     final isFan = target == 'vent_fan' && (fan?.configured ?? false);
-    if (target != 'desk_lamp' && !isFan) return null;
+    final isSpeaker = target == 'speaker';
+    if (target != 'desk_lamp' && !isFan && !isSpeaker) return null;
     final id = command['command_id'];
     if (id is! String || id.isEmpty) return null;
     final cached = _commandResults[id];
     if (cached != null) return cached;
-    final result =
-        isFan ? _executeFanCommand(command) : _executeLampCommand(command);
+    final result = isSpeaker
+        ? _executeSpeakerCommand(command)
+        : isFan
+            ? _executeFanCommand(command)
+            : _executeLampCommand(command);
     _commandResults[id] = result;
     if (_commandResults.length > 128) {
       _commandResults.remove(_commandResults.keys.first);
     }
     return result;
   }
+
+  /// control/result 의 `recovery`: 기기를 검색해 다시 찾았으면 rediscovered, 찾다 못 찾았으면 not_found.
+  /// 검색하지 않았으면 넣지 않는다. status 는 그대로 succeeded|failed 다.
+  static Map<String, Object?> _recovery(bool? rediscovered) =>
+      switch (rediscovered) {
+        true => const {'recovery': 'rediscovered'},
+        false => const {'recovery': 'not_found'},
+        null => const {},
+      };
 
   Map<String, dynamic> _result(Map<String, dynamic> command, String status,
       {Object? actual, String? error, Map<String, Object?> extra = const {}}) {
@@ -402,7 +547,7 @@ class FeedbackCoordinator {
     final expires = command['expires_ts_ms'];
     if (expires is! num ||
         !expires.isFinite ||
-        !['auto', 'suggest', 'undo'].contains(command['gate']) ||
+        !['auto', 'suggest', 'undo', 'notice'].contains(command['gate']) ||
         command['requires_confirmation'] != false) {
       return 'invalid_command';
     }
@@ -462,12 +607,19 @@ class FeedbackCoordinator {
       return _result(command, 'failed',
           error: 'unsupported_operation_or_value');
     }
-    if (!await lamp.writeFrames(frames, expiresTsMs: expires)) {
+    final write = await lamp.writeFramesReport(frames,
+        expiresTsMs: expires, rediscover: true);
+    final recovery = _recovery(write.rediscovered);
+    if (!write.ok) {
       return _result(command, 'failed',
           error: expires <= DateTime.now().millisecondsSinceEpoch
               ? 'expired'
-              : 'bluetooth_write_failed');
+              : write.rediscovered == false
+                  ? 'device_not_found'
+                  : 'bluetooth_write_failed',
+          extra: recovery);
     }
+    extra = {...extra, ...recovery};
     // Sound failure must not turn a successful lamp command into a failure.
     if (command['gate'] != 'undo' && _latest?.phase == 'fatigue') {
       try {
@@ -493,19 +645,94 @@ class FeedbackCoordinator {
           error: 'unsupported_operation_or_value');
     }
     final sent = await fan!.send(frame, expiresTsMs: expires);
+    final recovery = _recovery(fan!.lastRediscovered);
     if (!sent.written) {
       return _result(command, 'failed',
           error: expires <= DateTime.now().millisecondsSinceEpoch
               ? 'expired'
-              : 'bluetooth_write_failed');
+              : fan!.lastRediscovered == false
+                  ? 'device_not_found'
+                  : 'bluetooth_write_failed',
+          extra: recovery);
     }
     final state = sent.state;
     // 상태를 못 읽었으면 램프처럼 쓰기 완료를 성공으로 본다.
-    if (state == null) return _result(command, 'succeeded', actual: value);
+    if (state == null) {
+      return _result(command, 'succeeded', actual: value, extra: recovery);
+    }
     if (!state.matches(operation, value)) {
       return _result(command, 'failed',
-          actual: state.actualFor(operation), error: 'state_mismatch');
+          actual: state.actualFor(operation),
+          error: 'state_mismatch',
+          extra: recovery);
     }
-    return _result(command, 'succeeded', actual: state.actualFor(operation));
+    return _result(command, 'succeeded',
+        actual: state.actualFor(operation), extra: recovery);
+  }
+
+  /// speak: TTS 로 읽고, 안 되면 알림음 + 화면 문구로 대신한 뒤 failed·tts_unavailable 과 함께
+  /// 무엇으로 대신했는지(fallback: chime_text | text) 답한다. chime {pattern, volume}: 알림음 하나.
+  Future<Map<String, dynamic>> _executeSpeakerCommand(
+      Map<String, dynamic> command) async {
+    final rejected = _rejection(command);
+    if (rejected != null) return _result(command, 'failed', error: rejected);
+    final operation = command['operation'];
+    final value = command['value'];
+    final alerts = this.alerts;
+    if (operation == 'chime') {
+      if (alerts == null) {
+        return _result(command, 'failed', error: 'speaker_unavailable');
+      }
+      final pattern = value is Map ? value['pattern'] : null;
+      final volume = value is Map ? value['volume'] : null;
+      try {
+        await alerts.play(chimeAssetFor(pattern),
+            volume: chimeVolumeFor(volume));
+      } on Object {
+        return _result(command, 'failed', error: 'audio_failed');
+      }
+      return _result(command, 'succeeded', actual: {
+        'pattern': pattern?.toString() ?? 'double',
+        if (volume != null) 'volume': volume.toString(),
+      });
+    }
+    if (operation != 'speak') {
+      return _result(command, 'failed',
+          error: 'unsupported_operation_or_value');
+    }
+    final text = value is Map ? value['text'] : null;
+    if (text is! String || text.trim().isEmpty) {
+      return _result(command, 'failed',
+          error: 'unsupported_operation_or_value');
+    }
+    final lang = value is Map && value['lang'] is String
+        ? value['lang'] as String
+        : 'ko';
+    final speech = this.speech;
+    if (speech != null) {
+      try {
+        await speech.speak(text.trim(), lang: lang);
+        return _result(command, 'succeeded', actual: {'mode': 'tts'});
+      } on Object {
+        // 이 보드에는 TTS 가 없다 — 아래로 넘어가 소리와 글로 알린다.
+      }
+    }
+    notices?.show(ScreenNotice(
+        text: text.trim(),
+        shownAt: DateTime.now(),
+        showFor: speakFallbackShowFor,
+        kind: 'speak'));
+    var chimed = false;
+    if (alerts != null) {
+      try {
+        await alerts.play(kChimeSoft);
+        chimed = true;
+      } on Object {
+        // 소리도 안 나면 화면 문구만 남는다.
+      }
+    }
+    return _result(command, 'failed',
+        error: 'tts_unavailable',
+        extra: {'fallback': chimed ? 'chime_text' : 'text'});
   }
 }

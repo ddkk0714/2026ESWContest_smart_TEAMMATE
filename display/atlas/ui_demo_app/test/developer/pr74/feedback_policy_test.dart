@@ -6,6 +6,7 @@ import 'package:deskmate_ui_demo/developer/pr74/display_state.dart';
 import 'package:deskmate_ui_demo/developer/pr74/feedback_policy.dart';
 import 'package:deskmate_ui_demo/developer/pr74/lamp_defaults.dart';
 import 'package:deskmate_ui_demo/developer/pr74/music_playback.dart';
+import 'package:deskmate_ui_demo/developer/pr74/voice_alert.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
 
@@ -336,14 +337,17 @@ void main() {
   });
 
   group('adjust_brightness', () {
-    Map<String, dynamic> adjust(String id, num percent, {String gate = 'auto'}) => {
+    Map<String, dynamic> adjust(String id, num percent,
+            {String gate = 'auto'}) =>
+        {
           ..._command(id),
           'operation': 'adjust_brightness',
           'value': {'percent': percent},
           'gate': gate,
         };
 
-    test('computes relative brightness with floor, ceiling and a minimum step', () {
+    test('computes relative brightness with floor, ceiling and a minimum step',
+        () {
       expect(adjustBrightness(current: 110, percent: 60, floor: 30),
           (base: 110, actual: 176));
       expect(adjustBrightness(current: 110, percent: -50, floor: 30),
@@ -381,13 +385,16 @@ void main() {
       // min_raw: 결과가 그보다 낮으면 거기까지(깨우기 = +60 %, 적어도 153)
       expect(adjustBrightness(current: 48, percent: 60, floor: 30, minRaw: 153),
           (base: 48, actual: 153));
-      expect(adjustBrightness(current: 200, percent: 10, floor: 30, minRaw: 153),
+      expect(
+          adjustBrightness(current: 200, percent: 10, floor: 30, minRaw: 153),
           (base: 200, actual: 220));
-      expect(adjustBrightness(current: null, percent: 60, floor: 30, minRaw: 153),
+      expect(
+          adjustBrightness(current: null, percent: 60, floor: 30, minRaw: 153),
           (base: 30, actual: 153));
     });
 
-    test('min_raw in the command lifts the result; invalid min_raw is ignored', () async {
+    test('min_raw in the command lifts the result; invalid min_raw is ignored',
+        () async {
       final bluetooth = _FakeBluetooth();
       final coordinator = FeedbackCoordinator(
           music: _FakeMusic(),
@@ -395,18 +402,23 @@ void main() {
           bluetooth: bluetooth)
         ..enabled = true;
       await coordinator.lamp.apply('start'); // 48
-      final wake = await coordinator.handleControlCommand(
-          {...adjust('w1', 60), 'value': {'percent': 60, 'min_raw': 153}});
+      final wake = await coordinator.handleControlCommand({
+        ...adjust('w1', 60),
+        'value': {'percent': 60, 'min_raw': 153}
+      });
       expect(wake?['previous'], 48);
       expect(wake?['actual'], 153);
       expect(bluetooth.frames.last, ilinkFrame([1, 8, 1, 153]));
-      final bad = await coordinator.handleControlCommand(
-          {...adjust('w2', 10), 'value': {'percent': 10, 'min_raw': 999}});
+      final bad = await coordinator.handleControlCommand({
+        ...adjust('w2', 10),
+        'value': {'percent': 10, 'min_raw': 999}
+      });
       expect(bad?['status'], 'succeeded');
       expect(bad?['actual'], 168);
     });
 
-    test('lamp tracks the last written brightness from phase lighting and commands',
+    test(
+        'lamp tracks the last written brightness from phase lighting and commands',
         () async {
       final bluetooth = _FakeBluetooth();
       final lamp = IlinkLampFeedback(bluetooth)..select(firstAddress);
@@ -433,7 +445,8 @@ void main() {
       expect(lamp.currentBrightness, isNull);
     });
 
-    test('hub adjust_brightness uses the tracked baseline and reports previous/actual',
+    test(
+        'hub adjust_brightness uses the tracked baseline and reports previous/actual',
         () async {
       final bluetooth = _FakeBluetooth();
       final coordinator = FeedbackCoordinator(
@@ -469,7 +482,8 @@ void main() {
       expect(coordinator.lamp.currentBrightness, 40);
     });
 
-    test('unknown lamp: base is the floor and previous is omitted; off lamp: previous is 0',
+    test(
+        'unknown lamp: base is the floor and previous is omitted; off lamp: previous is 0',
         () async {
       final bluetooth = _FakeBluetooth();
       final coordinator = FeedbackCoordinator(
@@ -491,17 +505,21 @@ void main() {
       expect(off?['previous'], 0);
       expect(off?['actual'], 60);
       // 전원 켜기 프레임이 먼저
-      expect(bluetooth.frames[bluetooth.frames.length - 2], ilinkFrame([1, 8, 5, 1]));
+      expect(bluetooth.frames[bluetooth.frames.length - 2],
+          ilinkFrame([1, 8, 5, 1]));
     });
 
-    test('adjust_brightness is refused like set_brightness when disabled, expired, unconfigured or malformed',
+    test(
+        'adjust_brightness is refused like set_brightness when disabled, expired, unconfigured or malformed',
         () async {
       final bluetooth = _FakeBluetooth();
       final coordinator = FeedbackCoordinator(
           music: _FakeMusic(),
           lamp: IlinkLampFeedback(bluetooth)..select(firstAddress),
           bluetooth: bluetooth);
-      expect((await coordinator.handleControlCommand(adjust('d1', 60)))?['error_code'],
+      expect(
+          (await coordinator
+              .handleControlCommand(adjust('d1', 60)))?['error_code'],
           'feedback_disabled');
       coordinator.enabled = true;
       expect(
@@ -513,8 +531,10 @@ void main() {
               {...adjust('b1', 60), 'value': 60}))?['error_code'],
           'unsupported_operation_or_value');
       expect(
-          (await coordinator.handleControlCommand(
-              {...adjust('b2', 60), 'value': {'percent': 'x'}}))?['error_code'],
+          (await coordinator.handleControlCommand({
+            ...adjust('b2', 60),
+            'value': {'percent': 'x'}
+          }))?['error_code'],
           'unsupported_operation_or_value');
       expect(bluetooth.writeCount, 0);
       final none = FeedbackCoordinator(
@@ -526,10 +546,193 @@ void main() {
           'lamp_not_configured');
     });
   });
+
+  group('lamp rediscovery', () {
+    // 10-26 Pi 5: BlueZ forgot the unpaired lamp 30 s after it disconnected, so
+    // every hub command failed in 56 ms with bluetooth_write_failed.
+    FeedbackCoordinator coordinator(_FakeBluetooth bluetooth) =>
+        FeedbackCoordinator(
+            music: _FakeMusic(),
+            lamp: IlinkLampFeedback(bluetooth, settleDelay: Duration.zero)
+              ..select(firstAddress),
+            bluetooth: bluetooth)
+          ..enabled = true;
+
+    test('a forgotten lamp is found by a scan and the command succeeds',
+        () async {
+      final bluetooth = _FakeBluetooth()
+        ..forgotten = true
+        ..visible = [firstAddress];
+      final result =
+          await coordinator(bluetooth).handleControlCommand(_command('r1'));
+      expect(result?['status'], 'succeeded');
+      expect(result?['recovery'], 'rediscovered');
+      expect(bluetooth.scans, 1);
+      expect(bluetooth.frames.last, ilinkFrame([1, 8, 1, 70]));
+    });
+
+    test('a lamp no scan can find reports device_not_found', () async {
+      final bluetooth = _FakeBluetooth()..forgotten = true;
+      final result =
+          await coordinator(bluetooth).handleControlCommand(_command('r2'));
+      expect(result?['status'], 'failed');
+      expect(result?['error_code'], 'device_not_found');
+      expect(result?['recovery'], 'not_found');
+      expect(bluetooth.frames, isEmpty);
+    });
+
+    test('commands scan at most once per window', () async {
+      final bluetooth = _FakeBluetooth()..forgotten = true;
+      final c = coordinator(bluetooth);
+      final first = await c.handleControlCommand(_command('w1'));
+      final second = await c.handleControlCommand(_command('w2'));
+      expect(bluetooth.scans, 1);
+      expect(first?['recovery'], 'not_found');
+      expect(second?['error_code'], 'bluetooth_write_failed');
+      expect(second?.containsKey('recovery'), isFalse);
+    });
+
+    test(
+        'phase lighting never scans and backs off a lamp that will not connect',
+        () async {
+      // 10-26 0.1.8: phase lighting retried every second with a scan each time;
+      // the lamp link flapped, the system showed 96 popups, the app crashed.
+      final bluetooth = _FakeBluetooth()
+        ..forgotten = true
+        ..visible = [firstAddress];
+      final lamp = IlinkLampFeedback(bluetooth, settleDelay: Duration.zero)
+        ..select(firstAddress);
+      for (var i = 0; i < 5; i++) {
+        await lamp.apply('focus');
+      }
+      expect(bluetooth.scans, 0);
+      expect(bluetooth.connectedAddresses,
+          hasLength(2)); // one write, then 30 s back-off
+    });
+
+    test('a lamp that connects first time is not scanned', () async {
+      final bluetooth = _FakeBluetooth();
+      final result =
+          await coordinator(bluetooth).handleControlCommand(_command('r3'));
+      expect(result?['status'], 'succeeded');
+      expect(result?.containsKey('recovery'), isFalse);
+      expect(bluetooth.scans, 0);
+    });
+  });
+
+  group('speaker commands', () {
+    Map<String, dynamic> speakerCommand(
+            String id, String operation, Object? value) =>
+        {
+          'command_id': id,
+          'target_id': 'speaker',
+          'operation': operation,
+          'value': value,
+          'origin_state': 'REST',
+          'gate': 'notice',
+          'requires_confirmation': false,
+          'expires_ts_ms': DateTime.now().millisecondsSinceEpoch + 15000,
+        };
+    FeedbackCoordinator coordinator(
+            _FakeAlerts alerts, SpeechOutput? speech, NoticeBoard notices) =>
+        FeedbackCoordinator(
+            music: _FakeMusic(),
+            lamp: IlinkLampFeedback(_FakeBluetooth()),
+            bluetooth: _FakeBluetooth(),
+            alerts: alerts,
+            speech: speech,
+            notices: notices)
+          ..enabled = true;
+
+    test('speak without TTS falls back to a chime and the text on screen',
+        () async {
+      // 10-26 Pi 5: com.atlas.VoiceManager1 is not on this board image.
+      final alerts = _FakeAlerts();
+      final notices = NoticeBoard();
+      final result = await coordinator(alerts, _NoSpeech(), notices)
+          .handleControlCommand(speakerCommand(
+              's1', 'speak', {'text': '1분만 일어나서 쉬어 가세요.', 'lang': 'ko'}));
+      expect(result?['status'], 'failed');
+      expect(result?['error_code'], 'tts_unavailable');
+      expect(result?['fallback'], 'chime_text');
+      expect(alerts.played, [kChimeSoft]);
+      expect(notices.current(DateTime.now())?.text, '1분만 일어나서 쉬어 가세요.');
+      expect(notices.current(DateTime.now())?.requestId, isNull);
+    });
+
+    test('speak with TTS succeeds without a chime', () async {
+      final alerts = _FakeAlerts();
+      final speech = _RecordingSpeech();
+      final notices = NoticeBoard();
+      final result = await coordinator(alerts, speech, notices)
+          .handleControlCommand(
+              speakerCommand('s2', 'speak', {'text': '쉬어 가세요', 'lang': 'ko'}));
+      expect(result?['status'], 'succeeded');
+      expect(result?['actual_value'], {'mode': 'tts'});
+      expect(speech.spoken, [('쉬어 가세요', 'ko')]);
+      expect(alerts.played, isEmpty);
+      expect(notices.current(DateTime.now()), isNull);
+    });
+
+    test('chime plays the sound and volume the hub asked for', () async {
+      // hub ad76ff0: pattern single|double|triple, volume low|mid|high (sound_pref).
+      final alerts = _FakeAlerts();
+      final c = coordinator(alerts, null, NoticeBoard());
+      final triple = await c.handleControlCommand(speakerCommand(
+          'c1', 'chime', {'pattern': 'triple', 'volume': 'low'}));
+      expect(triple?['status'], 'succeeded');
+      expect(triple?['actual_value'], {'pattern': 'triple', 'volume': 'low'});
+      await c.handleControlCommand(speakerCommand(
+          'c1b', 'chime', {'pattern': 'single', 'volume': 'mid'}));
+      final plain =
+          await c.handleControlCommand(speakerCommand('c2', 'chime', {}));
+      expect(plain?['actual_value'], {'pattern': 'double'});
+      expect(alerts.played, [kChimeAlert, kChimeSingle, kChimeSoft]);
+      expect(alerts.volumes, [0.35, 0.65, 1.0]);
+      alerts.fail = true;
+      expect(
+          (await c.handleControlCommand(
+              speakerCommand('c3', 'chime', null)))?['error_code'],
+          'audio_failed');
+    });
+
+    test('speaker commands follow the switch and reject bad values', () async {
+      final c = coordinator(_FakeAlerts(), null, NoticeBoard());
+      c.enabled = false;
+      expect(
+          (await c.handleControlCommand(
+              speakerCommand('d1', 'speak', {'text': 'x'})))?['error_code'],
+          'feedback_disabled');
+      c.enabled = true;
+      expect(
+          (await c.handleControlCommand(
+              speakerCommand('d2', 'speak', {'text': '  '})))?['error_code'],
+          'unsupported_operation_or_value');
+      expect(
+          (await c.handleControlCommand(
+              speakerCommand('d3', 'beep', null)))?['error_code'],
+          'unsupported_operation_or_value');
+      final noSpeaker = FeedbackCoordinator(
+          music: _FakeMusic(),
+          lamp: IlinkLampFeedback(_FakeBluetooth()),
+          bluetooth: _FakeBluetooth())
+        ..enabled = true;
+      expect(
+          (await noSpeaker.handleControlCommand(
+              speakerCommand('d4', 'chime', null)))?['error_code'],
+          'speaker_unavailable');
+    });
+  });
 }
 
 // implements는 실제 시스템 D-Bus 클라이언트를 생성하지 않는다.
 class _FakeBluetooth implements AtlasBluetoothService {
+  /// BlueZ 가 램프를 잊은 상태: 검색에 보이기 전까지 Connect 가 바로 실패한다.
+  bool forgotten = false;
+
+  /// 검색에 보이는 주소들.
+  List<String> visible = const [];
+  int scans = 0;
   int connectFailuresRemaining = 0;
   int writeFailuresRemaining = 0;
   int writeCount = 0;
@@ -541,6 +744,9 @@ class _FakeBluetooth implements AtlasBluetoothService {
   Future<GattConnection> connectLamp(String address) async {
     if (connectDelay > Duration.zero) await Future<void>.delayed(connectDelay);
     connectedAddresses.add(address);
+    if (forgotten) {
+      throw StateError('Device with supplied address is not available');
+    }
     if (connectFailuresRemaining > 0) {
       connectFailuresRemaining--;
       throw StateError('GATT connect failed');
@@ -564,6 +770,22 @@ class _FakeBluetooth implements AtlasBluetoothService {
       writeFailuresRemaining--;
       throw StateError('GATT write failed');
     }
+  }
+
+  @override
+  Stream<List<BluetoothDeviceInfo>> scanProgressive(
+      {Duration duration = const Duration(seconds: 8),
+      Duration interval = const Duration(seconds: 1)}) async* {
+    scans++;
+    if (visible.isNotEmpty) forgotten = false;
+    yield [
+      for (final address in visible)
+        BluetoothDeviceInfo(
+            address: address,
+            name: 'KLZS-L1 app',
+            paired: false,
+            connected: false),
+    ];
   }
 
   @override
@@ -614,3 +836,30 @@ DisplayState _state(String fsm,
         reasons: const [],
         sequence: 1,
         timestamp: DateTime(2026, 10, 12));
+
+class _FakeAlerts implements AlertSound {
+  final played = <String>[];
+  final volumes = <double>[];
+  bool fail = false;
+
+  @override
+  Future<void> play(String asset, {double volume = 1}) async {
+    if (fail) throw StateError('no audio');
+    played.add(asset);
+    volumes.add(volume);
+  }
+}
+
+class _NoSpeech implements SpeechOutput {
+  @override
+  Future<void> speak(String text, {required String lang}) async =>
+      throw StateError('org.freedesktop.DBus.Error.ServiceUnknown');
+}
+
+class _RecordingSpeech implements SpeechOutput {
+  final spoken = <(String, String)>[];
+
+  @override
+  Future<void> speak(String text, {required String lang}) async =>
+      spoken.add((text, lang));
+}

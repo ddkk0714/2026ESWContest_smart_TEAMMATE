@@ -131,7 +131,7 @@ class BluetoothLinkManager extends ChangeNotifier {
     _lampPhase = _Phase.connecting;
     _lampError = null;
     _notify();
-    final ok = await feedback.lamp.connect();
+    final ok = (await feedback.lamp.ensureConnected()).ok;
     _lampPhase = ok ? _Phase.connected : _Phase.failed;
     _lampError = ok ? null : '${feedback.lamp.lastError ?? '램프에 연결하지 못했습니다'}';
     _notify();
@@ -339,9 +339,28 @@ class BluetoothLinkManager extends ChangeNotifier {
     if (!_disposed) notifyListeners();
   }
 
+  Timer? _lampKeeper;
+
+  /// 피드백이 켜져 있는 동안 [every] 마다 램프가 끊겨 있으면 다시 붙인다(못 찾으면 검색).
+  /// 10-26 Pi 5: 끊긴 채 30초가 지나면 BlueZ 가 램프를 잊어, 다음 hub 명령이 바로 실패했다.
+  void keepLampConnected({Duration every = const Duration(seconds: 45)}) {
+    _lampKeeper?.cancel();
+    _lampKeeper = Timer.periodic(every, (_) {
+      if (_disposed ||
+          !feedback.enabled ||
+          _lamp == null ||
+          lampBusy ||
+          feedback.lamp.connected) {
+        return;
+      }
+      unawaited(reconnectLamp());
+    });
+  }
+
   @override
   void dispose() {
     _disposed = true;
+    _lampKeeper?.cancel();
     super.dispose();
   }
 }

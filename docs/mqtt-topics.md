@@ -392,3 +392,13 @@ retain으로 들어온 명령은 무시한다. 최근 128개 `command_id`의 처
 실행 중인 학습 job이 있고 실제 상태가 IDLE/END 밖이면 status=paused로 표시한다. 입력·판단·제어는 유지하고, 다시 유휴 상태가 되면 training으로 재개한다. Pi 5는 이 snapshot을 표시하며 연결 끊김이나 동의 철회 때 이전 개인 모델 상태를 현재처럼 표시하지 않는다. 서비스 시작 self-check는 stderr 진단만 사용하며 MQTT 명령·개인 표본을 새로 만들지 않는다.
 
 ondevice.yaml이 활성화된 경우에만 `state/phase.data.sensor_summary.ondevice_learning`을 추가한다. `execution: local`, `decision_source: fsm`, `head_source: common|personal`, `samples`, `sessions`, `training_step`(job이 없으면 null)을 제공한다. status는 disabled, unavailable, awaiting_consent, awaiting_portable_model, collecting, training, paused, accepted, rejected, storage_error, head_load_failed이다. embedding·개인 head·표본·파일 경로는 MQTT로 보내지 않는다. 기본 비활성에서는 기존 출력과 FSM을 유지한다. [실행·학습 계약](ondevice-personalization.md)을 따른다.
+
+## Pi5 알림 및 기기 복구 응답 (PR83 0.1.10 통합)
+
+기존 envelope/topic을 유지한다. display는 control/cmd target_id=speaker의 operation=speak 또는 chime을 실행한다. 기존 gate 외 notice를 허용하며 feedback_enabled, requires_confirmation=false, expires_ts_ms 검사를 동일하게 적용한다. speak.value는 text와 선택 lang(기본 ko), chime.value는 pattern(single/double/triple, 과거 alert/warning/urgent는 triple)과 volume(low/mid/high)을 사용한다. 음량 배율은 각각 0.35/0.65/1.0이며 미지정은 1.0이다.
+
+TTS 성공 결과는 succeeded와 actual_value.mode=tts다. TTS를 사용할 수 없으면 알림음/화면 문구로 대신하고 failed, error_code=tts_unavailable, fallback=chime_text 또는 text를 보고한다. 실제 TTS 성공으로 보고하지 않는다. chime 재생 실패는 audio_failed다. speaker 명령도 command_id 중복 실행을 막는다.
+
+interaction/request의 kind=rest_notice, auto=true, 또는 options=[dismiss]는 닫기 전용 알림으로 처리한다. text/explanation, arm_label, rest_min_sec, expires_in_s를 사용하며 retain으로 온 지난 알림은 표시하지 않는다. 사용자가 닫으면 feedback/user에 request_id, verdict=dismiss, response_ms를 보낸다. 수락·거절 제안 카드와 자동 실행 승인을 만들지 않는다.
+
+램프/선풍기 control/result에는 검색을 시도한 경우 recovery=rediscovered|not_found가 추가된다. 찾지 못하면 error_code=device_not_found, 명령이 만료됐으면 expired다. 검색하지 않은 경우 recovery를 생략하며 성공/실패 status의 의미는 유지한다.

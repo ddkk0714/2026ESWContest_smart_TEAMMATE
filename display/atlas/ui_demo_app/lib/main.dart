@@ -18,6 +18,7 @@ import 'pr56/display_state.dart';
 import 'profile_store.dart';
 import 'suggestion_card.dart';
 import 'developer/developer_controller.dart';
+import 'developer/pr74/notice_banner.dart';
 import 'developer/developer_views.dart';
 import 'developer/pr74/developer_page.dart' as legacy;
 
@@ -304,11 +305,28 @@ class _DemoShellState extends State<DemoShell> {
         final live = widget.live;
         final request =
             live?.status == LinkStatus.connected ? live!.request : null;
+        final screenNotice = live?.notices.current(m.now);
         return Stack(children: [
           Positioned.fill(
               child: PageTransitionView(
                   pageKey: _developerOpen ? 'developer' : m.page,
                   child: _page())),
+          if (!_developerOpen && live != null)
+            Positioned(
+                top: 76,
+                left: 40,
+                right: 40,
+                child: AnimatedSwitcher(
+                  duration: MediaQuery.disableAnimationsOf(context)
+                      ? Duration.zero
+                      : const Duration(milliseconds: 220),
+                  child: screenNotice != null
+                      ? NoticeBanner(
+                          notice: screenNotice,
+                          now: m.now,
+                          onDismiss: live.dismissNotice)
+                      : const SizedBox.shrink(),
+                )),
           if (request != null && !_developerOpen)
             Positioned.fill(
                 child: KeyedSubtree(

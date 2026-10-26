@@ -18,6 +18,7 @@ import 'pr74/feedback_policy.dart';
 import 'pr74/lamp_defaults.dart';
 import 'pr74/link_status.dart' as links;
 import 'pr74/music_playback.dart';
+import 'pr74/voice_alert.dart';
 import 'pr74/preview_page.dart';
 import 'pr74/settings_store.dart';
 
@@ -37,7 +38,10 @@ class DeveloperController extends ChangeNotifier {
         music: this.music,
         lamp: IlinkLampFeedback(this.bluetooth),
         bluetooth: this.bluetooth,
-        fan: BleFanControl(this.bluetooth));
+        fan: BleFanControl(this.bluetooth),
+        alerts: _alerts,
+        speech: _speech,
+        notices: live.notices);
     feedback.brightnessFloor =
         this.settings.load().lampBrightnessFloor ?? kLampBrightnessFloorDefault;
     btLinks = BluetoothLinkManager(
@@ -49,7 +53,15 @@ class DeveloperController extends ChangeNotifier {
       _changed();
       if (startHardware) unawaited(feedback.reconcileAudioOutput());
     });
-    if (startHardware) unawaited(btLinks.restore());
+    if (startHardware) unawaited(_restoreHardware());
+  }
+
+  final _alerts = AtlasAlertSound();
+  final _speech = AtlasSpeech();
+
+  Future<void> _restoreHardware() async {
+    await btLinks.restore();
+    if (!_disposed) btLinks.keepLampConnected();
   }
 
   final LiveLink live;
@@ -267,6 +279,8 @@ class DeveloperController extends ChangeNotifier {
     btLinks.dispose();
     log.dispose();
     board.dispose();
+    unawaited(_alerts.dispose());
+    unawaited(_speech.dispose());
     unawaited(music.dispose());
     unawaited(bluetooth.close());
     super.dispose();

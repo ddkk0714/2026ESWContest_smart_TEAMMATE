@@ -1,3 +1,18 @@
+# DESKMATE V27
+
+PR83 앱 0.1.10(e00a6f2)의 음성/알림음 명령, 닫기 전용 휴식·자동 정보 배너, 기기 재검색과 복구 결과를 V26 UI에 통합했다. 자동 피드백 최초 기본값은 OFF를 유지한다. 현재 Pi5 설치본은 V26이며 이번 변경은 PR 소스와 빌드에 반영한다.
+
+Atlas SDK가 새 작업 디렉터리의 플러그인 링크를 생성하지 않는 경우, Docker 안에서 다음을 준비한 뒤 빌드한다.
+
+```sh
+flutter pub get --offline
+mkdir -p atlas/flutter/ephemeral/.plugin_symlinks
+ln -s /opt/flutter-atlas-plugins/packages/flutter-plugin-atlas-audioplayers atlas/flutter/ephemeral/.plugin_symlinks/audioplayers_atlas
+flutter-atlas build atlas --no-pub --ipk --release
+```
+
+링크가 이미 있으면 ln 단계는 생략한다. SDK와 ephemeral 링크는 Git에 넣지 않는다. 아래는 버전별 변경 기록이다.
+
 # DESKMATE V26
 
 집중 상세의 ‘잠깐 환기하기’는 발표 전용 fatigue() 대신 수동 환기 제안 카드를 연다. 직접 선택한 이유, 유효한 실시간 CO₂ 관측값(수신한 경우), 창문 환기 방법을 표시한다. 수락은 안내 후 집중 화면으로 돌아가며 가상의 피로 이벤트나 장치 변경·허브 응답을 만들지 않는다.
@@ -355,3 +370,7 @@ bash display/atlas/deploy/install-to-pi.sh <Pi5 IP> display/atlas/ui_demo_app/bu
 ## Source checkout
 
 Local MP3 recordings and version archives are excluded from Git. The app uses the empty music state when recordings are absent. To reproduce the installed package with music, restore the separately managed, appropriately licensed files listed in assets/audio/CREDITS.md before building. SDK/plugin paths require the project Atlas Docker environment.
+
+## V27 / PR83 0.1.10
+
+PR83 e00a6f2의 speaker speak/chime, 휴식/자동 정보 알림, 연결 복구 결과 및 램프 재검색 제한을 통합했다. TTS 미지원 시 알림음·화면 안내로 대체하고 실패/대체 결과를 허브에 보고한다. 닫기 전용 알림은 수락/거절 제안과 분리하며 dismiss만 전송한다. 기존 피드백 최초 OFF, 주소별 GATT/작업 큐/세대 검사, V26 UI는 유지한다. 생성한 chime 3개만 Git에 포함하고 기존 6개 음악은 별도 관리한다. Pico 선풍기 감독 시간 수정은 소스만 포함하며 플래싱하지 않았다.

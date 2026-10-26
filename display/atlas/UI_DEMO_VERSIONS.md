@@ -44,11 +44,11 @@ V24: 큰 제안 카드에 이유·관측값·조절 대상·조절량 표시. �
 V18 은 블루투스 실행 앱 `com.atlas.app.deskmate_display` 와 함께 쓴다(화면은 V18, 블루투스는 deskmate_display).
 V18 부터 앱 ID 에서 `demo` 를 뺐다(`deskmate_ui_vNN`).
 
-1. 현재 V26 `ui_demo_app`을 생성물 없이 `ui_demo_versions/v26`에 보관한다.
+1. 현재 V27 `ui_demo_app`을 생성물 없이 `ui_demo_versions/v27`에 보관한다.
    `build/`, `.dart_tool/`, ephemeral, SDK, 로그는 복사하지 않는다.
-2. 새 UI는 `ui_demo_app`에서 개발하고 표시 이름을 `DESKMATE V27`로 올린다.
+2. 새 UI는 `ui_demo_app`에서 개발하고 표시 이름을 `DESKMATE V28`로 올린다.
 3. `appinfo.json`의 id·entry·version, CMake의 ATLAS_APP_ID·BINARY_NAME,
-   pubspec version을 함께 올린다. 화면에는 버전 배지를 표시하지 않는다. V27 ID는 `com.atlas.app.deskmate_ui_v27`다.
+   pubspec version을 함께 올린다. 화면에는 버전 배지를 표시하지 않는다. V28 ID는 `com.atlas.app.deskmate_ui_v28`다.
 4. 사용자 검증 지시에 따라 확인하고 release 빌드·별도 설치한다. 최근 V24~V26은 요청에 따라 테스트를 생략했다.
 5. 이전 버전은 명시적인 삭제 요청이 있을 때만 제거한다. 화면 비교 시 현재 앱을 Stop 하고 비교할 앱을 Start 한다.
 
@@ -64,4 +64,6 @@ V19는 BLE 실행도 포함하므로 사용 중에는 별도 DESKMATE(PR74) 앱�
 
 V25: PR83 연결 복구·피드백 저장·ToF 배치와 PR78 최신 노트북 개발자 화면 통합. 보관 소스 `ui_demo_versions/v25`, ID `com.atlas.app.deskmate_ui_v25`. 테스트는 사용자 요청으로 생략.
 
-V26: 수동 환기 제안 카드 연결, 기본 UI에 맞춘 블루투스 팝업과 간결한 기기 조작 문구. 현재 소스 `ui_demo_app`, ID `com.atlas.app.deskmate_ui_v26`. 사용자 요청으로 테스트 생략.
+V26: 수동 환기 제안 카드 연결, 기본 UI에 맞춘 블루투스 팝업과 간결한 기기 조작 문구. 보관 소스 `ui_demo_versions/v26`, ID `com.atlas.app.deskmate_ui_v26`. 사용자 요청으로 테스트 생략.
+
+V27: PR83 0.1.10(e00a6f2)의 speaker 음성/알림음, 휴식·자동 정보 배너, 연결 복구 보고·검색 제한을 공유 실행기에 통합. 현재 소스 `ui_demo_app`, ID `com.atlas.app.deskmate_ui_v27`. 테스트와 Pi5 설치는 이번 PR 갱신 범위에서 수행하지 않음.

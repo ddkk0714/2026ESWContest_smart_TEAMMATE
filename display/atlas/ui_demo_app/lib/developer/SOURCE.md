@@ -31,3 +31,5 @@ execution explicitly requested for this revision. It does not add ThinQ cloud
 credentials, camera collection, key content, or new hub control policies.
 
 V25/V26 ports PR83 ad1e1ee: sequential restore, feedback persistence (initial OFF retained), fan retries, audio route reuse, ToF B/A ordering. MQTT recovery is adapted into the shared LiveLink transport and watchdog. V26 restyles the Bluetooth popup and concise controls without changing device service callbacks.
+
+V27 imports PR83 e00a6f21 (app 0.1.10): speaker commands/chimes, rest and automatic notice routing, GATT recovery reports, 3s settle/30s rescan limits and 45s lamp keeper. The local GATT generation checks, cleanup and shared adapter queue are retained. Speech/audio resources are disposed with the controller. Firmware changes are source-only.

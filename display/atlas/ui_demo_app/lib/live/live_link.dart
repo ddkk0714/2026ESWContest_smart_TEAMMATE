@@ -14,6 +14,7 @@ import 'package:flutter/foundation.dart';
 
 import '../demo_model.dart';
 import '../pr56/display_state.dart';
+import '../developer/pr74/voice_alert.dart';
 import 'device_board.dart';
 import 'link_settings.dart';
 import 'live_request.dart';
@@ -79,6 +80,7 @@ class LiveLink extends ChangeNotifier {
         _clock = clock ?? DateTime.now {
     // node 는 개발자 앱(ui_env_app, `display`)과 hub 로그에서 구분되게 `pi5-ui`.
     // hub(mqtt_lines.route_mqtt_message → live.tick_once)·보드 C++ 브리지는 feedback 의 node 로 거르지 않는다(10-25 확인).
+    notices.addListener(_notify);
     _feedbackWriter = EnvelopeWriter(node: nodeName, clock: _clock);
     _profileWriter = EnvelopeWriter(node: nodeName, clock: _clock);
   }
@@ -122,6 +124,7 @@ class LiveLink extends ChangeNotifier {
   String host = '';
   int port = LinkSettings.defaultPort;
   LinkStatus status = LinkStatus.off;
+  final notices = NoticeBoard();
   DisplayState? state;
   DateTime? stateAt;
   LiveRequest? request;
@@ -233,6 +236,7 @@ class LiveLink extends ChangeNotifier {
     _transport?.close();
     _transport = null;
     if (!keepGeneration) {
+      notices.dismiss(_clock());
       state = null;
       stateAt = null;
       _lastStateSequence = null;
@@ -273,6 +277,10 @@ class LiveLink extends ChangeNotifier {
           onState?.call(next);
         case requestTopic:
           if (message.retained) return; // 지난 질문이 다시 뜨지 않게
+          if (ScreenNotice.isNoticeRequest(data)) {
+            notices.show(ScreenNotice.fromRequest(data, _clock()));
+            return;
+          }
           final next = LiveRequest.fromData(data, _clock());
           if (next == null) return;
           request = next;
@@ -331,6 +339,20 @@ class LiveLink extends ChangeNotifier {
     return sent;
   }
 
+  void dismissNotice() {
+    final now = _clock();
+    final notice = notices.dismiss(now);
+    final id = notice?.requestId;
+    if (notice == null || id == null) return;
+    final elapsed = now.difference(notice.shownAt).inMilliseconds;
+    publishData(
+        feedbackTopic,
+        buildFeedbackData(
+            requestId: id,
+            verdict: 'dismiss',
+            responseMs: elapsed < 0 ? 0 : elapsed));
+  }
+
   void _clearRequest() {
     _expiry?.cancel();
     _expiry = null;
@@ -377,6 +399,8 @@ class LiveLink extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _teardown();
+    notices.removeListener(_notify);
+    notices.dispose();
     _events.close();
     super.dispose();
   }

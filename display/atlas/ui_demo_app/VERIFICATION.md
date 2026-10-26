@@ -128,3 +128,12 @@
 - Pi5 PackageManager Install and AppManager Start returned success for V26. V25 settings copied to V26, ownership 5071:1011, synced. V25 remains installed and its source/audio is archived.
 - Laptop server restarted targeting V26 at http://127.0.0.1:8791/.
 - Tests, analyzer and UI/hardware interaction checks skipped as requested. No claim of runtime button or visual verification.
+
+# V27 PR83 update (2026-10-26)
+
+- Imported PR83 e00a6f21f5234d872acd79024a920d2b784f5cf6 (app 0.1.10) speaker/chime/notice and recovery changes. Existing GATT generations, connection release and shared adapter queue retained. Feedback initial OFF retained.
+- Alert chimes copied from the upstream Git objects with project-generated attribution. Existing music files remain excluded.
+- Release build exited 0 after preparing the missing SDK audio plugin symlink in this fresh worktree. IPK SHA256: 8470ca79500d9102d01df9791d6d81ec9efb932ebf038544fc5968a6c41d6c7e.
+- git diff --check passed. No oxlint configuration found. Imported upstream regression test sources; did not run tests or analyzer, per user request.
+- No Pi5 install, UI/hardware interactions, actual TTS/chime checks or Pico firmware build/flash for V27. Pi5 remains on V26.
+- V26 sources archived locally to ../ui_demo_versions/v26; archives, SDKs and build outputs remain excluded from the PR.
