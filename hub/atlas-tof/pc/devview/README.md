@@ -118,6 +118,38 @@ hub 시연 프로파일은 `state/phase`·`health/hub`·`:8765/health` 어디에
 타임라인 한 줄: `자세 개입(자세 원인) → iLink 무드등 밝기 +60 % (최소 153) (110→176)` + FSM 상태·원인·자동/제안·개인화 arm·
 decision_source·이유(개인화 설명) + 실제 Pi 5 결과. 이 화면을 켠 뒤부터 쌓인다(그 전 밝기는 '모름').
 
+### 노트북을 대역 기기로 (`--act-laptop`, 끈 게 기본)
+
+블루투스 기기가 없을 때 시연용으로 이 Windows 노트북이 대신 움직인다. **켤 때만** 동작하고 끝내면(Ctrl+C) 원래 값으로 되돌린다.
+
+```bash
+python hub/atlas-tof/pc/devview/devview.py --pi4 172.20.10.3 --hub-profile demo-b --hub-config <보드 hub 의 config> --act-laptop
+```
+
+- **무드등 → 화면 밝기:** 가상 무드등(Pi 5 앱 규칙 — 단계 조명·adjust_brightness 하한 30·min_raw)의 원시 밝기 0~255 를 % 로(176 → 69 %).
+  끔은 까만 화면 대신 10 %. 깜빡임 방지로 3 초에 한 번까지(사이 값은 마지막 것만). WMI `WmiSetBrightness`(인라인 PowerShell, 실행 정책 그대로).
+- **스피커·음성 안내·알림음 → 볼륨·짧은 소리:** hub 설정에서 소리를 뜻하는 것 — control.yaml 에는 스피커 대상이 없고, Pi 5 앱이 피로 국면에
+  음악을 틀며(feedback_policy), 개인화 arm `posture_voice`(voice)·`sound_cue`(sound). 음악 재생·음성·알림음이면 볼륨을 첫 설정 `sound_pref`
+  (V18 구간 가운데: low 20 % · mid 50 % · high 80 %, 없으면 V18 기본 30 %, off 면 올리지 않음)로 올리고 짧은 소리(winsound),
+  음악 정지면 원래 볼륨. 볼륨은 Windows Core Audio 를 ctypes 로 직접(pycaw 불필요).
+- **control/result 는 보내지 않는다.** Pi 5 앱이 같은 command_id 로 먼저 답하고(지금 `failed feedback_disabled`), hub 디스패처는 첫 결과로
+  명령을 끝낸 뒤 늦은 결과의 previous·actual 만 보충한다 — 노트북이 succeeded 를 보내면 실패한 명령에 노트북 숫자가 섞여 되돌리기 기준이 틀어진다.
+- **사용자가 직접 바꾼 밝기**는 5 초마다 읽어 타임라인에 "사용자(또는 Windows)가 노트북 화면 밝기를 바꿈 69 → 40 % — hub 에 보고하지 않음"
+  으로만 적는다(자동 밝기·전원 설정이 바꾼 것과 구별할 수 없어 manual_adjust 로 보내지 않음).
+- 화면 '가상 기기' 위에 상태(원래·지금 밝기·볼륨), 타임라인에 "노트북 화면 밝기 43 % → 69 % (무드등 …)".
+
+### 선풍기 그림 (`?mode=fan`, F 키)
+
+hub 선풍기 명령(vent_fan, 가상 선풍기와 같은 규칙)을 큰 선풍기 그림으로: 풍량(0~3)·속도(0~100)에 비례해 돌고(부드럽게 빨라지고 멈춤),
+natural 모드는 세기가 출렁인다. 켠 이유(원인·자동/제안·arm·그 결정의 설명)와 시각. 가상 기기 화면의 큰 칸, `?mode=fan` 은 전체 화면(두 번째 모니터용).
+`--act-laptop` 과 상관없이 화면에만 그린다 — 실제 Pico 2 W 선풍기는 Pi 5 앱이 따로 움직인다.
+
+### 두 '개인화'
+
+- **개입 선택 개인화**(`sensor_summary.personalize`, 밴딧): 어떤 기기·카드를 고를지. 결정 tick 에만 arm·source·delivered_gate,
+  평소엔 첫 설정 반영 문구(`signal.text_ko`) — '나는 누구?' 칸과 무드등 시점 칸에 보인다.
+- **2단계 피로 관찰**(`sensor_summary.personalization`, CNN): observe 전용, 판정에 안 들어감. demo-b 는 linear 정규화라 unavailable 이 정상.
+
 ### 무드등 올릴 시점
 
 가상 기기 화면 맨 위와 개발자 화면 판정 줄 아래. **hub 규칙을 hub 설정 파일에서 읽어**(코드에 숫자 없음) 지금 무드등(자세 개입)까지
@@ -129,6 +161,8 @@ decision_source·이유(개인화 설명) + 실제 Pi 5 결과. 이 화면을 �
 - hub 는 유지 타이머를 state/phase 에 싣지 않는다. 그래서 '남은 초'는 state/phase tick(10 s)으로 engine.py 규칙(단계 진입 tick 은 판정 안 함,
   지난 hold 초 기록 중 frac 이상)을 앞으로 굴려 **추정**한다. 가짜 hub 로 재 보면 엎드림을 처음 본 tick 부터 예측 시각이 실제 명령 시각과 같다.
 - 그래프: 지난 15 분 C_fatigue(흰 선), 의심·확정·회복 선, FSM 상태 배경, 세로선(💡 무드등 명령 · 자세 카드 · 피로 확정 · 개입 자동/제안).
+- 신호별 몫: C_fatigue = Σ w·δ / Σw 를 자세(라벨·끄덕임·졸음 플래그 중 큰 것, 추정)·키 입력·환경·경과·호흡으로, 학습기 c_fsm → c_adj(= 화면 값).
+  hub 는 자세 말고는 δ 를 싣지 않아서 나머지는 'c_fsm − 자세 몫'과 각 신호의 상한(w/Σw), 단서(env_flags·타이핑)로만 보인다.
 - 시험: `--fake --fake-scenario facedown`(15 s 부터 90 s 엎드림 → 카운트다운 → 약 65 s 뒤 무드등) · `--fake-scenario recline`(의심까지만, 무드등 없음).
 
 ### 앱 화면(가상)과 알림

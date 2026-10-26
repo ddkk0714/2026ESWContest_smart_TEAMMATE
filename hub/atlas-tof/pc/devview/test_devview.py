@@ -179,7 +179,8 @@ def test_board_c3441f4_summary_shape():
         "learning": {"enabled": True, "n_labels": 3, "acc_ai": 0.5, "acc_fsm": 0.25, "p": 0.5, "pending": False},
         "control": {"active": False}}})
     v = dv.phase_view(ph)
-    assert v["explanation"] == "mode record · status idle · decision_source prior"
+    # personalization 은 2단계 피로 관찰(판정 무관) — 개입 선택 개인화(personalize)와 섞지 않는다
+    assert v["stage2"] == "mode record · status idle · decision_source prior" and v["explanation"] == "-"
     assert v["learning"] == "켜짐 · 라벨 3 · AI 정확 0.50 · FSM 정확 0.25 · p 0.50 · 대기 false"
     assert v["episode"] == "없음"
     assert dv.profile_text(ph, None, env({"status": "online"}), hint="demo-b") == "hub demo-b (노트북 지정)"
@@ -253,8 +254,8 @@ def test_fetch_bypasses_system_proxy(monkeypatch):
 
 def test_phase_view_old_personalization_key_and_room_only():
     v = dv.phase_view(env({"sensor_summary": {"present": False, "in_room": True,
-                                              "personalization": {"arm_label": "환기"}}}))
-    assert v["place"] == "방" and v["presence"] == "없음" and v["explanation"] == "환기"
+                                              "personalization": {"explanation": "환기"}}}))
+    assert v["place"] == "방" and v["presence"] == "없음" and v["explanation"] == "환기"   # 옛 hub 는 설명을 여기에
 
 
 # ----------------------------------------------------------------- /raw·/api/state
@@ -822,6 +823,152 @@ def test_trigger_without_config_says_so():
     assert v["error"].startswith("FileNotFoundError")
 
 
+# ----------------------------------------------------------------- 두 개인화·첫 설정 문구·신호별 몫
+
+BOARD_PERSONALIZE = {"signal": {"kind": "profile", "text_ko": "첫 설정 반영: 밝은 조명 선호 → 밝은 조명 먼저 · 소리 작게 → 알림음·음성 덜 고름",
+                                "ts": 1.0}, "active_profile_id": "pbf0"}
+
+
+def test_two_personalizations_and_prior_text():
+    ph = env({"fsm_state": "FATIGUE_SUSPECT", "sensor_summary": {
+        "personalize": BOARD_PERSONALIZE, "personalization": {"mode": "observe", "status": "unavailable", "decision_source": "fsm"}}})
+    v = dv.phase_view(ph)
+    assert v["stage2"] == "mode observe · status unavailable · decision_source fsm"
+    assert v["prior"] == "밝은 조명 선호 → 밝은 조명 먼저 · 소리 작게 → 알림음·음성 덜 고름"
+    assert v["explanation"].startswith("개입 결정 없음 · 기준: 밝은 조명 선호")
+    dec = dv.phase_view(env({"sensor_summary": {"personalize": {"arm": "wake_light", "arm_label": "무드등 밝혀 깨우기",
+                                                                "explanation": "졸음 4회", "source": "bandit", "delivered_gate": "auto"}}}))
+    assert dec["explanation"] == "졸음 4회 (bandit · auto)"
+    st = dv.Store()
+    st.on_mqtt(dv.TOPIC_PHASE, json.dumps(ph, ensure_ascii=False).encode())
+    assert st.persona_view()["prior"].startswith("밝은 조명 선호")
+
+
+def test_breakdown_from_live_shape(hub_cfg):
+    """10-26 실보드 tick: 바른자세(δ 0)인데 피로 0.48 — 끄덕임 0.017 Hz 가 0.3 으로 잡히고, 학습기가 c_fsm 0.535 → 0.485."""
+    rules = dv.load_hub_rules(hub_cfg, "demo-b")
+    rules.update(nod_full=0.05, nod_max=0.3, rule_drowsy=0.3,
+                 weights={"pc": {"keystroke": 0.25, "posture": 0.60, "respiration": 0.0, "environment": 0.075, "elapsed": 0.075}})
+    tr = dv.TriggerTracker(rules)
+    tr.on_phase(env({"fsm_state": "FATIGUE_SUSPECT", "context": "pc", "c_fatigue": 0.485, "sensor_summary": {
+        "tof": {"posture": "upright", "posture_confidence": 0.65, "nod_rate_hz": 0.017, "drowsy": False},
+        "env_flags": ["too_hot", "too_dark"], "keystroke": {"typing_active": True},
+        "learning": {"c_fsm": 0.535, "c_adj": 0.485, "alpha": 0.3}, "personalize": BOARD_PERSONALIZE}}), at=100.0)
+    v = tr.view(101.0)
+    b = v["breakdown"]
+    post = b["rows"][0]
+    assert post["delta"] == 0.3 and post["share"] == 0.18 and post["note"].startswith("끄덕임")
+    assert b["sum_w"] == 1.0 and b["c_fsm"] == 0.535 and b["rest"] == 0.355 and b["c_adj"] == 0.485
+    rows = {r["key"]: r for r in b["rows"]}
+    assert rows["keystroke"]["share_max"] == 0.25 and rows["environment"]["note"] == "환경 경고 too_hot, too_dark"
+    assert rows["respiration"]["share_max"] == 0.0 and b["mismatch"] is False
+    assert v["prior"].startswith("밝은 조명 선호") and any(m["kind"] == "prior" for m in v["marks"])
+
+
+# ----------------------------------------------------------------- 노트북 대역 기기(가짜 백엔드 — 진짜 밝기·볼륨은 안 건드림)
+
+class FakeLaptop:
+    def __init__(self, brightness=43, volume=0.41):
+        self.b, self.v, self.calls, self.sounds = brightness, volume, [], []
+
+    def get_brightness(self):
+        return self.b
+
+    def set_brightness(self, n):
+        self.calls.append(("b", n))
+        self.b = n
+
+    def get_volume(self):
+        return self.v
+
+    def set_volume(self, x):
+        self.calls.append(("v", round(x, 3)))
+        self.v = x
+
+    def chime(self, kind):
+        self.sounds.append(kind)
+
+
+def _laptop_store():
+    st = dv.Store()
+    fake = FakeLaptop()
+    act = dv.LaptopActuator(st, fake)
+    st.laptop = act
+    act.start(thread=False)  # 스레드 대신 tick() 을 직접 부른다
+    return st, act, fake
+
+
+def test_laptop_lamp_to_brightness_with_rate_limit_and_restore():
+    st, act, fake = _laptop_store()
+    assert act.orig == {"brightness": 43, "volume": 0.41}
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "FOCUS_PC", "phase": "focus"}), at=1.0)   # 단계 조명 110
+    act.tick(10.0)
+    assert fake.calls == [("b", 43)] or fake.b == 43            # 110/255 = 43 % → 이미 43 이라 쓰지 않음
+    st.on_mqtt(dv.TOPIC_CMD, payload({"command_id": "c1", "target_id": "desk_lamp", "operation": "adjust_brightness",
+                                      "value": {"percent": 60, "min_raw": 153}, "gate": "auto", "requires_confirmation": False,
+                                      "expires_ts_ms": int((time.time() + 15) * 1000)}), at=time.time())
+    act.tick(20.0)
+    assert fake.b == 69                                         # 176/255 = 69 %
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "END", "phase": "end"}), at=time.time())   # 꺼짐 → 10 %(까맣게 안 함)
+    act.tick(21.0)
+    assert fake.b == 69                                         # 3 s 안 → 아직
+    act.tick(23.5)
+    assert fake.b == dv.LAMP_OFF_PERCENT
+    texts = [e["text"] for e in st.virtual.timeline if e["kind"] == "laptop"]
+    assert any("노트북 화면 밝기 43 % → 69 %" in t for t in texts)
+    act.restore()
+    assert fake.b == 43 and fake.v == 0.41 and act.active is False
+    act.restore()                                               # 두 번 불러도 한 번
+    assert fake.calls.count(("b", 43)) == 1
+
+
+def test_laptop_speaker_to_volume_by_sound_pref():
+    st, act, fake = _laptop_store()
+    st.profile_sent = {"profile_id": "p", "label": "x", "at": 0.0, "data": {"profile_id": "p", "sound_pref": "mid"}}
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "ACTION_POSTURE", "phase": "fatigue", "gate": "auto"}), at=1.0)
+    act.tick(5.0)
+    assert fake.v == 0.5                                        # 음악 재생 → sound_pref mid
+    time.sleep(0.05)
+    assert "music" in fake.sounds
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "RECOVERY", "phase": "recovery"}), at=2.0)
+    act.tick(10.0)
+    assert fake.v == 0.41                                       # 음악 정지 → 원래 볼륨
+    st.profile_sent["data"]["sound_pref"] = "off"
+    st.virtual.speaker["music"] = False
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "ACTION_POSTURE", "phase": "fatigue", "gate": "auto"}), at=3.0)
+    act.tick(20.0)
+    assert fake.v == 0.41                                       # 소리 싫음(off) → 올리지 않음
+
+
+def test_laptop_manual_change_logged_not_published():
+    st, act, fake = _laptop_store()
+    st.publisher = FakePub()
+    fake.b = 25                                                 # 사용자가 직접 낮춤
+    act.tick(100.0)
+    texts = [e["text"] for e in st.virtual.timeline if e["kind"] == "laptop"]
+    assert any("노트북 화면 밝기를 바꿈 43 → 25 %" in t and "보고하지 않음" in t for t in texts)
+    assert st.publisher.sent == []                              # manual_adjust·결과 둘 다 안 보냄
+    assert act.view()["result_policy"].startswith("결과 안 보냄")
+
+
+def test_fan_view_from_command():
+    h = dv.VirtualHome()
+    h.on_cmd(cmd_env("f1", "vent_fan", "set_level", 3, cause="environment", origin="ACTION_ENV"), at=100.0)
+    f = h.view(101.0)["fan"]
+    assert f["power"] is False and f["level"] == 3                  # 풍량만 바꿨지 켜지는 않음(앱과 같음)
+    h.on_cmd(cmd_env("f2", "vent_fan", "set_power", "on", cause="environment", origin="ACTION_ENV"), at=100.0)
+    f = h.view(101.0)["fan"]
+    assert f["power"] is True and f["why"]["cause"] == "환경" and f["why"]["gate"] == "자동"
+    h2 = dv.VirtualHome()
+    h2.on_phase(phase_env("ACTION_ENV", "fatigue", "auto", arm="wake_light", explanation="무드등 설명"), 1.0)
+    h2.on_request(env({"request_id": "r", "kind": "env_suggest", "arm": "fan_on", "explanation": "CO₂ 오름 — 선풍기?",
+                       "expires_in_s": 30}), 2.0)
+    h2.on_feedback(env({"request_id": "r", "verdict": "accept"}), 3.0)
+    h2.on_cmd(cmd_env("f3", "vent_fan", "set_power", "on", gate="suggest", cause="environment", origin="ACTION_ENV", at=4.0), at=4.0)
+    w = h2.view(5.0)["fan"]["why"]
+    assert w["reason"] == "CO₂ 오름 — 선풍기?"   # 무드등을 고른 설명이 아니라 선풍기 카드의 설명
+
+
 # ----------------------------------------------------------------- 보내기(프로필·카드 응답)
 
 class FakePub(dv.Publisher):
@@ -856,10 +1003,10 @@ def test_send_profile_and_hub_ack():
     assert st.send_profile({"profile_id": "pabc", "age_band": "20s"}, "대학생") == {"ok": True, "error": None}
     assert st.publisher.sent == [(dv.TOPIC_PROFILE, {"profile_id": "pabc", "age_band": "20s"})]
     assert st.persona_view()["ack"] is False
-    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "FOCUS_PC", "sensor_summary": {
-        "personalization": {"active_profile_id": "pabc", "decision_source": "prior"}}}))
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "FOCUS_PC", "sensor_summary": {   # 10-26 실보드: personalize 에 실린다
+        "personalize": {"active_profile_id": "pabc", "source": "prior"}}}))
     pv = st.persona_view()
-    assert pv["ack"] is True and pv["hub_active"] == "pabc" and pv["hub_fields"]["decision_source"] == "prior"
+    assert pv["ack"] is True and pv["hub_active"] == "pabc" and pv["hub_fields"]["source"] == "prior"
     st.publisher = None
     assert st.send_profile({"profile_id": "pabc"})["ok"] is False
 

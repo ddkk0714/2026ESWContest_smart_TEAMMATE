@@ -151,7 +151,7 @@ body:not([data-mode="virtual"]) #virt { display: none; }
 
 /* ---------- 가상 기기(/?mode=virtual): 주변기기가 다 연결돼 있었다면 ---------- */
 #virt { display: grid; min-height: 100vh; grid-template-columns: minmax(0, 1fr); gap: calc(10px * var(--k)); padding: 0 calc(16px * var(--k)) calc(12px * var(--k));
-  grid-template-rows: minmax(calc(44px * var(--k)), auto) auto auto auto minmax(calc(320px * var(--k)), 1fr); }
+  grid-template-rows: minmax(calc(44px * var(--k)), auto) auto auto auto auto minmax(calc(320px * var(--k)), 1fr); }
 #vband { display: flex; overflow: hidden; flex-wrap: wrap; row-gap: calc(4px * var(--k)); padding-top: calc(4px * var(--k)) !important; padding-bottom: calc(4px * var(--k)) !important; align-items: center; gap: calc(14px * var(--k)); border-bottom: 1px solid var(--line); margin: 0 -16px; padding: 0 calc(16px * var(--k)); white-space: nowrap; font-size: calc(15px * var(--k)); color: var(--dim); }
 #vband b { color: var(--fg); font-size: calc(17px * var(--k)); }
 #vband .virtTag { color: #111; background: var(--accent); border-radius: calc(4px * var(--k)); padding: 1px calc(8px * var(--k)); font-weight: 700; }
@@ -224,6 +224,7 @@ body:not([data-mode="virtual"]) #toasts { display: none; }
 #tl .k.card { background: rgba(245,185,58,.18); color: var(--warn); }
 #tl .k.feedback { background: rgba(143,156,255,.18); color: var(--accent); }
 #tl .k.phase_light { background: #222836; color: var(--dim); }
+#tl .k.laptop { background: rgba(76,195,138,.18); color: var(--ok); }
 #tl .tx { font-weight: 600; }
 #tl .why, #tl .rl { color: var(--dim); font-size: calc(13px * var(--k)); }
 
@@ -243,6 +244,31 @@ body.narrow .trig { grid-template-columns: minmax(0, 1fr); }
 .trig .src { grid-column: 1 / -1; font-size: calc(12px * var(--k)); color: var(--faint); }
 .trig svg { width: 100%; height: calc(220px * var(--k)); display: block; background: #10141c; border-radius: calc(6px * var(--k)); }
 .trig .lg { font-size: calc(12px * var(--k)); color: var(--dim); margin-top: calc(4px * var(--k)); }
+
+.trig .bd { font-size: calc(14px * var(--k)); margin-top: calc(6px * var(--k)); }
+.trig .bd table { width: 100%; border-collapse: collapse; }
+.trig .bd td, .trig .bd th { padding: calc(2px * var(--k)) calc(6px * var(--k)); text-align: left; white-space: nowrap; }
+.trig .bd th { color: var(--faint); font-weight: 400; font-size: calc(12px * var(--k)); }
+.trig .bd td.n { font-family: Consolas, monospace; text-align: right; }
+.trig .bd td.note { color: var(--dim); white-space: normal; }
+.trig .bd .sum { color: var(--fg); font-weight: 700; } .trig .bd .warn { color: var(--warn); }
+.trig .prior { grid-column: 1 / -1; font-size: calc(14px * var(--k)); color: var(--accent); }
+#pPrior { margin-top: calc(6px * var(--k)); font-size: calc(14px * var(--k)); color: var(--accent); }
+#lapStat { font-size: calc(14px * var(--k)); color: var(--dim); }
+#lapStat b { color: var(--fg); } #lapStat .on { color: var(--ok); font-weight: 700; } #lapStat .off { color: var(--faint); }
+/* 선풍기(가상·화면 그림): 가상 기기 화면의 큰 칸, ?mode=fan 은 전체 화면 */
+.fanbox { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: calc(18px * var(--k)); align-items: center; }
+.fanbox svg { width: calc(220px * var(--k)); height: calc(220px * var(--k)); }
+.fanbox .fs { font-size: calc(30px * var(--k)); font-weight: 800; }
+.fanbox .fs.on { color: var(--ok); } .fanbox .fs.off { color: var(--faint); }
+.fanbox .fw { font-size: calc(16px * var(--k)); color: var(--dim); margin-top: calc(6px * var(--k)); line-height: 1.5; }
+body:not([data-mode="fan"]) #fanpage { display: none; }
+#fanpage { position: fixed; inset: 0; background: #06080c; display: grid; place-items: center; }
+#fanpage .fanbox { grid-template-columns: minmax(0, 1fr); justify-items: center; text-align: center; }
+#fanpage .fanbox svg { width: min(70vh, 70vw); height: min(70vh, 70vw); }
+#fanpage .fanbox .fs { font-size: min(7vh, 6vw); } #fanpage .fanbox .fw { font-size: min(3vh, 2.4vw); max-width: 80vw; }
+#fanpage .tag { position: absolute; top: 16px; left: 20px; color: rgba(255,255,255,.5); font-size: 18px; }
+#fanpage .back { position: absolute; top: 12px; right: 16px; opacity: 0; } #fanpage:hover .back { opacity: 1; }
 
 /* ---------- 영상 모드(/?mode=video): 시뮬 영상 하단 띠와 같은 칸, 실제 영상 옆·위에 녹화 ---------- */
 #video { position: fixed; inset: 0; background: #000; --k: var(--kv, 1); }   /* 영상 모드는 화면 크기에 맞춰(1920 기준) */
@@ -297,7 +323,7 @@ body.narrow #virt { grid-template-rows: none; grid-auto-rows: auto; }
 body.narrow #vtop { display: contents; }
 body.narrow #trigV { order: 1; }
 body.narrow #vband { order: 0; } body.narrow #vnow { order: 1; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); }
-body.narrow #vdevs { order: 2; } body.narrow #vperson { order: 3; }
+body.narrow #vdevs { order: 2; } body.narrow #fanPanel { order: 2; } body.narrow #vperson { order: 3; }
 body.narrow #vtl { order: 4; min-height: calc(320px * var(--k)); }
 body.narrow #vdevs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 body.narrow #tl .row { grid-template-columns: calc(70px * var(--k)) calc(74px * var(--k)) minmax(0, 1fr); }
@@ -398,6 +424,9 @@ body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
     <button class="tg" data-go="video">영상 모드</button>
   </header>
   <section class="panel trig" id="trigV"></section>
+  <section class="panel" id="fanPanel"><div class="ptitle"><span><b>선풍기</b> · 가상(화면 그림) — 실제 Pico 2 W 선풍기는 Pi 5 앱이 따로 움직인다</span>
+    <span><span id="lapStat"></span> <button class="tg" data-go="fan" title="단축키 F">선풍기 전체 화면</button></span></div>
+    <div class="fanbox" id="fanV"></div></section>
   <section id="vtop">
     <div class="panel" id="vperson">
       <div class="ptitle"><span><b>나는 누구?</b> · 첫 설정 프로필 → hub 개인화 기준(prior)</span><span class="mono" id="pNode">node laptop-devview</span></div>
@@ -407,6 +436,7 @@ body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
       <div id="pconfirm"><div>deskmate/profile/user (retain, QoS 1) 로 보냅니다 — 이름·직업은 싣지 않음:</div><pre id="pPreview"></pre>
         <button class="btn go" id="pYes">확인하고 보내기</button> <button class="btn" id="pNo">취소</button></div>
       <div id="pstatus">-</div>
+      <div id="pPrior"></div>
     </div>
     <div class="panel" id="vnow">
       <div>
@@ -431,6 +461,8 @@ body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
   </section>
 </div>
 
+<div id="fanpage"><div class="tag">DESKMATE · 선풍기(가상 — hub 명령을 화면에) · F 키로 돌아가기</div>
+  <button class="tg back" data-go="virtual">가상 기기</button><div class="fanbox" id="fanF"></div></div>
 <div id="toasts"></div>
 <div id="video">
   <div id="vTag"><b>DESKMATE</b> · 보드 실시간 센서 · 판단·제어는 Pi 4·Pi 5 보드 <span id="vFake" style="display:none;color:#111;background:var(--warn);padding:0 8px;border-radius:4px;font-weight:700">가짜 데이터(--fake)</span></div>
@@ -549,7 +581,8 @@ function renderJudge(ph, p, profile) {
     ["재실", `${esc(ph.presence)} · ${esc(ph.place)} · mmWave ${esc(ph.mmwave_distance)}`],
     ["장치 위치", placeHtml(p && p.placement)],
     ["프로필", esc(profile)],
-    ["개인화", esc(ph.explanation)],
+    ["개입 선택 개인화", esc(ph.explanation)],
+    ["2단계 피로 관찰", `${esc(ph.stage2)} <span class="empty">(판정 무관)</span>`],
     ["반응 학습", esc(ph.learning)],
   ]);
 }
@@ -647,7 +680,7 @@ function setMode(mode) {
   if (mode === "dev") Q.delete("mode"); else Q.set("mode", mode);
   history.replaceState(null, "", location.pathname + (Q.toString() ? "?" + Q : ""));
 }
-setMode(["video", "virtual"].includes(Q.get("mode")) ? Q.get("mode") : "dev");
+setMode(["video", "virtual", "fan"].includes(Q.get("mode")) ? Q.get("mode") : "dev");
 if (Q.get("bg") === "green") $("video").classList.add("green");
 document.querySelectorAll("[data-go]").forEach(b => b.onclick = () => setMode(b.dataset.go));
 document.addEventListener("keydown", e => {
@@ -655,6 +688,7 @@ document.addEventListener("keydown", e => {
   const m = document.body.dataset.mode;
   if (e.key === "v" || e.key === "V") setMode(m === "video" ? "dev" : "video");
   if (e.key === "g" || e.key === "G") setMode(m === "virtual" ? "dev" : "virtual");
+  if (e.key === "f" || e.key === "F") setMode(m === "fan" ? "virtual" : "fan");
 });
 
 // ---------------- 글씨 크기: --k 배율(0.8~2.5). 처음엔 창이 좁으면(노트북 1440 폭) 1.6, 1920 이상이면 1.2
@@ -819,6 +853,16 @@ function trigChart(tr) {
     g += `<text x="${x(now - ago)}" y="${H - 6}" fill="#5d6578" font-size="11" text-anchor="${ago === 0 ? "end" : "start"}">${lab}</text>`);
   return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${g}</svg>`;
 }
+function breakdownHtml(b) {
+  const f = v => v == null ? "-" : Number(v).toFixed(2);
+  const rows = b.rows.map(r => r.key === "posture"
+    ? `<tr><td>${esc(r.name)}</td><td class="n">${f(r.w)}</td><td class="n">${f(r.delta)}</td><td class="n">${f(r.share)}</td><td class="note">${esc(r.note)} · 추정</td></tr>`
+    : `<tr><td>${esc(r.name)}</td><td class="n">${f(r.w)}</td><td class="n">?</td><td class="n">≤ ${f(r.share_max)}</td><td class="note">${esc(r.note)}</td></tr>`).join("");
+  return `<div class="bd"><table><tr><th>신호</th><th>w</th><th>δ</th><th>몫 w·δ/Σw</th><th>근거(hub 는 자세 말고 δ 를 안 보냄)</th></tr>${rows}` +
+    `<tr class="sum"><td>합</td><td class="n">${f(b.sum_w)}</td><td></td><td class="n">${f(b.c_fsm)}</td><td class="note">FSM 점수 c_fsm (맥락 ${esc(b.ctx)}) = 자세 ${f(b.posture_share)} + 나머지 ≈ ${f(b.rest)}(추정)</td></tr>` +
+    `<tr class="sum"><td>학습기</td><td></td><td></td><td class="n">${f(b.c_adj ?? b.c_shown)}</td><td class="note">반응 학습 c_fsm ${f(b.c_fsm)} → c_adj ${f(b.c_adj ?? b.c_shown)} (α ${f(b.alpha)}) = 화면의 C_fatigue</td></tr></table>` +
+    (b.mismatch ? `<div class="warn">자세 몫 추정(${f(b.posture_share)})이 c_fsm(${f(b.c_fsm)})보다 큼 — 이 tick 에 hub 가 다른 자세 값을 썼다(추정 오차)</div>` : "") + `</div>`;
+}
 function renderTrigger(el, tr) {
   if (!el) return;
   if (!tr || tr.error) {
@@ -830,12 +874,58 @@ function renderTrigger(el, tr) {
     `<div class="th"><span class="hl ${cls}">${esc(h)}</span>${tr.eta_s != null ? `<span class="eta">${tr.eta_s} s</span>` : ""}</div>` +
     `<div class="chk">${(tr.checks || []).map(c => `<div class="r"><span class="${c.ok ? "y" : "n"}">${c.ok ? "✓" : "·"}</span><span>${esc(c.name)}</span><span class="v">${esc(c.value)}</span>` +
       (c.progress != null ? `<div class="pb"><i style="width:${(c.progress * 100).toFixed(0)}%"></i></div>` : "") + `</div>`).join("")}</div>` +
+    (tr.breakdown ? breakdownHtml(tr.breakdown) : "") +
     `<div>${trigChart(tr)}<div class="lg">흰 선 = C_fatigue · 배경 = FSM(초록 집중·노랑 의심·빨강 피로/개입) · 세로선: 💡 무드등 명령 · 카드 · 확정 · 개입(자동/제안)</div></div>` +
+    (tr.prior ? `<div class="prior">개입 선택 개인화 기준(첫 설정): ${esc(tr.prior)}</div>` : "") +
     `<div class="src">설정: ${esc(tr.source)} · 프로파일 ${esc(tr.profile || "-")} · hub 는 유지 타이머를 싣지 않아 '남은 초'는 state/phase tick 으로 추정(engine.py 규칙)</div>`;
 }
 
+// ---------------- 선풍기 그림: 풍량에 비례한 회전(부드럽게 빨라지고 느려진다), 꺼지면 멈춤
+const fanAnim = {angle: 0, speed: 0, target: 0, natural: false, last: performance.now()};
+function fanSvg(id) {
+  const blades = [0, 120, 240].map(a => `<path transform="rotate(${a} 100 100)" d="M100 100 C 112 70, 138 38, 120 18 C 104 2, 86 20, 92 52 C 95 70, 97 86, 100 100 Z" fill="url(#bl${id})"/>`).join("");
+  return `<svg viewBox="0 0 200 200"><defs><radialGradient id="bl${id}" cx="50%" cy="30%"><stop offset="0" stop-color="#9fe7c4"/><stop offset="1" stop-color="#3fae80"/></radialGradient></defs>` +
+    `<circle cx="100" cy="100" r="96" fill="#0f141c" stroke="#2a3040" stroke-width="3"/>` +
+    `<g class="rot">${blades}</g><circle cx="100" cy="100" r="13" fill="#1d2430" stroke="#4cc38a" stroke-width="3"/>` +
+    [0, 30, 60, 90, 120, 150].map(a => `<line transform="rotate(${a} 100 100)" x1="100" y1="6" x2="100" y2="194" stroke="#2a3040" stroke-width="1.5"/>`).join("") +
+    `<circle cx="100" cy="100" r="96" fill="none" stroke="#3a4152" stroke-width="5"/></svg>`;
+}
+function fanTarget(f) {
+  if (!f || !f.power) return 0;
+  if (f.speed != null) return 0.25 + 2.0 * f.speed / 100;      // 회전/초
+  const lv = f.level == null ? 2 : f.level;                     // 풍량 0~3(정보 없으면 가운데)
+  return lv === 0 ? 0 : [0, 0.8, 1.5, 2.3][lv] || 1.5;
+}
+function renderFan(el, f) {
+  if (!el) return;
+  if (!el.dataset.built) { el.innerHTML = `${fanSvg(el.id)}<div><div class="fs"></div><div class="fw"></div></div>`; el.dataset.built = "1"; }
+  const on = f && f.power;
+  const st = el.querySelector(".fs");
+  st.className = "fs " + (on ? "on" : "off");
+  st.textContent = !f ? "-" : on ? `켜짐 · 풍량 ${f.level ?? "정보 없음"}${f.speed != null ? " · 속도 " + f.speed : ""}${f.mode ? " · " + f.mode : ""}` : "꺼짐";
+  const w = f && f.why;
+  el.querySelector(".fw").innerHTML = w ? `켠 이유: ${esc(w.cause || "-")} · ${esc(w.gate || "")}${w.arm ? " · " + esc(w.arm) : ""}${w.reason ? "<br>" + esc(w.reason) : ""}<br><span class="empty">${esc(w.text)} · ${w.t}</span>`
+    : `<span class="empty">hub 선풍기 명령이 오면 돌기 시작합니다(가상)</span>`;
+}
+function fanLoop(now) {
+  const dt = Math.min(0.1, (now - fanAnim.last) / 1000); fanAnim.last = now;
+  const target = fanAnim.target * (fanAnim.natural ? (0.75 + 0.25 * Math.sin(now / 900)) : 1);
+  fanAnim.speed += (target - fanAnim.speed) * Math.min(1, dt * 1.2);   // 부드럽게 돌기 시작·멈춤
+  fanAnim.angle = (fanAnim.angle + fanAnim.speed * 360 * dt) % 360;
+  document.querySelectorAll(".fanbox .rot").forEach(g => g.setAttribute("transform", `rotate(${fanAnim.angle.toFixed(1)} 100 100)`));
+  requestAnimationFrame(fanLoop);
+}
+requestAnimationFrame(fanLoop);
+
 function renderVirtual(d) {
   const v = d.virtual, P = d.persona, ph = d.phase;
+  fanAnim.target = fanTarget(v.fan); fanAnim.natural = !!(v.fan && v.fan.mode === "natural");
+  renderFan($("fanV"), v.fan); renderFan($("fanF"), v.fan);
+  const L = d.laptop;
+  $("lapStat").innerHTML = L && L.enabled
+    ? `💻 노트북 대역 <span class="on">켜짐</span> · 화면 <b>${L.cur.brightness ?? "-"} %</b> · 볼륨 <b>${L.cur.volume == null ? "-" : Math.round(L.cur.volume * 100) + " %"}</b> · 원래 ${L.orig.brightness ?? "-"} % / ${L.orig.volume == null ? "-" : Math.round(L.orig.volume * 100) + " %"} · ${esc(L.result_policy)}${L.error ? ` · <span class="bad">${esc(L.error)}</span>` : ""}`
+    : `💻 노트북 대역 <span class="off">꺼짐</span>(--act-laptop 으로 켬)`;
+  $("pPrior").textContent = P.prior ? `hub 가 반영한 첫 설정(개입 선택 개인화 기준): ${P.prior}` : "";
   $("vFake2").style.display = d.mode === "fake" ? "inline" : "none";
   $("vdMqtt").className = "dot" + (d.links.mqtt.ok ? " on" : "");
   if (!presets) { presets = P.presets; pickPersona("student_exam"); }
@@ -894,7 +984,7 @@ function renderVirtual(d) {
     (x.level != null ? `<div class="bar"><i style="width:${(x.level * 100).toFixed(0)}%"></i></div>` : "") +
     `<div class="lc">${x.last ? esc(x.last) + " · " + x.time : "아직 바뀐 적 없음"}</div></div>`).join("");
   // 타임라인
-  const KIND = {command: "명령", card: "카드", feedback: "응답", phase_light: "단계 조명"};
+  const KIND = {command: "명령", card: "카드", feedback: "응답", phase_light: "단계 조명", laptop: "노트북"};
   $("tlCount").textContent = `${v.timeline.length}`;
   $("tl").innerHTML = v.timeline.length ? v.timeline.map(e => {
     const why = [e.fsm_state && (FSM_KO_JS[e.fsm_state] || e.fsm_state), e.cause && ("원인 " + e.cause), e.gate && (e.gate === "auto" ? "자동" : e.gate === "suggest" ? "제안" : e.gate),
