@@ -152,7 +152,7 @@ void main() {
       expect(bluetooth.connects, 2);
     });
 
-    test('a link that fails to come up is retried after a short scan',
+    test('a link that fails to come up is retried, rescanning every other try',
         () async {
       // 10-24 Pi 5: about half the GATT connects to the Pico 2 W fail at once.
       fan.select(_fanAddress);
@@ -162,7 +162,8 @@ void main() {
       final result = await coordinator.handleControlCommand(_command('c6'));
       expect(result?['status'], 'succeeded');
       expect(bluetooth.connects, 4);
-      expect(bluetooth.scans, 3);
+      // 실패 직후 곧바로 검색하면 BlueZ 가 맺던 링크가 끊겨, 검색은 두 번에 한 번만(ui_env_app 0.1.4~).
+      expect(bluetooth.scans, 1);
     });
 
     test('gives up after the configured attempts', () async {

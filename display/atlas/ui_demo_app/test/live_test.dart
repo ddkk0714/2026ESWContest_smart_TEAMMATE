@@ -68,13 +68,14 @@ Map<String, Object?> phase(String fsm,
         double fatigue = .1,
         double focus = .1,
         String phaseName = 'focus',
-        List<String> envFlags = const []}) =>
+        List<String> envFlags = const [],
+        int seq = 1}) =>
     {
       'schema_version': '1.0',
       'ts': 1769000002.0,
       'node': 'hub',
       'boot_id': 'a8021bf0',
-      'seq': 1,
+      'seq': seq,
       'data': {
         'fsm_state': fsm,
         'phase': phaseName,
@@ -561,7 +562,9 @@ void main() {
       m.leaveLive();
       expect(m.liveDriven, isFalse);
       now = now.add(const Duration(seconds: 1));
-      transport.deliver(LiveLink.stateTopic, phase('IDLE', phaseName: 'idle'));
+      // 허브는 매 발행마다 seq 를 올린다. 같은 seq 는 새 상태로 치지 않는다(재연결 뒤 귀 먹음 수정).
+      transport.deliver(
+          LiveLink.stateTopic, phase('IDLE', phaseName: 'idle', seq: 2));
       expect(link.live, isTrue);
       transport.drop();
       expect(link.live, isFalse);
