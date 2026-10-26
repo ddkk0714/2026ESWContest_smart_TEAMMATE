@@ -121,6 +121,19 @@ def set_volume(level: float) -> None:
         _release(vol)
 
 
+def speak(text: str) -> str:
+    """Windows 내장 TTS(System.Speech)로 말한다. 한국어 목소리가 있으면 그것, 없으면 OSError(부르는 쪽이 알림음으로).
+    글자는 base64 로 넘겨 따옴표·특수문자가 명령이 되지 않게 한다. 실행 정책은 건드리지 않는다(인라인 -Command)."""
+    import base64
+    b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
+    out = _ps("Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+              "$v = $s.GetInstalledVoices() | Where-Object { $_.Enabled -and $_.VoiceInfo.Culture.Name -like 'ko*' } | Select-Object -First 1; "
+              "if (-not $v) { [Console]::Error.WriteLine('no korean voice'); exit 2 }; $s.SelectVoice($v.VoiceInfo.Name); "
+              f"$t = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{b64}')); $s.Speak($t); $v.VoiceInfo.Name",
+              timeout=60)
+    return out.splitlines()[-1] if out else "TTS"
+
+
 def chime(kind: str = "alert") -> None:
     """짧은 소리: alert = 두 음, voice = 세 음(음성 안내 대신), music = 부드러운 네 음(음악 대신). 막지 않게 부르는 쪽이 스레드로."""
     import winsound

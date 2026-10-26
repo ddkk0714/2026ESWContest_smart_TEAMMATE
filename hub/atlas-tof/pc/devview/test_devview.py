@@ -869,7 +869,7 @@ def test_breakdown_from_live_shape(hub_cfg):
 
 class FakeLaptop:
     def __init__(self, brightness=43, volume=0.41):
-        self.b, self.v, self.calls, self.sounds = brightness, volume, [], []
+        self.b, self.v, self.calls, self.sounds, self.spoken = brightness, volume, [], [], []
 
     def get_brightness(self):
         return self.b
@@ -887,6 +887,12 @@ class FakeLaptop:
 
     def chime(self, kind):
         self.sounds.append(kind)
+
+    def speak(self, text):
+        if getattr(self, "no_voice", False):
+            raise OSError("no korean voice")
+        self.spoken.append(text)
+        return "Microsoft Heami Desktop"
 
 
 def _laptop_store():
@@ -920,6 +926,21 @@ def test_laptop_lamp_to_brightness_with_rate_limit_and_restore():
     assert fake.b == 43 and fake.v == 0.41 and act.active is False
     act.restore()                                               # 두 번 불러도 한 번
     assert fake.calls.count(("b", 43)) == 1
+
+
+def test_laptop_original_values_survive_a_kill(tmp_path):
+    f = str(tmp_path / "orig.json")
+    st = dv.Store()
+    fake = FakeLaptop(brightness=43, volume=0.41)
+    a1 = dv.LaptopActuator(st, fake, f)
+    a1.start(thread=False)
+    fake.b, fake.v = 10, 0.8                                    # 바꾼 채로 강제 종료(restore 없음)
+    st2 = dv.Store()
+    a2 = dv.LaptopActuator(st2, fake, f)
+    a2.start(thread=False)
+    assert a2.orig == {"brightness": 43, "volume": 0.41}        # 지난번 원래 값을 그대로 쓴다
+    a2.restore()
+    assert (fake.b, fake.v) == (43, 0.41) and not _os.path.exists(f)
 
 
 def test_laptop_speaker_to_volume_by_sound_pref():
@@ -967,6 +988,72 @@ def test_fan_view_from_command():
     h2.on_cmd(cmd_env("f3", "vent_fan", "set_power", "on", gate="suggest", cause="environment", origin="ACTION_ENV", at=4.0), at=4.0)
     w = h2.view(5.0)["fan"]["why"]
     assert w["reason"] == "CO₂ 오름 — 선풍기?"   # 무드등을 고른 설명이 아니라 선풍기 카드의 설명
+
+
+# ----------------------------------------------------------------- 휴식(REST) 배너·말하기
+
+def test_rest_notice_banner_and_countdown():
+    h = dv.VirtualHome()
+    h.rest_min_s = 60
+    h.on_phase(phase_env("REST", "recovery"), 100.0)                  # 알림이 먼저 안 와도 배너는 뜬다
+    v = h.rest_view(101.0)
+    assert v["source"] == "phase" and v["label"] == "hub 알림 없음 (구버전)" and v["left_s"] == 59
+    h.on_request(env({"request_id": "r1", "kind": "rest_notice", "message": "잠깐 쉬어 가요", "rest_sec": 300,
+                      "reason": "작업이 길어졌어요"}), 102.0)
+    v = h.rest_view(110.0)
+    assert v["source"] == "notice" and v["message"] == "잠깐 쉬어 가요" and v["left_s"] == 290   # REST 진입 시각부터
+    assert v["reason"] == "작업이 길어졌어요" and h.pending_card(110.0) is None                    # 답하는 카드가 아니다
+    h.on_phase(phase_env("RECOVERY", "recovery"), 200.0)
+    assert h.rest_view(203.0)["ended"] is True and h.rest_view(209.0) is None
+
+
+def test_rest_notice_lenient_keys():
+    h = dv.VirtualHome()
+    h.on_request(env({"request_id": "r", "kind": "rest_notice", "text": "5분 휴식", "minutes": 5, "why": ["elapsed", "keystroke"]}), 1.0)
+    v = h.rest_view(2.0)
+    assert v["message"] == "5분 휴식" and v["duration_s"] == 300 and v["reason"] == "elapsed, keystroke"
+    c = dv.ControlTracker()
+    c.on_message(dv.TOPIC_REQUEST, env({"request_id": "r", "kind": "rest_notice", "text": "x"}), 1.0)
+    assert c.request is None                                          # 제어 결론의 '제안 카드'로 안 본다
+
+
+def test_speak_command_goes_to_virtual_speaker_and_laptop_tts():
+    st, act, fake = _laptop_store()
+    st.on_mqtt(dv.TOPIC_CMD, payload({"command_id": "s1", "target_id": "speaker", "operation": "speak",
+                                      "value": {"text": "잠깐 쉬어 가요"}, "gate": "auto", "requires_confirmation": False,
+                                      "expires_ts_ms": int((time.time() + 15) * 1000)}), at=time.time())
+    assert st.virtual.speaker["voice"] == "음성 안내: 잠깐 쉬어 가요"
+    act.tick(time.time() + 5)                                         # 볼륨 먼저(기본 0.3)
+    assert fake.v == dv.DEFAULT_VOLUME
+    deadline = time.time() + 5                                        # 볼륨을 올린 뒤(약 1.8 s) 스스로 한 번 말한다
+    while not fake.spoken and time.time() < deadline:
+        time.sleep(0.1)
+    assert fake.spoken == ["잠깐 쉬어 가요"]
+    assert any("노트북이 말함(Microsoft Heami Desktop)" in e["text"] for e in st.virtual.timeline if e["kind"] == "laptop")
+    fake.no_voice = True                                              # 한국어 목소리 없음 → 알림음
+    act._chime("speak:다시")
+    assert fake.sounds[-1] == "voice" and "음성 실패" in act.error
+
+
+def test_fake_rest_scenarios(hub_cfg):
+    for kind, label in (("rest", "hub 휴식 알림"), ("rest_old", "hub 알림 없음 (구버전)")):
+        rules = dv.load_hub_rules(hub_cfg, "demo-b")
+        rules["rest_min"] = 60
+        st = dv.Store()
+        st.virtual.rest_min_s = 60
+        sc = dv.FakeHubScenario(st, kind, rules)
+        base, real = 1_000_000.0, dv.time.time
+        try:
+            for i in range(0, 400):
+                t = i * 0.1
+                dv.time.time = lambda t=t: base + t
+                sc.step(t)
+            v = st.virtual.rest_view(base + 40)
+        finally:
+            dv.time.time = real
+        assert v["label"] == label and v["left_s"] == 40
+        spoke = [e for e in st.virtual.timeline if e.get("operation") == "speak"]
+        assert bool(spoke) == (kind == "rest")                        # 구버전은 말하지 않는다
 
 
 # ----------------------------------------------------------------- 보내기(프로필·카드 응답)

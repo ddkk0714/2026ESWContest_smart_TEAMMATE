@@ -715,7 +715,7 @@ class KeystrokeTracker:
 # --------------------------------------------------------------------------- 제어 결론
 
 # target_id → 실제 기기(control.yaml 주석·Pi 5 실행기 기준)
-DEVICE_REAL = {"desk_lamp": "iLink 무드등 (BLE)", "vent_fan": "Pico 2 W 선풍기 (BLE)",
+DEVICE_REAL = {"desk_lamp": "iLink 무드등 (BLE)", "vent_fan": "Pico 2 W 선풍기 (BLE)", "speaker": "블루투스 스피커",
                "air_purifier": "LG 공기청정기 (ThinQ)", "plug_1": "스마트 플러그"}
 CAUSE_KO = {"posture": "자세", "environment": "환경", "cognitive": "인지", "respiration": "호흡(자세성)",
             "elapsed": "경과 시간(인지성)", "keystroke": "키 입력(인지성)"}
@@ -775,6 +775,9 @@ def op_text(op: str, value: Any) -> str:
         return f"풍량 {value}"
     if op == "set_mode":
         return f"모드 {value}"
+    if op == "speak":
+        t = value.get("text") if isinstance(value, dict) else value
+        return f"말하기 “{_clip(str(t or ''), 40)}”"
     return f"{op} {raw_value(value)}".strip()
 
 
@@ -818,7 +821,7 @@ class ControlTracker:
                 if c.get("command_id") == data.get("command_id"):
                     c["result"] = {**data, "node": _map(env).get("node"), "at": at}
                     break
-        elif topic == TOPIC_REQUEST:
+        elif topic == TOPIC_REQUEST and data.get("kind") != "rest_notice":   # 휴식 알림은 답하는 카드가 아니다
             self.request = {**data, "at": at, "verdict": None}
         elif topic == TOPIC_FEEDBACK and self.request is not None:
             rid = data.get("request_id")
@@ -1107,6 +1110,9 @@ class VirtualHome:
         self.auto_notice: dict[str, Any] | None = None
         # 기기 상태가 바뀔 때 부르는 함수들(key, 기기 dict, 시각, 문구) — --act-laptop 이 화면 밝기·볼륨으로 옮긴다
         self.listeners: list[Callable[[str, dict[str, Any], float, str], None]] = []
+        # 휴식(REST) 배너: hub 의 rest_notice 카드가 있으면 그 문구·시간, 없으면(구버전 hub) state/phase REST 진입으로
+        self.rest: dict[str, Any] | None = None
+        self.rest_min_s: float | None = None    # hub fsm timers.rest_min_sec (load_hub_rules 가 넣는다)
 
     # ---------------------------------------------------------------- 공통
     def _notify(self, key: str, text: str, at: float, tone: str = "info") -> None:
@@ -1155,6 +1161,7 @@ class VirtualHome:
                         "decision_source": pers.get("decision_source") or pers.get("source"),
                         "explanation": pers.get("explanation"), "arm": pers.get("arm"), "arm_label": pers.get("arm_label")}
         fsm, phase, gate = self._latest["fsm_state"], self._latest["phase"], self._latest["gate"]
+        self._rest_on_phase(fsm, at)
         if fsm != self._accepted_action:
             self._accepted_action = None
         # 피로 국면인데 ACTION_ENV(명령이 맡음)·ACTION_* 아님·자동 아닌데 수락 전이면 조명·소리를 바꾸지 않는다
@@ -1162,6 +1169,45 @@ class VirtualHome:
                                    or (gate != "auto" and fsm != self._accepted_action)):
             return
         self._apply_outputs(phase, at, why=f"단계 {phase}")
+
+    # ---------------------------------------------------------------- 휴식
+    def _rest_on_phase(self, fsm: str, at: float) -> None:
+        r = self.rest
+        if fsm == "REST":
+            if r is None or r.get("ended_at") is not None:
+                self.rest = {"source": "phase", "message": "휴식 중이에요", "duration_s": self.rest_min_s, "start": at,
+                             "reason": None, "request_id": None, "ended_at": None}
+                self._event(at, kind="rest", text="휴식 시작 — hub 알림 없음 (구버전): state/phase REST 로만 앎")
+        elif r is not None and r.get("ended_at") is None:
+            r["ended_at"] = at
+            self._event(at, kind="rest", text=f"휴식 끝 — {FSM_KO.get(fsm, fsm)}")
+
+    def on_rest_notice(self, d: dict[str, Any], at: float) -> None:
+        """hub interaction/request kind rest_notice. 키 이름은 hub 확정 전이라 넉넉히 받는다."""
+        msg = next((str(d[k]) for k in ("message", "text", "message_ko", "explanation", "prompt") if d.get(k)), "쉬어 가요")
+        dur = next((float(d[k]) for k in ("rest_sec", "duration_s", "rest_s", "seconds") if _num(d.get(k)) is not None), None)
+        if dur is None and _num(d.get("minutes")) is not None:
+            dur = float(d["minutes"]) * 60
+        if dur is None:
+            dur = self.rest_min_s if self.rest_min_s is not None else _num(d.get("expires_in_s"))
+        reason = next((str(d[k]) for k in ("reason", "why", "reason_ko") if d.get(k)), None)
+        if isinstance(d.get("why"), list):
+            reason = ", ".join(map(str, d["why"]))
+        start = self.rest["start"] if self.rest and self.rest.get("ended_at") is None else at
+        self.rest = {"source": "notice", "message": msg, "duration_s": dur, "start": start, "reason": reason,
+                     "request_id": d.get("request_id"), "ended_at": None}
+        self._notify("card", f"휴식 — {msg}", at, "card")
+        self._event(at, kind="rest", text=f"휴식 알림(hub rest_notice) — {msg}" + (f" · {round(dur)} s" if dur else ""),
+                    reason=reason, request_id=d.get("request_id"))
+
+    def rest_view(self, now: float) -> dict[str, Any] | None:
+        r = self.rest
+        if r is None or (r.get("ended_at") is not None and now - r["ended_at"] > 8):
+            return None
+        left = None if not r.get("duration_s") else max(0, round(r["start"] + r["duration_s"] - now))
+        return {"source": r["source"], "message": r["message"], "reason": r.get("reason"), "duration_s": r.get("duration_s"),
+                "left_s": left, "ended": r.get("ended_at") is not None,
+                "label": "hub 휴식 알림" if r["source"] == "notice" else "hub 알림 없음 (구버전)"}
 
     def _apply_outputs(self, phase: str, at: float, why: str) -> None:
         if phase != self._phase_key and phase in PHASE_LIGHT:
@@ -1280,6 +1326,14 @@ class VirtualHome:
             self.fan[key] = (value == "on") if op == "set_power" else value
             self._stamp(self.fan, op_text(str(op), value), at)
             return {"status": "succeeded", "actual_value": value}
+        if op == "speak":
+            v = value if isinstance(value, dict) else {"text": value}
+            text = str(v.get("text") or v.get("message") or c.get("text") or "").strip()
+            if not text:
+                return {"status": "failed", "error_code": "unsupported_operation_or_value"}
+            self.speaker["voice"] = "음성 안내: " + text
+            self._stamp(self.speaker, self.speaker["voice"], at)
+            return {"status": "succeeded", "actual_value": "spoken"}
         if target == "air_purifier":
             if op != "set_mode" or value not in AIR_MODES:
                 return {"status": "failed", "error_code": "unsupported_operation_or_value"}
@@ -1292,7 +1346,7 @@ class VirtualHome:
         origin = c.get("origin_state") or self._latest.get("fsm_state") or "-"
         cause = c.get("cause") or self._latest.get("cause")
         head = f"{FSM_KO.get(str(origin), origin)}({CAUSE_KO.get(cause, cause or '-')} 원인)"
-        dev = DEVICE_REAL.get(str(c.get("target_id")), str(c.get("target_id"))).split(" (")[0]
+        dev = "스피커" if c.get("operation") == "speak" else DEVICE_REAL.get(str(c.get("target_id")), str(c.get("target_id"))).split(" (")[0]
         act = op_text(str(c.get("operation")), c.get("value"))
         if res.get("status") == "succeeded":
             tail = (f" ({res['previous']}→{res['actual']})" if res.get("previous") is not None and "actual" in res
@@ -1312,6 +1366,9 @@ class VirtualHome:
     def on_request(self, env: Any, at: float) -> None:
         d = _map(_map(env).get("data"))
         rid = d.get("request_id")
+        if d.get("kind") == "rest_notice":
+            self.on_rest_notice(d, at)
+            return
         if not rid:
             return
         arm = d.get("arm")
@@ -1425,7 +1482,7 @@ class VirtualHome:
                         "gate": {"auto": "자동", "suggest": "제안 수락", "undo": "되돌리기"}.get(str(fan_cmd.get("gate")), fan_cmd.get("gate")),
                         "arm": fan_cmd.get("arm_label") or fan_cmd.get("arm"), "reason": fan_cmd.get("reason"), "t": fan_cmd["t"]}}
         return {"devices": devices, "timeline": tl[::-1], "card": self.pending_card(now), "undo": self.undoable(now),
-                "fan": fan_view,
+                "fan": fan_view, "rest": self.rest_view(now),
                 "auto": auto, "notices": list(self.notices)[::-1][:12],
                 "home": PHASE_LABEL.get(str(self._latest.get("phase")), self._latest.get("fsm_state") or "-")}
 
@@ -1517,8 +1574,10 @@ class LaptopActuator:
       바꾼 것과 구별할 수 없어서).
     """
 
-    def __init__(self, store: "Store", backend: Any) -> None:
+    def __init__(self, store: "Store", backend: Any, state_file: str | None = None) -> None:
         self.store, self.b = store, backend
+        # 원래 밝기·볼륨을 적어 두는 파일 — 강제 종료로 되돌리지 못했으면 다음 실행이 이 값으로 되돌린다
+        self.state_file = state_file
         self.lock = threading.Lock()
         self.orig: dict[str, Any] = {"brightness": None, "volume": None}
         self.cur: dict[str, Any] = {"brightness": None, "volume": None}
@@ -1542,11 +1601,29 @@ class LaptopActuator:
             self.orig["volume"] = self.cur["volume"] = self.b.get_volume()
         except Exception as e:  # noqa: BLE001
             self.error = (self.error + " · " if self.error else "") + f"볼륨 못 읽음: {_reason(e)}"
+        note = ""
+        if self.state_file and os.path.exists(self.state_file):
+            try:
+                with open(self.state_file, encoding="utf-8") as f:
+                    saved = json.load(f)
+                for k in ("brightness", "volume"):
+                    if saved.get(k) is not None:
+                        self.orig[k] = saved[k]
+                note = " · 지난 실행이 되돌리지 못한 원래 값을 씀"
+            except (OSError, ValueError):
+                pass
+        if self.state_file:
+            try:
+                os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
+                with open(self.state_file, "w", encoding="utf-8") as f:
+                    json.dump(self.orig, f)
+            except OSError as e:
+                self.error = f"원래 값 파일 못 씀: {e}"
         self.active = True
         with self.store.lock:
             self.store.virtual.listeners.append(self.on_change)
             self.store.virtual.log_laptop(f"노트북 대역 기기 켬 — 원래 화면 밝기 {self.orig['brightness']} % · 볼륨 "
-                                          f"{_pct(self.orig['volume'])} (끝나면 되돌림)", time.time(), self.error is None)
+                                          f"{_pct(self.orig['volume'])} (끝나면 되돌림){note}", time.time(), self.error is None)
         if thread:
             self._thread = threading.Thread(target=self._loop, daemon=True)
             self._thread.start()
@@ -1557,13 +1634,20 @@ class LaptopActuator:
             return
         self.active = False
         self._stop.set()
+        ok = True
         for key, setter in (("brightness", self.b.set_brightness), ("volume", self.b.set_volume)):
             if self.orig[key] is not None:
                 try:
                     setter(self.orig[key])
                     self.cur[key] = self.orig[key]
                 except Exception as e:  # noqa: BLE001
+                    ok = False
                     self.error = f"되돌리기 실패({key}): {_reason(e)}"
+        if ok and self.state_file and os.path.exists(self.state_file):
+            try:
+                os.remove(self.state_file)
+            except OSError:
+                pass
 
     # ---- 가상 기기가 바뀔 때(store.lock 안에서 불린다 — 여기서는 원하는 값만 적고 실제 쓰기는 스레드가)
     def on_change(self, key: str, dev: dict[str, Any], at: float, text: str) -> None:
@@ -1583,7 +1667,8 @@ class LaptopActuator:
             if dev.get("music"):
                 target, why, sound = level, "스피커 음악 재생", "music"
             elif dev.get("voice") and text.startswith(("음성", "알림음")):
-                target, why, sound = level, text, "voice" if text.startswith("음성") else "alert"
+                target, why, sound = level, text, ("speak:" + text.split(":", 1)[1].strip()) if text.startswith("음성 안내:") \
+                    else "voice" if text.startswith("음성") else "alert"
             else:
                 target, why, sound = self.orig["volume"], "스피커 음악 정지 → 원래 볼륨", None
             with self.lock:
@@ -1602,6 +1687,17 @@ class LaptopActuator:
         return SOUND_PREF_VOLUME.get(str(pref), DEFAULT_VOLUME)
 
     def _chime(self, kind: str) -> None:
+        if kind.startswith("speak:"):
+            text = kind[len("speak:"):]
+            time.sleep(MIN_VOLUME_INTERVAL_S + 0.3)   # 볼륨을 먼저 올리고 말한다
+            try:
+                voice = self.b.speak(text)
+                with self.store.lock:
+                    self.store.virtual.log_laptop(f"노트북이 말함({voice}): “{_clip(text, 40)}”", time.time())
+                return
+            except Exception as e:  # noqa: BLE001 — 한국어 목소리 없음·TTS 실패 → 알림음
+                self.error = f"음성 실패 → 알림음: {_reason(e)}"
+                kind = "voice"
         try:
             self.b.chime(kind)
         except Exception as e:  # noqa: BLE001
@@ -1700,7 +1796,7 @@ def load_hub_rules(config_dir: str, profile: str = "") -> dict[str, Any]:
         natural=th.get("natural_recovery"),
         elevated_hold=tm.get("fatigue_elevated_hold_sec"), confirm_hold=tm.get("fatigue_confirm_hold_sec"),
         hold_frac=tm.get("fatigue_hold_min_frac", 1.0), tick=tm.get("score_period_sec", 10),
-        conf_auto=gate.get("conf_auto"), conf_suggest=gate.get("conf_suggest"),
+        conf_auto=gate.get("conf_auto"), conf_suggest=gate.get("conf_suggest"), rest_min=tm.get("rest_min_sec"),
         weights=(fsm.get("weights") or {}).get("fatigue") or {}, routing=fsm.get("routing") or {},
         posture_delta=tof.get("posture_delta") or {}, min_conf=tof.get("min_confidence", 0.0),
         floors=tof.get("min_confidence_by_label") or {}, nod_max=tof.get("nod_delta_max"),
@@ -2594,6 +2690,8 @@ class FakeHubScenario(FakeScenario):
 
     def _posture(self, t: float) -> str:
         u = t % self.PERIOD
+        if self.kind in ("rest", "rest_old"):
+            return "upright"
         if self.kind == "facedown":
             return "face_down" if 15 <= u < 105 else "upright"
         return "recline" if u >= 15 else "upright"
@@ -2628,7 +2726,34 @@ class FakeHubScenario(FakeScenario):
         frac = self.rules.get("hold_frac") or 1.0
         return c >= thr and t - self.hold_t0 >= hold and sum(1 for _, a in self.hist if a) / len(self.hist) >= frac
 
+    def _rest_fsm(self, t: float) -> None:
+        """휴식 각본: 10 s 휴식 제안(ACTION_BREAK) → 20 s 수락돼 REST(rest_min_sec) → RECOVERY → 집중.
+        rest 는 hub 새 동작(rest_notice 카드 + speak 명령), rest_old 는 구버전(state/phase REST 만)."""
+        u = t % self.PERIOD
+        rest_s = float(self.rules.get("rest_min") or 60)
+        new = ("FOCUS_NPC" if u < 10 else "ACTION_BREAK" if u < 20 else "REST" if u < 20 + rest_s
+               else "RECOVERY" if u < 30 + rest_s else "FOCUS_NPC")
+        if new != self.state:
+            self._goto(new, t)
+            self.gate = "suggest" if new == "ACTION_BREAK" else "none"
+            self.cause = "cognitive" if new in ("ACTION_BREAK", "REST") else None
+            if new == "REST" and self.kind == "rest":
+                msg = "잠깐 쉬어 가요. 눈을 감고 어깨를 천천히 풀어 보세요."
+                self.seq += 1
+                self.store.on_mqtt(TOPIC_REQUEST, _fake_env(self.seq, {
+                    "request_id": f"fkrest{int(t)}", "kind": "rest_notice", "message": msg, "rest_sec": rest_s,
+                    "reason": "작업이 길어지고 입력 리듬이 느려졌어요"}))
+                self.seq += 1
+                self.store.on_mqtt(TOPIC_CMD, _fake_env(self.seq, {
+                    "command_id": f"fkspk{int(t)}", "target_id": "speaker", "operation": "speak", "value": {"text": msg},
+                    "gate": "auto", "cause": "cognitive", "origin_state": "REST", "requires_confirmation": False,
+                    "expires_ts_ms": int((time.time() + 15) * 1000)}))
+        self.c_now = 0.2 if new in ("FOCUS_NPC", "RECOVERY") else 0.5
+
     def _fsm(self, t: float) -> None:
+        if self.kind in ("rest", "rest_old"):
+            self._rest_fsm(t)
+            return
         r, c = self.rules, self._c(t)
         st = self.state
         if st == "FOCUS_NPC":
@@ -2689,10 +2814,10 @@ class FakeHubScenario(FakeScenario):
         while t >= self.next_tick:   # hub 는 10 s 마다 판정한다
             self._fsm(self.next_tick)
             self.seq += 1
-            phase = {"FOCUS_NPC": "focus", "RECOVERY": "recovery"}.get(self.state, "fatigue")
+            phase = {"FOCUS_NPC": "focus", "RECOVERY": "recovery", "REST": "recovery"}.get(self.state, "fatigue")
             st.on_mqtt(TOPIC_PHASE, _fake_env(self.seq, {
                 "fsm_state": self.state, "phase": phase, "context": "npc", "c_fatigue": round(self.c_now, 4),
-                "c_focus": 0.1, "gate": self.gate if self.state == "ACTION_POSTURE" else "none",
+                "c_focus": 0.1, "gate": self.gate if self.state in ("ACTION_POSTURE", "ACTION_BREAK") else "none",
                 "cause": self.cause if self.state in ("ACTION_POSTURE", "MONITOR") else None, "reasons": [],
                 "sensor_summary": {"present": True, "presence_source": "both",
                                    "tof": {"posture": pst, "posture_confidence": probs[pst], "posture_source": "service"},
@@ -2702,7 +2827,8 @@ class FakeHubScenario(FakeScenario):
 
 def fake_loop(store: Store, stop: threading.Event, start: float = 0.0, scenario: str = "cycle",
               rules: dict[str, Any] | None = None) -> None:
-    sc = FakeHubScenario(store, scenario, rules or {}) if scenario in ("facedown", "recline") else FakeScenario(store)
+    sc = FakeHubScenario(store, scenario, rules or {}) if scenario in ("facedown", "recline", "rest", "rest_old") \
+        else FakeScenario(store)
     store.link("mqtt", True, "가짜 각본")
     t0 = time.time() - start
     while not stop.is_set():
@@ -2781,7 +2907,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--read-only", action="store_true",
                     help="화면에서 보내기(프로필·카드 응답)도 끈다 — 녹화만 할 때")
     ap.add_argument("--fake", action="store_true", help="보드 없이 가짜 각본으로")
-    ap.add_argument("--fake-scenario", choices=("cycle", "facedown", "recline"), default="cycle",
+    ap.add_argument("--fake-scenario", choices=("cycle", "facedown", "recline", "rest", "rest_old"), default="cycle",
                     help="cycle = 40 s 각본 · facedown = 15 s 부터 90 s 엎드림(hub 규칙대로 → 무드등) · recline = 계속 젖힘(의심까지만)")
     ap.add_argument("--fake-start", type=float, default=0.0, metavar="S",
                     help=f"가짜 각본을 S 초부터(0–{FAKE_PERIOD:.0f}, 예: 26 = 졸음→무드등 직전)")
@@ -2791,6 +2917,7 @@ def main(argv: list[str] | None = None) -> None:
     store.hub_floors = parse_floors(args.hub_floor)
     rules = load_hub_rules(args.hub_config, args.hub_profile or ("demo-b" if args.fake else ""))
     store.trigger = TriggerTracker(rules)
+    store.virtual.rest_min_s = None if rules.get("error") else rules.get("rest_min")
     if not rules.get("error") and rules.get("floors") is not None and args.hub_floor == ap.get_default("hub_floor"):
         store.hub_floors = {k: float(v) for k, v in rules["floors"].items()}   # 하한도 설정에서
     print(f"hub 규칙: {args.hub_config} · 프로파일 {rules.get('profile') or '-'}" + (f" — 못 읽음: {rules['error']}" if rules.get("error") else ""))
@@ -2818,7 +2945,8 @@ def main(argv: list[str] | None = None) -> None:
             print("--act-laptop 은 Windows 에서만 — 무시")
         else:
             import laptop_win
-            store.laptop = LaptopActuator(store, laptop_win)
+            state_file = os.path.join(os.environ.get("LOCALAPPDATA", HERE), "deskmate-devview", "laptop_original.json")
+            store.laptop = LaptopActuator(store, laptop_win, state_file)
             store.laptop.start()
             import atexit
             atexit.register(store.laptop.restore)

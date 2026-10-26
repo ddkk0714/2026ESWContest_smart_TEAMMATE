@@ -138,6 +138,21 @@ python hub/atlas-tof/pc/devview/devview.py --pi4 172.20.10.3 --hub-profile demo-
   으로만 적는다(자동 밝기·전원 설정이 바꾼 것과 구별할 수 없어 manual_adjust 로 보내지 않음).
 - 화면 '가상 기기' 위에 상태(원래·지금 밝기·볼륨), 타임라인에 "노트북 화면 밝기 43 % → 69 % (무드등 …)".
 
+### 휴식(REST) 알림
+
+hub 가 REST 에 들어가면 가상 기기 화면 위와 영상 모드에 큰 배너: 문구 · 남은 휴식 시간(카운트다운) · 이유.
+- hub 새 동작(준비 중): `interaction/request` kind `rest_notice`(문구 `message`/`text`, 시간 `rest_sec`/`duration_s`/`minutes`,
+  이유 `reason`/`why` — 키 이름은 hub 확정 전이라 넉넉히 받는다) → 라벨 "hub 휴식 알림". 답하는 카드가 아니라 제어 결론·카드 칸에는 안 넣는다.
+- 말하기: `control/cmd` operation `speak`(value `{text}`) → 가상 스피커 음성 안내. `--act-laptop` 이면 노트북이 볼륨을 소리 선호로 올린 뒤
+  Windows 내장 TTS(System.Speech, 한국어 목소리 — 이 노트북은 Microsoft Heami)로 말한다. 한국어 목소리가 없으면 알림음 + 배너. 인라인 명령만(실행 정책 그대로).
+- 구버전 hub(rest_notice 없음): state/phase 가 REST 로 들어가면 배너만, 라벨 "hub 알림 없음 (구버전)", 시간은 hub 설정 `rest_min_sec`. 말하지 않는다.
+- 시험: `--fake --fake-scenario rest`(새 동작) · `--fake-scenario rest_old`(구버전).
+
+### 강제 종료에도 원래 밝기·볼륨
+
+`--act-laptop` 은 켤 때 원래 값을 `%LOCALAPPDATA%\deskmate-devview\laptop_original.json` 에 적고, 되돌린 뒤 지운다. 창을 그냥 닫거나 프로세스가
+죽어 되돌리지 못했으면 다음 실행이 그 파일의 값을 원래 값으로 쓰고, 끝날 때 거기로 되돌린다.
+
 ### 선풍기 그림 (`?mode=fan`, F 키)
 
 hub 선풍기 명령(vent_fan, 가상 선풍기와 같은 규칙)을 큰 선풍기 그림으로: 풍량(0~3)·속도(0~100)에 비례해 돌고(부드럽게 빨라지고 멈춤),
