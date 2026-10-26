@@ -228,6 +228,8 @@ class _DashboardPageState extends State<DashboardPage> {
       diag.write('bluetooth: 복원 스피커=${_btLinks.speakerStatus.health.name} '
           '램프=${_btLinks.lampStatus.health.name} '
           '선풍기=${_btLinks.fanStatus.health.name}');
+      // 복원 뒤에도 램프가 끊기면 45 s 마다 다시 붙여 둔다(BlueZ 가 잊지 않게).
+      if (mounted) _btLinks.keepLampConnected();
     }));
     _startMqttCheck();
     _refresh();

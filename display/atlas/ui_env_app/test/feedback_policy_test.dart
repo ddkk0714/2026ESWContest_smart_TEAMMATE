@@ -528,6 +528,49 @@ void main() {
     });
   });
 
+  group('lamp rediscovery', () {
+    // 10-26 Pi 5: BlueZ forgot the unpaired lamp 30 s after it disconnected, so
+    // every hub command failed in 56 ms with bluetooth_write_failed.
+    FeedbackCoordinator coordinator(_FakeBluetooth bluetooth) =>
+        FeedbackCoordinator(
+            music: _FakeMusic(),
+            lamp: IlinkLampFeedback(bluetooth)..select(firstAddress),
+            bluetooth: bluetooth)
+          ..enabled = true;
+
+    test('a forgotten lamp is found by a scan and the command succeeds',
+        () async {
+      final bluetooth = _FakeBluetooth()
+        ..forgotten = true
+        ..visible = [firstAddress];
+      final result =
+          await coordinator(bluetooth).handleControlCommand(_command('r1'));
+      expect(result?['status'], 'succeeded');
+      expect(result?['recovery'], 'rediscovered');
+      expect(bluetooth.scans, 1);
+      expect(bluetooth.frames.last, ilinkFrame([1, 8, 1, 70]));
+    });
+
+    test('a lamp no scan can find reports device_not_found', () async {
+      final bluetooth = _FakeBluetooth()..forgotten = true;
+      final result =
+          await coordinator(bluetooth).handleControlCommand(_command('r2'));
+      expect(result?['status'], 'failed');
+      expect(result?['error_code'], 'device_not_found');
+      expect(result?['recovery'], 'not_found');
+      expect(bluetooth.frames, isEmpty);
+    });
+
+    test('a lamp that connects first time is not scanned', () async {
+      final bluetooth = _FakeBluetooth();
+      final result =
+          await coordinator(bluetooth).handleControlCommand(_command('r3'));
+      expect(result?['status'], 'succeeded');
+      expect(result?.containsKey('recovery'), isFalse);
+      expect(bluetooth.scans, 0);
+    });
+  });
+
   group('speaker commands', () {
     Map<String, dynamic> speakerCommand(
             String id, String operation, Object? value) =>
@@ -630,6 +673,12 @@ void main() {
 
 // implements는 실제 시스템 D-Bus 클라이언트를 생성하지 않는다.
 class _FakeBluetooth implements AtlasBluetoothService {
+  /// BlueZ 가 램프를 잊은 상태: 검색에 보이기 전까지 Connect 가 바로 실패한다.
+  bool forgotten = false;
+
+  /// 검색에 보이는 주소들.
+  List<String> visible = const [];
+  int scans = 0;
   int connectFailuresRemaining = 0;
   int writeFailuresRemaining = 0;
   int writeCount = 0;
@@ -641,6 +690,9 @@ class _FakeBluetooth implements AtlasBluetoothService {
   Future<GattConnection> connectLamp(String address) async {
     if (connectDelay > Duration.zero) await Future<void>.delayed(connectDelay);
     connectedAddresses.add(address);
+    if (forgotten) {
+      throw StateError('Device with supplied address is not available');
+    }
     if (connectFailuresRemaining > 0) {
       connectFailuresRemaining--;
       throw StateError('GATT connect failed');
@@ -664,6 +716,22 @@ class _FakeBluetooth implements AtlasBluetoothService {
       writeFailuresRemaining--;
       throw StateError('GATT write failed');
     }
+  }
+
+  @override
+  Stream<List<BluetoothDeviceInfo>> scanProgressive(
+      {Duration duration = const Duration(seconds: 8),
+      Duration interval = const Duration(seconds: 1)}) async* {
+    scans++;
+    if (visible.isNotEmpty) forgotten = false;
+    yield [
+      for (final address in visible)
+        BluetoothDeviceInfo(
+            address: address,
+            name: 'KLZS-L1 app',
+            paired: false,
+            connected: false),
+    ];
   }
 
   @override

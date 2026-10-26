@@ -107,8 +107,12 @@ class BleFanControl {
   DateTime? _lastOkAt;
   Object? _lastError;
   FanState? _lastState;
+  bool? _lastRediscovered;
 
   bool get configured => _address?.isNotEmpty ?? false;
+
+  /// 마지막 [send] 에서 선풍기를 검색해 다시 찾았는지: null = 검색 안 함, true = 찾음, false = 못 찾음.
+  bool? get lastRediscovered => _lastRediscovered;
   String? get address => _address;
   bool get connected => _connection != null;
   DateTime? get lastOkAt => _lastOkAt;
@@ -150,19 +154,23 @@ class BleFanControl {
         if (attempt >= connectAttempts) return false;
       }
       await Future<void>.delayed(retryDelay);
-      if (attempt.isEven) await _rediscover();
+      if (attempt.isEven) {
+        final found = await _rediscover();
+        _lastRediscovered = (_lastRediscovered ?? false) || found;
+      }
     }
   }
 
-  /// 선풍기가 다시 보일 때까지(최대 [rescanFor]) 검색한다. 검색 실패는 다음 연결 시도가 판정한다.
-  Future<void> _rediscover() async {
+  /// 선풍기가 다시 보일 때까지(최대 [rescanFor]) 검색한다. 찾았는지 돌려준다.
+  Future<bool> _rediscover() async {
     final wanted = _address!.toLowerCase();
     try {
       await for (final devices
           in _bluetooth.scanProgressive(duration: rescanFor)) {
-        if (devices.any((d) => d.address.toLowerCase() == wanted)) break;
+        if (devices.any((d) => d.address.toLowerCase() == wanted)) return true;
       }
     } catch (_) {}
+    return false;
   }
 
   /// 명령 하나를 쓰고 상태를 읽는다. 쓰기는 순서대로, 끊긴 연결은 한 번만 다시 붙는다.
@@ -177,6 +185,7 @@ class BleFanControl {
   Future<({bool written, FanState? state})> _send(
       List<int> frame, num? expiresTsMs) async {
     const notSent = (written: false, state: null);
+    _lastRediscovered = null;
     if (!configured) return notSent;
     bool expired() =>
         expiresTsMs != null &&

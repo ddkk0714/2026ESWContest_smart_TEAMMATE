@@ -163,6 +163,43 @@ void main() {
     expect(store.load().feedbackEnabled, isTrue);
   });
 
+  test('the lamp keeper retries a dropped lamp only while feedback is on',
+      () async {
+    store.save(const DeskmateSettings(
+      lamp: SavedBluetoothDevice(
+          address: 'AA:BB:CC:00:00:02', name: 'KLZS-L1 app'),
+    ));
+    lamp.connectOk = false;
+    final links = manager();
+    addTearDown(links.dispose);
+    await links.restore();
+    final afterRestore = lamp.connects;
+    links.keepLampConnected(every: const Duration(milliseconds: 20));
+    await Future<void>.delayed(const Duration(milliseconds: 70));
+    expect(lamp.connects, greaterThan(afterRestore));
+
+    // 피드백을 끄면 다시 붙이지 않는다.
+    links.setFeedbackEnabled(false);
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    final stopped = lamp.connects;
+    await Future<void>.delayed(const Duration(milliseconds: 70));
+    expect(lamp.connects, stopped);
+  });
+
+  test('the lamp keeper leaves a connected lamp alone', () async {
+    store.save(const DeskmateSettings(
+      lamp: SavedBluetoothDevice(
+          address: 'AA:BB:CC:00:00:02', name: 'KLZS-L1 app'),
+    ));
+    final links = manager();
+    addTearDown(links.dispose);
+    await links.restore();
+    expect(lamp.connects, 1);
+    links.keepLampConnected(every: const Duration(milliseconds: 20));
+    await Future<void>.delayed(const Duration(milliseconds: 70));
+    expect(lamp.connects, 1);
+  });
+
   test('restore reconnects saved speaker and lamp without scanning', () async {
     store.save(const DeskmateSettings(
       speaker:
