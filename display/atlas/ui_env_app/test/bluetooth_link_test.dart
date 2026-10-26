@@ -55,7 +55,7 @@ class _FakeBluetooth implements AtlasBluetoothService {
 
 /// 램프 재시도 규칙은 Codex 쪽(IlinkLampFeedback) 테스트가 지킨다. 여기서는 결과만 흉내 낸다.
 class _FakeLamp extends IlinkLampFeedback {
-  _FakeLamp(super.bluetooth);
+  _FakeLamp(super.bluetooth) : super(settleDelay: Duration.zero);
   bool connectOk = true;
   String? selected;
   int connects = 0;

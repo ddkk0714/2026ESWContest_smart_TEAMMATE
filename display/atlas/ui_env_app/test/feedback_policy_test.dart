@@ -534,7 +534,8 @@ void main() {
     FeedbackCoordinator coordinator(_FakeBluetooth bluetooth) =>
         FeedbackCoordinator(
             music: _FakeMusic(),
-            lamp: IlinkLampFeedback(bluetooth)..select(firstAddress),
+            lamp: IlinkLampFeedback(bluetooth, settleDelay: Duration.zero)
+              ..select(firstAddress),
             bluetooth: bluetooth)
           ..enabled = true;
 
@@ -559,6 +560,33 @@ void main() {
       expect(result?['error_code'], 'device_not_found');
       expect(result?['recovery'], 'not_found');
       expect(bluetooth.frames, isEmpty);
+    });
+
+    test('commands scan at most once per window', () async {
+      final bluetooth = _FakeBluetooth()..forgotten = true;
+      final c = coordinator(bluetooth);
+      final first = await c.handleControlCommand(_command('w1'));
+      final second = await c.handleControlCommand(_command('w2'));
+      expect(bluetooth.scans, 1);
+      expect(first?['recovery'], 'not_found');
+      expect(second?['error_code'], 'bluetooth_write_failed');
+      expect(second?.containsKey('recovery'), isFalse);
+    });
+
+    test('phase lighting never scans and backs off a lamp that will not connect',
+        () async {
+      // 10-26 0.1.8: phase lighting retried every second with a scan each time;
+      // the lamp link flapped, the system showed 96 popups, the app crashed.
+      final bluetooth = _FakeBluetooth()
+        ..forgotten = true
+        ..visible = [firstAddress];
+      final lamp = IlinkLampFeedback(bluetooth, settleDelay: Duration.zero)
+        ..select(firstAddress);
+      for (var i = 0; i < 5; i++) {
+        await lamp.apply('focus');
+      }
+      expect(bluetooth.scans, 0);
+      expect(bluetooth.connectedAddresses, hasLength(2)); // one write, then 30 s back-off
     });
 
     test('a lamp that connects first time is not scanned', () async {

@@ -60,8 +60,24 @@ List<List<int>> ilinkFramesForPhase(String phase) {
 
 class IlinkLampFeedback {
   IlinkLampFeedback(this._bluetooth,
-      {this.rescanFor = const Duration(seconds: 6)});
+      {this.rescanFor = const Duration(seconds: 6),
+      this.settleDelay = const Duration(seconds: 3),
+      this.rescanEvery = const Duration(seconds: 30),
+      this.connectRetryAfter = const Duration(seconds: 30)});
   final AtlasBluetoothService _bluetooth;
+
+  /// 연결 실패 뒤 검색 전에 기다리는 시간. Atlas 가 실패를 먼저 돌려준 뒤에도 BlueZ 가 링크를 맺고
+  /// 있을 수 있어, 곧바로 검색하면 그 링크가 끊긴다(선풍기 10-24 확인).
+  final Duration settleDelay;
+
+  /// 검색은 이 간격에 한 번까지. 10-26 0.1.8 은 국면 조명이 매초 검색·연결해 램프 링크가 1→0 을
+  /// 되풀이했고, 시스템 "Bluetooth device disconnected" 창이 96번 뜬 뒤 앱이 죽었다(SEGV).
+  final Duration rescanEvery;
+
+  /// 국면 조명 쓰기는 연결이 막 실패했으면 이 시간 동안 BlueZ 를 건드리지 않는다(명령·버튼은 예외).
+  final Duration connectRetryAfter;
+  DateTime? _connectFailedAt;
+  DateTime? _lastRescanAt;
 
   /// 램프를 다시 찾는 검색 시간(찾으면 바로 멈춘다). 10-26 Pi 5: 페어링하지 않은 BLE 램프는
   /// 끊긴 지 30초 뒤 BlueZ 가 잊고, 그 뒤 Gatt.Connect 는 BlueZ 를 부르지도 않고 바로 실패했다
@@ -126,21 +142,40 @@ class IlinkLampFeedback {
     try {
       _connection = await _bluetooth.connectLamp(_address!);
       _lastError = null;
+      _connectFailedAt = null;
       return true;
     } catch (error) {
       _connection = null;
       _lastError = error;
+      _connectFailedAt = DateTime.now();
       return false;
     }
   }
 
   /// 붙어 있지 않으면 붙고, 실패하면 주소를 한 번 검색해 다시 보이게 한 뒤 한 번 더 붙는다.
   /// [rediscovered]: null = 검색하지 않음, true = 찾음, false = 못 찾음.
+  /// 검색은 [rescanEvery] 에 한 번까지, 실패 뒤 [settleDelay] 를 기다린 다음에만 한다.
   Future<({bool ok, bool? rediscovered})> ensureConnected(
       {num? expiresTsMs}) async {
     if (await connect()) return (ok: true, rediscovered: null);
+    final last = _lastRescanAt;
+    if (last != null && DateTime.now().difference(last) < rescanEvery) {
+      return (ok: false, rediscovered: null);
+    }
+    if (!await _settle(expiresTsMs)) return (ok: false, rediscovered: null);
+    _lastRescanAt = DateTime.now();
     final found = await _rediscover(expiresTsMs);
     return (ok: await connect(), rediscovered: found);
+  }
+
+  /// [settleDelay] 를 기다린다. 명령 만료 전에 검색·연결할 시간(4 s)이 안 남으면 기다리지 않고 false.
+  Future<bool> _settle(num? expiresTsMs) async {
+    if (expiresTsMs != null) {
+      final left = expiresTsMs - DateTime.now().millisecondsSinceEpoch;
+      if (left < settleDelay.inMilliseconds + 4000) return false;
+    }
+    if (settleDelay > Duration.zero) await Future<void>.delayed(settleDelay);
+    return true;
   }
 
   /// 램프가 보일 때까지 최대 [rescanFor](명령이면 만료 2초 전까지) 검색한다.
@@ -171,42 +206,56 @@ class IlinkLampFeedback {
     await writeFrames(ilinkFramesForPhase(phase));
   }
 
+  /// 블루투스 탭의 밝기 시험 버튼 — 사람이 누른 것이라 필요하면 램프를 다시 찾는다.
   Future<bool> setBrightness(int value) => writeFrames([
         ilinkFrame([0x01, 0x08, 0x05, 0x01]),
         ilinkFrame([0x01, 0x08, 0x01, value]),
-      ]);
+      ], rediscover: true);
 
   /// Phase feedback and explicit commands must not interleave BLE frames.
-  Future<bool> writeFrames(List<List<int>> frames, {num? expiresTsMs}) =>
-      writeFramesReport(frames, expiresTsMs: expiresTsMs).then((r) => r.ok);
+  /// [rediscover] 는 hub 명령·사람이 누른 버튼만 켠다 — 국면 조명은 1초마다 다시 부르므로 검색하지 않는다.
+  Future<bool> writeFrames(List<List<int>> frames,
+          {num? expiresTsMs, bool rediscover = false}) =>
+      writeFramesReport(frames,
+              expiresTsMs: expiresTsMs, rediscover: rediscover)
+          .then((r) => r.ok);
 
   /// [writeFrames] 와 같고, 램프를 다시 찾았는지도 돌려준다([ensureConnected] 의 rediscovered).
   Future<({bool ok, bool? rediscovered})> writeFramesReport(
       List<List<int>> frames,
-      {num? expiresTsMs}) {
-    final next = _writes.then((_) => _writeFrames(frames, expiresTsMs));
+      {num? expiresTsMs,
+      bool rediscover = false}) {
+    final next =
+        _writes.then((_) => _writeFrames(frames, expiresTsMs, rediscover));
     _writes = next.then<void>((_) {});
     return next;
   }
 
   Future<({bool ok, bool? rediscovered})> _writeFrames(
-      List<List<int>> frames, num? expiresTsMs) async {
+      List<List<int>> frames, num? expiresTsMs, bool rediscover) async {
     bool? rediscovered;
     ({bool ok, bool? rediscovered}) failed() =>
         (ok: false, rediscovered: rediscovered);
     if (!configured || frames.isEmpty) return failed();
+    final failedAt = _connectFailedAt;
+    if (!rediscover &&
+        _connection == null &&
+        failedAt != null &&
+        DateTime.now().difference(failedAt) < connectRetryAfter) {
+      return failed();
+    }
     bool expired() =>
         expiresTsMs != null &&
         DateTime.now().millisecondsSinceEpoch >= expiresTsMs;
-    // 끊긴 GATT 세션은 재사용하지 않고 한 번만 새 세션으로 되풀이한다. 검색은 한 번만.
+    // 끊긴 GATT 세션은 재사용하지 않고 한 번만 새 세션으로 되풀이한다. 검색은 처음 한 번만.
     for (var attempt = 0; attempt < 2; attempt++) {
       if (expired()) return failed();
-      if (rediscovered == null) {
+      if (rediscover && attempt == 0) {
         final link = await ensureConnected(expiresTsMs: expiresTsMs);
         rediscovered = link.rediscovered;
         if (!link.ok) return failed();
       } else if (!await connect()) {
-        return failed();
+        continue;
       }
       try {
         for (final frame in frames) {
@@ -500,7 +549,8 @@ class FeedbackCoordinator {
     } else {
       return _result(command, 'failed', error: 'unsupported_operation_or_value');
     }
-    final write = await lamp.writeFramesReport(frames, expiresTsMs: expires);
+    final write = await lamp.writeFramesReport(frames,
+        expiresTsMs: expires, rediscover: true);
     final recovery = _recovery(write.rediscovered);
     if (!write.ok) {
       return _result(command, 'failed',
