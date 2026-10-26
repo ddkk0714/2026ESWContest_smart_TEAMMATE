@@ -85,7 +85,9 @@ class BluetoothLinkManager extends ChangeNotifier {
   /// 앱 시작 때 부른다. 저장된 기기가 있으면 검색 없이 붙는다. 던지지 않는다.
   Future<void> restore() async {
     final saved = settings.load();
-    feedback.enabled = saved.feedbackEnabled ?? false;
+    // 저장값이 없으면 켠 채로 시작한다(ui_env_app 0.1.4~). 꺼진 채로 시작하면 hub 의 램프·선풍기·소리
+    // 명령이 사람이 스위치를 켤 때까지 전부 feedback_disabled 로 돌아온다(10-26 Pi 5).
+    feedback.enabled = saved.feedbackEnabled ?? true;
     _speaker = saved.speaker;
     _lamp = saved.lamp;
     _fan = saved.fan;
