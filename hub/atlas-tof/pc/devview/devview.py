@@ -912,6 +912,90 @@ def fan_valid(op: Any, value: Any) -> bool:
             or (op == "set_timer" and up_to(65535)))
 
 
+# ---- Pi 5 앱이 화면에 띄우는 문구 그대로(ui_env_app/lib/intervention.dart · dashboard_view.dart)
+
+def auto_action_title(fsm: str) -> str:
+    """intervention.dart autoActionTitle — 자동 실행 뒤 알림 제목."""
+    return {"ACTION_ENV": "환경을 조정했어요", "ACTION_BREAK": "휴식을 권하는 알림을 켰어요",
+            "ACTION_POSTURE": "자세를 바꿀 때라고 알렸어요"}.get(fsm, "상태에 맞춰 조정했어요")
+
+
+def _env_phrase(flag: str, ph: dict[str, Any]) -> str | None:
+    co2, t, h, lux = ph.get("co2_ppm"), ph.get("temp_c"), ph.get("humidity_pct"), ph.get("lux")
+    return {
+        "co2_high": f"CO₂가 높아요 ({co2:.0f} ppm)" if co2 is not None else "CO₂가 높아요",
+        "co2_rising": "CO₂가 빠르게 오르고 있어요",
+        "too_hot": f"방이 더워요 ({t:.1f}°C)" if t is not None else "방이 더워요",
+        "too_cold": f"방이 추워요 ({t:.1f}°C)" if t is not None else "방이 추워요",
+        "too_humid": f"습도가 높아요 ({round(h)}%)" if h is not None else "습도가 높아요",
+        "too_dry": f"공기가 건조해요 ({round(h)}%)" if h is not None else "공기가 건조해요",
+        "too_dark": f"조명이 어두워요 ({lux:.0f} lx)" if lux is not None else "조명이 어두워요",
+    }.get(flag)
+
+
+def intervention_reason(ph: dict[str, Any], cause: str | None = None) -> str:
+    """intervention.dart interventionReason — 원인·환경 플래그로 사람이 읽는 이유 한 줄."""
+    cause = cause or ph.get("cause")
+    if cause == "environment":
+        parts = [x for x in (_env_phrase(f, ph) for f in ph.get("env_flags") or []) if x]
+        if parts:
+            return " · ".join(parts)
+        co2 = ph.get("co2_ppm")
+        return f"CO₂ {co2:.0f} ppm — 환경이 쾌적 범위를 벗어났어요" if co2 is not None else "환경이 쾌적 범위를 벗어났어요"
+    if cause == "cognitive":
+        return "작업 시간이 길어지고 입력 리듬이 느려졌어요"
+    if cause == "posture":
+        return "움직임이 줄고 졸음 신호가 보여요"
+    return "지금 상태를 보고 판단했어요"
+
+
+def _environment_title(flags: list[str]) -> str:
+    if "co2_high" in flags or "co2_rising" in flags:
+        return "잠깐 환기해 볼까요?"
+    if "too_dark" in flags:
+        return "조명을 조금 밝혀 볼까요?"
+    if "too_hot" in flags or "too_cold" in flags:
+        return "실내 온도를 맞춰 볼까요?"
+    return "환경을 잠시 조정해볼까요?"
+
+
+def suggestion_title(req: dict[str, Any], ph: dict[str, Any]) -> str:
+    """dashboard_view.dart suggestionTitle."""
+    kind = req.get("kind")
+    if kind == "checkin_suggest":
+        return "지금 피곤하세요?"
+    if kind == "vent_suggest":
+        m = req.get("ventilate_minutes")
+        return "창문을 잠깐 열어 주세요" if m is None else f"창문을 {m}분 열어 주세요"
+    cause = req.get("cause") or ph.get("cause")
+    if cause == "environment":
+        return _environment_title(list(ph.get("env_flags") or []))
+    return {"posture": "자세를 가볍게 바로잡아볼까요?", "cognitive": "잠깐 쉬어가는 건 어떨까요?"}.get(
+        str(cause), "환경을 잠시 조정해볼까요?")
+
+
+def suggestion_body(req: dict[str, Any], ph: dict[str, Any]) -> str:
+    """dashboard_view.dart suggestionBody + V18 규칙(hub 의 explanation 이 있으면 그것)."""
+    if req.get("kind") == "checkin_suggest":
+        return str(req.get("explanation") or "예/아니오로만 답해 주세요. 판정을 다듬는 데 써요.")
+    if req.get("explanation"):
+        return str(req["explanation"])
+    return "이유: " + intervention_reason(ph, req.get("cause"))
+
+
+def suggestion_buttons(req: dict[str, Any]) -> dict[str, str]:
+    """dashboard_view.dart suggestionButtons."""
+    return {"checkin_suggest": {"accept": "예", "reject": "아니오"},
+            "vent_suggest": {"accept": "열게요", "reject": "괜찮아요"}}.get(
+        str(req.get("kind")), {"accept": "적용할게요", "reject": "괜찮아요"})
+
+
+PHASE_LABEL = {"idle": "대기 중", "start": "집중 준비 중", "focus": "집중 유지 중", "fatigue": "잠시 조정이 필요해요",
+               "recovery": "회복 중", "end": "세션 완료"}   # dashboard_view.dart 국면 문구
+DEVICE_ICON = {"lamp": "💡", "fan": "🌀", "air": "🍃", "window": "🪟", "speaker": "🔊"}
+AUTO_NOTICE_S = 60   # 자동 실행 알림을 남겨 두는 시간(되돌리기 창 undo_window_sec 과 같게)
+
+
 class VirtualHome:
     """주변기기가 전부 연결·'상태 기반 조명·음악 피드백' 스위치가 켜져 있다고 보고, hub 가 보낸 것을 Pi 5 앱과 같은 규칙으로
     가상 기기에 적용한다. 실제 Pi 5 가 돌려준 결과(feedback_disabled 등)는 따로 붙여 둔다 — 화면은 가상임을 밝힌다.
@@ -931,10 +1015,23 @@ class VirtualHome:
         self._latest: dict[str, Any] = {}
         self._by_cmd: dict[str, dict[str, Any]] = {}
         self._requests: dict[str, dict[str, Any]] = {}
+        # 앱 화면 알림(가상): 기기가 바뀔 때마다 한 줄("스피커 켜짐 · 음악 재생" 같은) — 화면이 위에 잠깐 띄운다
+        self.notices: deque[dict[str, Any]] = deque(maxlen=40)
+        self._notice_seq = 0
+        self.auto_notice: dict[str, Any] | None = None
 
     # ---------------------------------------------------------------- 공통
+    def _notify(self, key: str, text: str, at: float, tone: str = "info") -> None:
+        self._notice_seq += 1
+        self.notices.append({"id": self._notice_seq, "t": time.strftime("%H:%M:%S", time.localtime(at)), "at": at,
+                             "icon": DEVICE_ICON.get(key, "🔔"), "text": text, "tone": tone})
+
     def _stamp(self, dev: dict[str, Any], text: str, at: float) -> None:
         dev["last"], dev["at"] = text, at
+        key = next((k for k, d in (("lamp", self.lamp), ("fan", self.fan), ("air", self.air), ("window", self.window),
+                                   ("speaker", self.speaker)) if d is dev), "")
+        name = {"lamp": "무드등", "fan": "선풍기", "air": "공기청정기", "window": "창문", "speaker": "스피커"}.get(key, "")
+        self._notify(key, f"{name} {text}".strip(), at, "on" if key else "info")
 
     def _event(self, at: float, **kw: Any) -> dict[str, Any]:
         ph = self._latest
@@ -946,7 +1043,7 @@ class VirtualHome:
     def _music(self, on: bool, at: float, why: str) -> None:
         if self.speaker["music"] != on:
             self.speaker["music"] = on
-            self._stamp(self.speaker, ("음악 재생 · " if on else "음악 정지 · ") + why, at)
+            self._stamp(self.speaker, ("켜짐 · 음악 재생 · " if on else "꺼짐 · 음악 정지 · ") + why, at)
 
     # ---------------------------------------------------------------- state/phase → 단계 조명·음악 (FeedbackCoordinator.apply)
     def on_phase(self, env: Any, at: float) -> None:
@@ -957,6 +1054,9 @@ class VirtualHome:
         pers = _map(ss.get("personalize")) or _map(ss.get("personalization"))
         self._latest = {"fsm_state": str(data.get("fsm_state") or ""), "phase": str(data.get("phase") or ""),
                         "gate": data.get("gate"), "cause": data.get("cause"),
+                        "env_flags": ss.get("env_flags") if isinstance(ss.get("env_flags"), list) else [],
+                        "co2_ppm": _num(ss.get("co2_ppm")), "temp_c": _num(ss.get("temp_c")),
+                        "humidity_pct": _num(ss.get("humidity_pct")), "lux": _num(ss.get("lux")),
                         "decision_source": pers.get("decision_source") or pers.get("source"),
                         "explanation": pers.get("explanation"), "arm": pers.get("arm"), "arm_label": pers.get("arm_label")}
         fsm, phase, gate = self._latest["fsm_state"], self._latest["phase"], self._latest["gate"]
@@ -1011,6 +1111,15 @@ class VirtualHome:
             self._by_cmd[cid] = e
             while len(self._by_cmd) > 64:
                 self._by_cmd.pop(next(iter(self._by_cmd)))
+        if c.get("gate") == "auto" and res.get("status") == "succeeded":
+            origin = str(c.get("origin_state") or self._latest.get("fsm_state") or "")
+            effect = line.split(" → ", 1)[-1]
+            a = self.auto_notice
+            if a is not None and at - a["at"] <= 3.0 and a["origin"] == origin:   # 같은 개입의 명령은 한 알림에
+                a["effects"].append(effect)
+            else:
+                self.auto_notice = {"at": at, "origin": origin, "title": auto_action_title(origin),
+                                    "reason": intervention_reason(self._latest, c.get("cause")), "effects": [effect]}
         return e
 
     _CHANNEL_TARGET = {"lamp": "desk_lamp", "fan": "vent_fan", "air": "air_purifier"}
@@ -1119,6 +1228,7 @@ class VirtualHome:
         if ch in ("voice", "sound"):   # 음성 안내·알림음 arm 은 카드와 함께 소리로(가상 스피커)
             self.speaker["voice"] = ("음성 안내: " + str(expl or d.get("prompt_code") or "")) if ch == "voice" else "알림음"
             self._stamp(self.speaker, self.speaker["voice"], at)
+        self._notify("card", f"제안 카드 — {suggestion_title(d, self._latest)}", at, "card")
         self._event(at, kind="card", text=f"카드 {d.get('kind')} — {expl or d.get('prompt_code') or ''}".strip(),
                     request_id=rid, gate="suggest", cause=d.get("cause") or self._latest.get("cause"), arm=arm,
                     arm_label=d.get("arm_label"), decision_source=self._latest.get("decision_source"), reason=expl)
@@ -1153,6 +1263,8 @@ class VirtualHome:
             exp = _num(req.get("expires_in_s"))
             if req.get("verdict") is None and (exp is None or now <= req["at"] + exp):
                 return {"request_id": req.get("request_id"), "kind": req.get("kind"),
+                        "title": suggestion_title(req, self._latest), "body": suggestion_body(req, self._latest),
+                        "buttons": suggestion_buttons(req),
                         "text": req.get("explanation") or req.get("prompt_code") or "-",
                         "arm_label": req.get("arm_label"), "cause": req.get("cause"),
                         "left_s": None if exp is None else max(0, round(req["at"] + exp - now)),
@@ -1204,7 +1316,14 @@ class VirtualHome:
                                                          + (f" ({real['node']})" if real.get("node") else "")),
                        "real_ok": None if real is None else real.get("status") == "succeeded",
                        "virtual_ok": None if e.get("virtual") is None else e["virtual"].get("status") == "succeeded"})
-        return {"devices": devices, "timeline": tl[::-1], "card": self.pending_card(now), "undo": self.undoable(now)}
+        a = self.auto_notice
+        auto = None if a is None or now - a["at"] > AUTO_NOTICE_S else {
+            "title": a["title"], "reason": a["reason"], "effects": a["effects"],
+            "t": time.strftime("%H:%M:%S", time.localtime(a["at"])), "left_s": round(AUTO_NOTICE_S - (now - a["at"])),
+            "key": round(a["at"], 3)}
+        return {"devices": devices, "timeline": tl[::-1], "card": self.pending_card(now), "undo": self.undoable(now),
+                "auto": auto, "notices": list(self.notices)[::-1][:12],
+                "home": PHASE_LABEL.get(str(self._latest.get("phase")), self._latest.get("fsm_state") or "-")}
 
 
 # --------------------------------------------------------------------------- 사용자 프로필(페르소나) — V18 profileData 와 같은 모양

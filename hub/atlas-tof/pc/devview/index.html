@@ -175,7 +175,26 @@ body:not([data-mode="virtual"]) #virt { display: none; }
 #vnowState { font-size: calc(38px * var(--k)); font-weight: 800; }
 #vnowHead { font-size: calc(18px * var(--k)); font-weight: 700; margin-top: calc(4px * var(--k)); }
 #vnowMeta { font-size: calc(14px * var(--k)); color: var(--dim); margin-top: calc(4px * var(--k)); }
+/* 앱 화면(가상): Pi 5 앱이 띄웠을 카드·자동 실행 알림을 같은 문구로 */
+#appTag { font-size: calc(12px * var(--k)); color: #111; background: var(--accent); border-radius: 4px; padding: 0 calc(6px * var(--k)); font-weight: 700; }
+#appHome { font-size: calc(26px * var(--k)); font-weight: 800; margin: calc(6px * var(--k)) 0; }
+#cardTitle { font-size: calc(24px * var(--k)); font-weight: 800; margin: calc(4px * var(--k)) 0 calc(2px * var(--k)); }
+#cardBody { font-size: calc(16px * var(--k)); color: var(--fg); margin-bottom: calc(8px * var(--k)); }
+.autoN .lab { font-size: calc(13px * var(--k)); color: var(--ok); font-weight: 700; }
+.autoN .eff { font-size: calc(16px * var(--k)); color: var(--ok); margin: calc(2px * var(--k)) 0; }
+#noticeList { margin-top: calc(10px * var(--k)); border-top: 1px solid var(--line); padding-top: calc(6px * var(--k)); font-size: calc(15px * var(--k)); }
+#noticeList div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.55; }
+#noticeList .t { color: var(--faint); margin-right: calc(8px * var(--k)); font-family: Consolas, monospace; }
+#toasts { position: fixed; top: calc(70px * var(--k)); right: calc(18px * var(--k)); z-index: 50; display: flex; flex-direction: column; gap: calc(8px * var(--k)); pointer-events: none; }
+.toast { background: rgba(20,26,36,.96); border: 1px solid var(--line); border-left: calc(6px * var(--k)) solid var(--info); border-radius: calc(10px * var(--k));
+  padding: calc(10px * var(--k)) calc(16px * var(--k)); font-size: calc(20px * var(--k)); font-weight: 700; color: var(--fg); max-width: calc(560px * var(--k));
+  box-shadow: 0 8px 30px rgba(0,0,0,.5); animation: tin .25s ease-out; }
+.toast.on { border-left-color: var(--ok); } .toast.card { border-left-color: var(--warn); }
+.toast small { display: block; font-size: calc(12px * var(--k)); color: var(--dim); font-weight: 400; }
+@keyframes tin { from { transform: translateX(30px); opacity: 0; } to { transform: none; opacity: 1; } }
+body:not([data-mode="virtual"]) #toasts { display: none; }
 #cardBox { border: 1px solid var(--line); border-radius: calc(10px * var(--k)); padding: calc(10px * var(--k)) calc(12px * var(--k)); background: #10141c; }
+#cardBox.auto { border-color: var(--ok); box-shadow: 0 0 0 2px rgba(76,195,138,.25) inset; }
 #cardBox.live { border-color: var(--warn); box-shadow: 0 0 0 2px rgba(245,185,58,.25) inset; }
 #cardBox .ttl { font-size: calc(13px * var(--k)); color: var(--dim); }
 #cardText { font-size: calc(19px * var(--k)); font-weight: 700; margin: calc(4px * var(--k)) 0 calc(8px * var(--k)); }
@@ -251,7 +270,12 @@ body.narrow #row1 { grid-template-columns: auto auto minmax(0, 1fr); }
 body.narrow #fd { grid-column: 1 / -1; }
 body.narrow #control { grid-template-columns: minmax(0, 1fr); }
 body.narrow #devices { border-left: none; padding-left: 0; border-top: 1px solid var(--line); padding-top: 6px; }
-body.narrow #vtop { grid-template-columns: minmax(0, 1fr); }
+/* 좁은 화면: 앱 화면(카드·알림)과 기기를 먼저, 프로필 고르기는 그 아래 */
+body.narrow #virt { grid-template-rows: none; grid-auto-rows: auto; }
+body.narrow #vtop { display: contents; }
+body.narrow #vband { order: 0; } body.narrow #vnow { order: 1; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); }
+body.narrow #vdevs { order: 2; } body.narrow #vperson { order: 3; }
+body.narrow #vtl { order: 4; min-height: calc(320px * var(--k)); }
 body.narrow #vdevs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 body.narrow #tl .row { grid-template-columns: calc(70px * var(--k)) calc(74px * var(--k)) minmax(0, 1fr); }
 body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
@@ -349,7 +373,7 @@ body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
     <button class="tg" data-go="video">영상 모드</button>
   </header>
   <section id="vtop">
-    <div class="panel">
+    <div class="panel" id="vperson">
       <div class="ptitle"><span><b>나는 누구?</b> · 첫 설정 프로필 → hub 개인화 기준(prior)</span><span class="mono" id="pNode">node laptop-devview</span></div>
       <div class="pbtns" id="pbtns"></div>
       <div id="pform"></div>
@@ -366,10 +390,11 @@ body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
         <div id="vnowMeta">-</div>
       </div>
       <div id="cardBox">
-        <div class="ttl">hub 가 띄운 카드 · 내 반응이 학습 라벨이 됩니다</div>
-        <div id="cardText">-</div>
+        <div class="ttl"><span id="appTag">앱 화면 · 가상</span> Pi 5 앱이 띄웠을 화면(같은 문구) · 내 반응이 학습 라벨이 됩니다</div>
+        <div id="appMain"></div>
         <div id="cardBtns"></div>
         <div id="cardMsg"></div>
+        <div id="noticeList"></div>
       </div>
     </div>
   </section>
@@ -380,6 +405,7 @@ body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
   </section>
 </div>
 
+<div id="toasts"></div>
 <div id="video">
   <div id="vTag"><b>DESKMATE</b> · 보드 실시간 센서 · 판단·제어는 Pi 4·Pi 5 보드 <span id="vFake" style="display:none;color:#111;background:var(--warn);padding:0 8px;border-radius:4px;font-weight:700">가짜 데이터(--fake)</span></div>
   <div id="vToggle"><button class="tg" data-go="dev" title="단축키 V">개발자 화면</button></div>
@@ -687,7 +713,21 @@ $("pYes").onclick = async () => {
   $("pHint").textContent = r.ok ? `${p.label} 보냄 — hub 확인 대기(state/phase 10 s 주기)` : `보내기 실패: ${r.error}`;
 };
 
-let cardMsg = "", armed = null, cardKey = "";
+let cardMsg = "", armed = null, cardKey = "", dismissedAuto = null, lastToast = null;
+// 새 기기 알림을 오른쪽 위에 6 초 띄운다(가상 기기 화면). 처음 열 때 쌓여 있던 것은 띄우지 않는다
+function showToasts(notices) {
+  const newest = notices.length ? notices[0].id : 0;
+  if (lastToast == null) { lastToast = newest; return; }
+  notices.filter(n => n.id > lastToast).reverse().forEach(n => {
+    const el = document.createElement("div");
+    el.className = "toast " + (n.tone || "");
+    el.innerHTML = `${n.icon} ${esc(n.text)}<small>가상 · ${n.t}</small>`;
+    $("toasts").appendChild(el);
+    setTimeout(() => el.remove(), 6000);
+    while ($("toasts").children.length > 4) $("toasts").firstChild.remove();
+  });
+  lastToast = Math.max(lastToast, newest);
+}
 const VLABEL = {accept: "수락", reject: "거절", undo: "되돌리기"};
 // 한 번 누르면 '한 번 더 눌러 보내기'(4 s), 두 번째에 보낸다 — 실수로 hub 에 라벨을 보내지 않게
 async function answer(rid, verdict) {
@@ -723,21 +763,35 @@ function renderVirtual(d) {
   $("vnowTime").textContent = `${ph.fsm_state} · seq ${ph.seq ?? "-"}`;
   $("vnowHead").textContent = d.control.headline;
   $("vnowMeta").textContent = `피로도 ${ph.fatigue_text} · 원인 ${ph.cause} · 게이트 ${ph.gate} · 개인화 ${ph.explanation}`;
-  // 카드·되돌리기
-  const c = v.card, u = v.undo;
-  $("cardBox").className = c ? "live" : "";
-  $("cardText").textContent = c ? `${c.text}` : "지금 떠 있는 카드 없음";
+  // 앱 화면(가상): 제안 카드 > 자동 실행 알림 > 평소 화면 — Pi 5 앱과 같은 우선순위·문구
+  const c = v.card, u = v.undo, au = v.auto && v.auto.key !== dismissedAuto ? v.auto : null;
+  $("cardBox").className = c ? "live" : au ? "auto" : "";
+  if (c) {
+    $("appMain").innerHTML = `<div id="cardTitle">${esc(c.title)}</div><div id="cardBody">${esc(c.body)}</div>`;
+  } else if (au) {
+    $("appMain").innerHTML = `<div class="autoN"><div class="lab">✓ 자동으로 실행했어요 · ${au.t}</div><div id="cardTitle">${esc(au.title)}</div>` +
+      au.effects.map(x => `<div class="eff">${esc(x)}</div>`).join("") +
+      `<div id="cardBody">이유: ${esc(au.reason)}<br><span class="empty">원하지 않으면 되돌릴 수 있어요.</span></div></div>`;
+  } else {
+    $("appMain").innerHTML = `<div class="empty">평소 화면</div><div id="appHome">${esc(v.home)}</div>`;
+  }
+  $("noticeList").innerHTML = v.notices.length ? v.notices.slice(0, 6).map(n => `<div><span class="t">${n.t}</span>${n.icon} ${esc(n.text)}</div>`).join("")
+    : `<div class="empty">기기 알림이 오면 여기에 쌓입니다(가상)</div>`;
+  showToasts(v.notices);
   // 단추는 카드·되돌리기 대상이 바뀔 때만 다시 만든다(250 ms 마다 갈면 누르는 순간 사라질 수 있다)
   const key = `${c ? c.request_id : ""}|${u ? u.command_id : ""}|${armed ? armed.verdict : ""}|${P.enabled}`;
   if (key !== cardKey) {
     cardKey = key;
-    const lab = a => armed && armed.verdict === a ? "한 번 더 → 보내기" : VLABEL[a];
+    const names = Object.assign({}, VLABEL, c ? c.buttons : {});   // 앱 단추 글자(적용할게요/괜찮아요, 예/아니오, 열게요)
+    const lab = a => armed && armed.verdict === a ? "한 번 더 → 보내기" : names[a];
     let btns = "";
     if (c) btns += `<button class="btn go" data-a="accept">${lab("accept")}</button><button class="btn no" data-a="reject">${lab("reject")}</button>` +
       `<span class="empty">${esc(c.kind)}${c.arm_label ? " · " + esc(c.arm_label) : ""} · 남은 <span id="cardLeft"></span> s</span>`;
-    if (u) btns += `<button class="btn warn" data-a="undo">${lab("undo")}</button><span class="empty">자동 실행 되돌리기 · <span id="undoLeft"></span> s 안</span>`;
+    if (u) btns += `<button class="btn warn" data-a="undo">${lab("undo")}</button>` + (au ? `<button class="btn" id="autoOk">확인</button>` : "") +
+      `<span class="empty">자동 실행 되돌리기 · <span id="undoLeft"></span> s 안</span>`;
     $("cardBtns").innerHTML = btns || `<span class="empty">카드·자동 실행이 오면 여기서 답합니다</span>`;
     $("cardBtns").querySelectorAll("[data-a]").forEach(b => { b.disabled = !P.enabled; b.onclick = () => answer(c ? c.request_id : null, b.dataset.a); });
+    if ($("autoOk")) $("autoOk").onclick = () => { dismissedAuto = au.key; cardKey = ""; };   // 확인 = 이 화면에서만 알림 닫기(보내지 않음)
   }
   if (c && $("cardLeft")) $("cardLeft").textContent = c.left_s ?? "-";
   if (u && $("undoLeft")) $("undoLeft").textContent = u.left_s;

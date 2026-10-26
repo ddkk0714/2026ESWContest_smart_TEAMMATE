@@ -612,6 +612,42 @@ def test_request_headline_uses_chosen_arm():
     assert c.view(None, now=2.0)["headline"] == "제안 카드 · 환경 → Pico 2 W 선풍기 (BLE) 켬"
 
 
+# ----------------------------------------------------------------- 앱 화면 문구(Pi 5 intervention.dart·dashboard_view.dart)
+
+def test_app_wording_matches_pi5():
+    ph = {"cause": "environment", "env_flags": ["co2_high", "too_dark"], "co2_ppm": 1180.0, "lux": 20.0}
+    assert dv.intervention_reason(ph) == "CO₂가 높아요 (1180 ppm) · 조명이 어두워요 (20 lx)"
+    assert dv.intervention_reason({"cause": "posture"}) == "움직임이 줄고 졸음 신호가 보여요"
+    assert dv.auto_action_title("ACTION_POSTURE") == "자세를 바꿀 때라고 알렸어요"
+    assert dv.suggestion_title({"kind": "posture_suggest", "cause": "posture"}, {}) == "자세를 가볍게 바로잡아볼까요?"
+    assert dv.suggestion_title({"kind": "env_suggest", "cause": "environment"}, ph) == "잠깐 환기해 볼까요?"
+    assert dv.suggestion_title({"kind": "vent_suggest", "ventilate_minutes": 15}, {}) == "창문을 15분 열어 주세요"
+    assert dv.suggestion_title({"kind": "checkin_suggest"}, {}) == "지금 피곤하세요?"
+    assert dv.suggestion_buttons({"kind": "checkin_suggest"}) == {"accept": "예", "reject": "아니오"}
+    assert dv.suggestion_buttons({"kind": "break_suggest"}) == {"accept": "적용할게요", "reject": "괜찮아요"}
+    assert dv.suggestion_body({"kind": "break_suggest", "cause": "cognitive"}, {}) == "이유: 작업 시간이 길어지고 입력 리듬이 느려졌어요"
+    assert dv.suggestion_body({"kind": "env_suggest", "explanation": "CO₂ 높음"}, {}) == "CO₂ 높음"
+
+
+def test_virtual_notices_and_auto_notice():
+    h = dv.VirtualHome()
+    h.on_phase(phase_env("FOCUS_PC", "focus"), 1.0)
+    h.on_phase(phase_env("ACTION_POSTURE", "fatigue", "auto", cause="posture"), 2.0)
+    texts = [n["text"] for n in h.notices]
+    assert "무드등 단계 조명(focus) 모름→110" in texts and any(t.startswith("스피커 켜짐 · 음악 재생") for t in texts)
+    h.on_cmd(cmd_env("c1", "desk_lamp", "adjust_brightness", {"percent": 60, "min_raw": 153}, at=3.0), at=3.0)
+    h.on_cmd(cmd_env("c2", "vent_fan", "set_power", "on", at=3.5), at=3.5)      # 같은 개입 → 한 알림에
+    v = h.view(10.0)
+    assert v["auto"]["title"] == "자세를 바꿀 때라고 알렸어요" and v["auto"]["reason"] == "움직임이 줄고 졸음 신호가 보여요"
+    assert v["auto"]["effects"] == ["iLink 무드등 밝기 +60 % (최소 153) (180→255)", "Pico 2 W 선풍기 켬"]
+    assert h.view(3.0 + dv.AUTO_NOTICE_S + 1)["auto"] is None
+    assert v["home"] == "잠시 조정이 필요해요" and v["notices"][0]["text"] == "선풍기 켬"
+    h.on_request(env({"request_id": "r", "kind": "checkin_suggest", "expires_in_s": 120}), 20.0)
+    card = h.view(21.0)["card"]
+    assert card["title"] == "지금 피곤하세요?" and card["buttons"]["accept"] == "예"
+    assert h.notices[-1]["text"] == "제안 카드 — 지금 피곤하세요?"
+
+
 # ----------------------------------------------------------------- 보내기(프로필·카드 응답)
 
 class FakePub(dv.Publisher):
