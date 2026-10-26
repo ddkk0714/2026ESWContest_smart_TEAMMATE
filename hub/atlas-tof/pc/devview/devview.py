@@ -548,6 +548,305 @@ class DeviceBoard:
         return [self.line(d) for d in self.devices.values()]
 
 
+# --------------------------------------------------------------------------- 키 입력 패널
+
+TOPIC_KEYSTROKE = "deskmate/sensor/keystroke"
+TOPIC_HEALTH_PC = "deskmate/health/pc-collector"
+KEYSTROKE_STALE_S = 5.0   # Pi 5 keystroke_page.dart 와 같은 기준
+
+
+class KeystrokeTracker:
+    """PC 수집기 집계(키 값 없음, 타이밍 통계만)의 마지막 표본과 최근 60 표본 추이(Pi 5 keystroke_page.dart 규칙).
+
+    추이에는 valid 이고 ts 가 앞 표본보다 새 것만 넣는다.
+    """
+
+    def __init__(self, keep: int = 60) -> None:
+        self.last: dict[str, Any] | None = None
+        self.last_ts: float | None = None
+        self.received: float | None = None
+        self.hist: deque[tuple[float, float, float]] = deque(maxlen=keep)
+        self.health: dict[str, Any] | None = None
+        self.health_at: float | None = None
+
+    def on_sample(self, env: Any, at: float) -> None:
+        data = _map(_map(env).get("data"))
+        if not data:
+            return
+        self.last, self.received = data, at
+        ts = _num(_map(env).get("ts")) or _num(data.get("ts")) or at
+        self.last_ts = ts
+        if data.get("valid") is False:
+            return
+        if self.hist and ts <= self.hist[-1][0]:
+            return
+        self.hist.append((ts, _num(data.get("dwell_mean_ms")) or 0.0, _num(data.get("flight_mean_ms")) or 0.0))
+
+    def on_health(self, env: Any, at: float) -> None:
+        # health/<node> 는 envelope 없이 {ts,node,status,reconnects} 로 온다(10-26 실기). data 로 감싸도 받는다.
+        self.health = _map(_map(env).get("data")) or _map(env)
+        self.health_at = at
+
+    def view(self, now: float) -> dict[str, Any]:
+        ks = self.last
+        age = None if self.received is None else round(now - self.received, 1)
+        stale = age is None or age > KEYSTROKE_STALE_S
+        if ks is None:
+            status = "PC 수집기 대기"
+        elif stale:
+            status = "수신 끊김"
+        elif ks.get("valid") is False:
+            status = "유효하지 않은 표본"
+        elif ks.get("typing_active"):
+            status = "타이핑 중"
+        else:
+            status = "입력 없음 · 수신 중"
+        ks = ks or {}
+        window = _num(ks.get("window_s"))
+        count = _num(ks.get("event_count"))
+        rate = None if count is None or not window else round(count * 60.0 / window, 1)
+        h = self.health or {}
+        return {
+            "status": status,
+            "ok": ks.get("valid") is not False and not stale and bool(self.last),
+            "node": ks.get("node") or DASH,
+            "age_s": age,
+            "window_s": window,
+            "dwell_mean_ms": _num(ks.get("dwell_mean_ms")), "dwell_std_ms": _num(ks.get("dwell_std_ms")),
+            "flight_mean_ms": _num(ks.get("flight_mean_ms")), "flight_std_ms": _num(ks.get("flight_std_ms")),
+            "flight_cv": _num(ks.get("flight_cv")), "idle_ratio": _num(ks.get("idle_ratio")),
+            "correction_rate": _num(ks.get("correction_rate")), "mouse_event_rate": _num(ks.get("mouse_event_rate")),
+            "event_count": count, "rate_per_min": rate,
+            "valid": ks.get("valid"), "typing_active": ks.get("typing_active"), "mouse_active": ks.get("mouse_active"),
+            "link": {"status": h.get("status") or DASH, "reconnects": h.get("reconnects"),
+                     "age_s": None if self.health_at is None else round(now - self.health_at, 1)},
+            "spark": [[round(d, 1), round(f, 1)] for _, d, f in self.hist],
+        }
+
+
+# --------------------------------------------------------------------------- 제어 결론
+
+# target_id → 실제 기기(control.yaml 주석·Pi 5 실행기 기준)
+DEVICE_REAL = {"desk_lamp": "iLink 무드등 (BLE)", "vent_fan": "Pico 2 W 선풍기 (BLE)",
+               "air_purifier": "LG 공기청정기 (ThinQ)", "plug_1": "스마트 플러그"}
+CAUSE_KO = {"posture": "자세", "environment": "환경", "cognitive": "인지", "respiration": "호흡(자세성)",
+            "elapsed": "경과 시간(인지성)", "keystroke": "키 입력(인지성)"}
+GATE_KO = {"auto": "자동 실행", "suggest": "제안 카드 — 수락하면 실행", "none": "무동작 — 기록만"}
+ORIGIN_KO = {"ACTION_ENV": "환경 개입", "ACTION_POSTURE": "자세 개입", "ACTION_BREAK": "휴식 개입"}
+# 원인 → hub 가 내보낼 명령(hub/deskmate_hub/config/control.yaml actions, 10-25 기준). 화면 예고 문구에만 쓴다 —
+# 실제로 무엇을 보냈는지는 control/cmd 가 정본이다. cognitive 는 기기 명령 없이 휴식 카드.
+ACTION_PLAN = {
+    "posture": [("desk_lamp", "adjust_brightness", {"percent": 60, "min_raw": 153})],
+    "environment": [("vent_fan", "set_power", "on"), ("desk_lamp", "adjust_brightness", {"percent": 30})],
+    "cognitive": [],
+}
+FSM_KO = {"IDLE": "대기", "START": "시작", "CONTEXT_DETECT": "맥락 판정", "FOCUS_PC": "집중", "FOCUS_MIXED": "집중",
+          "FOCUS_NPC": "집중", "FOCUS_BREAK": "집중 저하", "FATIGUE_SUSPECT": "피로 의심", "FATIGUE": "피로",
+          "CAUSE_ANALYSIS": "원인 분석", "MONITOR": "효과 확인", "ESCALATE": "재시도", "RECOVERY": "회복",
+          "ACTION_ENV": "환경 개입", "ACTION_POSTURE": "자세 개입", "ACTION_BREAK": "휴식 개입", "REST": "휴식",
+          "END": "종료"}
+CONTEXT_KO = {"pc": "PC 작업", "mixed": "PC·책 혼합", "npc": "책·필기"}
+RECENT_CONTROL_S = 180.0  # 이 안의 명령·제안이면 '지금 일'로 보여 준다
+
+
+def op_text(op: str, value: Any) -> str:
+    """명령을 사람 말로: 밝기 +60 % (최소 153) · 켬 · 풍량 2 …"""
+    v = _map(value)
+    if op == "adjust_brightness" and _num(v.get("percent")) is not None:
+        p = v["percent"]
+        text = f"밝기 {'+' if p >= 0 else ''}{round(p)} %"
+        if v.get("min_raw") is not None:
+            text += f" (최소 {v['min_raw']})"
+        return text
+    if op == "set_power":
+        return {"on": "켬", "off": "끔"}.get(str(value).lower(), f"전원 {value}")
+    if op == "set_brightness":
+        return f"밝기 {value}"
+    if op == "set_level":
+        return f"풍량 {value}"
+    if op == "set_mode":
+        return f"모드 {value}"
+    return f"{op} {raw_value(value)}".strip()
+
+
+def result_text(r: dict[str, Any] | None) -> tuple[str, bool | None]:
+    if not r:
+        return "… 결과 대기", None
+    status = r.get("status")
+    if status == "succeeded":
+        if r.get("previous") is not None and r.get("actual") is not None:
+            return f"✓ 성공 {r['previous']}→{r['actual']}", True
+        return "✓ 성공" + (f" {r['actual_value']}" if r.get("actual_value") is not None else ""), True
+    if status in ("failed", "timeout", "cancelled"):
+        return f"✗ {status}" + (f" {r['error_code']}" if r.get("error_code") else ""), False
+    return str(status or "?"), None
+
+
+class ControlTracker:
+    """'어느 블루투스 기기를 왜 제어하나' — interaction/request·control/cmd·control/result·feedback/user 를 묶는다."""
+
+    def __init__(self) -> None:
+        self.cmds: deque[dict[str, Any]] = deque(maxlen=16)
+        self.request: dict[str, Any] | None = None
+        self.phase_reasons: list[str] = []
+        self.explanation: str | None = None
+
+    def on_phase(self, env: Any) -> None:
+        data = _map(_map(env).get("data"))
+        reasons = data.get("reasons")
+        if isinstance(reasons, list) and reasons:
+            self.phase_reasons = [str(r) for r in reasons]
+        pers = _map(_map(data.get("sensor_summary")).get("personalize"))
+        if pers.get("explanation"):
+            self.explanation = str(pers["explanation"])
+
+    def on_message(self, topic: str, env: Any, at: float) -> None:
+        data = _map(_map(env).get("data"))
+        if topic == TOPIC_CMD and data.get("target_id"):
+            self.cmds.append({**data, "at": at, "result": None, "reasons": list(self.phase_reasons)})
+        elif topic == TOPIC_RESULT:
+            for c in reversed(self.cmds):
+                if c.get("command_id") == data.get("command_id"):
+                    c["result"] = {**data, "node": _map(env).get("node"), "at": at}
+                    break
+        elif topic == TOPIC_REQUEST:
+            self.request = {**data, "at": at, "verdict": None}
+        elif topic == TOPIC_FEEDBACK and self.request is not None:
+            rid = data.get("request_id")
+            if not rid or rid == self.request.get("request_id"):
+                self.request["verdict"] = data.get("verdict")
+
+    @staticmethod
+    def _cmd_line(c: dict[str, Any]) -> dict[str, Any]:
+        res, ok = result_text(c.get("result"))
+        r = c.get("result") or {}
+        return {"device": DEVICE_REAL.get(c.get("target_id"), str(c.get("target_id"))),
+                "target": c.get("target_id"), "action": op_text(str(c.get("operation")), c.get("value")),
+                "result": res, "ok": ok, "by": r.get("node"),
+                "time": time.strftime("%H:%M:%S", time.localtime(c["at"])),
+                "result_time": time.strftime("%H:%M:%S", time.localtime(r["at"])) if r.get("at") else None}
+
+    def view(self, phase_env: Any, now: float) -> dict[str, Any]:
+        data = _map(_map(phase_env).get("data"))
+        state = str(data.get("fsm_state") or "")
+        last_cmd = self.cmds[-1] if self.cmds else None
+        req = self.request
+        recent_cmd = last_cmd is not None and now - last_cmd["at"] <= RECENT_CONTROL_S
+        recent_req = req is not None and now - req["at"] <= RECENT_CONTROL_S
+        if recent_req and (not recent_cmd or req["at"] >= last_cmd["at"]):
+            cause = req.get("cause")
+            devices = _plan_text(cause) or "기기 제어 없음"
+            verdict = {"accept": "수락 → 실행", "reject": "거절", "timeout": "응답 없음"}.get(req.get("verdict") or "",
+                                                                                   "응답 대기")
+            return {
+                "kind": "request",
+                "headline": f"제안 카드 · {CAUSE_KO.get(cause, cause or '-')} → {devices}",
+                "gate": GATE_KO["suggest"], "cause": CAUSE_KO.get(cause, cause or DASH),
+                "reason": str(req.get("explanation") or ", ".join(map(str, req.get("evidence") or [])) or DASH),
+                "status": f"{verdict} · {req.get('expires_in_s', '-')} s 시한",
+                "time": time.strftime("%H:%M:%S", time.localtime(req["at"])), "commands": [],
+            }
+        if recent_cmd:
+            # 같은 개입(같은 origin·cause, 3 s 안)에 함께 나간 명령을 묶는다
+            group = [c for c in self.cmds if c.get("origin_state") == last_cmd.get("origin_state")
+                     and c.get("cause") == last_cmd.get("cause") and last_cmd["at"] - c["at"] <= 3.0]
+            lines = [self._cmd_line(c) for c in group]
+            cause = last_cmd.get("cause")
+            gate = str(last_cmd.get("gate") or "")
+            head = " + ".join(f"{l['device']} {l['action']}" for l in lines)
+            reason = ", ".join(last_cmd.get("reasons") or []) or DASH
+            if self.explanation:
+                reason = f"{self.explanation} · {reason}" if reason != DASH else self.explanation
+            oks = [l["ok"] for l in lines]
+            status = ("✓ 실행됨" if all(o is True for o in oks) else "✗ 실행 안 됨" if any(o is False for o in oks)
+                      else "… 결과 대기")
+            return {
+                "kind": "command",
+                "headline": f"{'자동' if gate == 'auto' else '제안' if gate == 'suggest' else gate} · "
+                            f"{CAUSE_KO.get(cause, cause or '-')} → {head}",
+                "gate": GATE_KO.get(gate, gate or DASH), "cause": CAUSE_KO.get(cause, cause or DASH),
+                "origin": ORIGIN_KO.get(str(last_cmd.get("origin_state")), str(last_cmd.get("origin_state") or DASH)),
+                "reason": reason, "status": status,
+                "time": lines[-1]["time"], "commands": lines,
+            }
+        return {"kind": "idle", "headline": recommendation(state, data.get("cause")), "gate": DASH,
+                "cause": CAUSE_KO.get(data.get("cause"), data.get("cause") or DASH),
+                "reason": ", ".join(map(str, data.get("reasons") or [])) or DASH, "status": DASH,
+                "time": None, "commands": [self._cmd_line(last_cmd)] if last_cmd else []}
+
+
+def _plan_text(cause: str | None) -> str:
+    plan = ACTION_PLAN.get(cause or "")
+    if plan is None:
+        return ""
+    if not plan:
+        return "휴식 카드(기기 제어 없음)"
+    return " + ".join(f"{DEVICE_REAL.get(t, t)} {op_text(o, v)}" for t, o, v in plan)
+
+
+def recommendation(state: str, cause: str | None = None) -> str:
+    """지금 명령·제안이 없을 때의 한 줄 — state/phase 와 원인별 라우팅(control.yaml)으로 다음에 무엇을 할지."""
+    ko = FSM_KO.get(state, state or "-")
+    if not state:
+        return "hub 판정 대기"
+    if state in ("IDLE", "START", "CONTEXT_DETECT", "FOCUS_PC", "FOCUS_MIXED", "FOCUS_NPC", "RECOVERY", "REST", "END"):
+        return f"지금 개입 없음 — {ko} ({state})"
+    if state == "FOCUS_BREAK":
+        return "집중 저하 — 기기 제어 없이 화면 안내만"
+    if state == "FATIGUE_SUSPECT":
+        return ("피로 의심: 확정되면 원인별로 — 자세 → " + _plan_text("posture") + " · 환경 → "
+                + _plan_text("environment") + " · 인지 → " + _plan_text("cognitive"))
+    if state in ("FATIGUE", "CAUSE_ANALYSIS"):
+        if cause in ACTION_PLAN:
+            return f"피로 확정 · 원인 {CAUSE_KO.get(cause, cause)} → {_plan_text(cause)}"
+        return "피로 확정 — 원인 분석 중"
+    if state in ORIGIN_KO:
+        c = cause or {"ACTION_ENV": "environment", "ACTION_POSTURE": "posture", "ACTION_BREAK": "cognitive"}[state]
+        return f"{ORIGIN_KO[state]} 중 → {_plan_text(c)} (명령 수신 대기)"
+    if state == "MONITOR":
+        return "효과 확인 중(MONITOR) — 새 명령 없음"
+    if state == "ESCALATE":
+        return "효과 없음 — 다른 원인으로 다시 시도(제안)"
+    return f"{ko} ({state})"
+
+
+# --------------------------------------------------------------------------- 영상 모드
+
+VIDEO_POSTURE_KO = {**POSTURE_KO, "drowsy": "졸음(꾸벅)", "face_down": "엎드림", "lean_forward": "앞으로 숙임"}
+
+
+def video_view(phase_env: Any, posture: Any, control: dict[str, Any]) -> dict[str, Any]:
+    """시뮬 영상 하단 띠와 같은 칸: 센서가 본 자세 · 허브·상태·맥락 칩 · 피로 막대 · 환경 한 줄 · 허브 결정."""
+    data = _map(_map(phase_env).get("data"))
+    ss = _map(data.get("sensor_summary"))
+    p = _map(posture)
+    label = DASH
+    if p:
+        key = str(p.get("posture") or "unknown")
+        label = VIDEO_POSTURE_KO.get(key, key) if p.get("valid", True) else "센서 입력 없음"
+    env = []
+    if _num(ss.get("co2_ppm")) is not None:
+        env.append(f"CO₂ {ss['co2_ppm']:.0f} ppm")
+    if _num(ss.get("temp_c")) is not None:
+        env.append(f"{ss['temp_c']:.1f} ℃")
+    if _num(ss.get("humidity_pct")) is not None:
+        env.append(f"{ss['humidity_pct']:.0f} %")
+    if _num(ss.get("lux")) is not None:
+        env.append(f"{ss['lux']:.0f} lx")
+    state = str(data.get("fsm_state") or "")
+    fatigue = _num(data.get("c_fatigue"))
+    return {
+        "posture": label,
+        "posture_conf": _num(p.get("conf")) if p else None,
+        "chips": ["허브", FSM_KO.get(state, state or DASH), CONTEXT_KO.get(str(data.get("context")), DASH)],
+        "phase": str(data.get("phase") or ""),
+        "fatigue": fatigue,
+        "env": " · ".join(env) or DASH,
+        "decision": control.get("headline") or DASH,
+        "decision_status": " · ".join(x for x in (control.get("status"), control.get("time")) if x and x != DASH) or DASH,
+    }
+
+
 # --------------------------------------------------------------------------- 상태 저장소
 
 class Store:
@@ -566,6 +865,8 @@ class Store:
         self.topics: dict[str, dict[str, Any]] = {}
         self.topics_max = 128
         self.face_down = FaceDownTracker()
+        self.keystroke = KeystrokeTracker()
+        self.control = ControlTracker()
         # 연결별 상태: ok, reason, last(마지막 수신 epoch)
         self.links: dict[str, dict[str, Any]] = {
             k: {"ok": False, "reason": "아직 연결 시도 전", "last": None} for k in ("mqtt", "posture", "raw")}
@@ -596,10 +897,17 @@ class Store:
                 return
             if topic == TOPIC_PHASE:
                 self.phase = env
+                self.control.on_phase(env)
             elif topic == TOPIC_HEALTH_HUB:
                 self.health_hub = env
             elif topic == TOPIC_PROFILE:
                 self.profile_user = env
+            elif topic == TOPIC_KEYSTROKE:
+                self.keystroke.on_sample(env, at)
+            elif topic == TOPIC_HEALTH_PC:
+                self.keystroke.on_health(env, at)
+            if topic in (TOPIC_CMD, TOPIC_RESULT, TOPIC_REQUEST, TOPIC_FEEDBACK):
+                self.control.on_message(topic, env, at)
             entry = log_entry(topic, env, at)
             if entry is not None:
                 self.log.append(entry)
@@ -620,7 +928,11 @@ class Store:
             now = time.time()
             links = {k: {**v, "age_s": None if v["last"] is None else round(now - v["last"], 1)}
                      for k, v in self.links.items()}
+            control = self.control.view(self.phase, now)
             return {
+                "control": control,
+                "keystroke": self.keystroke.view(now),
+                "video": video_view(self.phase, self.posture, control),
                 "mode": self.mode,
                 "target": self.target,
                 "now": time.strftime("%H:%M:%S"),
@@ -898,15 +1210,21 @@ class FakeScenario:
             self.fired.add("once")
             st.on_mqtt(TOPIC_HEALTH_HUB, _fake_env(self.seq, {"status": "online", "profile": "demo-b"}))
             st.on_mqtt(TOPIC_PROFILE, _fake_env(self.seq, {"profile_id": "u-7f3a", "age_band": "20s"}, "pi5-display"))
+            st.on_mqtt(TOPIC_HEALTH_PC, json.dumps({"ts": time.time(), "node": "pc-collector", "status": "online",
+                                                    "reconnects": 1}).encode("utf-8"))
         ks_slot = f"ks{int(u)}"
         if ks_slot not in self.fired:
             self.fired.add(ks_slot)
             typing = self.stage(t) == "FOCUS_PC"
-            st.on_mqtt("deskmate/sensor/keystroke", _fake_env(self.seq, {
-                "window_s": 60, "dwell_mean_ms": 96.0 if typing else 0.0, "flight_mean_ms": 182.0 if typing else 0.0,
+            wob = math.sin(u * 1.3)
+            st.on_mqtt(TOPIC_KEYSTROKE, _fake_env(self.seq, {
+                "node": "pc-collector", "window_s": 60,
+                "dwell_mean_ms": round(96.0 + 8 * wob, 1) if typing else 0.0, "dwell_std_ms": 21.0 if typing else 0.0,
+                "flight_mean_ms": round(182.0 + 30 * wob, 1) if typing else 0.0, "flight_std_ms": 74.0 if typing else 0.0,
                 "flight_cv": 0.41 if typing else 0.0, "idle_ratio": 0.2 if typing else 1.0,
                 "correction_rate": 0.04 if typing else 0.0, "typing_active": typing, "mouse_active": typing,
-                "input_active": typing, "mouse_event_rate": 30.0 if typing else 0.0}, "pc-collector"))
+                "input_active": typing, "mouse_event_rate": 30.0 if typing else 0.0,
+                "event_count": 212 if typing else 0, "valid": True}, "pc-collector"))
 
         # state/phase 는 2 s 마다(실제는 10 s)
         slot = f"phase{int(u // 2)}"
@@ -949,10 +1267,17 @@ class FakeScenario:
                                      "origin_state": "ACTION_POSTURE"}, "hub"),
             (28.0, "res", TOPIC_RESULT, {"command_id": cid, "status": "succeeded", "previous": 110, "actual": 176,
                                         "actual_value": 176}, "display-control"),
-            (33.0, "req", TOPIC_REQUEST, {"request_id": f"fk{cycle:04d}req", "kind": "suggestion",
-                                         "action": "break", "explanation": "졸음이 계속됨 — 5분 쉬고 환기할까요?",
-                                         "arm_label": "휴식 제안", "expires_in_s": 30}, "hub"),
+            (33.0, "req", TOPIC_REQUEST, {"request_id": f"fk{cycle:04d}req", "kind": "env_suggest",
+                                         "prompt_code": "adjust_environment", "cause": "environment",
+                                         "evidence": ["co2_rising"], "options": ["accept", "reject"],
+                                         "explanation": "CO₂ 가 계속 오름 — 선풍기를 켜 환기할까요?",
+                                         "arm_label": "선풍기 켜기", "expires_in_s": 30}, "hub"),
             (35.0, "fb", TOPIC_FEEDBACK, {"request_id": f"fk{cycle:04d}req", "verdict": "accept"}, "display"),
+            (35.5, "cmd2", TOPIC_CMD, {"command_id": f"fk{cycle:04d}fan", "target_id": "vent_fan",
+                                      "operation": "set_power", "value": "on", "gate": "suggest",
+                                      "cause": "environment", "origin_state": "ACTION_ENV"}, "hub"),
+            (36.0, "res2", TOPIC_RESULT, {"command_id": f"fk{cycle:04d}fan", "status": "succeeded",
+                                         "actual_value": "on"}, "display-control"),
         ]
         for at, key, topic, data, node in events:
             if u >= at and key not in self.fired:

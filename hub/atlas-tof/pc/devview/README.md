@@ -89,6 +89,30 @@ hub 시연 프로파일은 `state/phase`·`health/hub`·`:8765/health` 어디에
 - 값이 없는 칸은 `-`. 심박·호흡은 `*_valid=false` 면 `(무효)` 를 붙인다(락온 풀림 ≠ 사람 없음).
 - 열지도 색 눈금은 `pc/posture_view.html`·Pi 5 `tof_heatmap.dart` 와 같다(20 cm 붉음 → 2 m 어둠). 배열은 펌웨어가 방향을 적용한 그대로 그린다(뒤집지 않음).
 
+## 영상 모드 (`/?mode=video`)
+
+시연영상에서 실제 장면 옆·아래에 붙이는 하단 띠(시뮬 영상의 띠와 같은 칸). 개발자 화면 오른쪽 위 **영상 모드** 단추, `V` 키,
+또는 <http://127.0.0.1:8790/?mode=video> 로 바꾼다(`&bg=green` 이면 크로마키 초록 배경). 칸: ToF 8×8 두 개 · 센서가 본 자세
+(자세 서비스 라벨, 예: 졸음(꾸벅)) · 칩 `허브 · FSM 상태 · 작업 맥락`(예: 허브 · 집중 · 책·필기) · 피로 막대와 C_fatigue · 환경 한 줄
+(CO₂·온도·습도·조도) · **허브 결정**(시뮬의 "실제(시뮬 정답)" 자리 — 아래 제어 결론의 한 줄). 위쪽은 비워 두고 띠만 반투명이다.
+
+## 제어 결론 패널
+
+"어느 블루투스 기기를 왜 제어하나" 를 한 줄로. `interaction/request`·`control/cmd`·`control/result`·`feedback/user` 를 묶어:
+- 최근 180 s 안의 **명령**: `자동 · 환경 → Pico 2 W 선풍기 (BLE) 켬 + iLink 무드등 (BLE) 밝기 +30 %` + 게이트(자동/제안)·원인·이유
+  (그때 state/phase reasons·개인화 설명)·Pi 5 실행기 결과(`✓ 성공 110→176` / `✗ failed feedback_disabled`, 결과를 낸 노드·시각).
+- 최근 **제안 카드**: `제안 카드 · 자세 → iLink 무드등 (BLE) 밝기 +60 % (최소 153)` + 카드 설명·응답(수락/거절/응답 대기)·시한.
+- 둘 다 없으면 state/phase 로 **지금 할 일**: `지금 개입 없음 — 집중 (FOCUS_PC)`, `피로 의심: 확정되면 원인별로 — 자세 → … · 환경 → …`.
+  원인별 기기는 `hub/deskmate_hub/config/control.yaml` actions(10-25)를 옮긴 표(`ACTION_PLAN`)로 예고만 한다 — 실제로 보낸 것은 control/cmd 가 정본.
+
+target → 기기: `desk_lamp` = iLink 무드등 (BLE), `vent_fan` = Pico 2 W 선풍기 (BLE), `air_purifier` = LG 공기청정기 (ThinQ).
+
+## 키 입력 패널
+
+PC 수집기(`deskmate/sensor/keystroke`, 키 값·문자는 보내지 않음 — 타이밍 집계뿐)의 키 누름 유지·키 입력 간격(ms, ±표준편차),
+입력 수(`event_count`)와 분당 수, 리듬 CV·공백·교정 비율, `valid`·`typing_active`, 최근 60 표본 추이(유지·간격), 연결
+(`deskmate/health/pc-collector` status·재연결)과 표본 나이. 상태 문구·5 s 끊김 기준·추이 규칙은 Pi 5 `keystroke_page.dart` 와 같다.
+
 ## 핫스팟 연결
 
 1. 휴대폰 핫스팟 **So** 를 켜고 노트북 Wi-Fi 를 So 에 붙인다(주소 172.20.10.x/28). 집 Wi-Fi 에서는 Pi 4 가 안 보인다.

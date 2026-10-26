@@ -369,7 +369,7 @@ def test_fake_scenario_runs_fsm_and_lamp_command():
     assert states == ["START", "FOCUS_PC", "FATIGUE_SUSPECT", "FATIGUE", "ACTION_POSTURE"]
     snap = st.snapshot()
     kinds = [e["kind"] for e in snap["log"]]
-    assert kinds == ["CMD", "RESULT", "REQUEST", "FEEDBACK"]
+    assert kinds == ["CMD", "RESULT", "REQUEST", "FEEDBACK", "CMD", "RESULT"]
     assert "desk_lamp adjust_brightness +60%" in snap["log"][0]["text"]
     assert "110→176" in snap["log"][1]["text"]
     assert snap["devices"][0]["value"] == "밝기 110→176"
@@ -386,7 +386,120 @@ def test_fake_scenario_repeats_each_cycle():
     sc = dv.FakeScenario(st)
     for i in range(int(2 * dv.FAKE_PERIOD / 0.5)):
         sc.step(i * 0.5)
-    assert [e["kind"] for e in st.snapshot()["log"]].count("CMD") == 2
+    assert [e["kind"] for e in st.snapshot()["log"]].count("CMD") == 4
+
+
+# ----------------------------------------------------------------- 키 입력 패널
+
+def ks_env(ts, **data):
+    base = {"node": "pc-collector", "window_s": 60, "dwell_mean_ms": 90.0, "flight_mean_ms": 180.0,
+            "event_count": 120, "valid": True, "typing_active": True}
+    return {"ts": ts, "node": "pc-collector", "data": {**base, **data}}
+
+
+def test_keystroke_tracker_status_rate_and_history():
+    k = dv.KeystrokeTracker()
+    assert k.view(0.0)["status"] == "PC 수집기 대기"
+    k.on_sample(ks_env(10.0), at=10.0)
+    k.on_sample(ks_env(10.0), at=10.5)               # 같은 ts → 추이에 다시 넣지 않음
+    k.on_sample(ks_env(11.0, valid=False), at=11.0)  # 무효 → 추이 제외
+    k.on_sample(ks_env(12.0, typing_active=False, dwell_mean_ms=0.0), at=12.0)
+    v = k.view(13.0)
+    assert v["status"] == "입력 없음 · 수신 중" and v["rate_per_min"] == 120.0 and v["age_s"] == 1.0
+    assert v["spark"] == [[90.0, 180.0], [0.0, 180.0]]
+    assert k.view(20.0)["status"] == "수신 끊김"
+    k.on_health({"ts": 1, "node": "pc-collector", "status": "online", "reconnects": 1}, at=5.0)  # envelope 없는 health
+    assert k.view(20.0)["link"] == {"status": "online", "reconnects": 1, "age_s": 15.0}
+    k.on_sample(ks_env(21.0, valid=False), at=21.0)
+    assert k.view(21.0)["status"] == "유효하지 않은 표본" and k.view(21.0)["ok"] is False
+
+
+def test_store_routes_keystroke_and_health_topics():
+    st = dv.Store()
+    st.on_mqtt(dv.TOPIC_KEYSTROKE, json.dumps(ks_env(1.0)).encode(), at=1.0)
+    st.on_mqtt(dv.TOPIC_HEALTH_PC, b'{"ts": 1, "node": "pc-collector", "status": "online", "reconnects": 2}', at=1.0)
+    v = st.snapshot()["keystroke"]
+    assert v["event_count"] == 120 and v["link"]["status"] == "online"
+    assert "key" not in json.dumps(v["spark"])  # 숫자 추이뿐
+
+
+# ----------------------------------------------------------------- 제어 결론
+
+# 10-26 실기에서 받은 모양 그대로(hub c3441f4 → Pi 5 display-control)
+REAL_CMD = {"schema_version": "1.0", "ts": 1792990644.825, "node": "hub", "data": {
+    "command_id": "85b381353be3", "target_id": "desk_lamp", "operation": "adjust_brightness", "value": {"percent": 30},
+    "origin_state": "ACTION_ENV", "cause": "environment", "gate": "auto", "requires_confirmation": False,
+    "expires_ts_ms": 1792990659819}}
+REAL_RESULT = {"schema_version": "1.0", "ts": 1792990644.853, "node": "display-control", "seq": 8, "data": {
+    "command_id": "85b381353be3", "status": "failed", "error_code": "feedback_disabled", "completed_ts_ms": 1}}
+
+
+def test_control_view_real_board_command_and_result():
+    c = dv.ControlTracker()
+    c.on_phase(env({"fsm_state": "ACTION_ENV", "reasons": ["co2_high"]}))
+    c.on_message(dv.TOPIC_CMD, REAL_CMD, at=100.0)
+    v = c.view(env({"fsm_state": "MONITOR"}), now=101.0)
+    assert v["kind"] == "command" and v["headline"] == "자동 · 환경 → iLink 무드등 (BLE) 밝기 +30 %"
+    assert v["status"] == "… 결과 대기" and v["reason"] == "co2_high" and v["origin"] == "환경 개입"
+    c.on_message(dv.TOPIC_RESULT, REAL_RESULT, at=100.1)
+    v = c.view(env({"fsm_state": "MONITOR"}), now=101.0)
+    line = v["commands"][0]
+    assert line["result"] == "✗ failed feedback_disabled" and line["ok"] is False and line["by"] == "display-control"
+    assert v["status"] == "✗ 실행 안 됨" and v["gate"] == "자동 실행"
+    # 오래되면 지금 일이 아니라 추천 줄로(마지막 명령은 세부에 남긴다)
+    v = c.view(env({"fsm_state": "FOCUS_PC"}), now=100.0 + dv.RECENT_CONTROL_S + 1)
+    assert v["kind"] == "idle" and v["headline"] == "지금 개입 없음 — 집중 (FOCUS_PC)" and len(v["commands"]) == 1
+
+
+def test_control_view_groups_env_commands_and_success_text():
+    c = dv.ControlTracker()
+    for i, (t, op, val) in enumerate([("vent_fan", "set_power", "on"),
+                                      ("desk_lamp", "adjust_brightness", {"percent": 60, "min_raw": 153})]):
+        c.on_message(dv.TOPIC_CMD, env({"command_id": f"c{i}", "target_id": t, "operation": op, "value": val,
+                                        "origin_state": "ACTION_ENV", "cause": "environment", "gate": "auto"}), at=10.0 + i)
+    c.on_message(dv.TOPIC_RESULT, env({"command_id": "c1", "status": "succeeded", "previous": 110, "actual": 176},
+                                      node="display-control"), at=12.0)
+    c.on_message(dv.TOPIC_RESULT, env({"command_id": "c0", "status": "succeeded", "actual_value": "on"}), at=12.0)
+    v = c.view(None, now=13.0)
+    assert v["headline"] == "자동 · 환경 → Pico 2 W 선풍기 (BLE) 켬 + iLink 무드등 (BLE) 밝기 +60 % (최소 153)"
+    assert [l["result"] for l in v["commands"]] == ["✓ 성공 on", "✓ 성공 110→176"] and v["status"] == "✓ 실행됨"
+
+
+def test_control_view_suggest_card_then_feedback():
+    c = dv.ControlTracker()
+    c.on_message(dv.TOPIC_REQUEST, env({"request_id": "r1", "kind": "posture_suggest", "cause": "posture",
+                                        "expires_in_s": 15, "explanation": "졸음 — 무드등을 밝힐까요?"}), at=5.0)
+    v = c.view(None, now=6.0)
+    assert v["kind"] == "request" and v["headline"] == "제안 카드 · 자세 → iLink 무드등 (BLE) 밝기 +60 % (최소 153)"
+    assert v["status"] == "응답 대기 · 15 s 시한" and v["reason"] == "졸음 — 무드등을 밝힐까요?"
+    c.on_message(dv.TOPIC_FEEDBACK, env({"request_id": "r1", "verdict": "accept"}), at=7.0)
+    assert c.view(None, now=8.0)["status"].startswith("수락")
+
+
+def test_recommendation_lines():
+    assert dv.recommendation("") == "hub 판정 대기"
+    assert dv.recommendation("MONITOR") == "효과 확인 중(MONITOR) — 새 명령 없음"
+    assert dv.recommendation("FATIGUE", "posture") == "피로 확정 · 원인 자세 → iLink 무드등 (BLE) 밝기 +60 % (최소 153)"
+    assert dv.recommendation("FATIGUE_SUSPECT").startswith("피로 의심: 확정되면 원인별로 — 자세 → iLink 무드등")
+    assert dv.recommendation("ACTION_BREAK") == "휴식 개입 중 → 휴식 카드(기기 제어 없음) (명령 수신 대기)"
+
+
+def test_op_text():
+    assert dv.op_text("set_power", "off") == "끔" and dv.op_text("set_level", 2) == "풍량 2"
+    assert dv.op_text("adjust_brightness", {"percent": -20}) == "밝기 -20 %"
+
+
+# ----------------------------------------------------------------- 영상 모드
+
+def test_video_view_bar_fields():
+    ph = env({"fsm_state": "FOCUS_NPC", "context": "npc", "c_fatigue": 0.83,
+              "sensor_summary": {"co2_ppm": 1106, "temp_c": 22.5, "lux": 350}})
+    v = dv.video_view(ph, {"posture": "drowsy", "conf": 0.9, "valid": True}, {"headline": "지금 개입 없음"})
+    assert v["posture"] == "졸음(꾸벅)" and v["chips"] == ["허브", "집중", "책·필기"]
+    assert v["fatigue"] == 0.83 and v["env"] == "CO₂ 1106 ppm · 22.5 ℃ · 350 lx" and v["decision"] == "지금 개입 없음"
+    assert dv.video_view(ph, None, {"headline": "x", "status": "✓ 실행됨", "time": "12:00:01"})["decision_status"] ==         "✓ 실행됨 · 12:00:01"
+    e = dv.video_view(None, None, {})
+    assert e["posture"] == "-" and e["chips"] == ["허브", "-", "-"] and e["env"] == "-"
 
 
 # ----------------------------------------------------------------- 로컬 HTTP
