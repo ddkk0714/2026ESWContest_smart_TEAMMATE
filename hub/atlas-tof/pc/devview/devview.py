@@ -369,10 +369,72 @@ def parse_raw(j: Any) -> dict[str, Any]:
     return {"frames": j.get("frames"), "bad": j.get("bad"), "sensors": sensors}
 
 
-def posture_view(j: Any) -> dict[str, Any]:
-    """자세 서비스 `/api/state` → 라벨·신뢰도·9 클래스 막대·장치 위치."""
+# hub 가 자세 라벨을 셀 때의 신뢰도 하한(hub config/profiles/demo-b.yaml ingest.tof.min_confidence_by_label, bd47052).
+# 서비스가 화면에 내는 라벨은 하한 없는 EMA argmax 라, 이 아래면 화면에 떠도 hub 는 그 자세를 세지 않는다. --hub-floor 로 바꾼다.
+HUB_FLOORS_DEFAULT = {"face_down": 0.99, "drowsy": 0.80}
+
+
+def parse_floors(text: str) -> dict[str, float]:
+    """'face_down=0.99,drowsy=0.80' → dict. 빈 문자열이면 하한 없음."""
+    out: dict[str, float] = {}
+    for part in (text or "").split(","):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            out[k.strip()] = float(v)
+    return out
+
+
+def _rule_view(j: dict[str, Any]) -> dict[str, Any] | None:
+    """e415d23 서비스의 보정 상태: 엎드림 규칙(d)·앉음→upright 치환·radial·fill·misplaced 게이트. 옛 서비스면 None."""
+    r, m = _map(j.get("rule")), _map(j.get("misplaced_rule"))
+    if not r and not m and "radial" not in j:
+        return None
+    parts = []
+    if r:
+        if r.get("enabled"):
+            parts.append(("엎드림 규칙 " + ("켜짐 → face_down " + raw_value(r.get("conf")) if r.get("face_down") else "꺼짐"))
+                         + f" (share {raw_value(r.get('share'))} · up {raw_value(r.get('up'))} · lo {raw_value(r.get('lo'))}"
+                         + f" · dlo {raw_value(r.get('dlo'))} · dup {raw_value(r.get('dup'))})")
+        if r.get("seated_upright"):
+            parts.append("앉음→바른자세 " + ("적용 중" if r.get("seated_applied") else "대기") +
+                         (" (앉음 감지)" if r.get("seated") else ""))
+    if m:
+        mode = m.get("mode")
+        if mode in (None, "off"):
+            parts.append("위치 재조정 게이트 꺼짐")
+        else:
+            parts.append(f"위치 재조정 게이트 {mode} · 베이스라인 {'있음(' + str(m.get('baseline_source')) + ')' if m.get('baseline') else '없음'}"
+                         + f" · 장치 움직임 {'예' if m.get('device_moved') else '아니오'} · 모델 misplaced {'예' if m.get('model_misplaced') else '아니오'}"
+                         + (" → 막음" if m.get("gated") else ""))
+    if "radial" in j or "fill_notarget_mm" in j:
+        parts.append(f"입력 radial {'켜짐' if j.get('radial') else '꺼짐'} · fill {raw_value(j.get('fill_notarget_mm'))} mm")
+    mo = _map(j.get("model_output"))
+    raw = None
+    if mo:
+        mp = _map(mo.get("probs"))
+        top = sorted(mp.items(), key=lambda kv: -(_num(kv[1]) or 0))[:2]
+        raw = f"{POSTURE_KO.get(str(mo.get('posture')), mo.get('posture'))} {raw_value(_num(mo.get('conf')))}" + "".join(
+            f" · {POSTURE_KO.get(k, k)} {raw_value(_num(v))}" for k, v in top if k != mo.get("posture"))[:80]
+    return {"lines": parts, "model_raw": raw, "face_down_rule": bool(r.get("face_down")),
+            "seated_applied": bool(r.get("seated_applied")), "gated": bool(m.get("gated"))}
+
+
+def hub_floor_note(posture: str, conf: float | None, floors: dict[str, float]) -> str | None:
+    """화면 라벨이 hub 하한 아래면 'hub 무시 (0.54 < 0.80)'."""
+    f = floors.get(posture)
+    if f is None or conf is None or conf >= f:
+        return None
+    return f"hub 무시 ({conf:.2f} < {f:.2f})"
+
+
+def posture_view(j: Any, floors: dict[str, float] | None = None) -> dict[str, Any]:
+    """자세 서비스 `/api/state` → 라벨·신뢰도·9 클래스 막대·장치 위치·보정 상태·hub 하한 표시.
+
+    막대는 서비스가 라벨로 쓰는 평활 확률(probs — 게이트·규칙을 거친 값). 모델 원 출력은 model_output 으로 따로 보인다.
+    """
     j = _map(j)
-    probs = _map(_map(j.get("instant")).get("probs")) or _map(j.get("probs"))
+    floors = HUB_FLOORS_DEFAULT if floors is None else floors
+    probs = _map(j.get("probs")) or _map(_map(j.get("instant")).get("probs"))
     labels = _map(j.get("model")).get("labels") or LABELS
     p = str(j.get("posture") or "unknown")
     placement = j.get("placement")
@@ -388,6 +450,9 @@ def posture_view(j: Any) -> dict[str, Any]:
         "placement": placement if placement in ("left", "center", "right") else None,
         "probs": [[l, POSTURE_KO.get(l, l), _num(probs.get(l)) or 0.0] for l in labels],
         "model": str(_map(j.get("model")).get("file") or DASH).replace("\\", "/").split("/")[-1],
+        "hub_note": hub_floor_note(p, _num(j.get("conf")), floors) if j.get("valid") else None,
+        "floors": floors,
+        "rules": _rule_view(j),
     }
 
 
@@ -1421,6 +1486,7 @@ class Store:
         self.mode = "board"
         self.target = ""
         self.hub_profile = ""  # --hub-profile: 보드가 싣지 않는 시연 프로파일을 노트북에서 적은 값
+        self.hub_floors: dict[str, float] = dict(HUB_FLOORS_DEFAULT)   # --hub-floor
 
     def link(self, name: str, ok: bool, reason: str = "") -> None:
         with self.lock:
@@ -1567,7 +1633,7 @@ class Store:
                 "links": links,
                 "phase": phase_view(self.phase),
                 "profile": profile_text(self.phase, self.profile_user, self.health_hub, self.hub_profile),
-                "posture": posture_view(self.posture) if self.posture is not None else None,
+                "posture": posture_view(self.posture, self.hub_floors) if self.posture is not None else None,
                 "face_down": self.face_down.view(now),
                 "raw": parse_raw(self.raw),
                 "sections": sensor_sections(self.raw, self.topics, self.phase, now),
@@ -2075,6 +2141,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--port", type=int, default=8790, help="이 화면의 로컬 포트")
     ap.add_argument("--hub-profile", default="", metavar="NAME",
                     help="hub 시연 프로파일 이름(예: demo-b). 보드가 발행하지 않아서 화면에 '(노트북 지정)' 으로 표시")
+    ap.add_argument("--hub-floor", default="face_down=0.99,drowsy=0.80", metavar="L=C,…",
+                    help="hub 가 자세를 세는 신뢰도 하한(demo-b bd47052). 화면 라벨이 이 아래면 'hub 무시' 표시. 빈 값이면 표시 안 함")
     ap.add_argument("--read-only", action="store_true",
                     help="화면에서 보내기(프로필·카드 응답)도 끈다 — 녹화만 할 때")
     ap.add_argument("--fake", action="store_true", help="보드 없이 가짜 각본으로")
@@ -2083,6 +2151,7 @@ def main(argv: list[str] | None = None) -> None:
     args = ap.parse_args(argv)
 
     store = Store()
+    store.hub_floors = parse_floors(args.hub_floor)
     stop = threading.Event()
     threads: list[threading.Thread] = []
     if args.fake:

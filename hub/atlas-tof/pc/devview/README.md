@@ -55,6 +55,14 @@ python hub/atlas-tof/pc/devview/devview.py --fake
 | `GET :8771/api/state` | 0.3 s | 자세 서비스 라벨·신뢰도·9 클래스 확률·장치 위치(`placement`, 없으면 '-'), 엎드림 추적 |
 | `GET :8772/raw` (없으면 `:8771/raw`) | 0.2 s | ToF A·왼쪽 / B·오른쪽 8×8 열지도(칸 숫자 cm, 회색 = 무효 상태값), 유효 칸 수·최소 거리, `other` 블록 |
 
+### 자세 서비스 칸 — 보정 상태와 hub 하한
+
+- 라벨 옆 배지: 서비스 라벨은 하한 없는 평활 argmax 라, hub 하한(demo-b bd47052: 졸음 0.80 · 엎드림 0.99, `--hub-floor`) 아래면
+  **hub 무시 (0.54 < 0.80)**, 넘으면 **hub 셈 (≥ 0.99)**. 하한이 없는 라벨은 배지 없음.
+- 막대는 서비스가 라벨로 쓰는 평활 확률(`probs`, 게이트·규칙 뒤). 그 아래 **모델 원 출력**(`model_output`, 게이트·규칙 전)과
+  e415d23 서비스의 보정 상태: 엎드림 규칙(d) 켜짐/꺼짐(share·up·lo·dlo·dup) · 앉음→바른자세 적용 · 위치 재조정 게이트(모드·베이스라인·
+  장치 움직임·모델 misplaced → 막음) · 입력 radial·fill. 옛 서비스면 이 줄은 안 보인다.
+
 ### 센서 원값 패널
 
 섹션마다 원값 출처를 하나 고른다: **`/raw` 의 `other`(ESP32 UART 프레임 그대로) → MQTT `deskmate/sensor/*` → hub 요약(`state/phase` 의 `sensor_summary`)**.

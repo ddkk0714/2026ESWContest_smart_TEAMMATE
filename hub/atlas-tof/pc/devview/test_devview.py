@@ -288,6 +288,44 @@ def test_posture_view_probs_and_placement():
     assert dv.posture_view({})["placement"] is None
 
 
+# 10-26 실보드 e415d23 /api/state 모양(값은 예시)
+BOARD_STATE = {
+    "valid": True, "posture": "recline", "posture_ko": "뒤로 젖힘", "conf": 0.862,
+    "probs": {"recline": 0.862, "upright": 0.006, "misplaced": 0.0, "face_down": 0.011},
+    "instant": {"posture": "recline", "conf": 0.587, "probs": {"recline": 0.587, "misplaced": 0.293}},
+    "model_output": {"posture": "recline", "conf": 0.6195, "probs": {"recline": 0.619, "misplaced": 0.281, "away": 0.084}},
+    "rule": {"enabled": True, "face_down": False, "applied": False, "conf": 0.995, "share": 0, "up": 0, "lo": 16,
+             "dlo": 1.061, "dup": -1, "seated": False, "seated_upright": True, "seated_applied": False},
+    "misplaced_rule": {"mode": "and", "baseline": True, "baseline_source": "post", "device_moved": False,
+                       "model_misplaced": True, "gated": True},
+    "radial": True, "fill_notarget_mm": 3000, "placement": "left",
+}
+
+
+def test_posture_view_rules_and_raw_model_output():
+    v = dv.posture_view(BOARD_STATE)
+    assert v["conf"] == 0.862 and dict((l, x) for l, _, x in v["probs"])["recline"] == 0.862   # 막대 = 게이트 뒤 평활 확률
+    r = v["rules"]
+    assert r["model_raw"] == "젖힘 0.62 · 위치 재조정 0.281"
+    assert r["lines"][0].startswith("엎드림 규칙 꺼짐 (share 0 · up 0 · lo 16 · dlo 1.061")
+    assert r["lines"][1] == "앉음→바른자세 대기"
+    assert r["lines"][2] == "위치 재조정 게이트 and · 베이스라인 있음(post) · 장치 움직임 아니오 · 모델 misplaced 예 → 막음"
+    assert r["lines"][3] == "입력 radial 켜짐 · fill 3000 mm" and r["gated"] is True
+    on = dict(BOARD_STATE, rule=dict(BOARD_STATE["rule"], face_down=True, seated_applied=True))
+    assert dv.posture_view(on)["rules"]["lines"][0].startswith("엎드림 규칙 켜짐 → face_down 0.995")
+    assert dv.posture_view({"posture": "upright", "conf": 0.9, "valid": True})["rules"] is None   # 옛 서비스
+
+
+def test_hub_floor_note():
+    assert dv.parse_floors("face_down=0.99, drowsy=0.80") == {"face_down": 0.99, "drowsy": 0.80}
+    assert dv.parse_floors("") == {}
+    assert dv.posture_view({"posture": "drowsy", "conf": 0.54, "valid": True})["hub_note"] == "hub 무시 (0.54 < 0.80)"
+    assert dv.posture_view({"posture": "face_down", "conf": 0.995, "valid": True})["hub_note"] is None
+    assert dv.posture_view({"posture": "face_down", "conf": 0.7, "valid": True})["hub_note"] == "hub 무시 (0.70 < 0.99)"
+    assert dv.posture_view({"posture": "upright", "conf": 0.3, "valid": True})["hub_note"] is None   # 하한 없는 라벨
+    assert dv.posture_view({"posture": "drowsy", "conf": 0.54, "valid": True}, floors={})["hub_note"] is None
+
+
 def test_poll_loop_falls_back_to_second_url():
     st, stop = dv.Store(), threading.Event()
     calls = []
