@@ -99,6 +99,8 @@ python -m collector --target lan        # = --broker 172.16.34.199 (연구실 LA
 - hub 반영 확인: `deskmate/state/phase` 의 `sensor_summary.keystroke` 가 이 값이고, 타이핑하면 `context` 가 `npc` → `mixed`/`pc` 로
   간다(demo 프로파일은 `pc_ratio_window_sec` 120 s, 기본 900 s 창의 입력 비율).
 - 대학생 세션은 타이핑 중 켜 둔다. 수험생(책·필기) 세션도 켜 두면 입력이 없어 `context: npc` 로 잡히는지 함께 확인된다.
+- Pi 5 개발자 앱 키보드 탭(PR #37·#43)에서도 보인다. 그 탭은 표본 `ts`(노트북 시계)와 Pi 5 시계 차이로 5 s 넘으면 '수신 끊김'이라
+  두 시계가 맞아야 한다(10-26 실측: Pi 5 가 노트북보다 88 s 늦음 — 늦은 쪽이면 통과, Pi 5 가 앞서면 끊김으로 보인다).
 - 보내는 것은 타이밍 통계와 keydown 개수뿐이다. 어떤 키인지는 어디에도 남지 않는다.
 
 옵션: `--target {hotspot,lan}`, `--port`, `--node`, `--window`, `--period`. 환경변수(`DESKMATE_BROKER` 등)로도 지정 가능.

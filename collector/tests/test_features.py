@@ -93,8 +93,9 @@ def test_payload_carries_fatigue_validity_and_count():
     """hub fatigue/features.py 는 valid 일 때만 키 특징을 읽고 event_count/window_s 로 분당 타건 수를 만든다."""
     p = extract(_typing(41.0, 20), window_s=60, now_t=60.0).to_payload(node="pc-collector")
     assert p["valid"] is True and p["event_count"] == 20
+    # 미입력 창도 유효한 표본이다 — Pi 5 탭은 valid=false 를 '유효하지 않은 표본'으로 띄운다. 타이핑 여부는 typing_active.
     idle = extract([], window_s=60, now_t=60.0).to_payload(node="pc-collector")
-    assert idle["valid"] is False and idle["event_count"] == 0
+    assert idle["valid"] is True and idle["event_count"] == 0 and idle["typing_active"] is False
 
 
 def test_target_alias_sets_broker_and_broker_wins():
