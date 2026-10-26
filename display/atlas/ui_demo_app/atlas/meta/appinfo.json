@@ -1,0 +1,24 @@
+{
+    "id": "com.atlas.app.deskmate_ui_v27",
+    "type": "flutter",
+    "name": "DESKMATE V27",
+    "description": "A personal workspace for your daily focus.",
+    "entry": "deskmate_ui_v27 --bundle=./ --fullscreen --onscreen-keyboard -a com.atlas.app.deskmate_ui_v27",
+    "version": "0.27.0",
+    "required_permissions": {
+        "privileged": [
+            "com.atlas.permission.privileged.audiocontrol",
+            "com.atlas.permission.privileged.mediacontrol",
+            "com.atlas.permission.privileged.mediasession",
+            "com.atlas.permission.privileged.permission_agent",
+            "com.atlas.permission.privileged.bluetooth_admin",
+            "com.atlas.permission.privileged.peripheral",
+            "com.atlas.permission.privileged.audioroute"
+        ],
+        "user_consent": [
+            "com.atlas.permission.user_consent.mediaplayer",
+            "com.atlas.permission.user_consent.bluetooth_connect",
+            "com.atlas.permission.user_consent.bluetooth_scan"
+        ]
+    }
+}
