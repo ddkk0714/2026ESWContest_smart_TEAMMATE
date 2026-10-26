@@ -1199,6 +1199,15 @@ def test_fake_card_waits_for_my_answer():
 
 # ----------------------------------------------------------------- 로컬 HTTP
 
+def test_tof_panels_in_sensor_view_order():
+    """Pi 5 앱 PR #83 과 같은 순서: 격자가 사진 방향이라 B(사용자 오른쪽)를 화면 왼쪽, A(사용자 왼쪽)를 화면 오른쪽."""
+    import os
+    page = open(os.path.join(os.path.dirname(dv.__file__), "index.html"), encoding="utf-8").read()
+    assert page.index('id="tof1"') < page.index('id="tof0"') and page.index('id="vtof1"') < page.index('id="vtof0"')
+    assert "센서가 보는 방향 — 사용자 왼쪽 센서 A 가 화면 오른쪽" in page
+    assert dv.SENSOR_NAMES == {0: "A · 왼쪽", 1: "B · 오른쪽"}          # 이름표는 사용자 기준 그대로
+
+
 def test_http_serves_page_and_data():
     st = dv.Store()
     dv.FakeScenario(st).step(30.0)

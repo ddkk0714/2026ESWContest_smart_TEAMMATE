@@ -53,7 +53,7 @@ python hub/atlas-tof/pc/devview/devview.py --fake
 | MQTT `deskmate/health/hub`·`deskmate/profile/user` | retain | 프로필 줄(hub 시연 프로파일 demo-a/b 가 실려 있으면 · 개인화 `active_profile_id` · 첫 설정 `profile_id`) |
 | MQTT `deskmate/#` 전부 | — | MQTT 토픽 목록(토픽별 개수·마지막 수신) — 실시간으로 들어오는지 확인 |
 | `GET :8771/api/state` | 0.3 s | 자세 서비스 라벨·신뢰도·9 클래스 확률·장치 위치(`placement`, 없으면 '-'), 엎드림 추적 |
-| `GET :8772/raw` (없으면 `:8771/raw`) | 0.2 s | ToF A·왼쪽 / B·오른쪽 8×8 열지도(칸 숫자 cm, 회색 = 무효 상태값), 유효 칸 수·최소 거리, `other` 블록 |
+| `GET :8772/raw` (없으면 `:8771/raw`) | 0.2 s | ToF 8×8 열지도 — **화면 왼쪽 B·오른쪽, 오른쪽 A·왼쪽**(격자가 센서가 보는 사진 방향이라 사용자 왼쪽 센서 A 가 화면 오른쪽, Pi 5 앱 PR #83 과 같음. 이름표는 사용자 기준)(칸 숫자 cm, 회색 = 무효 상태값), 유효 칸 수·최소 거리, `other` 블록 |
 
 ### 자세 서비스 칸 — 보정 상태와 hub 하한
 

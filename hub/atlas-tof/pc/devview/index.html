@@ -27,7 +27,7 @@ body:not([data-mode="dev"]) #dev { display: none; }
 body:not([data-mode="video"]) #video { display: none; }
 body:not([data-mode="virtual"]) #virt { display: none; }
 .mono, .num { font-family: Consolas, "D2Coding", "Cascadia Mono", monospace; font-variant-numeric: tabular-nums; }
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: calc(10px * var(--k)); padding: calc(10px * var(--k)) calc(14px * var(--k)); min-height: 0; overflow: hidden; }
+.panel { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: calc(10px * var(--k)); padding: calc(10px * var(--k)) calc(14px * var(--k)); min-height: 0; overflow: hidden; }
 .ptitle { font-size: calc(14px * var(--k)); color: var(--dim); margin-bottom: calc(6px * var(--k)); display: flex; justify-content: space-between; gap: calc(12px * var(--k)); white-space: nowrap; }
 .ptitle b { color: var(--fg); font-weight: 700; font-size: calc(16px * var(--k)); }
 .empty { color: var(--faint); }
@@ -327,7 +327,8 @@ body.narrow #row2 { grid-template-columns: minmax(0, 1fr); }
 body.narrow .sec.wide .rkv { grid-template-columns: repeat(2, minmax(0, auto) minmax(0, 1fr)); }
 body.narrow #row4 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 body.narrow #logPanel { grid-column: 1 / -1; min-height: calc(260px * var(--k)); }
-body.narrow #row1 { grid-template-columns: auto auto minmax(0, 1fr); }
+body.narrow #row1 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+body.narrow #svc { grid-column: 1 / -1; }
 body.narrow #fd { grid-column: 1 / -1; }
 body.narrow #control { grid-template-columns: minmax(0, 1fr); }
 body.narrow #devices { border-left: none; padding-left: 0; border-top: 1px solid var(--line); padding-top: 6px; }
@@ -363,8 +364,9 @@ body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
 <div id="banner"></div>
 
 <section id="row1">
-  <div class="panel tof" id="tof0"></div>
+  <!-- 센서가 보는 방향(펌웨어 flags=1 사진 방향): 사용자 왼쪽 센서 A 가 화면 오른쪽 — Pi 5 앱 PR #83 과 같은 B · A 순서 -->
   <div class="panel tof" id="tof1"></div>
+  <div class="panel tof" id="tof0"></div>
   <div class="panel" id="svc">
     <div class="ptitle"><span><b>자세 서비스</b> · Pi 4 GRU (:8771)</span><span class="mono" id="svcModel">-</span></div>
     <div class="head"><span id="svcLabel">-</span><span id="svcConf">-</span></div>
@@ -483,7 +485,7 @@ body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
   <div id="vToggle"><button class="tg" data-go="dev" title="단축키 V">개발자 화면</button></div>
   <div class="restB" id="vRest"></div>
   <div id="vBar">
-    <div><div class="vcap">ToF 8×8 두 개</div><div class="vtofs"><div class="vtof" id="vtof0"></div><div class="vtof" id="vtof1"></div></div></div>
+    <div><div class="vcap">ToF 8×8 두 개 · 센서가 보는 방향(A 가 오른쪽)</div><div class="vtofs"><div class="vtof" id="vtof1"></div><div class="vtof" id="vtof0"></div></div></div>
     <div><div class="vcap">센서가 본 자세</div><div id="vPosture">-</div><div id="vConf">-</div></div>
     <div><div class="vchips" id="vChips"></div>
       <div class="vfat"><span>피로</span><div class="track"><i id="vFatB"></i></div><span class="num" id="vFatT">-</span></div>
@@ -513,7 +515,8 @@ function renderTof(el, s) {
   if (!el.dataset.built) {
     el.innerHTML = `<div class="ptitle"><span><b>ToF ${esc(s.name)}</b> · L8 8×8</span><span class="mono age"></span></div>
       <div class="grid">${"<i></i>".repeat(64)}</div><div class="sub"></div>
-      <div class="legend"><span>20 cm</span><span class="bar"></span><span>2 m</span><span>· 회색=무효</span></div>`;
+      <div class="legend"><span>20 cm</span><span class="bar"></span><span>2 m</span><span>· 회색=무효</span></div>
+      <div class="legend">센서가 보는 방향 — 사용자 왼쪽 센서 A 가 화면 오른쪽</div>`;
     el.dataset.built = "1";
   }
   const cells = el.querySelectorAll(".grid i");
