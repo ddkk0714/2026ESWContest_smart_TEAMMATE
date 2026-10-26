@@ -1077,6 +1077,23 @@ def test_auto_info_card_is_a_banner_not_a_card():
     assert c.request is None
 
 
+def test_dismiss_rest_notice_and_info_card():
+    st = dv.Store()
+    st.publisher = FakePub()
+    now = time.time()
+    st.on_mqtt(dv.TOPIC_REQUEST, json.dumps(env(F91_REST), ensure_ascii=False).encode(), at=now - 3)
+    st.on_mqtt(dv.TOPIC_REQUEST, payload({"request_id": "i1", "auto": True, "text": "허리를 펴 볼까요", "expires_in_s": 30}), at=now - 1)
+    assert st.send_feedback("nope", "dismiss")["ok"] is False
+    assert st.send_feedback("b1-42-rest", "dismiss") == {"ok": True, "error": None}
+    topic, data = st.publisher.sent[-1]
+    assert topic == dv.TOPIC_FEEDBACK and data["request_id"] == "b1-42-rest" and data["verdict"] == "dismiss"
+    assert 2500 <= data["response_ms"] <= 10000
+    assert st.snapshot()["virtual"]["rest"]["dismissed"] is True
+    assert st.send_feedback("b1-42-rest", "dismiss")["ok"] is False          # 두 번은 안 보낸다
+    assert st.send_feedback("i1", "dismiss")["ok"] is True
+    assert st.snapshot()["virtual"]["info"] == []                             # 닫은 안내는 띠에서 빠진다
+
+
 def test_chime_command_plays_laptop_sound():
     st, act, fake = _laptop_store()
     st.on_mqtt(dv.TOPIC_CMD, payload({"command_id": "c9", "target_id": "speaker", "operation": "chime", "value": {"pattern": "soft"},

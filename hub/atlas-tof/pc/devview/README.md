@@ -144,6 +144,8 @@ hub 가 REST 에 들어가면 가상 기기 화면 위와 영상 모드에 큰 �
 - hub(f91afd8): `interaction/request` kind `rest_notice` — `text`(문구) · `minutes`(없으면 `rest_min_sec`) · `reason`
   (accepted 수락 · asleep 졸아서 바로 · escalated 효과 없어 격상 · reminder 다시 알림) · `variant`(default|study) · `speak` → 라벨 "hub 휴식 알림".
   예전 이름(message·rest_sec·duration_s·why)도 받는다. 답하는 카드가 아니라 제어 결론·카드 칸에는 안 넣는다.
+  배너의 **닫기**(한 번 누름) → `feedback/user` `{request_id, verdict: "dismiss", response_ms}` — hub 는 counts.dismissed 만 세고
+  FSM·제어·ESM 에는 안 넣어서 두 번 확인하지 않는다. 자동 안내 띠의 닫기도 같다.
   state/phase `sensor_summary.rest_notice.counts`(알림·말함·다시 알림·생략·닫음)를 배너에 같이.
 - 말하기: `control/cmd` target `speaker` operation `speak`(value `{text, lang}`, gate `notice`) → 가상 스피커 음성 안내. `--act-laptop` 이면 노트북이 볼륨을 소리 선호로 올린 뒤
   Windows 내장 TTS(System.Speech, 한국어 목소리 — 이 노트북은 Microsoft Heami)로 말한다. 한국어 목소리가 없으면 알림음 + 배너. 인라인 명령만(실행 정책 그대로).

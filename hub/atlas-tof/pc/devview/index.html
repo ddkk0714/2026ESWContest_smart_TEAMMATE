@@ -941,6 +941,14 @@ function fanLoop(now) {
 }
 requestAnimationFrame(fanLoop);
 
+// 휴식 알림·자동 안내 닫기: 한 번 누르면 hub 에 dismiss(닫은 횟수만 셈 — 판정·제어에 안 들어가 두 번 확인하지 않는다)
+document.addEventListener("click", async e => {
+  const b = e.target.closest && e.target.closest("[data-dismiss]");
+  if (!b) return;
+  b.disabled = true; b.textContent = "닫는 중…";
+  const r = await post("/api/feedback", {request_id: b.dataset.dismiss, verdict: "dismiss"}).catch(x => ({ok: false, error: x.message}));
+  if (!r.ok) { b.disabled = false; b.textContent = "닫기 실패"; b.title = r.error; }
+});
 function renderRest(el, r) {
   if (!el) return;
   el.className = "restB" + (r ? " on" : "");
@@ -949,14 +957,17 @@ function renderRest(el, r) {
   el.innerHTML = `<span class="ic">${r.ended ? "✅" : "☕"}</span><div><div class="msg">${esc(r.ended ? "휴식 끝 — 다시 시작해요" : r.message)}</div>` +
     `<div class="sub"><span class="lb ${r.source === "notice" ? "" : "old"}">${esc(r.label)}</span>${r.reason ? " " + esc(r.reason) : ""}` +
     `${r.duration_s ? ` · 휴식 ${Math.round(r.duration_s)} s` : ""}${r.counts ? ` · <span class="empty">hub ${esc(r.counts)}</span>` : ""}</div></div>` +
-    (r.left_s != null && !r.ended ? `<span class="cd">${mm(r.left_s)}</span>` : "");
+    (r.left_s != null && !r.ended ? `<span class="cd">${mm(r.left_s)}</span>` : "") +
+    (r.request_id && !r.ended && !r.dismissed ? `<button class="btn" data-dismiss="${esc(r.request_id)}">닫기</button>` :
+     r.dismissed ? `<span class="empty">닫음</span>` : "");
 }
 
 function renderVirtual(d) {
   const v = d.virtual, P = d.persona, ph = d.phase;
   renderRest($("restV"), v.rest); renderRest($("vRest"), v.rest);
   $("infoV").innerHTML = (v.info || []).map(x => `<div class="info"><span>💬</span><b>자동 안내</b><span>${esc(x.text)}</span>` +
-    `<span class="m">${esc(x.arm_label || "")}${x.channel ? " · " + esc(x.channel) : ""} · ${x.t} · ${x.left_s} s</span></div>`).join("");
+    `<span class="m">${esc(x.arm_label || "")}${x.channel ? " · " + esc(x.channel) : ""} · ${x.t} · ${x.left_s} s</span>` +
+    (x.request_id ? `<button class="btn" data-dismiss="${esc(x.request_id)}">닫기</button>` : "") + `</div>`).join("");
   fanAnim.target = fanTarget(v.fan); fanAnim.natural = !!(v.fan && v.fan.mode === "natural");
   renderFan($("fanV"), v.fan); renderFan($("fanF"), v.fan);
   const L = d.laptop;

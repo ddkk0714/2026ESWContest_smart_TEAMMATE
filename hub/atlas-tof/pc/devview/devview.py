@@ -1226,13 +1226,31 @@ class VirtualHome:
         self._event(at, kind="rest", text=f"휴식 알림(hub rest_notice) — {msg}" + (f" · {round(dur)} s" if dur else ""),
                     reason=reason, request_id=d.get("request_id"))
 
+    def dismissable(self, request_id: str, now: float) -> dict[str, Any] | None:
+        """지금 떠 있는 휴식 알림·자동 안내 중 이 request_id — 닫기(dismiss)를 보낼 수 있나."""
+        r = self.rest
+        if r and r.get("request_id") == request_id and r.get("ended_at") is None and not r.get("dismissed"):
+            return {"at": r["start"], "what": "휴식 알림"}
+        for x in self.info:
+            if x.get("request_id") == request_id and not x.get("dismissed") and now - x["at"] <= (x["expires_in_s"] or 60):
+                return {"at": x["at"], "what": "자동 안내"}
+        return None
+
+    def mark_dismissed(self, request_id: str, now: float) -> None:
+        if self.rest and self.rest.get("request_id") == request_id:
+            self.rest["dismissed"] = True
+        for x in self.info:
+            if x.get("request_id") == request_id:
+                x["dismissed"] = True
+        self._event(now, kind="feedback", text="닫기(dismiss) 보냄 — hub 는 닫은 횟수만 셈", request_id=request_id, verdict="dismiss")
+
     def info_view(self, now: float) -> list[dict[str, Any]]:
-        """떠 있는 자동 안내(시한 전, 시한이 없으면 60 s)."""
+        """떠 있는 자동 안내(시한 전, 시한이 없으면 60 s). 닫은 것은 뺀다."""
         out = []
         for x in self.info:
             ttl = x["expires_in_s"] or 60
-            if now - x["at"] <= ttl:
-                out.append({k: x[k] for k in ("t", "text", "arm_label", "channel", "explanation")} |
+            if now - x["at"] <= ttl and not x.get("dismissed"):
+                out.append({k: x[k] for k in ("t", "text", "arm_label", "channel", "explanation", "request_id")} |
                            {"left_s": max(0, round(x["at"] + ttl - now))})
         return out[::-1]
 
@@ -1243,6 +1261,7 @@ class VirtualHome:
         left = None if not r.get("duration_s") else max(0, round(r["start"] + r["duration_s"] - now))
         return {"source": r["source"], "message": r["message"], "reason": r.get("reason"), "duration_s": r.get("duration_s"),
                 "left_s": left, "ended": r.get("ended_at") is not None, "counts": self.rest_counts,
+                "request_id": r.get("request_id") if r["source"] == "notice" else None, "dismissed": bool(r.get("dismissed")),
                 "label": "hub 휴식 알림" if r["source"] == "notice" else "hub 알림 없음 (구버전)"}
 
     def _apply_outputs(self, phase: str, at: float, why: str) -> None:
@@ -2221,10 +2240,23 @@ class Store:
         return res
 
     def send_feedback(self, request_id: Any, verdict: Any) -> dict[str, Any]:
-        """Pi 5 앱과 같은 data: {request_id, verdict, response_ms(, kind)}. 되돌리기 = 자동 실행 뒤 reject."""
-        if verdict not in ("accept", "reject", "undo"):
-            return {"ok": False, "error": "verdict 는 accept|reject|undo"}
+        """Pi 5 앱과 같은 data: {request_id, verdict, response_ms(, kind)}. 되돌리기 = 자동 실행 뒤 reject.
+        dismiss = 휴식 알림·자동 안내 닫기(hub 는 counts.dismissed 만 센다 — FSM·제어·ESM 에 안 들어감)."""
+        if verdict not in ("accept", "reject", "undo", "dismiss"):
+            return {"ok": False, "error": "verdict 는 accept|reject|undo|dismiss"}
         now = time.time()
+        if verdict == "dismiss":
+            with self.lock:
+                target = self.virtual.dismissable(str(request_id), now)
+            if target is None:
+                return {"ok": False, "error": "닫을 휴식 알림·자동 안내가 아님(시한 지남·이미 닫음)"}
+            res = self._send(TOPIC_FEEDBACK, {"request_id": request_id, "verdict": "dismiss",
+                                              "response_ms": max(0, int((now - target["at"]) * 1000))},
+                             f"닫기 {target['what']}")
+            if res["ok"]:
+                with self.lock:
+                    self.virtual.mark_dismissed(str(request_id), now)
+            return res
         with self.lock:
             card = self.virtual.pending_card(now)
             undo = self.virtual.undoable(now)
