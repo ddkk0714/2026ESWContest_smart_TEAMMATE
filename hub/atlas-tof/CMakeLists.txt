@@ -15,7 +15,7 @@ find_package(Threads REQUIRED)
 # 없어도(호스트 빌드) 서비스는 그대로 돈다 — camsvc 도 sdbus 없이 Pi 5 에서 동작했다.
 find_package(sdbus-c++ 2.0 QUIET)
 
-set(TOFPOSTURE_CORE src/tof_line.cpp src/device_posture.cpp src/placement.cpp)
+set(TOFPOSTURE_CORE src/tof_line.cpp src/device_posture.cpp src/placement.cpp src/baseline.cpp)
 
 add_executable(${PROJECT_NAME} src/main.cpp src/line_source.cpp src/http_server.cpp ${TOFPOSTURE_CORE})
 target_link_libraries(${PROJECT_NAME} PRIVATE Threads::Threads)
@@ -36,6 +36,9 @@ if(BUILD_TESTING)
     set(TOFPOSTURE_TEST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/test)
     file(GLOB TOFPOSTURE_REPLAY ${TOFPOSTURE_TEST_DIR}/replay_*.jsonl)
     list(SORT TOFPOSTURE_REPLAY)
+    # 실측 녹화 리플레이(record_board.py 의 rec_toflines.jsonl + 실제 시각 라벨) — 게이트 전/후 라벨 분포. 호스트 전용 도구
+    add_executable(tofposture_real_replay src/real_replay.cpp ${TOFPOSTURE_CORE})
+    target_link_libraries(tofposture_real_replay PRIVATE Threads::Threads)
     add_test(NAME tofposture_host_test
         COMMAND tofposture_host_test ${TOFPOSTURE_TEST_DIR}/posture_net.bin ${TOFPOSTURE_TEST_DIR}/golden.txt
                 ${TOFPOSTURE_REPLAY})

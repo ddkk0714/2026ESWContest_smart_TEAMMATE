@@ -21,6 +21,8 @@ struct HttpHandlers {
     std::function<std::string()> raw;      // 비우면 /raw 는 404
     std::function<std::string()> placement_get;                                  // 비우면 /api/placement 는 404
     std::function<int(const std::string& body, std::string& out)> placement_post; // HTTP 코드와 본문을 돌려준다
+    // 그 밖의 경로(/api/baseline…). 0 을 돌려주면 404
+    std::function<int(const std::string& method, const std::string& path, const std::string& body, std::string& out)> extra;
 };
 
 class HttpServer {

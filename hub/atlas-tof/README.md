@@ -92,6 +92,11 @@ arc build hub/atlas-tof          # -> hub/atlas-tof/build/arm64/ipk/com.deskmate
 | `TOFPOSTURE_PRESENT_MIN_MM` / `_MAX_MM` | 150 / 1300 | 재실 coverage 에 세는 zone 의 거리 범위(mm) |
 | `TOFPOSTURE_PRESENT_MIN_COVERAGE` | 0.06 | 두 센서 중 큰 coverage(status 5·6·9·10 이고 거리 범위 안인 zone / 64)가 이 이상이면 재실(64칸 중 4칸) |
 | `TOFPOSTURE_STDOUT` | change | `change` 자세 바뀔 때 / `tick` 매 스텝 / `off` |
+| `TOFPOSTURE_MISPLACED_RULE` | off | `off` 모델 misplaced 그대로(10-26 이전 동작) · `and` 모델 misplaced ∧ 베이스라인 변화 규칙(10 s 유지)일 때만 misplaced, 아니면 misplaced 를 뺀 나머지 중 최대 · `never` misplaced 를 절대 표시 안 함. 아래 "misplaced 게이트" |
+| `TOFPOSTURE_BASELINE_FILE` | `<exe>/baseline.json` | 설치 베이스라인(센서별 칸 중앙값·σ·유효). 캡처가 끝나면 저장, 시작 때 읽음 |
+| `TOFPOSTURE_BASELINE_CAPTURE_S` / `_AUTO_S` | 10 / 0 | `POST /api/baseline/capture` 기본 길이 / 파일이 없을 때 첫 프레임부터 자동 캡처(0 = 끔) |
+| `TOFPOSTURE_BASELINE_BG_MM` | 1200 | 배경 칸 = 베이스라인 거리가 이 이상 |
+| `TOFPOSTURE_MOVED_MIN_MM` / `_SIGMA` / `_FRAC` / `_HOLD_S` / `_MIN_ZONES` | 80 / 4 / 0.5 / 10 / 4 | 변화 문턱 max(MIN_MM, SIGMA×칸σ), 지금 유효한 배경 칸 중 변한 비율 ≥ FRAC 이 HOLD_S 이어지면 `device_moved`, 평가 칸 < MIN_ZONES 면 보류 |
 
 ## API
 
@@ -101,17 +106,40 @@ arc build hub/atlas-tof          # -> hub/atlas-tof/build/arm64/ipk/com.deskmate
   "resets":{periodic,away,manual,last_reset_ms,since_reset_ms,period_s,away_s,present_min_mm,present_max_mm,present_min_coverage},
   "sensors":[{name,online,posture,conf,probs,frames,steps,reused,resets,age_ms,hz,has_status,coverage,rule,hello,info,error}],
   "model":{file,classes,rate_hz,fusion,flip_rows,flip_cols,labels}}`
-  `posture` 는 1 초 EMA 를 거친 값, `instant` 는 이번 스텝 값. `present` = valid 이고 `away` 가 아님(모델).
+  `posture` 는 1 초 EMA 를 거친 값에 misplaced 게이트를 적용한 표시값(게이트 `off` 면 평활 모델 출력과 같다), `instant` 는 이번 스텝 모델 값,
+  `model_output` 은 게이트 전 평활 모델 값. `present` = valid 이고 `away` 가 아님(모델).
   `present_rule`·`coverage` 는 모델과 무관한 ToF 규칙 재실(아래 "GRU 리셋"), `resets` 는 리셋 계기별 횟수와 마지막 리셋 시각(`ts_ms` 와 같은 단조 시계).
   `sensors[].rule` 은 펌웨어 온보드 규칙 판정(bring-up `P,` 줄 / tof_logger `rule.posture`)으로, 모델과 비교용이다.
 - `POST /api/reset` — 모든 GRU 상태 0 + EMA 비움 (장치를 옮겨 놓은 뒤). `resets.manual` 이 늘고 마지막 리셋 시각이 갱신된다.
 - `GET /api/placement` · `POST /api/placement {"placement":"left|center|right"}` — 장치 위치와 위치별 모델 전환(아래 "장치 위치별 모델"). 기능이 꺼져 있으면 404.
+- `GET /api/baseline` — 설치 베이스라인(센서별 `median_mm`·`std_mm`·`valid` 64칸, `bg_zones`, `sigma_mm`)과 캡처 상태·규칙 문턱·`moved_frac`·`device_moved`.
+  `POST /api/baseline/capture` (본문 선택 `{"seconds":10}`) → 202, 사람이 없거나 앉은 채로 N s 모아 저장(캡처 중 재요청은 409).
+  `POST /api/baseline/clear` → 베이스라인·파일 삭제. 아래 "misplaced 게이트".
 - `GET /raw` (주 포트와 `TOFPOSTURE_RAW_HTTP` 포트) — `uart_relay_board` 의 `/raw` 와 같은 스키마:
   `{"dev","frames","type5","sent","bad":0,"sensors":[{"id":0,"have":true,"age_ms","uart_seq","ts_ms","frame_id","frame_seq","mask",
   "flags","flip_rows","flip_cols","w":8,"h":8,"dist_mm":[64],"status":[64]},{"id":1,…}]}`. `id` 는 물리 센서 번호(0x05 의 sensor,
   0 = A 왼쪽·1 = B 오른쪽; USB·파일 입력은 자리 번호), 격자는 **받은 그대로**(모델 입력용 뒤집기 전, 표준 배치는 -1 = 없음),
   없는 센서는 `{"id":n,"have":false}`. `other`(mmWave 등) 는 없다. 앱 파서(`display/atlas/ui_env_app/lib/tof_raw_client.dart`)는
   have·id·w·h·dist_mm·status·age_ms 만 읽는다.
+
+## misplaced 게이트 — 설치 베이스라인 ∧ 모델 (10-26)
+
+10-26 실측(왼쪽 자리, 기울기 고정)에서 보드가 엎드림·졸음·턱괴기, 엎드림 뒤 바르게까지 대부분 **misplaced** 로 냈다(모델의 평활 argmax 그대로).
+10-17 결정(`rpi4_tof_deploy_20261017/PLACEMENT_BASELINE_NOISE_PROCESS.md` §1-3): 장치 위치는 설치 뒤 거의 안 바뀌므로 설치 때 베이스라인을
+한 번 잡고, **misplaced 는 모델 AND "베이스라인 대비 장치 이동" 규칙이 함께 참일 때만** 표시한다. 구현은 `src/baseline.{h,cpp}` + `device_posture.cpp`.
+
+- 베이스라인: `POST /api/baseline/capture` 로 N s(기본 10) 모아 센서별 8×8 칸 중앙값·σ·유효(절반 이상 유효한 칸)를 `baseline.json` 에 저장.
+  빈 자리든 착석이든 된다(배경 = 거리 ≥ 1200 mm 인 칸만 쓴다). 시작 때 파일을 읽고, `TOFPOSTURE_BASELINE_AUTO_S` 로 자동 캡처도 가능.
+- 규칙(프레임마다, 센서별): 배경 칸 중 **지금 유효한** 칸만 평가해 `|d − B| > max(80 mm, 4σ)` 이면서 사람이 가린 것(`d < B` 이고 `d ≤ 1300 mm`)이
+  아닌 칸의 비율 `moved_frac`. 두 센서 최대가 0.5 이상으로 10 s 이어지면 `device_moved`. 무효가 된 칸은 세지 않는다(아래).
+- 표시: `TOFPOSTURE_MISPLACED_RULE=and` 면 모델 misplaced ∧ `device_moved` 일 때만 misplaced. 규칙이 거짓이면 misplaced 를 뺀 확률을
+  재정규화해 가장 큰 라벨을 `posture`·`probs`·`present`·`misplaced` 로 낸다. 원 모델 출력은 `instant`(이번 스텝)·`model_output`(평활)에 그대로.
+  `misplaced_rule` 블록에 mode·baseline 유무·moved_frac·moved_held_ms·device_moved·model_misplaced·gated. 기본 `off` 는 이전과 완전히 같다.
+- 실측 검증(`docs/MISPLACED_GATE_REAL_20261026.md`, `tofposture_real_replay`): 녹화 3종에서 misplaced 76 %·57 %·55 % → **0 %**, 정확도
+  0.19→0.44 · 0.25→0.32 · 0.38→0.48, 규칙 발화 0 회(장치 고정). 첫 판은 "보이던 벽이 무효로 됨(lost)" 도 변화로 셌는데 사람이 앉으면
+  3~4 m 벽 칸의 70~90 % 가 무효로 떨어져 오발화(20 % 구간) → lost 를 빼고 유효 칸만 평가하도록 고쳤다. 한계: 기울어져 배경 칸이
+  책상·바닥만 보게 되는 이동은 못 잡는다(실제 이동 녹화가 없어 양성은 합성 테스트로만 확인).
+- 시연: `TOFPOSTURE_MISPLACED_RULE=and` + 설치 때 캡처. 베이스라인을 못 잡으면 `and` 는 `never` 와 같이 동작한다(misplaced 안 뜸).
 
 ## 장치 위치별 모델 (10-25)
 
@@ -193,7 +221,7 @@ cd hub/atlas-tof
 # export 산출물을 test/ 에 (커밋 안 함): posture_net.bin, golden.txt, 선택 replay_s0.jsonl replay_s1.jsonl
 cmake -S . -B build/host -DBUILD_TESTING=ON && cmake --build build/host && (cd build/host && ctest --output-on-failure)
 # cmake 가 없으면
-g++ -O2 -std=c++17 -pthread -o build/host_test src/host_test.cpp src/http_server.cpp src/tof_line.cpp src/device_posture.cpp src/placement.cpp
+g++ -O2 -std=c++17 -pthread -o build/host_test src/host_test.cpp src/http_server.cpp src/tof_line.cpp src/device_posture.cpp src/placement.cpp src/baseline.cpp
 build/host_test test/posture_net.bin test/golden.txt test/replay_s0.jsonl test/replay_s1.jsonl
 # 서비스 자체를 파일 입력으로
 TOFPOSTURE_PORTS=test/replay_s0.jsonl,test/replay_s1.jsonl TOFPOSTURE_MODEL=test/posture_net.bin \
@@ -214,9 +242,11 @@ TOFPOSTURE_EXIT_ON_EOF=1 build/deskmate_tofposture
 | `src/line_source.{h,cpp}` | tty(raw, 보드율 자동)·TCP(`tcp:<port>`)·파일 읽기 스레드, 끊기면 다시 연결 |
 | `src/device_posture.{h,cpp}` | 센서 N개 × 모델, 10 Hz 스텝, 방향 보정, offline 처리, 융합, EMA, 상태 JSON |
 | `src/placement.{h,cpp}` | 장치 위치(left·center·right)별 모델 맵·파일·`/api/placement` JSON, 모델 교체는 `DevicePosture::switchModel` |
-| `src/http_server.{h,cpp}` | `/health` `/api/state` `/api/reset` `/raw` `/api/placement` (두 번째 포트는 `/raw` 만) |
+| `src/baseline.{h,cpp}` | 설치 베이스라인(캡처 누적·칸 중앙값/σ/유효·파일)과 장치 이동 규칙 `movedFraction`. 게이트는 `device_posture.cpp` tick 끝 |
+| `src/real_replay.cpp` | 호스트 도구: 실측 녹화(`rec_toflines.jsonl` + 실제 시각 라벨)를 off/and/never 로 돌려 단계별 라벨 분포, `--board` 로 보드 기록과 비교 |
+| `src/http_server.{h,cpp}` | `/health` `/api/state` `/api/reset` `/raw` `/api/placement` `/api/baseline*` (두 번째 포트는 `/raw` 만) |
 | `src/main.cpp` | 설정(`tofposture.env`)·포트 자동 탐색(5초마다)·루프·stdout. sdbus-c++ 가 있으면 D-Bus 이름 소유 |
-| `src/host_test.cpp` | 파서·골든·리셋 규칙(주기·자리 비움·끔=골든과 일치)·`/raw` JSON·HTTP 리스너·장치 위치 모델 전환·리플레이 테스트 (보드에서는 `tofposture_selftest`) |
+| `src/host_test.cpp` | 파서·골든·리셋 규칙(주기·자리 비움·끔=골든과 일치)·`/raw` JSON·HTTP 리스너·장치 위치 모델 전환·베이스라인/misplaced 게이트·리플레이 테스트 (보드에서는 `tofposture_selftest`) |
 | `board/start.sh` `stop.sh` `status.sh` `selftest.sh` `tofposture.env.example` | A 경로에서 보드에 함께 올리는 스크립트(BusyBox sh) |
 | `tools/build_static_aarch64.sh` | A 경로 정적 빌드(Zig) |
 | `tools/deploy-pi4.ps1` / `deploy-pi4.sh` | A 경로: PC → 보드 복사·자가 시험·시작 |

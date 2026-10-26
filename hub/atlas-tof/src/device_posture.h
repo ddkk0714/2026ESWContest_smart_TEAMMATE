@@ -21,12 +21,17 @@
 #include <string>
 #include <vector>
 
+#include "baseline.h"
 #include "posture_net.h"
 #include "tof_line.h"
 
 namespace tof {
 
 enum class FusionRule { LogProb, MeanProb };   // log-softmax 합(기하평균) / softmax 산술평균
+// misplaced 표시 규칙 (baseline.h): Off = 모델 그대로(이전 동작) · And = 모델 misplaced ∧ 베이스라인 변화 규칙 hold_s 유지 ·
+// Never = misplaced 를 절대 표시하지 않음(규칙·베이스라인 없이 시연할 때)
+enum class MisplacedRule { Off, And, Never };
+inline const char* misplacedRuleName(MisplacedRule r) { return r == MisplacedRule::Off ? "off" : r == MisplacedRule::And ? "and" : "never"; }
 
 struct DeviceConfig {
     int rate_hz = kModelRateHz;     // 모델 스텝 주기. 학습 프레임률과 같아야 한다
@@ -41,6 +46,10 @@ struct DeviceConfig {
     int present_min_mm = 150;       // 재실 coverage 에 세는 zone: status 5·6·9·10 이고 거리 [min, max] mm
     int present_max_mm = 1300;
     float present_min_coverage = 0.06f;   // 두 센서 중 큰 coverage 가 이 이상이면 재실 (64칸 중 4칸)
+    // misplaced 게이트 (baseline.h). 기본 Off = 모델 출력 그대로(10-26 이전 동작)
+    MisplacedRule misplaced_rule = MisplacedRule::Off;
+    MovedRuleParams moved;          // 베이스라인 변화 규칙 문턱 (TOFPOSTURE_BASELINE_BG_MM·MOVED_*)
+    int baseline_capture_s = 10;    // POST /api/baseline/capture 기본 캡처 길이
 };
 
 // 리셋: 모든 센서의 GRU h 를 0 으로, 융합 EMA 를 비움(smooth_argmax=-1 → 다음 스텝은 그 스텝의 융합 확률로 시작),
@@ -84,6 +93,9 @@ struct SensorStatus {
     bool stale = false;             // 살아 있지만 유효 프레임이 stale_ms 넘게 없다 → 판정에서 빠지고 GRU 리셋
     float coverage = 0.f;           // 마지막 프레임의 재실 coverage (status 5·6·9·10 ∧ [present_min_mm, present_max_mm] 인 zone / 전체)
     int sensor_id = -1;             // 물리 센서 번호 (UART 0x05 의 sensor 필드: 0 = A 왼쪽, 1 = B 오른쪽). 다른 형식은 -1 = 자리 번호
+    bool has_baseline = false;      // 이 센서에 베이스라인이 있다
+    int baseline_bg_zones = 0;
+    float moved_frac = -1.f;        // 마지막 스텝의 베이스라인 변화 비율 (-1 = 베이스라인 없음/배경 칸 없음)
 };
 
 struct ResetStats {
@@ -106,6 +118,16 @@ struct DeviceResult {
     bool present_rule = false;      // ToF 규칙 재실 (online 센서 coverage 최대 ≥ present_min_coverage)
     float coverage_max = 0.f;
     ResetStats resets;
+    // misplaced 게이트를 거친 표시값. Off 면 smooth 와 같다. 규칙이 거짓이고 모델이 misplaced 면 misplaced 를 뺀 재정규화
+    int display_argmax = -1;
+    float display[kMaxClasses] = {};
+    int64_t display_since_ms = -1;
+    bool model_misplaced = false;   // 평활 모델 출력(smooth_argmax)이 misplaced
+    bool gated = false;             // 이번 스텝에 misplaced 를 눌렀다
+    float moved_frac_max = -1.f;    // online 센서 중 최대 변화 비율 (-1 = 베이스라인 없음)
+    bool moved_candidate = false;   // moved_frac_max ≥ moved_frac_min
+    int64_t moved_held_ms = 0;      // 후보가 이어진 시간
+    bool device_moved = false;      // 후보가 hold_s 이상 이어짐 = 규칙 참
 };
 
 class DevicePosture {
@@ -118,6 +140,15 @@ public:
     bool switchModel(const std::string& path, int64_t now_ms, std::string* err = nullptr);
     void setPlacement(const std::string& key);               // /api/state 의 "placement" (비우면 필드 없음)
     std::string modelPath() const;
+
+    // 설치 기준(베이스라인, baseline.h). 파일 경로를 주면 캡처가 끝날 때 저장하고 clear 때 지운다
+    void setBaselineFile(const std::string& path);
+    void setBaseline(const Baseline& b, int64_t now_ms);     // 시작 때 파일에서 읽은 것
+    bool startBaselineCapture(int64_t now_ms, int seconds, const std::string& source);   // 이미 캡처 중이면 false
+    bool capturing() const;
+    void clearBaseline();
+    Baseline baseline() const;
+    std::string baselineJson(int64_t now_ms) const;         // GET /api/baseline (캡처 상태·규칙 상태 포함)
     int addSensor(const std::string& name);                 // 센서 번호를 돌려준다
     void renameSensor(int sensor, const std::string& name);
     int sensorCount() const { return static_cast<int>(slots_.size()); }
@@ -150,6 +181,7 @@ private:
         PostureNet net;
         TofFrame last;
         TofFrame raw;                   // 받은 그대로(뒤집기 전) — /raw 용
+        BaselineAccumulator acc;        // 캡처 중 누적
         bool has_frame = false;
         int64_t last_rx_ms = -1;
         int64_t first_rx_ms = -1;
@@ -166,6 +198,14 @@ private:
 
     std::string modelPath_;
     std::string placement_;         // 비어 있으면 위치 기능 꺼짐
+    std::string baselineFile_;
+    Baseline baseline_;
+    bool capturing_ = false;
+    int64_t capture_start_ms_ = -1, capture_end_ms_ = -1;
+    std::string capture_source_;
+    int64_t moved_since_ms_ = -1;   // 이동 후보가 시작된 시각
+    int slotId(size_t i) const { const int id = slots_[i].st.sensor_id; return id >= 0 ? id : static_cast<int>(i); }
+    void finishCaptureLocked(int64_t now_ms);
     int net_H_ = 0, net_W_ = 0, net_hidden_ = 0;
     std::string devLabel_;
     uint64_t frames_total_ = 0;

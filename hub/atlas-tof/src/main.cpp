@@ -37,6 +37,17 @@
 //                      PC 시뮬 180회(보드 모델 v4): 복귀 0~60 s 정확도 끔 0.790 / 60 s 0.633 → 기본 끔, 실기 고착 때 300 s
 //   TOFPOSTURE_PRESENT_MIN_MM / TOFPOSTURE_PRESENT_MAX_MM  150 / 1300. 재실 coverage 에 세는 zone 의 거리 범위(mm)
 //   TOFPOSTURE_PRESENT_MIN_COVERAGE  0.06. 두 센서 중 큰 coverage(status 5·6·9·10 ∧ 거리 범위 인 zone / 64)가 이 이상이면 재실
+//   TOFPOSTURE_MISPLACED_RULE  off(기본: 모델 misplaced 그대로, 10-26 이전 동작) | and(모델 misplaced ∧ 베이스라인 변화 규칙 hold_s 유지일 때만
+//                      misplaced, 아니면 misplaced 를 뺀 나머지 중 최대) | never(misplaced 를 절대 표시 안 함 — 베이스라인 없이 시연할 때).
+//                      원 모델 출력은 instant·model_output 에 그대로. 10-17 결정(PLACEMENT_BASELINE_NOISE_PROCESS.md §1-3). 시연 권장: and + 설치 때 캡처
+//   TOFPOSTURE_BASELINE_FILE   기본 <실행파일 폴더>/baseline.json. 캡처가 끝나면 저장, 시작 때 읽음, POST /api/baseline/clear 로 삭제
+//   TOFPOSTURE_BASELINE_CAPTURE_S 10. POST /api/baseline/capture 의 기본 캡처 길이(본문 {"seconds":N} 으로 바꿀 수 있다)
+//   TOFPOSTURE_BASELINE_AUTO_S 0(끔). N 이면 베이스라인 파일이 없을 때 첫 프레임부터 N s 를 자동 캡처(시연 준비용)
+//   TOFPOSTURE_BASELINE_BG_MM  1200. 배경 칸 = 베이스라인 거리가 이 이상인 칸
+//   TOFPOSTURE_MOVED_MIN_MM / TOFPOSTURE_MOVED_SIGMA  80 / 4. 변화 문턱 = max(MIN_MM, SIGMA × 칸 σ)
+//   TOFPOSTURE_MOVED_FRAC / TOFPOSTURE_MOVED_HOLD_S   0.5 / 10. 지금 유효한 배경 칸 중 변한 비율이 FRAC 이상으로 HOLD_S 이어지면 device_moved
+//                      (사람이 가려 가까워진 칸(≤ TOFPOSTURE_PRESENT_MAX_MM)과 무효가 된 칸은 안 센다 — baseline.h)
+//   TOFPOSTURE_MOVED_MIN_ZONES 4. 지금 유효한 배경 칸이 이보다 적으면 판단 보류
 //   TOFPOSTURE_STDOUT   change(기본: 자세가 바뀔 때만) | tick(매 스텝) | off
 //   TOFPOSTURE_EXIT_ON_EOF 1 이면 리플레이 파일이 끝났을 때 종료 (테스트용)
 // 같은 키를 <실행파일 폴더>/tofposture.env (KEY=VALUE 한 줄씩) 에 적어도 된다 — D-Bus 로 뜬 서비스는
@@ -57,6 +68,7 @@
 #include <string>
 #include <vector>
 
+#include "baseline.h"
 #include "device_posture.h"
 #include "http_server.h"
 #include "line_source.h"
@@ -191,6 +203,22 @@ int main() {
     cfg.present_min_mm = envInt("TOFPOSTURE_PRESENT_MIN_MM", 150);
     cfg.present_max_mm = envInt("TOFPOSTURE_PRESENT_MAX_MM", 1300);
     cfg.present_min_coverage = static_cast<float>(envDouble("TOFPOSTURE_PRESENT_MIN_COVERAGE", 0.06));
+    {
+        const std::string mr = envOr("TOFPOSTURE_MISPLACED_RULE", "off");
+        cfg.misplaced_rule = mr == "and" || mr == "1" || mr == "on" ? tof::MisplacedRule::And
+                             : mr == "never" ? tof::MisplacedRule::Never : tof::MisplacedRule::Off;
+    }
+    cfg.moved.bg_min_mm = envInt("TOFPOSTURE_BASELINE_BG_MM", 1200);
+    cfg.moved.moved_min_mm = envInt("TOFPOSTURE_MOVED_MIN_MM", 80);
+    cfg.moved.moved_sigma = static_cast<float>(envDouble("TOFPOSTURE_MOVED_SIGMA", 4.0));
+    cfg.moved.moved_frac_min = static_cast<float>(envDouble("TOFPOSTURE_MOVED_FRAC", 0.5));
+    cfg.moved.hold_s = envInt("TOFPOSTURE_MOVED_HOLD_S", 10);
+    cfg.moved.min_eval_zones = envInt("TOFPOSTURE_MOVED_MIN_ZONES", 4);
+    cfg.moved.person_max_mm = cfg.present_max_mm;
+    cfg.baseline_capture_s = std::max(1, envInt("TOFPOSTURE_BASELINE_CAPTURE_S", 10));
+    const int baseline_auto_s = envInt("TOFPOSTURE_BASELINE_AUTO_S", 0);
+    std::string baseline_file = envOr("TOFPOSTURE_BASELINE_FILE", exe_dir + "/baseline.json");
+    if (!baseline_file.empty() && baseline_file[0] != '/') baseline_file = exe_dir + "/" + baseline_file;
     const std::string baud_env = envOr("TOFPOSTURE_BAUD", "auto");
     const int baud = baud_env == "auto" ? 0 : std::atoi(baud_env.c_str());
     const int http_port = envInt("TOFPOSTURE_HTTP", 8771);
@@ -218,6 +246,19 @@ int main() {
         device.setPlacement(placement.current());
         std::cerr << "tofposture: placement " << placement.current() << " (" << pcfg.models.size() << " models, file "
                   << pcfg.file << ")\n";
+    }
+    device.setBaselineFile(baseline_file);
+    {
+        tof::Baseline b;
+        if (tof::loadBaseline(baseline_file, b, &err)) {
+            device.setBaseline(b, nowMs());
+            std::cerr << "tofposture: baseline from " << baseline_file << " (" << b.sensors.size() << " sensors)\n";
+        } else if (baseline_auto_s > 0) {
+            std::cerr << "tofposture: no baseline (" << err << "); will auto-capture " << baseline_auto_s << " s after the first frames\n";
+        }
+        std::cerr << "tofposture: misplaced rule " << tof::misplacedRuleName(cfg.misplaced_rule) << " (bg >= " << cfg.moved.bg_min_mm
+                  << " mm, thr max(" << cfg.moved.moved_min_mm << ", " << cfg.moved.moved_sigma << " sigma), frac " << cfg.moved.moved_frac_min
+                  << ", hold " << cfg.moved.hold_s << " s)\n";
     }
     if (!device.loadModel(model_path, &err)) {
         std::cerr << "tofposture: model load failed: " << err << " (" << model_path << ")\n"
@@ -277,22 +318,40 @@ int main() {
     auto rawHandler = [&device] { return device.rawJson(nowMs()); };
     tof::HttpHandlers handlers{[&device] { return device.healthJson(nowMs()); },
                                [&device] { return device.stateJson(nowMs()); },
-                               [&device] { device.reset(nowMs()); }, rawHandler, nullptr, nullptr};
+                               [&device] { device.reset(nowMs()); }, rawHandler, nullptr, nullptr, nullptr};
     if (placement.enabled()) {
         handlers.placement_get = [&placement] { return placement.json(nowMs()); };
         handlers.placement_post = [&placement](const std::string& body, std::string& out) { return placement.apply(body, nowMs(), out); };
     }
+    // 베이스라인: GET /api/baseline · POST /api/baseline/capture [{"seconds":N}] · POST /api/baseline/clear
+    handlers.extra = [&device, &cfg](const std::string& method, const std::string& path, const std::string& body, std::string& out) -> int {
+        if (path == "/api/baseline" && method == "GET") { out = device.baselineJson(nowMs()); return 200; }
+        if (path == "/api/baseline/capture" && method == "POST") {
+            int seconds = cfg.baseline_capture_s;
+            const size_t k = body.find("\"seconds\"");
+            if (k != std::string::npos) {
+                const size_t c = body.find(':', k);
+                if (c != std::string::npos) seconds = std::atoi(body.c_str() + c + 1);
+            }
+            if (seconds <= 0 || seconds > 600) { out = "{\"error\":\"seconds must be 1..600\"}"; return 400; }
+            if (!device.startBaselineCapture(nowMs(), seconds, "post")) { out = "{\"error\":\"capture already running\"}"; return 409; }
+            out = device.baselineJson(nowMs());
+            return 202;
+        }
+        if (path == "/api/baseline/clear" && method == "POST") { device.clearBaseline(); out = device.baselineJson(nowMs()); return 200; }
+        return 0;
+    };
     tof::HttpServer http(bind_addr, http_port, handlers);
     if (http_port > 0) {
         if (!http.start(&err)) {
             std::cerr << "tofposture: HTTP listen failed on " << bind_addr << ":" << http_port << " (" << err << ")\n";
             return 1;
         }
-        std::cerr << "tofposture: HTTP on " << bind_addr << ":" << http_port << "  (GET /api/state, /health, /raw, POST /api/reset"
+        std::cerr << "tofposture: HTTP on " << bind_addr << ":" << http_port << "  (GET /api/state, /health, /raw, /api/baseline, POST /api/reset, /api/baseline/capture|clear"
                   << (placement.enabled() ? ", GET/POST /api/placement" : "") << ")\n";
     }
     // 두 번째 리스너: /raw 만 (uart_relay_board 의 8772 자리). 실패해도 서비스는 계속 — 옛 중계기가 아직 그 포트를 쥐고 있을 수 있다.
-    tof::HttpServer raw_http(bind_addr, raw_port, tof::HttpHandlers{nullptr, nullptr, nullptr, rawHandler, nullptr, nullptr});
+    tof::HttpServer raw_http(bind_addr, raw_port, tof::HttpHandlers{nullptr, nullptr, nullptr, rawHandler, nullptr, nullptr, nullptr});
     if (raw_port > 0) {
         if (raw_http.start(&err))
             std::cerr << "tofposture: raw HTTP on " << bind_addr << ":" << raw_port << "  (GET /raw)\n";
@@ -302,21 +361,26 @@ int main() {
     }
 
     int last_label = -2;
+    bool auto_capture_pending = baseline_auto_s > 0 && !device.baseline().any();
     int64_t last_summary = nowMs(), last_scan = nowMs();
     while (!g_stop) {
         const int64_t now = nowMs();
         if (device.tick(now)) {
             const tof::DeviceResult r = device.result();
-            const bool changed = r.smooth_argmax != last_label;
+            if (auto_capture_pending && r.online_sensors > 0) {       // 첫 프레임이 들어온 뒤부터 N s
+                auto_capture_pending = false;
+                device.startBaselineCapture(now, baseline_auto_s, "auto");
+            }
+            const bool changed = r.display_argmax != last_label;
             if (stdout_mode == "tick" || (stdout_mode == "change" && changed)) {
                 std::cout << device.stateJson(now) << std::endl;
             }
             if (changed) {
-                std::cerr << "tofposture: " << tof::DevicePosture::labelName(r.smooth_argmax) << " ("
-                          << tof::DevicePosture::labelKo(r.smooth_argmax) << ") conf "
-                          << (r.smooth_argmax >= 0 ? r.smooth[r.smooth_argmax] : 0.f)
-                          << " online " << r.online_sensors << "\n";
-                last_label = r.smooth_argmax;
+                std::cerr << "tofposture: " << tof::DevicePosture::labelName(r.display_argmax) << " ("
+                          << tof::DevicePosture::labelKo(r.display_argmax) << ") conf "
+                          << (r.display_argmax >= 0 ? r.display[r.display_argmax] : 0.f)
+                          << " online " << r.online_sensors << (r.gated ? " (model misplaced, gated)" : "") << "\n";
+                last_label = r.display_argmax;
             }
         }
         if (now - last_summary >= 10000) {

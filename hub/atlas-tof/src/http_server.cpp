@@ -26,7 +26,9 @@ void sendAll(int fd, const std::string& data) {
 const char* reasonFor(int code) {
     switch (code) {
         case 200: return "OK";
+        case 202: return "Accepted";
         case 400: return "Bad Request";
+        case 409: return "Conflict";
         case 404: return "Not Found";
         case 500: return "Internal Server Error";
         default: return "Error";
@@ -142,6 +144,13 @@ void HttpServer::handle(int client) {
     } else if ((method == "POST" || method == "GET") && path == "/api/reset" && handlers_.reset) {
         handlers_.reset();
         sendAll(client, response(200, "OK", "{\"ok\":true}"));
+    } else if (handlers_.extra && [&] {
+                   std::string out;
+                   const int code = handlers_.extra(method, path, body, out);
+                   if (code) sendAll(client, response(code, reasonFor(code), out));
+                   return code != 0;
+               }()) {
+        // extra 가 처리했다
     } else if (method == "GET" && path == "/" && handlers_.state) {
         sendAll(client, response(200, "OK", "deskmate tof posture: GET /health, GET /api/state, POST /api/reset, GET /raw, GET/POST /api/placement\n", "text/plain"));
     } else {

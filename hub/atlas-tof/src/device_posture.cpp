@@ -1,5 +1,6 @@
 #include "device_posture.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <sstream>
@@ -182,6 +183,10 @@ void DevicePosture::feed(int sensor, const TofLine& line, int64_t now_ms) {
             }
     }
     s.has_frame = true;
+    if (capturing_) {
+        if (s.acc.w != f.w || s.acc.h != f.h) s.acc.reset(f.w, f.h);
+        s.acc.add(s.last);                                       // 모델 방향(뒤집기 뒤)으로 모은다 — 규칙도 같은 방향에서 본다
+    }
     // 재실 coverage (리셋 규칙용. 뒤집기와 무관하게 개수만 센다)
     {
         int n = 0;
@@ -231,6 +236,31 @@ bool DevicePosture::tick(int64_t now_ms) {
     }
     res_.coverage_max = cov_max;
     res_.present_rule = online > 0 && cov_max >= cfg_.present_min_coverage;
+    if (capturing_ && now_ms >= capture_end_ms_) finishCaptureLocked(now_ms);
+    // 1b) 베이스라인 변화 규칙 (센서별 → 최대) — 모델 입력과 같은 방향의 s.last 로
+    float moved_max = -1.f;
+    for (size_t i = 0; i < slots_.size(); ++i) {
+        Slot& s = slots_[i];
+        const SensorBaseline* sb = baseline_.forId(slotId(i));
+        s.st.has_baseline = sb != nullptr;
+        s.st.baseline_bg_zones = sb ? sb->bg_zones : 0;
+        s.st.moved_frac = (sb && s.st.online) ? movedFraction(*sb, s.last, cfg_.moved) : -1.f;
+        if (s.st.moved_frac > moved_max) moved_max = s.st.moved_frac;
+    }
+    res_.moved_frac_max = moved_max;
+    res_.moved_candidate = moved_max >= 0.f && moved_max >= cfg_.moved.moved_frac_min;
+    if (res_.moved_candidate) {
+        if (moved_since_ms_ < 0) moved_since_ms_ = now_ms;
+        res_.moved_held_ms = now_ms - moved_since_ms_;
+    } else {
+        moved_since_ms_ = -1;
+        res_.moved_held_ms = 0;
+    }
+    const bool was_moved = res_.device_moved;
+    res_.device_moved = res_.moved_candidate && res_.moved_held_ms >= 1000LL * cfg_.moved.hold_s;
+    if (res_.device_moved != was_moved)
+        std::fprintf(stderr, "tofposture: device_moved %s (moved_frac %.2f, held %.1f s)\n", res_.device_moved ? "true" : "false",
+                     moved_max, static_cast<double>(res_.moved_held_ms) / 1000.0);
     // 2) 리셋 규칙 (추론 전). 시작 시각은 첫 tick
     if (res_.resets.last_reset_ms < 0) res_.resets.last_reset_ms = now_ms;
     if (cfg_.reset_period_s > 0 && now_ms - res_.resets.last_reset_ms >= 1000LL * cfg_.reset_period_s) {
@@ -269,7 +299,8 @@ bool DevicePosture::tick(int64_t now_ms) {
     if (online == 0) {
         res_.valid = false; res_.argmax = -1; res_.conf = 0.f;
         res_.smooth_argmax = -1; res_.label_since_ms = -1;
-        for (int i = 0; i < C; ++i) { res_.probs[i] = 0.f; res_.smooth[i] = 0.f; }
+        res_.display_argmax = -1; res_.display_since_ms = -1; res_.model_misplaced = false; res_.gated = false;
+        for (int i = 0; i < C; ++i) { res_.probs[i] = 0.f; res_.smooth[i] = 0.f; res_.display[i] = 0.f; }
         return true;
     }
     res_.valid = true;
@@ -290,12 +321,128 @@ bool DevicePosture::tick(int64_t now_ms) {
         if (res_.smooth[i] > res_.smooth[sa]) sa = i;
     }
     if (sa != res_.smooth_argmax) { res_.smooth_argmax = sa; res_.label_since_ms = now_ms; }
+    // misplaced 게이트: 표시값 = 평활 모델 출력, 단 모델이 misplaced 인데 규칙(And)이 거짓이거나 Never 면 misplaced 를 뺀 재정규화
+    res_.model_misplaced = sa == kMisplacedIndex;
+    const bool suppress = cfg_.misplaced_rule == MisplacedRule::Never ||
+                          (cfg_.misplaced_rule == MisplacedRule::And && !res_.device_moved);
+    int da = -1;
+    if (suppress && C > kMisplacedIndex) {
+        const float rest = 1.f - res_.smooth[kMisplacedIndex];
+        for (int i = 0; i < C; ++i) {
+            res_.display[i] = i == kMisplacedIndex ? 0.f : (rest > 1e-6f ? res_.smooth[i] / rest : (i == 0 ? 1.f : 0.f));
+            if (da < 0 || res_.display[i] > res_.display[da]) da = i;
+        }
+        res_.gated = res_.model_misplaced;
+    } else {
+        for (int i = 0; i < C; ++i) res_.display[i] = res_.smooth[i];
+        da = sa;
+        res_.gated = false;
+    }
+    if (da != res_.display_argmax) { res_.display_argmax = da; res_.display_since_ms = now_ms; }
     return true;
+}
+
+// ---- 베이스라인 ----
+
+void DevicePosture::setBaselineFile(const std::string& path) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    baselineFile_ = path;
+}
+
+void DevicePosture::setBaseline(const Baseline& b, int64_t now_ms) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    baseline_ = b;
+    baseline_.captured_at_ms = now_ms;
+    if (baseline_.source.empty()) baseline_.source = "file";
+    moved_since_ms_ = -1;
+}
+
+bool DevicePosture::startBaselineCapture(int64_t now_ms, int seconds, const std::string& source) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (capturing_) return false;
+    if (seconds <= 0) seconds = cfg_.baseline_capture_s;
+    capturing_ = true;
+    capture_start_ms_ = now_ms;
+    capture_end_ms_ = now_ms + 1000LL * seconds;
+    capture_source_ = source;
+    for (Slot& s : slots_) s.acc.reset(0, 0);
+    std::fprintf(stderr, "tofposture: baseline capture started (%d s, %s)\n", seconds, source.c_str());
+    return true;
+}
+
+bool DevicePosture::capturing() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return capturing_;
+}
+
+void DevicePosture::finishCaptureLocked(int64_t now_ms) {
+    capturing_ = false;
+    Baseline b;
+    for (size_t i = 0; i < slots_.size(); ++i) {
+        SensorBaseline sb;
+        if (!slots_[i].acc.finish(sb, cfg_.moved.bg_min_mm)) continue;
+        sb.id = slotId(i);
+        b.sensors.push_back(sb);
+    }
+    if (b.sensors.empty()) {
+        std::fprintf(stderr, "tofposture: baseline capture ended with no frames — baseline unchanged\n");
+        return;
+    }
+    b.captured_at_ms = now_ms;
+    b.captured_epoch_s = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+    b.source = capture_source_;
+    baseline_ = b;
+    moved_since_ms_ = -1;
+    res_.device_moved = false;
+    for (const SensorBaseline& sb : b.sensors)
+        std::fprintf(stderr, "tofposture: baseline sensor %d: %d frames, %d background zones (>= %d mm), sigma %.1f mm\n", sb.id, sb.frames,
+                     sb.bg_zones, cfg_.moved.bg_min_mm, sb.sigma_mm);
+    if (!baselineFile_.empty()) {
+        std::string err;
+        if (!saveBaseline(baselineFile_, baseline_, &err)) std::fprintf(stderr, "tofposture: baseline not saved: %s\n", err.c_str());
+        else std::fprintf(stderr, "tofposture: baseline saved to %s\n", baselineFile_.c_str());
+    }
+}
+
+void DevicePosture::clearBaseline() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    baseline_ = Baseline{};
+    capturing_ = false;
+    moved_since_ms_ = -1;
+    res_.device_moved = false; res_.moved_candidate = false; res_.moved_held_ms = 0; res_.moved_frac_max = -1.f;
+    for (Slot& s : slots_) { s.st.has_baseline = false; s.st.baseline_bg_zones = 0; s.st.moved_frac = -1.f; }
+    if (!baselineFile_.empty()) std::remove(baselineFile_.c_str());
+}
+
+Baseline DevicePosture::baseline() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return baseline_;
+}
+
+std::string DevicePosture::baselineJson(int64_t now_ms) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::string j = tof::baselineJson(baseline_, true);
+    j.pop_back();                                               // '}' 를 떼고 상태를 덧붙인다
+    std::ostringstream o;
+    o << j << ",\"capturing\":" << (capturing_ ? "true" : "false")
+      << ",\"capture_remaining_ms\":" << (capturing_ ? std::max<int64_t>(0, capture_end_ms_ - now_ms) : -1)
+      << ",\"file\":\"" << jsonEscape(baselineFile_) << "\""
+      << ",\"age_ms\":" << (baseline_.captured_at_ms >= 0 ? now_ms - baseline_.captured_at_ms : -1)
+      << ",\"rule\":{\"mode\":\"" << misplacedRuleName(cfg_.misplaced_rule) << "\",\"bg_min_mm\":" << cfg_.moved.bg_min_mm
+      << ",\"moved_min_mm\":" << cfg_.moved.moved_min_mm << ",\"moved_sigma\":" << cfg_.moved.moved_sigma
+      << ",\"person_max_mm\":" << cfg_.moved.person_max_mm << ",\"moved_frac_min\":" << cfg_.moved.moved_frac_min
+      << ",\"hold_s\":" << cfg_.moved.hold_s << ",\"min_eval_zones\":" << cfg_.moved.min_eval_zones << "}"
+      << ",\"moved_frac\":[";
+    for (size_t i = 0; i < slots_.size(); ++i) o << (i ? "," : "") << slots_[i].st.moved_frac;
+    o << "],\"moved_candidate\":" << (res_.moved_candidate ? "true" : "false") << ",\"moved_held_ms\":" << res_.moved_held_ms
+      << ",\"device_moved\":" << (res_.device_moved ? "true" : "false") << "}";
+    return o.str();
 }
 
 void DevicePosture::resetLocked(const char* why, int64_t now_ms) {
     for (Slot& s : slots_) { s.net.reset(); ++s.st.resets; s.used_once = false; }
     res_.smooth_argmax = -1; res_.label_since_ms = -1;
+    res_.display_argmax = -1; res_.display_since_ms = -1;
     const int64_t since = res_.resets.last_reset_ms >= 0 ? now_ms - res_.resets.last_reset_ms : -1;
     res_.resets.last_reset_ms = now_ms;
     std::fprintf(stderr, "tofposture: reset (%s) after %.1f s, coverage %.3f, sensors %zu\n", why,
@@ -330,25 +477,41 @@ std::vector<SensorStatus> DevicePosture::sensors(int64_t now_ms) const {
 std::string DevicePosture::stateJson(int64_t now_ms) const {
     const DeviceResult r = result();
     const std::vector<SensorStatus> ss = sensors(now_ms);
-    std::string model_file, placement;
+    std::string model_file, placement, baseline_source;
     int C = 0;
+    bool has_baseline = false, capturing = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         model_file = modelPath_; placement = placement_; C = net_classes_;
+        has_baseline = baseline_.any(); baseline_source = baseline_.source; capturing = capturing_;
     }
     std::ostringstream o;
+    // posture·index·conf·since_ms·probs·present·misplaced 는 misplaced 게이트를 거친 표시값(Off 면 평활 모델 출력과 같다).
+    // 모델 원 출력은 instant(이번 스텝)·model_output(평활)에 그대로 남긴다.
     o << "{\"schema\":\"deskmate/tof_posture/1\",\"ts_ms\":" << now_ms
       << ",\"valid\":" << (r.valid ? "true" : "false")
-      << ",\"posture\":\"" << labelName(r.smooth_argmax) << "\""
-      << ",\"posture_ko\":\"" << labelKo(r.smooth_argmax) << "\""
-      << ",\"index\":" << r.smooth_argmax
-      << ",\"conf\":" << (r.smooth_argmax >= 0 ? r.smooth[r.smooth_argmax] : 0.f)
-      << ",\"since_ms\":" << (r.label_since_ms >= 0 ? now_ms - r.label_since_ms : -1)
+      << ",\"posture\":\"" << labelName(r.display_argmax) << "\""
+      << ",\"posture_ko\":\"" << labelKo(r.display_argmax) << "\""
+      << ",\"index\":" << r.display_argmax
+      << ",\"conf\":" << (r.display_argmax >= 0 ? r.display[r.display_argmax] : 0.f)
+      << ",\"since_ms\":" << (r.display_since_ms >= 0 ? now_ms - r.display_since_ms : -1)
       << ",\"instant\":{\"posture\":\"" << labelName(r.argmax) << "\",\"conf\":" << r.conf
       << ",\"probs\":" << probsJson(r.probs, C) << "}"
-      << ",\"probs\":" << probsJson(r.smooth, C)
-      << ",\"present\":" << ((r.valid && r.smooth_argmax >= 0 && r.smooth_argmax != kAwayIndex) ? "true" : "false")
-      << ",\"misplaced\":" << ((r.valid && r.smooth_argmax == kMisplacedIndex) ? "true" : "false")
+      << ",\"probs\":" << probsJson(r.display, C)
+      << ",\"model_output\":{\"posture\":\"" << labelName(r.smooth_argmax) << "\",\"conf\":"
+      << (r.smooth_argmax >= 0 ? r.smooth[r.smooth_argmax] : 0.f)
+      << ",\"since_ms\":" << (r.label_since_ms >= 0 ? now_ms - r.label_since_ms : -1)
+      << ",\"probs\":" << probsJson(r.smooth, C) << "}"
+      << ",\"present\":" << ((r.valid && r.display_argmax >= 0 && r.display_argmax != kAwayIndex) ? "true" : "false")
+      << ",\"misplaced\":" << ((r.valid && r.display_argmax == kMisplacedIndex) ? "true" : "false")
+      << ",\"misplaced_rule\":{\"mode\":\"" << misplacedRuleName(cfg_.misplaced_rule) << "\""
+      << ",\"baseline\":" << (has_baseline ? "true" : "false") << ",\"baseline_source\":\"" << jsonEscape(baseline_source) << "\""
+      << ",\"capturing\":" << (capturing ? "true" : "false")
+      << ",\"moved_frac\":[";
+    for (size_t i = 0; i < ss.size(); ++i) o << (i ? "," : "") << ss[i].moved_frac;
+    o << "],\"moved_candidate\":" << (r.moved_candidate ? "true" : "false") << ",\"moved_held_ms\":" << r.moved_held_ms
+      << ",\"device_moved\":" << (r.device_moved ? "true" : "false")
+      << ",\"model_misplaced\":" << (r.model_misplaced ? "true" : "false") << ",\"gated\":" << (r.gated ? "true" : "false") << "}"
       << ",\"online_sensors\":" << r.online_sensors << ",\"ticks\":" << r.ticks;
     if (!placement.empty()) o << ",\"placement\":\"" << jsonEscape(placement) << "\"";
     o << ",\"present_rule\":" << (r.present_rule ? "true" : "false") << ",\"coverage\":[";
@@ -367,6 +530,7 @@ std::string DevicePosture::stateJson(int64_t now_ms) const {
           << ",\"seq_gaps\":" << s.seq_gaps << ",\"duplicates\":" << s.duplicates
           << ",\"idle_frames\":" << s.idle_frames << ",\"alive\":" << (s.alive ? "true" : "false")
           << ",\"stale\":" << (s.stale ? "true" : "false") << ",\"coverage\":" << s.coverage
+          << ",\"has_baseline\":" << (s.has_baseline ? "true" : "false") << ",\"moved_frac\":" << s.moved_frac
           << ",\"rule\":\"" << jsonEscape(s.rule) << "\",\"hello\":\"" << jsonEscape(s.hello)
           << "\",\"info\":\"" << jsonEscape(s.info) << "\",\"error\":\"" << jsonEscape(s.error) << "\"}";
     }
@@ -431,6 +595,7 @@ std::string DevicePosture::healthJson(int64_t now_ms) const {
     o << "{\"ok\":" << (net_classes_ > 0 ? "true" : "false") << ",\"model_loaded\":" << (net_classes_ > 0 ? "true" : "false")
       << ",\"rate_hz\":" << cfg_.rate_hz << ",\"ticks\":" << r.ticks << ",\"online_sensors\":" << r.online_sensors
       << ",\"present_rule\":" << (r.present_rule ? "true" : "false") << "," << resetsJson(r.resets, now_ms, cfg_)
+      << ",\"misplaced_rule\":\"" << misplacedRuleName(cfg_.misplaced_rule) << "\",\"device_moved\":" << (r.device_moved ? "true" : "false")
       << ",\"sensors\":[";
     for (size_t i = 0; i < ss.size(); ++i) {
         const SensorStatus& s = ss[i];

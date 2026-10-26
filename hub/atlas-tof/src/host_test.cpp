@@ -9,6 +9,8 @@
 // 4) GET /raw: uart_relay_board 스키마(두 센서 64칸·have·id=물리 번호·받은 그대로), HttpServer 리스너로 실제 GET
 // 4'') 장치 위치별 모델(placement.h): 맵 파싱, 시작 때 파일 우선, POST 성공·잘못된 키 400·모양 다른 모델 500(기존 유지)·
 //     같은 키 재요청, 교체 뒤 첫 스텝 EMA = 그 프레임 확률, 기능 꺼짐 = /api/state 에 placement 없음(골든 동일은 3-c)
+// 4''') 베이스라인·misplaced 게이트(baseline.h): 누적기 중앙값·σ·유효, movedFraction(가림 제외·멀어짐·사라짐·σ 문턱·배경 아닌 칸 제외),
+//     파일 저장/읽기, 캡처→규칙→device_moved(10 s 유지), 모드 off = 표시 == 평활, never = misplaced 0 재정규화, and 는 규칙에 따라, HTTP extra 경로
 // 5) 리플레이(있으면): 시뮬 세션을 두 센서 파일로 넣어 DevicePosture 전체 경로를 가상 시계로 돌리고
 //    파일의 "label" 과 비교 (dataset/tof_sim_v5/tools/sim_to_toflines.py 가 만든 파일). 기본 설정과 리셋 끔 두 번. 끝에 /raw 확인
 #include <arpa/inet.h>
@@ -18,13 +20,16 @@
 
 #include <algorithm>
 #include <chrono>
+#include <numeric>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <map>
 #include <string>
 #include <vector>
 
+#include "baseline.h"
 #include "device_posture.h"
 #include "http_server.h"
 #include "placement.h"
@@ -629,7 +634,7 @@ void testRawHttp(const std::string& bin) {
     tof::parseTofLine(uartV1Line(0, 3, 1, 10, 1), l0);
     d.feed(d.addSensor("x"), l0, 0);
     const int port = 38772;
-    tof::HttpServer srv("127.0.0.1", port, tof::HttpHandlers{nullptr, nullptr, nullptr, [&d] { return d.rawJson(100); }, nullptr, nullptr});
+    tof::HttpServer srv("127.0.0.1", port, tof::HttpHandlers{nullptr, nullptr, nullptr, [&d] { return d.rawJson(100); }, nullptr, nullptr, nullptr});
     if (!srv.start(&err)) { std::printf("skip raw http test (port %d: %s)\n", port, err.c_str()); return; }
     auto get = [&](const char* path) {
         const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -800,7 +805,7 @@ void testPlacementHttp(const std::string& bin) {
     const int port = 38773;
     tof::HttpHandlers hs{nullptr, [&d] { return d.stateJson(0); }, nullptr, nullptr,
                          [&p] { return p.json(0); },
-                         [&p](const std::string& body, std::string& out) { return p.apply(body, 5000, out); }};
+                         [&p](const std::string& body, std::string& out) { return p.apply(body, 5000, out); }, nullptr};
     tof::HttpServer srv("127.0.0.1", port, hs);
     if (!srv.start(&err)) { std::printf("skip placement http test (port %d: %s)\n", port, err.c_str()); return; }
     auto req = [&](const std::string& text) {
@@ -832,13 +837,241 @@ void testPlacementHttp(const std::string& bin) {
           "placement http: POST with Content-Length body -> 200, switched and saved");
     check(p2.rfind("HTTP/1.0 400", 0) == 0 && p2.find("\"error\"") != std::string::npos, "placement http: bad key -> 400");
     check(o1.rfind("HTTP/1.0 200", 0) == 0 && o1.find("Access-Control-Allow-Origin: *") != std::string::npos, "placement http: OPTIONS preflight -> 200 with CORS");
-    tof::HttpServer rawonly("127.0.0.1", port, tof::HttpHandlers{nullptr, nullptr, nullptr, [&d] { return d.rawJson(0); }, nullptr, nullptr});
+    tof::HttpServer rawonly("127.0.0.1", port, tof::HttpHandlers{nullptr, nullptr, nullptr, [&d] { return d.rawJson(0); }, nullptr, nullptr, nullptr});
     if (rawonly.start(&err)) {
         const std::string r404 = req("GET /api/placement HTTP/1.0\r\n\r\n");
         rawonly.stop();
         check(r404.rfind("HTTP/1.0 404", 0) == 0, "placement http: raw-only listener has no /api/placement");
     }
     std::remove(cfg.file.c_str());
+}
+
+// 8×8 프레임: 모든 칸 dist/status 를 직접 준다
+tof::TofLine gridFrame(uint32_t seq, uint32_t ms, const int16_t* d, const uint8_t* st) {
+    tof::TofLine l;
+    l.kind = tof::LineKind::Frame;
+    l.frame.seq = seq; l.frame.ms = ms; l.frame.w = 8; l.frame.h = 8; l.frame.has_status = true;
+    for (int i = 0; i < 64; ++i) { l.frame.d[i] = d[i]; l.frame.st[i] = st[i]; }
+    return l;
+}
+
+void testBaseline(const std::string& bin) {
+    // 누적기: 칸 0 은 2900/3000/3100(중앙값 3000, σ 81.6), 칸 1 은 3 프레임 중 2 프레임 무효 → valid 0, 나머지 3000 고정
+    tof::BaselineAccumulator acc;
+    acc.reset(8, 8);
+    int16_t d[64]; uint8_t st[64];
+    for (int k = 0; k < 3; ++k) {
+        for (int i = 0; i < 64; ++i) { d[i] = 3000; st[i] = 5; }
+        d[0] = (int16_t)(2900 + 100 * k);
+        if (k < 2) { d[1] = -1; st[1] = 255; }
+        acc.add(gridFrame(k + 1, 100 * k, d, st).frame);
+    }
+    tof::SensorBaseline sb;
+    check(acc.finish(sb, 1200) && sb.frames == 3 && sb.median_mm[0] == 3000 && std::fabs(sb.std_mm[0] - 81.65f) < 0.1f && sb.valid[0] == 1 &&
+              sb.valid[1] == 0 && sb.median_mm[1] == -1 && sb.valid[2] == 1 && sb.std_mm[2] == 0.f && sb.bg_zones == 63 && sb.sigma_mm == 0.f,
+          "baseline: accumulator median/std/valid (zone invalid in >= half the frames is dropped), bg zones, sigma = median std");
+    // movedFraction: 배경 63칸(칸 1 제외). 같은 장면 → 0
+    tof::MovedRuleParams p;
+    for (int i = 0; i < 64; ++i) { d[i] = 3000; st[i] = 5; }
+    int changed = 0, lost = 0, bg = 0;
+    check(tof::movedFraction(sb, gridFrame(1, 0, d, st).frame, p, &changed, &lost, &bg) == 0.f && bg == 63 && changed == 0,
+          "baseline: unchanged scene -> moved_frac 0 over 63 background zones");
+    // 사람이 40칸을 600 mm 로 가림 → 안 센다
+    for (int i = 0; i < 40; ++i) d[i] = 600;
+    check(tof::movedFraction(sb, gridFrame(1, 0, d, st).frame, p) == 0.f, "baseline: person occluding 40 zones at 600 mm is not a device move");
+    // 벽이 3300 으로 멀어진 40칸(그 중 칸 1 은 배경 아님 → 39) → 39/63
+    for (int i = 0; i < 64; ++i) d[i] = 3000;
+    for (int i = 0; i < 40; ++i) d[i] = 3300;
+    float fr = tof::movedFraction(sb, gridFrame(1, 0, d, st).frame, p, &changed, &lost, &bg);
+    check(std::fabs(fr - 38.f / 63.f) < 1e-4f && changed == 38 && lost == 0,
+          "baseline: 40 background zones farther by 300 mm -> 38 changed (zone 1 not background, zone 0 under its 4 sigma)");
+    // 더 가깝지만 사람 범위 밖(2000 mm, −1000) → 변화로 센다
+    for (int i = 0; i < 64; ++i) d[i] = 3000;
+    for (int i = 0; i < 40; ++i) d[i] = 2000;
+    check(std::fabs(tof::movedFraction(sb, gridFrame(1, 0, d, st).frame, p) - 39.f / 63.f) < 1e-4f,
+          "baseline: closer but beyond person range (2000 mm) counts as a change");
+    // 보이던 벽 40칸이 무효 → lost
+    for (int i = 0; i < 64; ++i) d[i] = 3000;
+    for (int i = 0; i < 40; ++i) { d[i] = -1; st[i] = 255; }
+    fr = tof::movedFraction(sb, gridFrame(1, 0, d, st).frame, p, &changed, &lost, &bg);
+    check(fr == 0.f && lost == 39 && changed == 0, "baseline: background zones that vanish are 'lost' and not counted (person kills far returns)");
+    for (int i = 0; i < 61; ++i) { d[i] = -1; st[i] = 255; }
+    check(tof::movedFraction(sb, gridFrame(1, 0, d, st).frame, p, &changed, &lost, &bg) < 0.f && lost == 60,
+          "baseline: fewer than min_eval_zones valid background zones -> undecided (-1)");
+    for (int i = 0; i < 64; ++i) { d[i] = 3000; st[i] = 5; }
+    // 문턱: 칸 0 σ 81.6 → thr max(80, 326) = 326: +300 은 안 세고 +400 은 센다. 칸 2 σ 0 → thr 80: +100 은 센다
+    for (int i = 0; i < 64; ++i) { d[i] = 3000; st[i] = 5; }
+    d[0] = 3300; d[2] = 3100;
+    fr = tof::movedFraction(sb, gridFrame(1, 0, d, st).frame, p, &changed, &lost, &bg);
+    check(changed == 1, "baseline: threshold = max(80 mm, 4 sigma) per zone (zone 0 +300 < 4*81.6 ignored, zone 2 +100 > 80 counted)");
+    d[0] = 3400;
+    tof::movedFraction(sb, gridFrame(1, 0, d, st).frame, p, &changed, &lost, &bg);
+    check(changed == 2, "baseline: zone 0 +400 exceeds 4 sigma");
+    // 배경이 아닌 칸(베이스라인 700 mm)은 평가에서 빠진다
+    tof::SensorBaseline near = sb;
+    for (int i = 0; i < 32; ++i) near.median_mm[i] = 700;
+    for (int i = 0; i < 64; ++i) { d[i] = 3300; st[i] = 5; }
+    fr = tof::movedFraction(near, gridFrame(1, 0, d, st).frame, p, &changed, &lost, &bg);
+    check(bg == 32 && changed == 32 && fr == 1.f, "baseline: zones with a near baseline (person/desk) are not background");
+    tof::SensorBaseline nobg = sb;
+    for (int i = 0; i < 64; ++i) nobg.median_mm[i] = 700;
+    check(tof::movedFraction(nobg, gridFrame(1, 0, d, st).frame, p) < 0.f, "baseline: no background zones -> -1 (rule cannot fire)");
+
+    // 저장/읽기
+    const std::string file = "/tmp/tofposture_baseline_test_" + std::to_string((long)::getpid()) + ".json";
+    tof::Baseline b;
+    sb.id = 1;
+    b.sensors.push_back(sb);
+    b.captured_epoch_s = 1792984470.5; b.source = "post";
+    std::string err;
+    tof::Baseline back;
+    check(tof::saveBaseline(file, b, &err) && tof::loadBaseline(file, back, &err) && back.sensors.size() == 1 && back.sensors[0].id == 1 &&
+              back.sensors[0].median_mm[0] == 3000 && back.sensors[0].valid[1] == 0 && back.sensors[0].median_mm[63] == 3000 &&
+              std::fabs(back.sensors[0].std_mm[0] - 81.6f) < 0.11f && back.sensors[0].bg_zones == 63 && back.source == "post" &&
+              std::fabs(back.captured_epoch_s - 1792984470.5) < 1e-3 && back.forId(1) != nullptr && back.forId(0) == nullptr,
+          "baseline: save (tmp+rename) and load round-trip");
+    std::remove(file.c_str());
+    check(!tof::loadBaseline(file, back, &err), "baseline: missing file -> load fails");
+
+    // 서비스 경로: 캡처 → 규칙 → device_moved → 게이트. 센서 2개, 모드 and
+    tof::DeviceConfig cfg;
+    cfg.misplaced_rule = tof::MisplacedRule::And;
+    cfg.moved.hold_s = 2;
+    tof::DevicePosture dev(cfg);
+    dev.loadModel(bin, &err);
+    dev.setBaselineFile(file);
+    const int s0 = dev.addSensor("a"), s1 = dev.addSensor("b");
+    const int C = dev.classes();
+    auto scene = [&](int16_t wall, int person_zones, int16_t person_mm) {
+        for (int i = 0; i < 64; ++i) { d[i] = wall; st[i] = 5; }
+        for (int i = 64 - person_zones; i < 64; ++i) d[i] = person_mm;     // 아래 줄부터 사람
+    };
+    int k = 0;
+    auto run = [&](int ticks, int16_t wall, int person_zones) {
+        for (int j = 0; j < ticks; ++j, ++k) {
+            const int64_t now = 100 * k;
+            scene(wall, person_zones, 650);
+            dev.feed(s0, gridFrame(k + 1, (uint32_t)now, d, st), now);
+            scene((int16_t)(wall + 100), person_zones, 700);
+            dev.feed(s1, gridFrame(k + 1, (uint32_t)now, d, st), now);
+            dev.tick(now);
+        }
+        return dev.result();
+    };
+    auto r0 = run(5, 3000, 0);
+    check(!r0.device_moved && r0.moved_frac_max < 0.f && dev.stateJson(400).find("\"misplaced_rule\":{\"mode\":\"and\",\"baseline\":false") != std::string::npos &&
+              dev.stateJson(400).find("\"gated\":") != std::string::npos,
+          "gate: no baseline -> moved_frac -1, device_moved false, /api/state misplaced_rule reports baseline=false");
+    check(r0.display_argmax >= 0 && r0.display[tof::kMisplacedIndex] == 0.f && std::fabs(std::accumulate(r0.display, r0.display + C, 0.f) - 1.f) < 1e-4f &&
+              r0.gated == (r0.smooth_argmax == tof::kMisplacedIndex) && r0.model_misplaced == (r0.smooth_argmax == tof::kMisplacedIndex),
+          "gate(and, no baseline): display has misplaced 0 and sums to 1, gated iff model said misplaced, model output kept");
+    check(dev.startBaselineCapture(400, 1, "post") && dev.capturing() && !dev.startBaselineCapture(450, 1, "post"),
+          "baseline: capture starts once (second start -> false while running)");
+    auto r1 = run(12, 3000, 0);                              // 0.5~1.6 s: 빈 자리 캡처 1 s
+    const tof::Baseline cap = dev.baseline();
+    check(!dev.capturing() && cap.any() && cap.sensors.size() == 2 && cap.source == "post" && cap.forId(0) && cap.forId(1) &&
+              cap.forId(0)->median_mm[0] == 3000 && cap.forId(1)->median_mm[0] == 3100 && cap.forId(0)->bg_zones == 64 && cap.forId(0)->frames >= 9,
+          "baseline: capture over 1 s builds both sensors' baselines (slot index as id for non-UART input) and ends by itself");
+    check(tof::loadBaseline(file, back, &err) && back.sensors.size() == 2, "baseline: finished capture is saved to the baseline file");
+    check(dev.sensors(1700)[0].has_baseline && dev.sensors(1700)[0].baseline_bg_zones == 64 && r1.moved_frac_max == 0.f,
+          "baseline: sensors report has_baseline, same scene -> moved_frac 0");
+    auto r2 = run(30, 3000, 24);                             // 사람 착석(아래 3줄 650 mm): 가림은 이동이 아니다
+    check(!r2.moved_candidate && r2.moved_frac_max == 0.f && !r2.device_moved, "gate: seated person -> no move candidate");
+    auto r3 = run(15, 3400, 24);                             // 장치가 움직여 벽이 400 mm 멀어짐, 1.5 s: 후보지만 아직 아님
+    check(r3.moved_candidate && r3.moved_frac_max >= 0.6f && !r3.device_moved && r3.moved_held_ms == 1400,
+          "gate: wall moved 400 mm on 40 zones -> candidate (frac 40/64), not yet held 2 s");
+    auto r4 = run(10, 3400, 24);                             // 2.5 s 유지 → device_moved
+    check(r4.device_moved && r4.moved_held_ms >= 2000, "gate: candidate held >= hold_s -> device_moved");
+    bool same = true;
+    for (int i = 0; i < C; ++i) same = same && r4.display[i] == r4.smooth[i];
+    check(same && !r4.gated && r4.display_argmax == r4.smooth_argmax, "gate(and, device moved): display == model output, nothing gated");
+    auto r5 = run(3, 3000, 24);                              // 제자리로 → 후보 즉시 해제
+    check(!r5.device_moved && !r5.moved_candidate && r5.moved_held_ms == 0, "gate: back in place -> device_moved false at once");
+    check(dev.baselineJson(9999).find("\"captured\":true") != std::string::npos && dev.baselineJson(9999).find("\"rule\":{\"mode\":\"and\"") != std::string::npos &&
+              dev.baselineJson(9999).find("\"median_mm\":[3000,") != std::string::npos,
+          "baseline: /api/baseline JSON has grids, rule params and state");
+    dev.clearBaseline();
+    check(!dev.baseline().any() && !tof::loadBaseline(file, back, &err) && !dev.sensors(9999)[0].has_baseline, "baseline: clear removes baseline and file");
+    // setBaseline(파일에서 읽은 것) 로 복원
+    dev.setBaseline(cap, 10000);
+    check(dev.baseline().any() && run(2, 3000, 24).moved_frac_max == 0.f, "baseline: setBaseline from a loaded file restores the rule");
+
+    // 모드 off: 표시 == 평활(비트 동일). never: misplaced 0, 재정규화, 모델 출력 유지
+    tof::DeviceConfig off_cfg;
+    tof::DevicePosture off(off_cfg);
+    off.loadModel(bin, &err);
+    const int o0 = off.addSensor("o");
+    tof::DeviceConfig nv_cfg;
+    nv_cfg.misplaced_rule = tof::MisplacedRule::Never;
+    tof::DevicePosture nv(nv_cfg);
+    nv.loadModel(bin, &err);
+    const int n0 = nv.addSensor("n");
+    bool off_same = true, nv_ok = true;
+    for (int j = 0; j < 30; ++j) {
+        const int64_t now = 100 * j;
+        scene(3000, 24, 650);
+        off.feed(o0, gridFrame(j + 1, (uint32_t)now, d, st), now); off.tick(now);
+        nv.feed(n0, gridFrame(j + 1, (uint32_t)now, d, st), now); nv.tick(now);
+        const auto ro = off.result(), rn = nv.result();
+        for (int i = 0; i < C; ++i) off_same = off_same && ro.display[i] == ro.smooth[i];
+        off_same = off_same && ro.display_argmax == ro.smooth_argmax && !ro.gated;
+        float sum = 0.f;
+        for (int i = 0; i < C; ++i) sum += rn.display[i];
+        nv_ok = nv_ok && rn.display[tof::kMisplacedIndex] == 0.f && std::fabs(sum - 1.f) < 1e-4f && rn.display_argmax != tof::kMisplacedIndex &&
+                rn.smooth[0] == ro.smooth[0];
+    }
+    check(off_same, "gate(off): display identical to the smoothed model output (today's behaviour)");
+    check(nv_ok, "gate(never): misplaced never displayed, probs renormalised, model output untouched");
+    const std::string sj = off.stateJson(3000);
+    check(sj.find("\"model_output\":{\"posture\":") != std::string::npos && sj.find("\"misplaced_rule\":{\"mode\":\"off\"") != std::string::npos,
+          "state: model_output and misplaced_rule blocks present");
+}
+
+// HttpServer extra 경로: /api/baseline GET·capture 202/409·clear, 모르는 경로 404
+void testBaselineHttp(const std::string& bin) {
+    tof::DevicePosture d;
+    std::string err;
+    d.loadModel(bin, &err);
+    const int port = 38774;
+    tof::HttpHandlers hs{nullptr, [&d] { return d.stateJson(0); }, nullptr, nullptr, nullptr, nullptr,
+                         [&d](const std::string& method, const std::string& path, const std::string& body, std::string& out) -> int {
+                             (void)body;
+                             if (path == "/api/baseline" && method == "GET") { out = d.baselineJson(0); return 200; }
+                             if (path == "/api/baseline/capture" && method == "POST") {
+                                 if (!d.startBaselineCapture(0, 5, "post")) { out = "{\"error\":\"capture already running\"}"; return 409; }
+                                 out = d.baselineJson(0); return 202;
+                             }
+                             if (path == "/api/baseline/clear" && method == "POST") { d.clearBaseline(); out = d.baselineJson(0); return 200; }
+                             return 0;
+                         }};
+    tof::HttpServer srv("127.0.0.1", port, hs);
+    if (!srv.start(&err)) { std::printf("skip baseline http test (port %d: %s)\n", port, err.c_str()); return; }
+    auto req = [&](const std::string& text) {
+        const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        sockaddr_in a{};
+        a.sin_family = AF_INET; a.sin_port = htons((uint16_t)port); ::inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
+        std::string out;
+        if (::connect(fd, (sockaddr*)&a, sizeof a) == 0) {
+            ::send(fd, text.data(), text.size(), 0);
+            char buf[8192];
+            ssize_t n;
+            while ((n = ::recv(fd, buf, sizeof buf, 0)) > 0) out.append(buf, (size_t)n);
+        }
+        ::close(fd);
+        return out;
+    };
+    const std::string g = req("GET /api/baseline HTTP/1.0\r\n\r\n");
+    const std::string c1 = req("POST /api/baseline/capture HTTP/1.0\r\nContent-Length: 0\r\n\r\n");
+    const std::string c2 = req("POST /api/baseline/capture HTTP/1.0\r\nContent-Length: 0\r\n\r\n");
+    const std::string cl = req("POST /api/baseline/clear HTTP/1.0\r\n\r\n");
+    const std::string nf = req("GET /api/nothing HTTP/1.0\r\n\r\n");
+    srv.stop();
+    check(g.rfind("HTTP/1.0 200", 0) == 0 && g.find("\"captured\":false") != std::string::npos && g.find("\"capturing\":false") != std::string::npos,
+          "baseline http: GET /api/baseline -> 200 status JSON");
+    check(c1.rfind("HTTP/1.0 202", 0) == 0 && c1.find("\"capturing\":true") != std::string::npos, "baseline http: POST capture -> 202 Accepted, capturing");
+    check(c2.rfind("HTTP/1.0 409", 0) == 0, "baseline http: second capture while running -> 409");
+    check(cl.rfind("HTTP/1.0 200", 0) == 0 && cl.find("\"capturing\":false") != std::string::npos, "baseline http: POST clear -> 200, capture cancelled");
+    check(nf.rfind("HTTP/1.0 404", 0) == 0, "baseline http: unknown path still 404 through the extra handler");
 }
 
 struct ReplayLine { uint32_t ms; int sensor; tof::TofLine line; };
@@ -937,6 +1170,8 @@ int main(int argc, char** argv) {
     testRawHttp(argv[1]);
     testPlacement(argv[1]);
     testPlacementHttp(argv[1]);
+    testBaseline(argv[1]);
+    testBaselineHttp(argv[1]);
     if (argc > 3) {
         const std::vector<std::string> files(argv + 3, argv + argc);
         testReplay(argv[1], files, tof::DeviceConfig{}, "defaults (resets off)");
