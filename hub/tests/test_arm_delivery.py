@@ -170,8 +170,29 @@ def test_live_device_arm_still_runs_lamp_and_policy_off_uses_default(tmp_path):
     assert State.ACTION_POSTURE in seen2 and hub2.mock_plug.state.get("desk_lamp", {}).get("brightness") == 176
 
 
-def test_demo_profiles_lower_exploration():
+def test_demo_profiles_use_greedy_and_board_keeps_thompson():
     from deskmate_hub.profile import apply_section
     for name in ("demo-a", "demo-b", "demo-b-study"):
-        assert apply_section(load_personalize_config(), "personalize", name)["cold_start"]["explore_scale_global"] == 0.2
-    assert load_personalize_config()["cold_start"]["explore_scale_global"] == 1.0
+        p = apply_section(load_personalize_config(), "personalize", name)
+        assert p["bandit"]["algorithm"] == "greedy" and p["cold_start"]["explore_scale_global"] == 1.0
+    assert load_personalize_config()["bandit"]["algorithm"] == "thompson"
+
+
+COLLEGE = {"light_pref": "mid", "sound_pref": "mid", "wind_pref": "mid"}   # 대학생(가정: 중립 선호 — devview 프리셋이 다르면 여기 맞출 것)
+
+
+@pytest.mark.parametrize("persona,profile,expected", [("수험생", STUDENT, "wake_light"), ("대학생", COLLEGE, "sound_cue")])
+def test_demo_greedy_persona_under_drowsiness_picks_distinct_device(persona, profile, expected):
+    """시연(greedy)에서 온보딩 prior 가 기기를 결정한다 — 수험생(밝은 조명·소리 작게)은 wake_light, 중립 선호 대학생은 sound_cue(알림음)."""
+    from deskmate_hub.profile import apply_section
+    cfg = apply_section(load_personalize_config(), "personalize", "demo-b")
+    p = InterventionPolicy(cfg)
+    p.apply_user_profile(profile)
+    d = p.decide(_sit(), cause="posture", gate="auto", session_id=persona)
+    assert d.source == "bandit" and d.arm == expected, (persona, d.arm, d.scores)
+    # 같은 입력이면 같은 답(결정적) — 새 정책 인스턴스로 다시(같은 인스턴스는 방금 실행한 arm 이 cooldown_sec 300 동안 후보에서 빠진다)
+    q = InterventionPolicy(cfg)
+    q.apply_user_profile(profile)
+    assert q.decide(_sit(), cause="posture", gate="auto", session_id=persona + "2").arm == expected
+    # 깨어 있으면 둘 다 자세 카드
+    assert p.decide(_sit(False), cause="posture", gate="auto", session_id=persona + "3").arm == "posture_card"

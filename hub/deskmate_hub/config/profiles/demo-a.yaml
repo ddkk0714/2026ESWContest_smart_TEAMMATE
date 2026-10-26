@@ -33,8 +33,12 @@ control:
     cooldown_sec: 30                # 기본 120. 시연은 REST 가 60 s 라 재진입이 빠르다
     reminder_after_sec: 120         # 기본 600. 휴식(60 s)을 넘겨 계속 쉬면 한 번 더
 personalize:
-  cold_start:
-    explore_scale_global: 0.2       # 10-26 보드: n_personal 0 에서 Thompson 탐색 잡음(계수 σ≈0.5)이 온보딩 prior(차이 0.2)를 묻어 sound_cue 가 1.32 로 뽑혔다. 기본 1.0
+  # 10-26 총괄 결정: 시연은 온보딩 prior 가 결정적으로 기기를 고르게 평균만 쓴다(greedy). 기본(보드) Thompson 은 n_personal 0 에서
+  # 탐색 잡음(계수 σ≈0.5)이 prior 차이(0.2)를 묻어 sound_cue 가 1.32 로 뽑혔고, explore 0.2 로도 wake_light 1위가 41 % 뿐이었다.
+  # 피드백 학습은 그대로 평균을 움직인다. **시연은 온보딩(deskmate/profile/user)을 먼저 보내야 한다** — 온보딩이 없으면 평균으로도
+  # 졸음에서 sound_cue 0.55 > wake_light 0.45 라 램프 대신 알림음이 나간다(수험생 prior: wake_light 0.55 > sound_cue 0.35).
+  bandit:
+    algorithm: greedy               # 기본 thompson
   gate:
     conf_auto: 0.60                 # 시연 전용 — PC 리허설 10-24 근거. 기본 0.75. FSM gate.conf_auto 와 같은 값으로 맞춘 것 — 다르면 정책이 FSM 자동을 제안(personalize:ask)으로 낮춰 무드등이 자동으로 안 켜진다
 ingest:
