@@ -10,9 +10,13 @@ set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 SRC=${SRC:-$(cd "$HERE/../../../../.." && pwd)}
 docker network create mqtt-repro >/dev/null 2>&1 || true
+CONF=$(mktemp)
+printf 'listener 1883
+allow_anonymous true
+' > "$CONF"
 docker rm -f mqtt-broker >/dev/null 2>&1 || true
 docker run -d --name mqtt-broker --network mqtt-repro \
-  -v "$HERE/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" eclipse-mosquitto:2.0.20 >/dev/null \
+  -v "$CONF:/mosquitto/config/mosquitto.conf:ro" eclipse-mosquitto:2.0.20 >/dev/null \
   || { echo "broker start failed"; exit 1; }
 pub() {
   docker exec mqtt-broker mosquitto_pub -t deskmate/control/cmd \
@@ -42,5 +46,5 @@ pub after-1; sleep 5; pub after-2; sleep 5; pub after-3
 wait $APP
 echo "--- app (컨테이너 시계는 UTC)"; grep -v "다시 연결 중" "$LOG"
 echo "(재연결 대기 중 fetch 실패 $(grep -c "다시 연결 중" "$LOG")회)"
-rm -f "$LOG"
+rm -f "$LOG" "$CONF"
 docker rm -f mqtt-broker >/dev/null 2>&1
