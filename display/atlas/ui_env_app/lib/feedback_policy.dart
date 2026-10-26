@@ -79,6 +79,9 @@ class IlinkLampFeedback {
   DateTime? _connectFailedAt;
   DateTime? _lastRescanAt;
 
+  /// 마지막으로 램프 연결이 실패한 때. 붙으면 null.
+  DateTime? get lastConnectFailedAt => _connectFailedAt;
+
   /// 램프를 다시 찾는 검색 시간(찾으면 바로 멈춘다). 10-26 Pi 5: 페어링하지 않은 BLE 램프는
   /// 끊긴 지 30초 뒤 BlueZ 가 잊고, 그 뒤 Gatt.Connect 는 BlueZ 를 부르지도 않고 바로 실패했다
   /// (hub 명령이 56 ms 만에 bluetooth_write_failed).

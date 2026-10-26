@@ -353,20 +353,46 @@ class BluetoothLinkManager extends ChangeNotifier {
   }
 
   Timer? _lampKeeper;
+  Duration _keepGap = Duration.zero;
+  DateTime? _nextKeepAt;
 
-  /// 피드백이 켜져 있는 동안 [every] 마다 램프가 끊겨 있으면 다시 붙인다(못 찾으면 검색).
+  /// 피드백이 켜져 있는 동안 램프가 끊겨 있으면 다시 붙인다(못 찾으면 검색).
   /// 10-26 Pi 5: 끊긴 채 30초가 지나면 BlueZ 가 램프를 잊어, 다음 hub 명령이 바로 실패했다.
-  void keepLampConnected({Duration every = const Duration(seconds: 45)}) {
+  ///
+  /// 실패할 때마다 간격을 [first] → 2배 … [max] 까지 늘리고, 붙으면 [first] 로 돌린다. 램프 연결이
+  /// 실패할 때마다 시스템 "Bluetooth device disconnected" 창이 하나씩 뜨므로, 어디서든(hub 명령·버튼·
+  /// 시작 복원) 실패한 지 지금 간격이 안 지났으면 손대지 않는다 — 창이 쌓이지 않게.
+  void keepLampConnected({
+    Duration first = const Duration(seconds: 45),
+    Duration max = const Duration(seconds: 300),
+    Duration tick = const Duration(seconds: 5),
+  }) {
     _lampKeeper?.cancel();
-    _lampKeeper = Timer.periodic(every, (_) {
-      if (_disposed ||
-          !feedback.enabled ||
-          _lamp == null ||
-          lampBusy ||
-          feedback.lamp.connected) {
+    _keepGap = first;
+    _nextKeepAt = null;
+    _lampKeeper = Timer.periodic(tick, (_) async {
+      if (_disposed || !feedback.enabled || _lamp == null || lampBusy) return;
+      final now = DateTime.now();
+      if (feedback.lamp.connected) {
+        _keepGap = first;
+        _nextKeepAt = null;
         return;
       }
-      unawaited(reconnectLamp());
+      final failedAt = feedback.lamp.lastConnectFailedAt;
+      if (failedAt != null && now.difference(failedAt) < _keepGap) return;
+      final due = _nextKeepAt ??= now.add(_keepGap);
+      if (now.isBefore(due)) return;
+      final ok = await reconnectLamp();
+      _keepGap = nextKeepGap(_keepGap, ok: ok, first: first, max: max);
+      _nextKeepAt = DateTime.now().add(_keepGap);
     });
   }
+}
+
+/// 램프 유지 간격: 붙으면 [first], 실패하면 두 배(최대 [max]).
+Duration nextKeepGap(Duration current,
+        {required bool ok, required Duration first, required Duration max}) {
+  if (ok) return first;
+  final doubled = current * 2;
+  return doubled > max ? max : doubled;
 }

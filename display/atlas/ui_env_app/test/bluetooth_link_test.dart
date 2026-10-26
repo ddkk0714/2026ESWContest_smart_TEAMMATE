@@ -174,7 +174,10 @@ void main() {
     addTearDown(links.dispose);
     await links.restore();
     final afterRestore = lamp.connects;
-    links.keepLampConnected(every: const Duration(milliseconds: 20));
+    links.keepLampConnected(
+        first: const Duration(milliseconds: 20),
+        max: const Duration(milliseconds: 20),
+        tick: const Duration(milliseconds: 5));
     await Future<void>.delayed(const Duration(milliseconds: 70));
     expect(lamp.connects, greaterThan(afterRestore));
 
@@ -186,6 +189,41 @@ void main() {
     expect(lamp.connects, stopped);
   });
 
+  test('the lamp keeper backs off 45, 90, 180, 300 s and resets on success',
+      () {
+    const first = Duration(seconds: 45);
+    const max = Duration(seconds: 300);
+    var gap = first;
+    final gaps = <int>[];
+    for (var i = 0; i < 5; i++) {
+      gap = nextKeepGap(gap, ok: false, first: first, max: max);
+      gaps.add(gap.inSeconds);
+    }
+    expect(gaps, [90, 180, 300, 300, 300]);
+    expect(nextKeepGap(gap, ok: true, first: first, max: max), first);
+  });
+
+  test('the lamp keeper slows down while the lamp keeps failing', () async {
+    // 10-26 Pi 5: every failed lamp link raised a system popup.
+    store.save(const DeskmateSettings(
+      lamp: SavedBluetoothDevice(
+          address: 'AA:BB:CC:00:00:02', name: 'KLZS-L1 app'),
+    ));
+    lamp.connectOk = false;
+    final links = manager();
+    addTearDown(links.dispose);
+    await links.restore();
+    final start = lamp.connects;
+    links.keepLampConnected(
+        first: const Duration(milliseconds: 20),
+        max: const Duration(milliseconds: 1000),
+        tick: const Duration(milliseconds: 2));
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    // 고정 20 ms 면 열 번쯤 시도했을 것을, 20 → 40 → 80 → 160 ms 로 늘려 서너 번만.
+    expect(lamp.connects - start, lessThanOrEqualTo(4 * 2));
+    expect(lamp.connects - start, greaterThan(0));
+  });
+
   test('the lamp keeper leaves a connected lamp alone', () async {
     store.save(const DeskmateSettings(
       lamp: SavedBluetoothDevice(
@@ -195,7 +233,9 @@ void main() {
     addTearDown(links.dispose);
     await links.restore();
     expect(lamp.connects, 1);
-    links.keepLampConnected(every: const Duration(milliseconds: 20));
+    links.keepLampConnected(
+        first: const Duration(milliseconds: 20),
+        tick: const Duration(milliseconds: 5));
     await Future<void>.delayed(const Duration(milliseconds: 70));
     expect(lamp.connects, 1);
   });
