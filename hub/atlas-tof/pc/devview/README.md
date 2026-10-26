@@ -1,13 +1,15 @@
 # 노트북 개발자 화면 (`devview`)
 
-결선 시연영상에서 **내부 상태를 보여 주는 화면**이다. Pi 5 앱의 개발자 모드와 같은 정보를
-노트북 브라우저 한 페이지(1920×1080)에 크게 띄우고, 그 화면을 녹화한다.
+결선 시연영상에서 **내부 상태를 보여 주는 화면**이자, 실기 중에 보드의 원값을 실시간으로 보는 개발자 화면이다.
+Pi 5 앱의 개발자 모드와 같은 정보에 센서 원값·엎드림(face_down) 신뢰도 추적을 더해 노트북 브라우저 한 페이지(1920×1080)에 띄운다.
 
 - **보기 전용.** 판단(FSM·개인화)과 제어는 전부 Pi 4·Pi 5 보드에서 한다. 이 프로그램은 Pi 4 브로커를
   구독하고 자세 서비스에 GET 만 한다 — 발행·제어 명령을 보내지 않는다. 화면 맨 위 띠에도 그렇게 적혀 있다.
 - **원시 센서 값은 화면에만.** 받은 값은 메모리에만 두고 `127.0.0.1` 로만 연다. 파일로 쓰지 않는다
   (녹화는 사람이 화면 캡처로 한다).
 - 표준 라이브러리만 쓴다(Python 3.10+). `pip install` 이 필요 없고 외부 CDN 도 없다(오프라인 동작).
+- **시스템 프록시를 쓰지 않는다.** 노트북 프록시 설정이 172.20.x(핫스팟) HTTP 요청을 프록시로 보내 시간 초과가 날 수 있어,
+  자세 서비스 GET 은 빈 `ProxyHandler` 로 직접 붙는다(MQTT 는 소켓이라 원래 프록시와 무관).
 
 ## 실행
 
@@ -25,8 +27,9 @@ python hub/atlas-tof/pc/devview/devview.py --fake
 ```
 
 `--fake` 는 40 초 각본을 반복한다: 0 s START → 6 s FOCUS_PC → 16 s FATIGUE_SUSPECT → 22 s FATIGUE →
-27 s ACTION_POSTURE(자세 졸음, 무드등 `adjust_brightness +60%` 명령) → 28 s 결과 `110→176` → 33 s 휴식 제안 →
-35 s 수락. 두 ToF 격자도 움직인다. `--fake-start 26` 처럼 원하는 장면 직전부터 시작할 수 있다.
+27 s ACTION_POSTURE(자세 졸음, 무드등 `adjust_brightness +60%` 명령) → 28 s 결과 `110→176` → 32 s 엎드림
+(face_down 0.90 → 37 s 0.995) → 33 s 휴식 제안 → 35 s 수락. 두 ToF 격자도 움직이고, `/raw other`(0x20·0x10·0x03·0x04·0xF0)·
+키 입력 토픽·프로필도 가짜로 낸다. `--fake-start 26` 처럼 원하는 장면 직전부터 시작할 수 있다.
 가짜 데이터일 땐 띠에 노란 `가짜 데이터(--fake)` 표시가 붙는다 — 시연 녹화에서 이 표시가 보이면 안 된다.
 
 | 옵션 | 기본 | 뜻 |
@@ -40,11 +43,38 @@ python hub/atlas-tof/pc/devview/devview.py --fake
 
 | 출처 | 주기 | 화면 |
 |---|---|---|
-| MQTT `deskmate/state/phase` | hub 10 s | 판정(FSM 상태·C_fatigue·C_focus·원인·게이트·hub 자세·재실·개인화 설명), 센서 값(`sensor_summary` 의 mmWave·환경·키 입력) |
-| MQTT `deskmate/control/cmd`·`control/result` | 이벤트 | 기기 상태 한 줄(무드등·선풍기·공기청정기의 마지막 명령·결과, `previous→actual` 밝기) + 명령 로그 |
+| MQTT `deskmate/state/phase` | hub 10 s | 판정(FSM 상태·C_fatigue·C_focus·원인·게이트·hub 자세·재실·장치 위치·개인화 설명·제어 에피소드) |
+| MQTT `deskmate/control/cmd`·`control/result` | 이벤트 | 기기 한 줄(무드등·선풍기·공기청정기의 마지막 명령·BLE 결과와 결과를 낸 노드, `previous→actual` 밝기) + 명령 로그 |
 | MQTT `deskmate/interaction/request`·`feedback/user` | 이벤트 | 명령 로그(REQUEST·FEEDBACK) |
-| `GET :8771/api/state` | 1 s | 자세 서비스 라벨·신뢰도·9 클래스 막대·장치 위치(`placement`, 없으면 '-') |
-| `GET :8772/raw` (없으면 `:8771/raw`) | 0.2 s | ToF A·왼쪽 / B·오른쪽 8×8 열지도(칸 숫자 cm, 회색 = 무효 상태값), 유효 칸 수·최소 거리 |
+| MQTT `deskmate/health/hub`·`deskmate/profile/user` | retain | 프로필 줄(hub 시연 프로파일 demo-a/b 가 실려 있으면 · 개인화 `active_profile_id` · 첫 설정 `profile_id`) |
+| MQTT `deskmate/#` 전부 | — | MQTT 토픽 목록(토픽별 개수·마지막 수신) — 실시간으로 들어오는지 확인 |
+| `GET :8771/api/state` | 0.3 s | 자세 서비스 라벨·신뢰도·9 클래스 확률·장치 위치(`placement`, 없으면 '-'), 엎드림 추적 |
+| `GET :8772/raw` (없으면 `:8771/raw`) | 0.2 s | ToF A·왼쪽 / B·오른쪽 8×8 열지도(칸 숫자 cm, 회색 = 무효 상태값), 유효 칸 수·최소 거리, `other` 블록 |
+
+### 센서 원값 패널
+
+섹션마다 원값 출처를 하나 고른다: **`/raw` 의 `other`(ESP32 UART 프레임 그대로) → MQTT `deskmate/sensor/*` → hub 요약(`state/phase` 의 `sensor_summary`)**.
+섹션 머리에 출처·seq·개수·나이가 나온다(15 s 넘게 안 바뀌면 빨강).
+
+| 섹션 | `/raw other` 키 | MQTT 토픽 | hub 요약 |
+|---|---|---|---|
+| mmWave C1001 (0x20) | `mmwave` | `deskmate/sensor/mmwave/*` | `sensor_summary.mmwave` |
+| 환경 CO₂·온도·습도·조도 (0x10) | `env` | `deskmate/sensor/env/*` | `co2_ppm`·`temp_c`·`humidity_pct`·`lux`·`env_flags` |
+| ToF 노드 규칙 특징 (0x03, 플래그·움직임·끄덕임) | `tof_feature` | `deskmate/sensor/tof/*` | `sensor_summary.tof` |
+| ToF 노드 자세 (0x04) | `tof_posture` | — | — |
+| ESP32 하트비트 (0xF0) | `heartbeat` | `deskmate/health/esp32` | — |
+| 키 입력 (PC 수집기) | — | `deskmate/sensor/keystroke` | `sensor_summary.keystroke` |
+
+보드 hub 는 UART 로 받은 센서를 MQTT 로 다시 내보내지 않는다(`deskmate/sensor/#` 는 구독만). 그래서 `other` 블록을 주는
+UART 중계기(`relay/uart_relay_board`)의 `/raw` 가 가장 원본에 가깝고, 자세 서비스 `/raw`(PR #72) 처럼 `other` 가 없으면
+hub 요약으로 내려간다 — 0x04·하트비트는 그때 '아직 없음'.
+
+### 엎드림 face_down 칸
+
+실기에서 face_down 확률이 0.99 에 닿는지 보려는 칸. `/api/state` 를 0.3 s 마다 읽어
+**smooth**(`probs`, EMA — 서비스가 라벨로 쓰는 값)·**instant**(`instant.probs`)·**센서 A·B**(`sensors[].probs`)의 지금 값과 최고값,
+0.99 이상 표본 수·마지막 도달 시각, 최근 60 s 막대(0.80~1.00 눈금, 0.99 점선)를 보여 준다. 0.99 이상이면 칸 테두리가 초록.
+최고값은 프로그램을 켠 뒤부터(다시 켜면 비워진다). 0.3 s 표본이라 그 사이의 순간 최고는 놓칠 수 있다.
 
 - MQTT 페이로드는 **UTF-8** 로 읽는다(한글 설명). Latin-1 로 읽으면 깨진다(Pi 5 앱에서 실제로 있었던 버그).
 - 명령 로그는 받은 순서대로 최근 200 줄. 줄 모양은 Pi 5 `command_log.dart` 와 같다
@@ -74,5 +104,6 @@ python hub/atlas-tof/pc/devview/devview.py --fake
 python -m pytest hub/atlas-tof/pc/devview -q
 ```
 
-UTF-8 디코딩(소켓으로 가짜 브로커까지), `state/phase` → 화면 데이터(키 없음 '-'), `/raw` 파싱, 명령 로그 200 줄 상한,
-기기 상태(`previous→actual`), `--fake` 각본이 FSM 다섯 단계와 명령·결과·제안·피드백을 만드는지, 로컬 HTTP. 보드 실기는 미확인.
+UTF-8 디코딩(소켓으로 가짜 브로커까지), `state/phase` → 화면 데이터(키 없음 '-'), 센서 원값 출처 우선순위(/raw other → MQTT → 요약),
+엎드림 최고값·0.99 횟수·60 s 창, 프록시 우회, 토픽 목록, `/raw` 파싱, 명령 로그 200 줄 상한, 기기 상태(`previous→actual`),
+`--fake` 각본이 FSM 다섯 단계와 명령·결과·제안·피드백·0.99 도달을 만드는지, 로컬 HTTP.

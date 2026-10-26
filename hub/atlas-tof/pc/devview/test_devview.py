@@ -97,8 +97,11 @@ def test_phase_view_empty_is_all_dash():
     v = dv.phase_view(None)
     assert v["fsm_state"] == v["cause"] == v["gate"] == v["hub_posture"] == v["presence"] == "-"
     assert v["fatigue"] is None and v["fatigue_text"] == "-"
-    assert v["explanation"] == "-" and v["keystroke"] == "-"
-    assert all(val == "-" for _, val in v["mmwave"] + v["env"])
+    assert v["explanation"] == "-" and v["episode"] == "-" and v["mmwave_distance"] == "-"
+    assert dv.profile_text(None, None, None) == "-"
+    secs = dv.sensor_sections(None, {}, None, 0.0)
+    assert [s["key"] for s in secs] == ["mmwave", "env", "tof_feature", "tof_posture", "heartbeat", "keystroke"]
+    assert all(s["source"] == "-" and s["rows"] == [] for s in secs)
 
 
 def test_phase_view_full():
@@ -118,13 +121,108 @@ def test_phase_view_full():
     assert v["hub_posture"] == "졸음 drowsy (service, 0.84)"
     assert v["presence"] == "있음 (근거 both)" and v["place"] == "책상"
     assert v["mmwave_distance"] == "62 cm"
-    mm = dict(v["mmwave"])
-    assert mm["재실"] == "-"  # sensor_summary.mmwave 에 present 가 없으면 '-'
-    assert mm["심박"] == "71 bpm" and mm["호흡"] == "14 회/분 (무효)"
-    e = dict(v["env"])
-    assert e["CO₂"] == "1024 ppm" and e["온도"] == "24.6 ℃" and e["환경 경고"] == "co2_high"
-    assert v["keystroke"].startswith("타이핑 없음")
     assert v["explanation"] == "무드등 밝게"
+
+
+PHASE_FULL = env({"sensor_summary": {
+    "tof": {"posture": "drowsy", "motion_score": 0.42, "nod_rate_hz": 0.3},
+    "mmwave": {"motion_state": "still", "heart_bpm": 71, "heart_valid": True, "resp_valid": False},
+    "co2_ppm": 1024, "temp_c": 24.56, "lux": 310, "env_flags": ["co2_high"],
+    "keystroke": {"typing_active": False, "idle_ratio": 0.9},
+    "control": {"active": True, "state": "ACTION_POSTURE", "cause": "posture", "gate": "auto",
+                "outcome": "pending", "awaiting_user": True},
+    "personalize": {"active_profile_id": "u-1"},
+}, "profile": "demo-b"})
+
+
+def test_sensor_sections_fall_back_to_hub_summary():
+    secs = {s["key"]: s for s in dv.sensor_sections(None, {}, PHASE_FULL, 0.0)}
+    assert secs["mmwave"]["source"].startswith("state/phase")
+    assert dict(secs["mmwave"]["rows"]) == {"motion_state": "still", "heart_bpm": "71", "heart_valid": "true",
+                                            "resp_valid": "false"}
+    assert dict(secs["env"]["rows"]) == {"co2_ppm": "1024", "temp_c": "24.56", "lux": "310", "env_flags": "co2_high"}
+    assert dict(secs["tof_feature"]["rows"])["motion_score"] == "0.42"
+    assert secs["heartbeat"]["rows"] == []  # hub 요약에는 하트비트가 없다
+
+
+def test_sensor_sections_prefer_raw_other_then_mqtt_topic():
+    raw = {"other": {"mmwave": {"have": True, "age_ms": 300, "seq": 9, "count": 9, "len": 11, "ts_ms": 1,
+                                "present": True, "distance_cm": None, "drowsy_state": "AWAKE"},
+                     "env": {"have": False}, "heartbeat": {"have": True, "age_ms": 0, "fw": "0x0125", "tof_a": True}}}
+    topics = {"deskmate/sensor/env/esp32-1": {"env": env({"co2_ppm": 900, "ts": 5}), "count": 3, "last": 8.0},
+              "deskmate/sensor/mmwave/esp32-1": {"env": env({"present": False}), "count": 1, "last": 9.0}}
+    secs = {s["key"]: s for s in dv.sensor_sections(raw, topics, PHASE_FULL, 10.0)}
+    mm = secs["mmwave"]
+    assert mm["source"].startswith("/raw other") and mm["age_s"] == 0.3 and mm["meta"] == "seq 9 · 9개"
+    assert dict(mm["rows"]) == {"present": "true", "distance_cm": "null", "drowsy_state": "AWAKE"}  # 머리 키 제외
+    e = secs["env"]  # other 가 have=false 면 MQTT 토픽
+    assert e["source"] == "MQTT deskmate/sensor/env/esp32-1" and e["age_s"] == 2.0 and dict(e["rows"]) == {"co2_ppm": "900"}
+    assert dict(secs["heartbeat"]["rows"]) == {"fw": "0x0125", "tof_a": "true"}
+
+
+def test_profile_and_episode_text():
+    pr = env({"profile_id": "u-7f3a"}, node="pi5-display")
+    assert dv.profile_text(PHASE_FULL, pr, None) == "hub demo-b · 개인화 u-1 · 첫 설정 u-7f3a"
+    assert dv.phase_view(PHASE_FULL)["episode"] == "ACTION_POSTURE · posture · auto · pending · 사용자 응답 대기"
+
+
+def test_raw_value_literals():
+    assert [dv.raw_value(v) for v in (None, True, False, 0.5, 1.23456, 3, [1, 2], "a")] == \
+        ["null", "true", "false", "0.5", "1.235", "3", "1, 2", "a"]
+
+
+def test_store_keeps_every_topic_and_non_json():
+    st = dv.Store()
+    st.on_mqtt("deskmate/sensor/keystroke", payload({"typing_active": True}), at=1.0)
+    st.on_mqtt("deskmate/sensor/keystroke", payload({"typing_active": False}), at=2.0)
+    st.on_mqtt("deskmate/health/esp32", b"online", at=2.0)
+    topics = {t["topic"]: t for t in dv.topics_view(st.topics, 3.0)}
+    assert topics["deskmate/sensor/keystroke"]["count"] == 2 and topics["deskmate/sensor/keystroke"]["age_s"] == 1.0
+    assert st.topics["deskmate/health/esp32"]["env"] == {"text": "online"}
+
+
+# ----------------------------------------------------------------- 엎드림 0.99 추적
+
+def _state(smooth, instant, a=None, b=None):
+    j = {"probs": {"face_down": smooth}, "instant": {"probs": {"face_down": instant}}}
+    if a is not None:
+        j["sensors"] = [{"name": "A", "online": True, "probs": {"face_down": a}},
+                        {"name": "B", "online": False, "probs": {"face_down": b}}]
+    return j
+
+
+def test_face_down_tracker_max_hits_and_window():
+    tr = dv.FaceDownTracker(window_s=10)
+    tr.add(_state(0.95, 0.991, 0.97, 0.5), now=0.0)
+    tr.add(_state(0.993, 0.98), now=5.0)
+    tr.add(_state(0.2, 0.1), now=20.0)  # 0 s·5 s 표본은 10 s 창 밖
+    v = tr.view(20.0)
+    assert v["max"]["smooth"] == 0.993 and v["max"]["instant"] == 0.991 and v["max"]["A"] == 0.97
+    assert v["max"]["B"] is None  # 오프라인 센서는 세지 않는다
+    assert v["hits"] == {"smooth": 1, "instant": 1} and v["samples"] == 3
+    assert v["current"]["smooth"] == 0.2 and v["max_recent"] == 0.2
+    assert len(v["spark"]) == 120 and v["spark"][-1][0] == 0.2
+
+
+def test_face_down_tracker_ignores_empty():
+    tr = dv.FaceDownTracker()
+    tr.add(None, 0.0)
+    tr.add({}, 0.0)
+    assert tr.view(0.0)["samples"] == 0 and tr.view(0.0)["max"]["smooth"] is None
+
+
+def test_fetch_bypasses_system_proxy(monkeypatch):
+    """노트북 시스템 프록시가 172.20.x 요청을 가로채지 않게 — 빈 ProxyHandler 로 기본 프록시 처리기를 뺀다."""
+    assert not any(isinstance(h, urllib.request.ProxyHandler) and h.proxies for h in dv._NO_PROXY.handlers)
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")  # 닿지 않는 프록시
+    srv = dv.ThreadingHTTPServer(("127.0.0.1", 0), dv.make_handler(dv.Store()))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        data = dv.fetch_json(f"http://127.0.0.1:{srv.server_address[1]}/data")
+        assert "phase" in data
+    finally:
+        srv.shutdown()
+        srv.server_close()
 
 
 def test_phase_view_old_personalization_key_and_room_only():
@@ -253,6 +351,9 @@ def test_fake_scenario_runs_fsm_and_lamp_command():
     assert snap["devices"][0]["value"] == "밝기 110→176"
     assert all(s["have"] and s["valid_count"] > 0 for s in snap["raw"]["sensors"])
     assert snap["posture"]["placement"] == "center"
+    assert snap["face_down"]["max"]["smooth"] >= 0.99 and snap["face_down"]["hits"]["smooth"] > 0
+    assert all(s["rows"] for s in snap["sections"])  # 0x20·0x10·0x03·0x04·0xF0·키 입력 모두 채워짐
+    assert snap["profile"] == "hub demo-b · 첫 설정 u-7f3a"
     assert snap["phase"]["explanation"] != "-"
 
 

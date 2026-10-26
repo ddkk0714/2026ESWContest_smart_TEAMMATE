@@ -47,6 +47,7 @@ TOPIC_RESULT = "deskmate/control/result"
 TOPIC_REQUEST = "deskmate/interaction/request"
 TOPIC_FEEDBACK = "deskmate/feedback/user"
 TOPIC_HEALTH_HUB = "deskmate/health/hub"
+TOPIC_PROFILE = "deskmate/profile/user"
 
 DASH = "-"
 
@@ -85,21 +86,15 @@ def _txt(v: Any, fmt: str = "{}", unit: str = "") -> str:
         return str(v) + unit
 
 
-def _vital(value: Any, valid: Any, unit: str) -> str:
-    """심박·호흡. *_valid 가 false 면 숫자를 그대로 믿지 않게 '(무효)' 를 붙인다(락온 풀림 ≠ 사람 없음)."""
-    if value is None:
-        return DASH
-    text = _txt(value, "{:.0f}", unit)
-    return text if valid is not False else f"{text} (무효)"
-
-
 def phase_view(envelope: Any) -> dict[str, Any]:
-    """`deskmate/state/phase` envelope → 화면 데이터. 키가 없으면 '-' (숫자 막대는 None)."""
+    """`deskmate/state/phase` envelope → 판정 화면 데이터. 키가 없으면 '-' (숫자 막대는 None).
+
+    센서 값은 여기서 다루지 않는다 — sensor_sections 가 /raw·MQTT 원값과 함께 고른다.
+    """
     data = _map(_map(envelope).get("data"))
     ss = _map(data.get("sensor_summary"))
     tof = _map(ss.get("tof"))
     mm = _map(ss.get("mmwave"))
-    ks = _map(ss.get("keystroke"))
     pers = _map(ss.get("personalize")) or _map(ss.get("personalization"))
     fatigue = _num(data.get("c_fatigue", data.get("C_fatigue")))
     focus = _num(data.get("c_focus", data.get("C_focus")))
@@ -123,15 +118,14 @@ def phase_view(envelope: Any) -> dict[str, Any]:
 
     reasons = data.get("reasons")
     explanation = pers.get("explanation") or pers.get("arm_label") or pers.get("arm")
-    keystroke = DASH
-    if ks:
-        keystroke = " · ".join([
-            "타이핑 중" if ks.get("typing_active") else "타이핑 없음",
-            f"공백 {_txt(_num(ks.get('idle_ratio')), '{:.2f}')}",
-            f"수정 {_txt(_num(ks.get('correction_rate')), '{:.2f}')}",
-            f"간격 {_txt(_num(ks.get('flight_mean_ms')), '{:.0f}', ' ms')}",
-        ])
-    env_flags = ss.get("env_flags")
+    control = _map(ss.get("control"))
+    episode = DASH
+    if control.get("active"):
+        episode = " · ".join(str(control[k]) for k in ("state", "cause", "gate", "outcome") if control.get(k))
+        if control.get("awaiting_user"):
+            episode += " · 사용자 응답 대기"
+    elif control:
+        episode = "없음"
 
     return {
         "fsm_state": str(data.get("fsm_state") or data.get("state") or DASH),
@@ -150,23 +144,176 @@ def phase_view(envelope: Any) -> dict[str, Any]:
         "place": place,
         "mmwave_distance": _txt(_num(mm.get("distance_cm")), "{:.0f}", " cm"),
         "explanation": str(explanation) if explanation else DASH,
-        "mmwave": [
-            ["재실", _txt(mm.get("present"))],
-            ["움직임", DASH if not mm else f"{_txt(mm.get('motion_state'))} · 세기 {_txt(mm.get('motion_level'))}"],
-            ["거리", _txt(_num(mm.get("distance_cm")), "{:.0f}", " cm")],
-            ["심박", _vital(_num(mm.get("heart_bpm")), mm.get("heart_valid"), " bpm")],
-            ["호흡", _vital(_num(mm.get("resp_bpm")), mm.get("resp_valid"), " 회/분")],
-            ["졸음 상태", _txt(mm.get("drowsy_state"))],
-        ],
-        "env": [
-            ["CO₂", _txt(_num(ss.get("co2_ppm")), "{:.0f}", " ppm")],
-            ["온도", _txt(_num(ss.get("temp_c")), "{:.1f}", " ℃")],
-            ["습도", _txt(_num(ss.get("humidity_pct")), "{:.0f}", " %")],
-            ["조도", _txt(_num(ss.get("lux")), "{:.0f}", " lx")],
-            ["환경 경고", ", ".join(env_flags) if isinstance(env_flags, list) and env_flags else DASH],
-        ],
-        "keystroke": keystroke,
+        "episode": episode,
     }
+
+
+def profile_text(phase_env: Any, profile_env: Any, health_env: Any) -> str:
+    """프로필 한 줄: hub 시연 프로파일(demo-a|b, 실려 있으면) · 개인화가 쓰는 사람 id · Pi 5 첫 설정 프로필 id."""
+    data = _map(_map(phase_env).get("data"))
+    ss = _map(data.get("sensor_summary"))
+    pers = _map(ss.get("personalize")) or _map(ss.get("personalization"))
+    health = _map(_map(health_env).get("data")) or _map(health_env)
+    parts = []
+    demo = data.get("profile") or ss.get("profile") or health.get("profile")
+    if demo:
+        parts.append(f"hub {demo}")
+    if pers.get("active_profile_id"):
+        parts.append(f"개인화 {pers['active_profile_id']}")
+    user = _map(_map(profile_env).get("data"))
+    if user.get("profile_id"):
+        parts.append(f"첫 설정 {user['profile_id']}")
+    return " · ".join(parts) if parts else DASH
+
+
+def raw_value(v: Any) -> str:
+    """원값 그대로에 가깝게: true/false/null, 소수는 3자리까지, 목록은 쉼표."""
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, float):
+        return "NaN" if math.isnan(v) else (f"{v:.3f}".rstrip("0").rstrip(".") or "0")
+    if isinstance(v, list):
+        return ", ".join(raw_value(x) for x in v) if v else "[]"
+    if isinstance(v, dict):
+        return json.dumps(v, ensure_ascii=False)
+    return str(v)
+
+
+def _flat(d: dict, prefix: str = "") -> list[list[str]]:
+    rows = []
+    for k, v in d.items():
+        if isinstance(v, dict) and v and len(v) <= 8:
+            rows += _flat(v, f"{prefix}{k}.")
+        else:
+            rows.append([f"{prefix}{k}", raw_value(v)])
+    return rows
+
+
+_SUMMARY_ENV_KEYS = ("co2_ppm", "temp_c", "humidity_pct", "lux", "env_flags")
+# (키, 화면 제목, /raw other 키, MQTT 토픽 접두어, state/phase sensor_summary 에서 꺼내는 함수)
+SECTIONS: list[tuple[str, str, str | None, str | None, Callable[[dict], dict]]] = [
+    ("mmwave", "mmWave C1001 · 0x20", "mmwave", "deskmate/sensor/mmwave", lambda ss: _map(ss.get("mmwave"))),
+    ("env", "환경 SCD41·DHT22·BH1750 · 0x10", "env", "deskmate/sensor/env",
+     lambda ss: {k: ss[k] for k in _SUMMARY_ENV_KEYS if k in ss}),
+    ("tof_feature", "ToF 노드 규칙 특징 · 0x03", "tof_feature", "deskmate/sensor/tof", lambda ss: _map(ss.get("tof"))),
+    ("tof_posture", "ToF 노드 자세 · 0x04", "tof_posture", None, lambda ss: {}),
+    ("heartbeat", "ESP32 하트비트 · 0xF0", "heartbeat", "deskmate/health/esp32", lambda ss: {}),
+    ("keystroke", "키 입력 · PC 수집기", None, "deskmate/sensor/keystroke", lambda ss: _map(ss.get("keystroke"))),
+]
+_HEAD_KEYS = ("have", "len", "seq", "ts_ms", "count", "age_ms")
+
+
+def sensor_sections(raw: Any, topics: dict[str, dict[str, Any]], phase_env: Any, now: float) -> list[dict[str, Any]]:
+    """센서마다 원값 출처를 하나 고른다: ESP32 프레임 그대로(/raw other) > MQTT 센서 토픽 > hub 요약(state/phase).
+
+    보드 hub 는 UART 로 받은 센서를 MQTT 로 다시 내보내지 않는다 — 중계기 /raw 의 other 가 가장 원본에 가깝다.
+    """
+    other = _map(_map(raw).get("other"))
+    ss = _map(_map(_map(phase_env).get("data")).get("sensor_summary"))
+    out = []
+    for key, title, other_key, prefix, from_summary in SECTIONS:
+        sec: dict[str, Any] = {"key": key, "title": title, "source": DASH, "age_s": None, "meta": "", "rows": []}
+        o = _map(other.get(other_key)) if other_key else {}
+        hit = None
+        if prefix:
+            matches = [(t, v) for t, v in topics.items() if t == prefix or t.startswith(prefix + "/")]
+            hit = max(matches, key=lambda tv: tv[1]["last"]) if matches else None
+        if o.get("have"):
+            sec["source"] = "/raw other · ESP32 프레임"
+            sec["age_s"] = None if _num(o.get("age_ms")) is None else round(o["age_ms"] / 1000, 1)
+            sec["meta"] = f"seq {o.get('seq', '-')} · {o.get('count', '-')}개"
+            sec["rows"] = _flat({k: v for k, v in o.items() if k not in _HEAD_KEYS})
+        elif hit:
+            t, info = hit
+            data = _map(_map(info["env"]).get("data")) or _map(info["env"])
+            sec["source"] = f"MQTT {t}"
+            sec["age_s"] = round(now - info["last"], 1)
+            sec["meta"] = f"{info['count']}개"
+            sec["rows"] = _flat({k: v for k, v in data.items() if k != "ts"})
+        else:
+            summary = from_summary(ss)
+            if summary:
+                sec["source"] = "state/phase 요약 · hub"
+                sec["rows"] = _flat(summary)
+        out.append(sec)
+    return out
+
+
+def topics_view(topics: dict[str, dict[str, Any]], now: float) -> list[dict[str, Any]]:
+    """받은 MQTT 토픽(이름순)의 개수·마지막 수신 — 실시간으로 들어오는지 보는 용도."""
+    return [{"topic": t, "count": v["count"], "age_s": round(now - v["last"], 1)} for t, v in sorted(topics.items())]
+
+
+FACE_DOWN = "face_down"
+FACE_DOWN_GOAL = 0.99
+
+
+class FaceDownTracker:
+    """자세 서비스의 엎드림(face_down) 확률을 따라간다 — 실기에서 0.99 에 닿는지 보려는 것.
+
+    smooth = /api/state probs(EMA, 서비스가 라벨로 쓰는 값), instant = instant.probs(이번 스텝 융합), A·B = 센서별 probs.
+    """
+
+    KEYS = ("smooth", "instant", "A", "B")
+
+    def __init__(self, window_s: float = 60.0) -> None:
+        self.window_s = window_s
+        self.hist: deque[tuple[float, float, float]] = deque()
+        self.max: dict[str, float | None] = {k: None for k in self.KEYS}
+        self.current: dict[str, float | None] = {k: None for k in self.KEYS}
+        self.hits = {"smooth": 0, "instant": 0}
+        self.samples = 0
+        self.last_hit: float | None = None
+
+    def add(self, j: Any, now: float) -> None:
+        j = _map(j)
+        if not j:
+            return
+        cur: dict[str, float | None] = {
+            "smooth": _num(_map(j.get("probs")).get(FACE_DOWN)),
+            "instant": _num(_map(_map(j.get("instant")).get("probs")).get(FACE_DOWN)),
+            "A": None, "B": None,
+        }
+        sensors = [s for s in j.get("sensors") or [] if isinstance(s, dict)]
+        for name, s in zip(("A", "B"), sensors):
+            if s.get("online", True):
+                cur[name] = _num(_map(s.get("probs")).get(FACE_DOWN))
+        self.current = cur
+        self.samples += 1
+        for k, v in cur.items():
+            if v is not None and (self.max[k] is None or v > self.max[k]):
+                self.max[k] = v
+        for k in self.hits:
+            if cur[k] is not None and cur[k] >= FACE_DOWN_GOAL:
+                self.hits[k] += 1
+                self.last_hit = now
+        self.hist.append((now, cur["smooth"] or 0.0, cur["instant"] or 0.0))
+        while self.hist and now - self.hist[0][0] > self.window_s:
+            self.hist.popleft()
+
+    def view(self, now: float) -> dict[str, Any]:
+        recent = [s for _, s, _ in self.hist]
+        return {
+            "goal": FACE_DOWN_GOAL,
+            "current": self.current,
+            "max": self.max,
+            "max_recent": max(recent) if recent else None,
+            "hits": self.hits,
+            "samples": self.samples,
+            "last_hit": None if self.last_hit is None else time.strftime("%H:%M:%S", time.localtime(self.last_hit)),
+            "spark": self.spark(now),
+        }
+
+    def spark(self, now: float, bins: int = 120) -> list[list[float]]:
+        """최근 window_s 를 bins 칸으로 — 칸마다 [smooth 최대, instant 최대]."""
+        out = [[0.0, 0.0] for _ in range(bins)]
+        for t, s, i in self.hist:
+            b = min(bins - 1, int((self.window_s - (now - t)) / self.window_s * bins))
+            if 0 <= b < bins:
+                out[b] = [max(out[b][0], round(s, 3)), max(out[b][1], round(i, 3))]
+        return out
 
 
 def parse_raw(j: Any) -> dict[str, Any]:
@@ -333,6 +480,7 @@ class DeviceBoard:
                 return
             d["status"] = data.get("status")
             d["error"] = data.get("error_code")
+            d["node"] = _map(envelope).get("node")
             actual = _num(data.get("actual"))
             if "adjust_brightness" in d["values"] and actual is not None:
                 d["values"].pop("adjust_brightness")
@@ -366,7 +514,7 @@ class DeviceBoard:
         else:
             mark, ok = str(status), None
         return {"name": DEVICE_LABELS.get(d["target"], d["target"]), "value": " · ".join(parts) or DASH,
-                "mark": mark, "ok": ok}
+                "mark": mark, "ok": ok, "node": d.get("node") if d["status"] is not None else None}
 
     def lines(self) -> list[dict[str, Any]]:
         return [self.line(d) for d in self.devices.values()]
@@ -383,8 +531,13 @@ class Store:
         self.posture: Any = None
         self.raw: Any = None
         self.health_hub: Any = None
+        self.profile_user: Any = None
         self.log: deque[dict[str, Any]] = deque(maxlen=log_max)
         self.board = DeviceBoard()
+        # 받은 모든 MQTT 토픽의 마지막 envelope·개수·시각(센서 원값 패널·토픽 목록). 토픽 수는 상한을 둔다.
+        self.topics: dict[str, dict[str, Any]] = {}
+        self.topics_max = 128
+        self.face_down = FaceDownTracker()
         # 연결별 상태: ok, reason, last(마지막 수신 epoch)
         self.links: dict[str, dict[str, Any]] = {
             k: {"ok": False, "reason": "아직 연결 시도 전", "last": None} for k in ("mqtt", "posture", "raw")}
@@ -403,21 +556,31 @@ class Store:
         at = time.time() if at is None else at
         with self.lock:
             self.links["mqtt"]["last"] = at
+            info = self.topics.get(topic)
+            if info is None and len(self.topics) < self.topics_max:
+                info = self.topics[topic] = {"env": None, "count": 0, "last": at}
+            if info is not None:
+                info["count"] += 1
+                info["last"] = at
+                info["env"] = env if env is not None else {"text": payload[:200].decode("utf-8", "replace")}
             if env is None:
                 return
             if topic == TOPIC_PHASE:
                 self.phase = env
             elif topic == TOPIC_HEALTH_HUB:
                 self.health_hub = env
+            elif topic == TOPIC_PROFILE:
+                self.profile_user = env
             entry = log_entry(topic, env, at)
             if entry is not None:
                 self.log.append(entry)
             if topic in (TOPIC_CMD, TOPIC_RESULT):
                 self.board.on_message(topic, env)
 
-    def set_posture(self, j: Any) -> None:
+    def set_posture(self, j: Any, at: float | None = None) -> None:
         with self.lock:
             self.posture = j
+            self.face_down.add(j, time.time() if at is None else at)
 
     def set_raw(self, j: Any) -> None:
         with self.lock:
@@ -434,8 +597,12 @@ class Store:
                 "now": time.strftime("%H:%M:%S"),
                 "links": links,
                 "phase": phase_view(self.phase),
+                "profile": profile_text(self.phase, self.profile_user, self.health_hub),
                 "posture": posture_view(self.posture) if self.posture is not None else None,
+                "face_down": self.face_down.view(now),
                 "raw": parse_raw(self.raw),
+                "sections": sensor_sections(self.raw, self.topics, self.phase, now),
+                "topics": topics_view(self.topics, now),
                 "devices": self.board.lines(),
                 "log": list(self.log),
             }
@@ -550,8 +717,12 @@ def _reason(e: BaseException) -> str:
 
 # --------------------------------------------------------------------------- HTTP 폴링
 
+# 시스템 프록시를 쓰지 않는다 — 노트북 프록시 설정이 172.20.x(핫스팟) 요청을 프록시로 보내 시간 초과가 났다.
+_NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def fetch_json(url: str, timeout: float = 1.5) -> Any:
-    with urllib.request.urlopen(url, timeout=timeout) as r:
+    with _NO_PROXY.open(url, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8-sig"))
 
 
@@ -592,7 +763,8 @@ class FakeScenario:
     """보드 없이 화면을 채우는 각본(40 s 반복). 실제 수신 경로(Store.on_mqtt·set_raw·set_posture)를 그대로 탄다.
 
     0–6 s START · 6–16 FOCUS_PC · 16–22 FATIGUE_SUSPECT · 22–27 FATIGUE · 27–40 ACTION_POSTURE
-    27 s 에 무드등 adjust_brightness +60% 명령, 28 s 에 결과(110→176), 33 s 제안 카드, 35 s 피드백.
+    27 s 에 무드등 adjust_brightness +60% 명령, 28 s 에 결과(110→176), 32 s 부터 엎드림(face_down 0.90→0.995),
+    33 s 제안 카드, 35 s 피드백. /raw other(0x20·0x10·0x03·0x04·0xF0)·키 입력 토픽·프로필도 낸다.
     """
 
     STAGES = [(0, "START", "start"), (6, "FOCUS_PC", "focus"), (16, "FATIGUE_SUSPECT", "fatigue"),
@@ -612,12 +784,26 @@ class FakeScenario:
         return name
 
     def _posture(self, t: float) -> str:
+        if t % FAKE_PERIOD >= 32:
+            return "face_down"
         s = self.stage(t)
         return {"START": "upright", "FOCUS_PC": "upright", "FATIGUE_SUSPECT": "lean_forward"}.get(s, "drowsy")
 
+    def probs(self, t: float, sensor: int | None = None) -> dict[str, float]:
+        """지금 자세에 몰린 확률. 엎드림은 32 s 0.90 → 37 s 0.995 로 올라 0.99 선을 넘는다(센서 B 는 조금 낮게)."""
+        posture, u = self._posture(t), t % FAKE_PERIOD
+        if posture == "face_down":
+            top = min(0.995, 0.90 + 0.019 * (u - 32)) - (0.006 if sensor == 1 else 0.0)
+        else:
+            top = 0.64 if posture == "lean_forward" else 0.82
+        rest = (1.0 - top) / (len(LABELS) - 1)
+        p = {l: rest for l in LABELS}
+        p[posture] = top
+        return p
+
     def grid(self, sid: int, t: float) -> list[int]:
-        """머리가 천천히 좌우로 움직이고, 졸음 구간엔 앞으로 숙인다(가까워짐)."""
-        lean = 120 if self._posture(t) == "drowsy" else 60 if self._posture(t) == "lean_forward" else 0
+        """머리가 천천히 좌우로 움직이고, 졸음 구간엔 앞으로 숙이고, 엎드리면 아주 가까워진다."""
+        lean = {"drowsy": 120, "lean_forward": 60, "face_down": 420}.get(self._posture(t), 0)
         cx = 3.5 + 1.6 * math.sin(t * 0.7 + sid * 0.8) + (1 if sid == 0 else -1)
         cy = 3.0 + 0.6 * math.sin(t * 0.4) + lean / 120
         out = []
@@ -637,21 +823,61 @@ class FakeScenario:
             self.cycle, self.fired = cycle, set()
         st = self.store
         posture = self._posture(t)
-        st.set_raw({"dev": "fake", "frames": int(t * 5), "type5": int(t * 10), "sent": 0, "bad": 0, "sensors": [
+        drowsy = posture in ("drowsy", "face_down")
+        n = int(t * 5)
+        st.set_raw({"dev": "fake", "frames": n, "type5": n * 2, "sent": 0, "bad": 0, "sensors": [
             {"id": i, "have": True, "age_ms": 40, "w": 8, "h": 8, "dist_mm": self.grid(i, t),
-             "status": [5] * 63 + [255 if i else 5], "flip_rows": False, "flip_cols": False} for i in (0, 1)]})
-        probs = {l: 0.02 for l in LABELS}
-        probs[posture] = 0.82 if posture != "lean_forward" else 0.64
-        if posture == "lean_forward":
-            probs["upright"] = 0.2
-        total = sum(probs.values())
-        probs = {k: v / total for k, v in probs.items()}
+             "status": [5] * 63 + [255 if i else 5], "flip_rows": False, "flip_cols": False} for i in (0, 1)],
+            # 중계기 /raw 의 other(relay/other_sensors.h 와 같은 키)
+            "other": {
+                "mmwave": {"have": True, "age_ms": 300, "seq": n // 5, "ts_ms": int(t * 1000), "count": n // 5, "len": 11,
+                           "present": True, "motion_state": "still" if drowsy else "active",
+                           "motion_level": 12 if drowsy else 48, "distance_cm": 62, "resp_bpm": 14,
+                           "resp_valid": u % 20 > 3, "heart_bpm": 71 + int(3 * math.sin(t)), "heart_valid": True,
+                           "drowsy_state": "DROWSY" if drowsy else "AWAKE", "valid": True},
+                "env": {"have": True, "age_ms": 2100, "seq": n // 25, "ts_ms": int(t * 1000), "count": n // 25, "len": 9,
+                        "co2_ppm": 820 + int(u * 6), "temp_c": 24.6, "humidity_pct": 41.0, "lux": 180 if u < 27 else 310,
+                        "co2_valid": True, "temp_valid": True, "humidity_valid": True, "lux_valid": True},
+                "tof_feature": {"have": True, "age_ms": 120, "seq": n, "ts_ms": int(t * 1000), "count": n, "len": 26,
+                                "present": True, "posture": "drowsy" if drowsy else "upright",
+                                "confidence_pct": 70, "motion_pct": 8 if drowsy else 35,
+                                "head_delta_mm": -40 if drowsy else -5, "nod_rate_hz": 0.31 if drowsy else 0.0,
+                                "valid_zones": 127, "grid_w": 16, "grid_h": 8, "coverage_pct": 58,
+                                "presence_count": 74, "centroid_mm": 640, "head_row_pct": 38, "shoulder_tilt_mm": 6,
+                                "motion_mm_s": 14, "change_per_min": 3, "baseline_dev_pct": 21 if drowsy else 4,
+                                "baseline_ready": True, "drowsy": drowsy, "geometry_valid": True,
+                                "sensor_a": True, "sensor_b": True, "nods": 4 if drowsy else 0},
+                "tof_posture": {"have": True, "age_ms": 120, "seq": n, "ts_ms": int(t * 1000), "count": n, "len": 4,
+                                "present": True, "posture": "drowsy" if drowsy else "upright",
+                                "confidence_pct": 70, "drowsy": drowsy},
+                "heartbeat": {"have": True, "age_ms": 600, "seq": n // 10, "ts_ms": int(t * 1000), "count": n // 10,
+                              "len": 8, "uptime_ms": int(t * 1000) + 3_600_000, "fw": "0x0125", "mmwave_ready": True,
+                              "tof_ok_mask": 3, "tof_a": True, "tof_b": True},
+            }})
+        probs = self.probs(t)
         st.set_posture({"posture": posture, "posture_ko": POSTURE_KO[posture], "conf": probs[posture], "valid": True,
                         "present": True, "misplaced": False, "online_sensors": 2, "probs": probs,
-                        "instant": {"probs": probs}, "placement": "center",
+                        "instant": {"posture": posture, "conf": probs[posture], "probs": probs}, "placement": "center",
+                        "sensors": [{"name": n_, "online": True, "posture": posture, "probs": self.probs(t, i)}
+                                    for i, n_ in enumerate(("A", "B"))],
                         "model": {"file": "models/opt_l8_c256.bin", "labels": LABELS}})
         st.link("posture", True, "가짜 각본")
         st.link("raw", True, "가짜 각본")
+
+        # 바퀴마다 한 번: hub 생존(시연 프로파일)·Pi 5 첫 설정 프로필. 키 입력은 1 s 마다(PC 수집기 토픽)
+        if "once" not in self.fired:
+            self.fired.add("once")
+            st.on_mqtt(TOPIC_HEALTH_HUB, _fake_env(self.seq, {"status": "online", "profile": "demo-b"}))
+            st.on_mqtt(TOPIC_PROFILE, _fake_env(self.seq, {"profile_id": "u-7f3a", "age_band": "20s"}, "pi5-display"))
+        ks_slot = f"ks{int(u)}"
+        if ks_slot not in self.fired:
+            self.fired.add(ks_slot)
+            typing = self.stage(t) == "FOCUS_PC"
+            st.on_mqtt("deskmate/sensor/keystroke", _fake_env(self.seq, {
+                "window_s": 60, "dwell_mean_ms": 96.0 if typing else 0.0, "flight_mean_ms": 182.0 if typing else 0.0,
+                "flight_cv": 0.41 if typing else 0.0, "idle_ratio": 0.2 if typing else 1.0,
+                "correction_rate": 0.04 if typing else 0.0, "typing_active": typing, "mouse_active": typing,
+                "input_active": typing, "mouse_event_rate": 30.0 if typing else 0.0}, "pc-collector"))
 
         # state/phase 는 2 s 마다(실제는 10 s)
         slot = f"phase{int(u // 2)}"
@@ -667,10 +893,12 @@ class FakeScenario:
                 "present": True, "presence_source": "both", "in_room": True,
                 "tof": {"posture": posture, "posture_confidence": round(probs[posture], 2),
                         "posture_source": "service"},
-                "mmwave": {"present": True, "motion_state": "still" if posture == "drowsy" else "active",
-                           "motion_level": 12 if posture == "drowsy" else 48, "distance_cm": 62,
+                "control": {"active": True, "state": "ACTION_POSTURE", "cause": "posture", "gate": "auto",
+                            "outcome": "pending", "awaiting_user": False} if state == "ACTION_POSTURE" else {"active": False},
+                "mmwave": {"present": True, "motion_state": "still" if drowsy else "active",
+                           "motion_level": 12 if drowsy else 48, "distance_cm": 62,
                            "heart_bpm": 71 + int(3 * math.sin(t)), "heart_valid": True,
-                           "resp_bpm": 14, "resp_valid": u % 20 > 3, "drowsy_state": 1 if posture == "drowsy" else 0},
+                           "resp_bpm": 14, "resp_valid": u % 20 > 3, "drowsy_state": 1 if drowsy else 0},
                 "co2_ppm": 820 + int(u * 6), "temp_c": 24.6, "humidity_pct": 41, "lux": 180 if u < 27 else 310,
                 "keystroke": {"typing_active": state == "FOCUS_PC", "idle_ratio": 0.2 if state == "FOCUS_PC" else 0.9,
                               "correction_rate": 0.04, "flight_mean_ms": 180},
@@ -683,7 +911,7 @@ class FakeScenario:
             st.on_mqtt(TOPIC_PHASE, _fake_env(self.seq, {
                 "fsm_state": state, "phase": dict((n, p) for _, n, p in self.STAGES)[state], "context": "pc",
                 "c_fatigue": round(fatigue, 3), "c_focus": focus, "gate": gate, "cause": cause,
-                "reasons": ["tof_drowsy", "mmwave_still"] if posture == "drowsy" else [],
+                "reasons": ["tof_drowsy", "mmwave_still"] if drowsy else [],
                 "sensor_summary": summary}))
         cid = f"fk{cycle:04d}lamp"
         events = [
@@ -766,7 +994,7 @@ def main(argv: list[str] | None = None) -> None:
         store.target = h
         threads += [
             threading.Thread(target=mqtt_loop, args=(h, args.mqtt_port, store, stop), daemon=True),
-            threading.Thread(target=poll_loop, args=("posture", [f"http://{h}:8771/api/state"], 1.0,
+            threading.Thread(target=poll_loop, args=("posture", [f"http://{h}:8771/api/state"], 0.3,
                                                      store.set_posture, store, stop), daemon=True),
             threading.Thread(target=poll_loop, args=("raw", [f"http://{h}:8772/raw", f"http://{h}:8771/raw"], 0.2,
                                                      store.set_raw, store, stop), daemon=True),
