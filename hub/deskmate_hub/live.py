@@ -304,6 +304,7 @@ class LiveHub:
             self.control.tick(now)
 
         frame = build_frame(view, now, self.ingest_cfg, self.tracker, fsm_state=self.engine.state)
+        self._last_present = bool(frame.present)            # 발행용: 자리 비움이면 점수 0.0·scores_valid false (_pub_scores)
         request_kind = self._REQUEST_STATES.get(self.engine.state)
         awaiting_request = (self.pending_request is not None and request_kind is not None
                             and self.pending_request["data"]["kind"] == request_kind[0])
@@ -364,7 +365,7 @@ class LiveHub:
         # REST 진입 알림 — 어떤 길(수락·강제·졸음 재시도)로든 REST 에 들어오면 카드 + 음성. 리포트·요약에도 남긴다
         sound_pref = self._sound_pref()
         for item in self.rest_notifier.on_tick(result, prev_state, frame, now, seq=self.seq, sound_pref=sound_pref,
-                                              c_fatigue=float(result.scores.c_fatigue),
+                                              c_fatigue=self._pub_scores(result)[0],
                                               cause=result.cause or getattr(self.engine, "_last_cause", None)):
             if item.get("data", {}).get("kind") == "rest_notice":
                 self.seq += 1
@@ -404,7 +405,8 @@ class LiveHub:
             })
             if fatigue_view is not None:
                 summary["fatigue"] = fatigue_view
-        envelope = state_envelope(result, boot_id=self.boot_id, seq=self.seq, ts=now, sensor_summary=summary)
+        envelope = state_envelope(result, boot_id=self.boot_id, seq=self.seq, ts=now, sensor_summary=summary,
+                                  present=self._last_present)
         self.seq += 1
         self.publish(envelope)
         self._maybe_request(result, prev_state, now)
@@ -501,11 +503,17 @@ class LiveHub:
             state=result.state.value, kind=kind, prompt_code=prompt, gate=result.gate.value, arm=arm,
             label=str(view.get("arm_label") or arm), channel=channel, explanation=view.get("explanation"),
             cause=result.cause, now=now, seq=self.seq, sound_pref=sound_pref,
-            c_fatigue=float(result.scores.c_fatigue), expires_in_s=expires)
+            c_fatigue=self._pub_scores(result)[0], expires_in_s=expires)
         for item in emitted:
             if item.get("data", {}).get("auto"):
                 self.seq += 1
                 self._mark_card(now, item["data"]["expires_in_s"], kind)      # 안내가 떠 있는 동안 환기·확인 카드는 기다린다
+
+    def _pub_scores(self, result) -> tuple[float, bool]:
+        """발행용 (c_fatigue, scores_valid). 자리 비움(이번 tick present false)이면 (0.0, False) — 부재면 환경 하나만 남아 재정규화가
+        어두운 방을 피로 1.0 으로 만든다(10-26 보드 IDLE). 엔진 점수는 건드리지 않는다(엔진에서 0 이면 부재 중 자연 회복·회복 승인 오판)."""
+        valid = bool(getattr(self, "_last_present", True))
+        return (round(max(0.0, min(1.0, float(result.scores.c_fatigue))), 4) if valid else 0.0), valid
 
     def _control_owns(self, state: State) -> bool:
         """이 상태의 완료(action_done)를 제어 결과가 정하는가. ACTION_ENV 는 언제나, ACTION_POSTURE 는 이번 진입에
@@ -649,13 +657,14 @@ class LiveHub:
         if self.control is not None and self._control_owns(result.state):
             # 제어가 맡은 제안(ENV, 기본 명령이 있는 POSTURE)은 카드 만료를 디스패처의 제안 시한과 맞춘다
             expires = min(expires, self.control.suggest_timeout)
+        c_fat, valid = self._pub_scores(result)
         self.pending_request = {
             "schema_version": "1.0", "ts": now, "node": "hub", "boot_id": self.boot_id, "seq": self.seq,
             "data": {
                 "request_id": f"{self.boot_id}-{self.seq}", "kind": kind, "prompt_code": prompt,
                 "options": ["accept", "reject"], "expires_in_s": expires,
                 "evidence": list(result.actions), "cause": result.cause,
-                "c_fatigue": round(float(result.scores.c_fatigue), 4),
+                "c_fatigue": c_fat, "present": valid, "scores_valid": valid,
             },
         }
         view = self.personalize_recorder.last_view if self.personalize_recorder is not None else None
@@ -697,13 +706,14 @@ class LiveHub:
 
     def _publish_co2_card(self, card: dict[str, Any], result, now: float) -> None:
         """CO₂ 창문 환기 카드(vent_suggest) — _maybe_request 의 카드와 같은 모양. minutes·ventilate_minutes = 창문 열 시간(분)."""
+        c_fat, valid = self._pub_scores(result)
         self.pending_request = {
             "schema_version": "1.0", "ts": now, "node": "hub", "boot_id": self.boot_id, "seq": self.seq,
             "data": {
                 "request_id": f"{self.boot_id}-{self.seq}", "kind": CO2_CARD_KIND, "prompt_code": CO2_PROMPT,
                 "options": ["accept", "reject"], "expires_in_s": float(self.co2_window.c.get("expires_in_s", 180)),
                 "evidence": ["co2_window"], "cause": "environment",
-                "c_fatigue": round(float(result.scores.c_fatigue), 4),
+                "c_fatigue": c_fat, "present": valid, "scores_valid": valid,
                 "minutes": card["minutes"], "ventilate_minutes": card["minutes"], "why": list(card["why"]),
                 "explanation": card["explanation"], "arm": CO2_ARM, "arm_label": CO2_ARM_LABEL,
                 "co2_avg": card["co2_avg"], "source": "co2_window",

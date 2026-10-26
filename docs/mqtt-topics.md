@@ -200,6 +200,7 @@ Pi 5의 **PC 키스트로크** 탭은 앱에 설정된 동일 MQTT 브로커에�
   "context": "pc",
   "c_focus": 0.22, "c_fatigue": 0.81,
   "confidence": 0.81,
+  "present": true, "scores_valid": true,   // 자리 비움(present false)이면 c_focus·c_fatigue·confidence 0.0, scores_valid false → 숫자 대신 "자리 비움" 표시(10-26). 카드 payload 도 같은 두 필드
   "source": "fsm",             // fsm | classifier | fused
   "gate": "auto",              // auto | suggest | none
   "cause": "environment",
