@@ -1035,6 +1035,60 @@ def test_speak_command_goes_to_virtual_speaker_and_laptop_tts():
     assert fake.sounds[-1] == "voice" and "음성 실패" in act.error
 
 
+# hub f91afd8 확정 모양
+F91_REST = {"request_id": "b1-42-rest", "kind": "rest_notice", "prompt_code": "rest_now", "options": ["dismiss"],
+            "expires_in_s": 60, "reason": "asleep", "cause": "posture", "text": "잠깐 눈을 붙여요", "minutes": 5,
+            "rest_min_sec": 60, "speak": True, "variant": "study", "evidence": ["tof_face_down"], "c_fatigue": 0.81}
+F91_SPEAK = {"command_id": "b1-43-speak", "target_id": "speaker", "operation": "speak", "value": {"text": "잠깐 눈을 붙여요", "lang": "ko"},
+             "origin_state": "REST", "gate": "notice", "requires_confirmation": False}
+
+
+def test_rest_notice_final_shape_f91afd8():
+    h = dv.VirtualHome()
+    h.rest_min_s = 60
+    h.on_request(env(F91_REST), 100.0)
+    v = h.rest_view(110.0)
+    assert v["message"] == "잠깐 눈을 붙여요" and v["duration_s"] == 300 and v["left_s"] == 290   # minutes 가 먼저
+    assert v["reason"] == "졸고 있어서 바로 휴식 · study 문구" and v["label"] == "hub 휴식 알림"
+    h.on_phase(env({"fsm_state": "REST", "phase": "recovery", "sensor_summary": {"rest_notice": {
+        "enabled": True, "variant": "study", "counts": {"notices": 2, "speaks": 1, "reminders": 1, "suppressed": 0, "dismissed": 0},
+        "last": {"ts": 1.0, "reason": "asleep", "spoken": True}, "in_rest_since": 1.0}}}), 111.0)
+    assert h.rest_view(112.0)["counts"] == "알림 2 · 말함 1 · 다시 알림 1 · 생략 0 · 닫음 0"
+    h.on_cmd(env(dict(F91_SPEAK, expires_ts_ms=int((113 + 15) * 1000))), 113.0)   # gate notice 도 받는다
+    assert h.speaker["voice"] == "음성 안내: 잠깐 눈을 붙여요"
+    e = [x for x in h.timeline if x.get("operation") == "speak"][-1]
+    assert e["virtual"]["status"] == "succeeded" and e["text"].endswith("스피커 말하기 “잠깐 눈을 붙여요”")
+    bad = dict(F91_SPEAK, operation="set_power", target_id="desk_lamp", value="on", command_id="x",
+               expires_ts_ms=int((113 + 15) * 1000))
+    assert h.on_cmd(env(bad), 113.0)["virtual"]["error_code"] == "invalid_command"   # 램프에 notice 게이트는 앱처럼 거절
+
+
+def test_auto_info_card_is_a_banner_not_a_card():
+    h = dv.VirtualHome()
+    h.on_request(env({"request_id": "i1", "kind": "posture_auto", "auto": True, "options": ["dismiss"], "arm": "posture_card",
+                      "arm_label": "자세 안내 카드", "channel": "display", "explanation": "고개가 앞으로", "text": "허리를 펴 볼까요",
+                      "expires_in_s": 30}), 10.0)
+    assert h.pending_card(11.0) is None
+    info = h.view(12.0)["info"]
+    assert info[0]["text"] == "허리를 펴 볼까요" and info[0]["arm_label"] == "자세 안내 카드" and info[0]["left_s"] == 28
+    assert h.view(41.0)["info"] == []
+    c = dv.ControlTracker()
+    c.on_message(dv.TOPIC_REQUEST, env({"request_id": "i1", "auto": True, "text": "x"}), 10.0)
+    assert c.request is None
+
+
+def test_chime_command_plays_laptop_sound():
+    st, act, fake = _laptop_store()
+    st.on_mqtt(dv.TOPIC_CMD, payload({"command_id": "c9", "target_id": "speaker", "operation": "chime", "value": {"pattern": "soft"},
+                                      "gate": "notice", "requires_confirmation": False,
+                                      "expires_ts_ms": int((time.time() + 15) * 1000)}), at=time.time())
+    assert st.virtual.speaker["voice"] == "알림음 (soft)"
+    deadline = time.time() + 3
+    while "soft" not in fake.sounds and time.time() < deadline:
+        time.sleep(0.05)
+    assert "soft" in fake.sounds
+
+
 def test_fake_rest_scenarios(hub_cfg):
     for kind, label in (("rest", "hub 휴식 알림"), ("rest_old", "hub 알림 없음 (구버전)")):
         rules = dv.load_hub_rules(hub_cfg, "demo-b")

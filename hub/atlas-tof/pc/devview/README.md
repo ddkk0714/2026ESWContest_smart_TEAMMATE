@@ -141,12 +141,21 @@ python hub/atlas-tof/pc/devview/devview.py --pi4 172.20.10.3 --hub-profile demo-
 ### 휴식(REST) 알림
 
 hub 가 REST 에 들어가면 가상 기기 화면 위와 영상 모드에 큰 배너: 문구 · 남은 휴식 시간(카운트다운) · 이유.
-- hub 새 동작(준비 중): `interaction/request` kind `rest_notice`(문구 `message`/`text`, 시간 `rest_sec`/`duration_s`/`minutes`,
-  이유 `reason`/`why` — 키 이름은 hub 확정 전이라 넉넉히 받는다) → 라벨 "hub 휴식 알림". 답하는 카드가 아니라 제어 결론·카드 칸에는 안 넣는다.
-- 말하기: `control/cmd` operation `speak`(value `{text}`) → 가상 스피커 음성 안내. `--act-laptop` 이면 노트북이 볼륨을 소리 선호로 올린 뒤
+- hub(f91afd8): `interaction/request` kind `rest_notice` — `text`(문구) · `minutes`(없으면 `rest_min_sec`) · `reason`
+  (accepted 수락 · asleep 졸아서 바로 · escalated 효과 없어 격상 · reminder 다시 알림) · `variant`(default|study) · `speak` → 라벨 "hub 휴식 알림".
+  예전 이름(message·rest_sec·duration_s·why)도 받는다. 답하는 카드가 아니라 제어 결론·카드 칸에는 안 넣는다.
+  state/phase `sensor_summary.rest_notice.counts`(알림·말함·다시 알림·생략·닫음)를 배너에 같이.
+- 말하기: `control/cmd` target `speaker` operation `speak`(value `{text, lang}`, gate `notice`) → 가상 스피커 음성 안내. `--act-laptop` 이면 노트북이 볼륨을 소리 선호로 올린 뒤
   Windows 내장 TTS(System.Speech, 한국어 목소리 — 이 노트북은 Microsoft Heami)로 말한다. 한국어 목소리가 없으면 알림음 + 배너. 인라인 명령만(실행 정책 그대로).
 - 구버전 hub(rest_notice 없음): state/phase 가 REST 로 들어가면 배너만, 라벨 "hub 알림 없음 (구버전)", 시간은 hub 설정 `rest_min_sec`. 말하지 않는다.
 - 시험: `--fake --fake-scenario rest`(새 동작) · `--fake-scenario rest_old`(구버전).
+
+### 자동 안내·알림음 (hub 예정)
+
+- 기기 없는 arm 을 AUTO 로 고르면 hub 가 보내는 안내 카드(`auto: true`, options `[dismiss]`, arm·arm_label·channel·explanation·text)는
+  답하지 않는 띠로(가상 기기 화면 위, 시한 `expires_in_s` 또는 60 s 뒤 사라짐) + 팝업. 제안 카드·제어 결론으로는 안 본다.
+- `operation: chime`(value `{pattern}`, gate `notice`) → 가상 스피커 알림음, `--act-laptop` 이면 노트북 알림음(패턴 alert·voice·soft·triple,
+  모르는 이름은 한 음). posture_voice arm 은 `speak` 로 와서 노트북이 말한다.
 
 ### 강제 종료에도 원래 밝기·볼륨
 

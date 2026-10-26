@@ -151,7 +151,7 @@ body:not([data-mode="virtual"]) #virt { display: none; }
 
 /* ---------- 가상 기기(/?mode=virtual): 주변기기가 다 연결돼 있었다면 ---------- */
 #virt { display: grid; min-height: 100vh; grid-template-columns: minmax(0, 1fr); gap: calc(10px * var(--k)); padding: 0 calc(16px * var(--k)) calc(12px * var(--k));
-  grid-template-rows: minmax(calc(44px * var(--k)), auto) auto auto auto auto auto minmax(calc(320px * var(--k)), 1fr); }
+  grid-template-rows: minmax(calc(44px * var(--k)), auto) auto auto auto auto auto auto minmax(calc(320px * var(--k)), 1fr); }
 #vband { display: flex; overflow: hidden; flex-wrap: wrap; row-gap: calc(4px * var(--k)); padding-top: calc(4px * var(--k)) !important; padding-bottom: calc(4px * var(--k)) !important; align-items: center; gap: calc(14px * var(--k)); border-bottom: 1px solid var(--line); margin: 0 -16px; padding: 0 calc(16px * var(--k)); white-space: nowrap; font-size: calc(15px * var(--k)); color: var(--dim); }
 #vband b { color: var(--fg); font-size: calc(17px * var(--k)); }
 #vband .virtTag { color: #111; background: var(--accent); border-radius: calc(4px * var(--k)); padding: 1px calc(8px * var(--k)); font-weight: 700; }
@@ -275,6 +275,11 @@ body:not([data-mode="fan"]) #fanpage { display: none; }
 .restB { display: none; background: linear-gradient(90deg, rgba(143,156,255,.25), rgba(92,200,255,.18)); border: 2px solid var(--accent);
   border-radius: calc(14px * var(--k)); padding: calc(14px * var(--k)) calc(22px * var(--k)); align-items: center; gap: calc(22px * var(--k)); }
 .restB.on { display: flex; }
+/* 자동 안내(기기 없는 arm 이 AUTO 로 고른 것): 답하지 않는 띠 — 시한이 지나면 사라진다 */
+#infoV:empty { display: none; }
+#infoV .info { display: flex; align-items: center; gap: calc(12px * var(--k)); background: rgba(92,200,255,.12); border: 1px solid rgba(92,200,255,.5);
+  border-radius: calc(10px * var(--k)); padding: calc(8px * var(--k)) calc(14px * var(--k)); margin-bottom: calc(6px * var(--k)); font-size: calc(18px * var(--k)); }
+#infoV .info b { color: var(--info); } #infoV .info .m { color: var(--dim); font-size: calc(13px * var(--k)); margin-left: auto; white-space: nowrap; }
 .restB .ic { font-size: calc(46px * var(--k)); }
 .restB .msg { font-size: calc(30px * var(--k)); font-weight: 800; color: var(--fg); }
 .restB .sub { font-size: calc(15px * var(--k)); color: var(--dim); margin-top: calc(4px * var(--k)); }
@@ -335,7 +340,7 @@ body.narrow #devices { border-left: none; padding-left: 0; border-top: 1px solid
 /* 좁은 화면: 앱 화면(카드·알림)과 기기를 먼저, 프로필 고르기는 그 아래 */
 body.narrow #virt { grid-template-rows: none; grid-auto-rows: auto; }
 body.narrow #vtop { display: contents; }
-body.narrow #restV { order: 1; } body.narrow #trigV { order: 1; }
+body.narrow #restV { order: 1; } body.narrow #infoV { order: 1; } body.narrow #trigV { order: 1; }
 body.narrow #vband { order: 0; } body.narrow #vnow { order: 1; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); }
 body.narrow #vdevs { order: 2; } body.narrow #fanPanel { order: 2; } body.narrow #vperson { order: 3; }
 body.narrow #vtl { order: 4; min-height: calc(320px * var(--k)); }
@@ -439,6 +444,7 @@ body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
     <button class="tg" data-go="video">영상 모드</button>
   </header>
   <section class="restB" id="restV"></section>
+  <section id="infoV"></section>
   <section class="panel trig" id="trigV"></section>
   <section class="panel" id="fanPanel"><div class="ptitle"><span><b>선풍기</b> · 가상(화면 그림) — 실제 Pico 2 W 선풍기는 Pi 5 앱이 따로 움직인다</span>
     <span><span id="lapStat"></span> <button class="tg" data-go="fan" title="단축키 F">선풍기 전체 화면</button></span></div>
@@ -942,12 +948,15 @@ function renderRest(el, r) {
   const mm = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
   el.innerHTML = `<span class="ic">${r.ended ? "✅" : "☕"}</span><div><div class="msg">${esc(r.ended ? "휴식 끝 — 다시 시작해요" : r.message)}</div>` +
     `<div class="sub"><span class="lb ${r.source === "notice" ? "" : "old"}">${esc(r.label)}</span>${r.reason ? " " + esc(r.reason) : ""}` +
-    `${r.duration_s ? ` · 휴식 ${Math.round(r.duration_s)} s` : ""}</div></div>` + (r.left_s != null && !r.ended ? `<span class="cd">${mm(r.left_s)}</span>` : "");
+    `${r.duration_s ? ` · 휴식 ${Math.round(r.duration_s)} s` : ""}${r.counts ? ` · <span class="empty">hub ${esc(r.counts)}</span>` : ""}</div></div>` +
+    (r.left_s != null && !r.ended ? `<span class="cd">${mm(r.left_s)}</span>` : "");
 }
 
 function renderVirtual(d) {
   const v = d.virtual, P = d.persona, ph = d.phase;
   renderRest($("restV"), v.rest); renderRest($("vRest"), v.rest);
+  $("infoV").innerHTML = (v.info || []).map(x => `<div class="info"><span>💬</span><b>자동 안내</b><span>${esc(x.text)}</span>` +
+    `<span class="m">${esc(x.arm_label || "")}${x.channel ? " · " + esc(x.channel) : ""} · ${x.t} · ${x.left_s} s</span></div>`).join("");
   fanAnim.target = fanTarget(v.fan); fanAnim.natural = !!(v.fan && v.fan.mode === "natural");
   renderFan($("fanV"), v.fan); renderFan($("fanF"), v.fan);
   const L = d.laptop;
