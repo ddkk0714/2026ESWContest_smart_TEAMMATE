@@ -26,6 +26,7 @@ from .esm import make_label, write_label
 from .fatigue.live import build_fatigue_runtime, load_fatigue_config
 from .co2_window import CARD_KIND as CO2_CARD_KIND, PROMPT_CODE as CO2_PROMPT, ARM_ID as CO2_ARM, ARM_LABEL as CO2_ARM_LABEL
 from .co2_window import Co2WindowRule, load_co2_window_config
+from .rest_notice import RestNotifier
 from .personalization import PersonalizationRuntime, load_personalization_config
 from .personalization.privacy import PersonalizationPrivacy, load_privacy_config
 from .personalization.ondevice import OnDeviceLearner, load_ondevice_config
@@ -115,6 +116,8 @@ class LiveHub:
         self._open_card: tuple[str, float] | None = None      # (kind, 만료 시각)
         # 제어: control.yaml enabled 면 ACTION_ENV 를 디스패처가 맡는다(auto_complete 대신). mock 어댑터는 즉시 성공 응답.
         self.control_cfg = control_cfg if control_cfg is not None else load_control_config()
+        self.control_cfg = apply_section(self.control_cfg, "control", self.profile or "")   # 프로파일 control: 절(rest_notice 등, 10-26)
+        self._publish_control = publish_control
         self.control: ControlDispatcher | None = None
         self.mock_plug: MockPlugAdapter | None = None
         if self.control_cfg.get("enabled"):
@@ -199,6 +202,15 @@ class LiveHub:
                                            state_path=learning_state_path,
                                            on_log=lambda m: print(m, file=self.out, flush=True))
             self.engine.score_adjust = self.learner.adjust
+        # REST 진입 알림(rest_notice.py, control.yaml rest_notice:): 카드(interaction/request kind rest_notice) + 스피커 speak 명령.
+        # 음성은 제어 명령 경로(publish_control; mock 어댑터면 그쪽)로 — 사용자 sound_pref off 면 카드만. 문구 변형은 프로파일 이름(study)으로.
+        speak_sink = self._publish_control if self._publish_control is not None else (
+            self.mock_plug.handle_command if self.mock_plug is not None else None)
+        self.rest_notifier = RestNotifier(
+            self.control_cfg.get("rest_notice"), fsm_cfg=self.fsm_cfg, boot_id=self.boot_id,
+            publish_request=self.publish_request, publish_control=speak_sink,
+            variant="study" if "study" in str(self.profile or "") else "default",
+            on_log=lambda m: print(m, file=self.out, flush=True))
 
     def tick_once(self, now: float | None = None) -> dict[str, Any]:
         now = time.time() if now is None else now
@@ -213,6 +225,10 @@ class LiveHub:
                     self.personalize_recorder.on_manual_adjust(feedback, ts=now if received is None else min(now, received))
                 continue
             feedback_now = now if received is None else min(now, received)
+            if self.rest_notifier.owns(feedback.get("request_id")):
+                # 휴식 안내 카드의 닫기·만료 — 질문이 아니므로 FSM·제어·ESM 에 넣지 않는다
+                self.rest_notifier.on_feedback(str(feedback.get("verdict")), feedback.get("request_id"), feedback_now)
+                continue
             self._expire_pending_request(feedback_now)
             if feedback:
                 verdict = feedback.get("verdict")
@@ -338,6 +354,17 @@ class LiveHub:
             summary["control"] = self.control.summary()
             if self.personalize_recorder is not None:          # 이번 tick 에 나간 무드등 명령 → '밝힘 뒤 직접 어둡게' 추적
                 self.personalize_recorder.observe_control(self.control, now)
+        # REST 진입 알림 — 어떤 길(수락·강제·졸음 재시도)로든 REST 에 들어오면 카드 + 음성. 리포트·요약에도 남긴다
+        sound_pref = None
+        if self.personalize_recorder is not None and isinstance(self.personalize_recorder.user_profile, dict):
+            sound_pref = self.personalize_recorder.user_profile.get("sound_pref")
+        for item in self.rest_notifier.on_tick(result, prev_state, frame, now, seq=self.seq, sound_pref=sound_pref,
+                                              c_fatigue=float(result.scores.c_fatigue),
+                                              cause=result.cause or getattr(self.engine, "_last_cause", None)):
+            if item.get("data", {}).get("kind") == "rest_notice":
+                self.seq += 1
+                self._mark_card(now, item["data"]["expires_in_s"], "rest_notice")   # 안내가 떠 있는 동안 환기·확인 카드는 기다린다
+        summary["rest_notice"] = self.rest_notifier.snapshot()
         if self.tracker.baseline is not None:
             snap = self.tracker.baseline.snapshot()
             summary["baseline"] = {"calibrating": snap["calibrating"], "ready": sorted(snap["session"]),
@@ -455,6 +482,7 @@ class LiveHub:
             self.recorder.finalize(), now=time.time() if now is None else now,
             control_episodes=(self.control.history + ([self.control.episode] if self.control.episode else []))
             if self.control is not None else (),
+            rest_notices=self.rest_notifier.report(),
         )
 
     def _effective_model_config(self):

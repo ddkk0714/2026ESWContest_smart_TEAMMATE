@@ -28,6 +28,10 @@ fsm:
     fatigue_confirm: 0.60           # 기본 0.70
 learning:
   keep_floor: 0.60                 # 확정 기준을 넘은 점수는 학습기가 끌어내리지 못함 — PC 리허설 10-25 근거(keep_floor 0.60 → demo-B 첫 깨우기 662/292/102 s → 102/102/102 s). 기본 0.85 = 이 프로파일의 fsm thresholds.fatigue_confirm
+control:
+  rest_notice:
+    cooldown_sec: 30                # 기본 120. 시연은 REST 가 60 s 라 재진입이 빠르다
+    reminder_after_sec: 120         # 기본 600. 휴식(60 s)을 넘겨 계속 쉬면 한 번 더
 personalize:
   gate:
     conf_auto: 0.55                 # FSM gate.conf_auto 와 같은 값(다르면 정책이 자동을 제안으로 낮춘다)

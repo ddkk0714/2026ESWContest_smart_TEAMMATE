@@ -16,7 +16,7 @@ import re
 from typing import Any, Callable
 
 PROFILE_ENV = "DESKMATE_PROFILE"
-SECTIONS = ("fsm", "ingest", "personalize", "learning")     # 프로파일이 얹을 수 있는 설정 절(learning: 10-25 PC 리허설 — 학습기 keep_floor)
+SECTIONS = ("fsm", "ingest", "personalize", "learning", "control")   # 프로파일이 얹을 수 있는 설정 절(learning: keep_floor, control: rest_notice 10-26)
 PROFILES_DIR = os.path.join(os.path.dirname(__file__), "config", "profiles")
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 

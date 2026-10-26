@@ -11,7 +11,25 @@ undo_window_sec: 60      # 자동 실행 뒤 한 tick 이 지나도 이 시간 �
 cooldown_sec: 300        # 같은 target 에 같은 operation 을 다시 보내기까지 최소 간격 (fsm timers.cmd_cooldown_sec 와 맞춤)
 irreversible_operations: [set_power_off, power_cycle]   # 사용자 확인 없이는 실행하지 않는 동작
 
-# 제어 대상(target_id): vent_fan(보조 환기팬·선풍기, set_power on|off) · desk_lamp(iLink 무드등 — adjust_brightness {percent: ±정수}
+# REST 진입 알림(deskmate_hub/rest_notice.py, 2026-10-26) — FSM 이 어떤 길(휴식 제안 수락·개입 실패 뒤 강제·졸음 재시도)로든 REST 에
+# 들어가면 interaction/request kind rest_notice(닫기만 있는 안내 카드) + control/cmd target speaker operation speak {text, lang}.
+# 10-26 실기: 다시 엎드려 강제 휴식이 됐는데 허브가 아무 말도 안 했다. 사용자 첫 설정 sound_pref 가 off 면 카드만.
+rest_notice:
+  enabled: true
+  expires_in_s: 60          # 카드 표시 시간(초)
+  cooldown_sec: 120         # REST 에 다시 들어와도 이 안에는 다시 알리지 않는다
+  reminder_after_sec: 600   # REST 가 이만큼 이어지면 한 번 더(null = 안 함). 시연 프로파일은 120
+  speak: true               # 스피커 음성(speak). false 면 카드만
+  speaker_target: speaker
+  lang: ko
+  messages:                 # {minutes} = fsm timers.rest_min_sec / 60. default = 일반, study = 수험생(demo-b-study)
+    asleep:    {default: "졸음이 이어지고 있어요. {minutes}분만 일어나서 쉬어 가세요.", study: "졸음이 계속되네요. {minutes}분만 일어나 기지개를 켜고 돌아와요."}
+    escalated: {default: "피로가 가시지 않아요. {minutes}분 쉬고 다시 시작해요.", study: "집중이 잘 안 되고 있어요. {minutes}분만 쉬었다가 다시 풀어요."}
+    accepted:  {default: "좋아요, {minutes}분 쉬어요. 끝나면 알려 드릴게요.", study: "좋아요, {minutes}분 쉬어요. 끝나면 다시 알려 드릴게요."}
+    reminder:  {default: "아직 쉬는 중이에요. 조금만 더 쉬고 돌아와요.", study: "아직 쉬는 시간이에요. 조금만 더 쉬고 다시 시작해요."}
+
+# 제어 대상(target_id): speaker(Pi 5 앱 블루투스 스피커 TTS, speak {text, lang} — rest_notice 전용) ·
+#   vent_fan(보조 환기팬·선풍기, set_power on|off) · desk_lamp(iLink 무드등 — adjust_brightness {percent: ±정수}
 #     = 지금 밝기 대비 %(2026-10-25, 앱이 지금 밝기를 알고 계산·상하한 결정, 결과에 previous·actual), set_brightness 0~255 는 되돌리기용)
 #   · air_purifier(LG ThinQ 공기청정기, set_mode off|auto|low|mid|high — 2026-10-23. auto = 공기청정기 자체 PM 자동 운전,
 #     high = 3단계 고정. CO₂ 를 못 내리므로 ACTION_ENV 기본 명령에는 넣지 않고 개인화 arm air_fan_up 만 쓴다).

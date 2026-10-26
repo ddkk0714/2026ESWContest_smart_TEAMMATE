@@ -282,6 +282,8 @@ USB 열거·xHCI 같은 하드웨어 진단 로그는 이 논리 스키마 밖�
 
 `command_id`는 멱등성을 보장한다. 오류 메시지에 비밀값을 포함하지 않는다.
 
+`speaker` 대상(2026-10-26): operation `speak`, `value = {"text": <한국어 문구>, "lang": "ko"}`, `gate: notice` — REST 진입 안내(`interaction/request kind rest_notice`)와 함께 허브가 보낸다. 앱이 TTS 로 읽고 `control_result` 를 돌려준다.
+
 `desk_lamp` 밝기는 2026-10-25 부터 절대값이 아니라 **지금 밝기 대비 %** 다: operation `adjust_brightness`, `value = {"percent": <부호 있는 정수>}`(+60 = 1.6 배, −50 = 절반). 지금 밝기는 램프를 쓰는 Pi 5 앱만 알므로 허브는 % 만 보내고 앱이 계산하며 상·하한도 앱이 정한다. 되돌리기는 허브가 그 명령 결과의 `previous` 로 `set_brightness <previous>` 를 보낸다(결과·previous 가 없으면 생략). `set_brightness`(0~255)·`set_power` 는 그대로 남는다. value 의 선택 키 `min_raw`(깨우기 `actions.posture` 만, 153 = 60 %): 결과 = max(계산값, min_raw) — 꺼진 램프(0)도 켜진다. PC life_sim 과 같은 정의.
 
 명령을 내는 상태(2026-10-24): `ACTION_ENV` 는 `control.yaml actions.environment`, `ACTION_POSTURE` 는 `actions.posture`(졸음 깨우기 — `desk_lamp adjust_brightness {percent: 60}`, 되돌림은 결과의 previous; 개인화 정책이 기기 arm 을 주면 그쪽이 우선, 묶음이 없으면 명령 없음). `ACTION_BREAK` 는 기본 명령이 없다. 게이트·쿨다운·되돌리기 창은 상태와 무관하게 같다.

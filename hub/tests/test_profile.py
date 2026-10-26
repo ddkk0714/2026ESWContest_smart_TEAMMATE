@@ -34,6 +34,8 @@ def test_deep_merge_overrides_nested_keys_keeps_others_and_leaves_base_alone():
 def test_shipped_profiles_only_touch_keys_the_engine_knows():
     """오타·엔진이 모르는 키(fatigue_hold_min_frac 등)가 섞이면 조용히 무시되므로, 기본 설정에 있는 키만 허용한다."""
     fsm, ingest, personalize, learning = load_config(), load_ingest_config(), load_personalize_config(), load_learning_config()
+    from deskmate_hub.control import load_control_config
+    control = load_control_config()
 
     def check(overlay, base, path):
         for key, value in overlay.items():
@@ -48,6 +50,7 @@ def test_shipped_profiles_only_touch_keys_the_engine_knows():
         check(prof["ingest"], ingest, f"{name}:ingest.")
         check(prof["personalize"], personalize, f"{name}:personalize.")
         check(prof["learning"], learning, f"{name}:learning.")
+        check(prof["control"], control, f"{name}:control.")
         # 학습기 울타리 keep_floor = 그 프로파일의 피로 확정 기준(기본 0.70) — 확정을 넘은 점수를 학습기가 못 내린다(PC 리허설 10-25)
         assert prof["learning"]["keep_floor"] == prof["fsm"].get("thresholds", {}).get("fatigue_confirm", fsm["thresholds"]["fatigue_confirm"])
         # 정책 문턱은 FSM 자동 문턱과 같아야 한다 — 다르면 정책이 FSM 자동을 제안으로 낮춘다(10-24 PC 리허설 결함)
@@ -162,7 +165,7 @@ def test_unknown_or_bad_profile_name_fails_loudly(monkeypatch):
     with pytest.raises(ValueError):
         load_profile("../fsm")
     with pytest.raises(ValueError, match="모르는 절"):                 # control: 같은 다른 설정은 프로파일로 못 얹는다
-        _load_inline({"fsm": {}, "control": {"x": 1}})
+        _load_inline({"fsm": {}, "ondevice": {"x": 1}})
 
 
 def _load_inline(data):
