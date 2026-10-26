@@ -32,6 +32,16 @@ void main() {
     expect(dog.backoff, const Duration(minutes: 2));
   });
 
+  test('over MQTT only a new hub sequence counts as fresh state', () {
+    // 10-26 Pi 5: fetch() kept returning the cached state of a link that had
+    // stopped delivering, so every fetch looked fresh and the watchdog never fired.
+    expect(isFreshState(mqtt: true, previousSequence: null, sequence: 450), isTrue);
+    expect(isFreshState(mqtt: true, previousSequence: 450, sequence: 450), isFalse);
+    expect(isFreshState(mqtt: true, previousSequence: 450, sequence: 451), isTrue);
+    expect(isFreshState(mqtt: true, previousSequence: 451, sequence: 1), isTrue); // hub restarted
+    expect(isFreshState(mqtt: false, previousSequence: 3, sequence: 3), isTrue);
+  });
+
   test('a received state resets the backoff', () {
     final dog = MqttWatchdog();
     dog.shouldReconnect(_at(16), _t0);

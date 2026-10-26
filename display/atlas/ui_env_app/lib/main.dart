@@ -260,8 +260,13 @@ class _DashboardPageState extends State<DashboardPage> {
     _busy = true;
     try {
       final next = await _source.fetch();
-      _lastStateAt = DateTime.now();
-      _watchdog.stateReceived();
+      if (isFreshState(
+          mqtt: _source is MqttStateSource,
+          previousSequence: _state?.sequence,
+          sequence: next.sequence)) {
+        _lastStateAt = DateTime.now();
+        _watchdog.stateReceived();
+      }
       if (_override == null) {
         _intervention.update(next,
             hasPendingRequest: _source.hasPendingRequest,

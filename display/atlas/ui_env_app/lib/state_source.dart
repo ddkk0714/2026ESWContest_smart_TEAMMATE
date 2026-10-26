@@ -293,7 +293,6 @@ class MqttStateSource implements StateSource, PrivacySource {
         .withClientIdentifier(_client.clientIdentifier)
         .startClean()
         .withWillQos(MqttQos.atLeastOnce);
-    _updates = _client.updates?.listen(_onUpdates);
   }
 
   static const _stateTopic = 'deskmate/state/phase';
@@ -326,6 +325,8 @@ class MqttStateSource implements StateSource, PrivacySource {
   final String _bootId;
   final MqttServerClient _client;
   StreamSubscription<List<MqttReceivedMessage<MqttMessage?>>>? _updates;
+  Stream<List<MqttReceivedMessage<MqttMessage?>>>? _listening;
+  bool _connectedOnce = false;
   Future<void>? _connection;
   DisplayState? _latest;
   String? _displayMessage;
@@ -459,7 +460,23 @@ class MqttStateSource implements StateSource, PrivacySource {
     if (_client.connectionStatus?.state == MqttConnectionState.connected) {
       return Future.value();
     }
+    // 10-26 Pi 5: once connected, autoReconnect owns the link. Calling connect() again
+    // while it reconnects (fetch() runs every second) makes mqtt_client build a new
+    // subscriptions manager, and its updates stream had no listener — after a broker
+    // restart the app stayed "connected" and never received another message.
+    if (_connectedOnce) {
+      return Future.error(StateError('MQTT 다시 연결 중입니다.'));
+    }
     return _connection ??= _connect().whenComplete(() => _connection = null);
+  }
+
+  /// Listen to the client's current updates stream; connect() replaces it.
+  void _listen() {
+    final updates = _client.updates;
+    if (identical(updates, _listening)) return;
+    unawaited(_updates?.cancel());
+    _listening = updates;
+    _updates = updates?.listen(_onUpdates);
   }
 
   Future<void> _connect() async {
@@ -469,7 +486,8 @@ class MqttStateSource implements StateSource, PrivacySource {
         _client.disconnect();
         throw StateError('MQTT broker 연결에 실패했습니다.');
       }
-      _updates ??= _client.updates?.listen(_onUpdates);
+      _listen();
+      _connectedOnce = true;
       _client.subscribe(_stateTopic, MqttQos.atLeastOnce);
       _client.subscribe(_requestTopic, MqttQos.atLeastOnce);
       _client.subscribe(_messageTopic, MqttQos.atLeastOnce);
