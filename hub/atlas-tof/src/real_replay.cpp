@@ -11,6 +11,8 @@
 // --clock state: off 를 kind:"state" 줄(host_t − /api/state ts_ms/1000)로 잡는다. 10-26 PC 기준 구현(04527fb)이 이렇게 했는데, state ts_ms 는
 // Pi 4 서비스의 단조 시계이고 /raw ts_ms 는 ESP32 millis 라 둘이 약 11 s 어긋난다 — PC 수치를 그대로 재현해 대조할 때만 쓴다.
 // --warmup-skip S: 녹화 시작과 센서 공백(> 1 s, 서비스가 GRU 를 리셋하는 곳) 뒤 S 초는 채점에서 뺀다(PC 채점기는 run 시작 45 프레임 = 4.5 s 를 뺀다).
+// --pc: PC real_demo_combo.py 규칙으로 — 두 센서 ts 가 같은 프레임 쌍만 넣고, tick 은 첫 쌍 ts 부터 100 ms(tick T 는 ts ≤ T 인 최신 쌍), 공백에도 GRU 를 리셋하지 않는다
+//   (stale_ms 를 무한으로: 폴링 녹화의 빈 구간 동안 마지막 쌍을 계속 쓴다). 보드는 프레임이 끊기지 않으므로 이 차이는 리플레이 관례다.
 //
 // --variant name:spec  spec = 콤마 목록: radial · fill=<mm> · fd(엎드림 규칙) · seated(upright 치환) · and(베이스라인 게이트) · never
 //   기본 묶음: off · radial · fill=3000 · radial+fill · combo(radial,fill=3000,fd,seated) — 10-26 PC 표와 같은 조합
@@ -252,6 +254,9 @@ int main(int argc, char** argv) {
     int cap_seconds = 0;
     std::string golden_path, csv_out, show_arg, clock = "raw";
     double warmup_skip = 0.0;
+    bool pc = false;
+    std::string dump_path;
+    int tick_offset = 0;
     std::vector<Variant> variants;
     for (int i = 5; i < argc; ++i) {
         const std::string a = argv[i];
@@ -264,6 +269,9 @@ int main(int argc, char** argv) {
         else if (a == "--show") { show_arg = next(); ++i; }
         else if (a == "--clock") { clock = next(); ++i; }
         else if (a == "--warmup-skip") { warmup_skip = std::atof(next().c_str()); ++i; }
+        else if (a == "--pc") pc = true;
+        else if (a == "--dump") { dump_path = next(); ++i; }
+        else if (a == "--tick-offset") { tick_offset = std::atoi(next().c_str()); ++i; }
     }
     if (variants.empty())
         for (const char* v : {"off:off", "radial:radial", "fill:fill=3000", "radial+fill:radial,fill=3000", "combo:radial,fill=3000,fd,seated"}) {
@@ -324,6 +332,14 @@ int main(int argc, char** argv) {
         std::printf("board clock offset %.3f s (host_t - ts_ms/1000, median of %s)\n", off, clock == "state" ? "/api/state lines" : "/raw frames");
     }
     std::stable_sort(frames.begin(), frames.end(), [](const Frame& a, const Frame& b) { return a.ts != b.ts ? a.ts < b.ts : a.id < b.id; });
+    if (pc) {   // 두 센서가 같은 ts 를 가진 쌍만 (PC read_raw 와 같은 교집합)
+        std::set<uint32_t> ta, tb;
+        for (const Frame& fr : frames) (fr.id == 0 ? ta : tb).insert(fr.ts);
+        std::vector<Frame> kept;
+        for (const Frame& fr : frames) if (ta.count(fr.ts) && tb.count(fr.ts)) kept.push_back(fr);
+        std::printf("--pc: %zu of %zu frames are in A/B pairs\n", kept.size(), frames.size());
+        frames.swap(kept);
+    }
     std::vector<Step> steps;
     if (labels_path != "-" && !readLabels(labels_path, steps)) { std::fprintf(stderr, "cannot read labels %s\n", labels_path.c_str()); return 1; }
     const double first_t = frames.front().host_t;
@@ -360,6 +376,7 @@ int main(int argc, char** argv) {
 
     // ---- 서비스 경로 ----
     for (Variant& v : variants) {
+        if (pc) v.cfg.stale_ms = 1 << 30;           // 공백에도 offline·GRU 리셋 없음
         v.dev = std::make_unique<tof::DevicePosture>(v.cfg);
         std::string err;
         if (!v.dev->loadModel(bin, &err)) { std::fprintf(stderr, "model: %s\n", err.c_str()); return 1; }
@@ -389,9 +406,10 @@ int main(int argc, char** argv) {
     }
     auto in_warmup = [&](int64_t now) { for (const auto& w : warm) if (now >= w.first && now < w.second) return true; return false; };
     const int64_t period = 100;
-    int64_t next_tick = 0;
+    int64_t next_tick = tick_offset;   // --tick-offset: tick 격자를 첫 프레임에서 N ms 늦춘다(보드의 tick·프레임 위상은 임의)
     bool capture_started = false;
     long ticks = 0;
+    FILE* dump = dump_path.empty() ? nullptr : std::fopen(dump_path.c_str(), "w");
     auto do_tick = [&](int64_t now) {
         if (!capture_started && cap_seconds > 0 && now >= rel_ms(t0 + cap_start)) {
             capture_started = true;
@@ -402,6 +420,15 @@ int main(int argc, char** argv) {
         if (!any) return;
         ++ticks;
         const double tr = (first_t + now / 1000.0) - t0;
+        if (dump) {   // 마지막 변형의 tick 별 출력: 상대 시각, 표시 라벨, 평활 확률
+            const tof::DeviceResult r = variants.back().dev->result();
+            std::fprintf(dump, "%.3f,%s", tr, r.valid ? tof::DevicePosture::labelName(r.display_argmax) : "invalid");
+            for (int c = 0; c < variants.back().dev->classes(); ++c) std::fprintf(dump, ",%.6f", r.smooth[c]);
+            const std::vector<tof::SensorStatus> ss = variants.back().dev->sensors(now);   // 센서 A 의 이번 스텝 확률
+            for (int c = 0; c < variants.back().dev->classes(); ++c) std::fprintf(dump, ",%.6f", ss.empty() ? 0.f : ss[0].probs[c]);
+            std::fprintf(dump, ",%llu", ss.empty() ? 0ULL : static_cast<unsigned long long>(ss[0].steps));
+            std::fprintf(dump, "\n");
+        }
         if (in_warmup(now)) return;
         for (size_t si = 0; si < steps.size(); ++si) {
             if (tr < steps[si].start_s + trim || tr > steps[si].end_s - trim) continue;
@@ -423,7 +450,9 @@ int main(int argc, char** argv) {
     };
     for (const Frame& fr : frames) {
         const int64_t now = rel_ms(fr.host_t);
-        while (next_tick <= now) { do_tick(next_tick); next_tick += period; }
+        // tick T 는 ts ≤ T 인 최신 프레임을 쓴다(PC searchsorted right − 1): --pc 면 같은 시각의 프레임을 먼저 넣고 tick 한다.
+        // 기본(서비스와 같은 순서)은 tick 을 먼저 — 첫 프레임 전 tick 0 이 비고, 5 Hz 프레임의 두 번 쓰기 위상이 한 tick 어긋난다
+        while (pc ? next_tick < now : next_tick <= now) { do_tick(next_tick); next_tick += period; }
         if (fr.id < 0 || fr.id > 1) continue;
         for (Variant& v : variants) {
             v.dev->feed(fr.id, fr.line, now);
