@@ -154,7 +154,7 @@ def test_monitor_recovered_below_stops_sign_noise_escalation(key, expected):
 def test_writing_misread_as_face_down_at_low_confidence_is_ignored(tmp_path, profile):
     """수험생 하루: 깨어 글 쓰는 사람을 GRU 가 face_down(conf 0.8)으로 읽음 → 하한 0.99 에 걸려 unknown, 램프·확정 없음."""
     hub, cache, _ = _hub(tmp_path, profile)
-    assert hub.ingest_cfg["tof"]["min_confidence_by_label"] == {"face_down": 0.99}
+    assert hub.ingest_cfg["tof"]["min_confidence_by_label"] == {"face_down": 0.99, "drowsy": 0.80}
     base = float(hub.fsm_cfg["timers"]["baseline_sec"])
     period, t, lamp_at, seen, c_max, focus_at = hub.period, 0.0, None, [], 0.0, None
     while t <= base + 600:
@@ -217,3 +217,20 @@ def test_label_floor_filters_model_drowsy_too_and_default_has_no_floor():
     assert build_frame(cache.snapshot(), 100.0, demo, SessionTracker(), fsm_state=State.FOCUS_NPC).get("posture").delta == 0.0
     cache.put("tof_service", svc(100.0, posture="drowsy", conf=1.0))
     assert build_frame(cache.snapshot(), 100.0, demo, SessionTracker(), fsm_state=State.FOCUS_NPC).get("posture").delta == 1.0
+
+
+@pytest.mark.parametrize("profile", PROFILES)
+def test_model_drowsy_floor_080_counts_only_confident_drowsy(profile):
+    """10-26 실측(왼쪽 고정 기울기): 모델 drowsy 는 이 위치에서 신호가 없어 하한 0.80 으로 사실상 끈다 — 0.7 은 무시, 0.85 는 센다."""
+    _, ingest, _ = apply_profile(load_config(), load_ingest_config(), profile)
+    assert ingest["tof"]["min_confidence_by_label"]["drowsy"] == 0.80
+    cache = SensorCache()
+    cache.put("mmwave", mm(100.0, level=5)); cache.put("tof", tof(100.0, posture="upright"))
+    cache.put("tof_service", svc(100.0, posture="drowsy", conf=0.7))
+    f = build_frame(cache.snapshot(), 100.0, ingest, SessionTracker(), fsm_state=State.FOCUS_NPC)
+    assert f.get("posture").delta == 0.0                                 # 걸러져 unknown — 모델 drowsy 플래그 경로로도 안 샌다
+    cache.put("tof_service", svc(100.0, posture="drowsy", conf=0.85))
+    assert build_frame(cache.snapshot(), 100.0, ingest, SessionTracker(), fsm_state=State.FOCUS_NPC).get("posture").delta == 1.0
+    # 보드 기본은 하한 없음 → 0.7 도 센다
+    cache.put("tof_service", svc(100.0, posture="drowsy", conf=0.7))
+    assert build_frame(cache.snapshot(), 100.0, load_ingest_config(), SessionTracker(), fsm_state=State.FOCUS_NPC).get("posture").delta == 1.0
