@@ -1439,3 +1439,28 @@ def test_http_serves_page_and_data():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ----------------------------------------------------------------- 자리 비움: 점수 없음
+def test_away_ticks_show_no_score_and_skip_trigger():
+    away = {"fsm_state": "IDLE", "phase": "idle", "c_fatigue": 0.0, "c_focus": 0.0, "scores_valid": False,
+            "sensor_summary": {"present": False}}
+    v = dv.phase_view(env(away))
+    assert v["away"] is True and v["fatigue"] is None and v["focus"] is None
+    old = dict(away, c_fatigue=1.0, c_focus=1.0)            # 예전 hub: present false 인데 1.0
+    old.pop("scores_valid")
+    assert dv.phase_view(env(old))["fatigue"] is None
+    assert dv.video_view(env(away), None, {})["away"] is True
+    here = {"fsm_state": "FOCUS_NPC", "phase": "focus", "c_fatigue": 0.3, "c_focus": 0.1, "scores_valid": True,
+            "sensor_summary": {"present": True}}
+    assert dv.phase_view(env(here))["fatigue"] == 0.3 and dv.phase_view(env(here))["away"] is False
+    tr = dv.TriggerTracker({"suspect": 0.4, "confirm": 0.6, "focus_low": 0.4, "tick": 10})
+    tr.on_phase(env(here), 100.0)
+    for i in range(3):
+        tr.on_phase(env(away), 110.0 + i * 10)
+    assert len(tr.ticks) == 1                               # 그래프·유지 판정에 안 들어감
+    view = tr.view(135.0)
+    assert view["away"] is True and view["headline"].startswith("자리 비움 — 점수 없음") and view["eta_s"] is None
+    assert [p["c"] for p in view["series"]] == [0.3]
+    tr.on_phase(env(here), 140.0)
+    assert len(tr.ticks) == 2 and tr.view(141.0)["away"] is False

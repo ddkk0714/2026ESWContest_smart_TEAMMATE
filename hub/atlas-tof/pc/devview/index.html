@@ -599,6 +599,7 @@ function renderJudge(ph, p, profile) {
   const meter = (v, t, b, color) => { $(t).textContent = f2(v); $(b).style.width = v == null ? "0" : (v * 100).toFixed(1) + "%"; $(b).style.background = color; };
   meter(ph.fatigue, "fatT", "fatB", ph.fatigue >= 0.7 ? "var(--bad)" : ph.fatigue >= 0.45 ? "var(--warn)" : "var(--ok)");
   meter(ph.focus, "focT", "focB", "var(--accent)");
+  if (ph.away) { $("fatT").textContent = "자리 비움 — 점수 없음"; $("focT").textContent = "자리 비움 — 점수 없음"; }
   $("judgeKv").innerHTML = kv([
     ["원인·게이트", `${esc(ph.cause)} · ${esc(ph.gate)}` + (ph.reasons !== "-" ? ` <span class="empty">· ${esc(ph.reasons)}</span>` : "")],
     ["자세(hub)", esc(ph.hub_posture)],
@@ -689,7 +690,7 @@ function renderVideo(d) {
     (d.posture && d.posture.hub_note ? ` · ${d.posture.hub_note}` : "");
   $("vChips").innerHTML = v.chips.map(c => `<span>${esc(c)}</span>`).join("");
   const f = v.fatigue;
-  $("vFatT").textContent = f == null ? "-" : f.toFixed(2);
+  $("vFatT").textContent = v.away ? "자리 비움 — 점수 없음" : f == null ? "-" : f.toFixed(2);
   $("vFatB").style.width = f == null ? "0" : (f * 100).toFixed(1) + "%";
   $("vFatB").style.background = f >= 0.7 ? "var(--bad)" : f >= 0.45 ? "var(--warn)" : "var(--ok)";
   $("vEnv").textContent = v.env;

@@ -147,6 +147,12 @@ python hub/atlas-tof/pc/devview/devview.py --pi4 172.20.10.3 --hub-profile demo-
     "깨우기 끝: 노트북 음량 80 % → 27 % (회복)". 깨우기가 아닌 알림음은 지금 음량으로 울린다. 밝기는 그대로, 끝낼 때 둘 다 원래 값으로.
   - `--wake-volume 0` 이면 예전처럼 첫 설정 소리 구간대로.
 
+### 자리 비움 — 점수 없음
+
+hub 가 state/phase 에 `scores_valid: false` 를 싣거나 `sensor_summary.present` 가 false 면(아무도 없음) c_fatigue·c_focus 는 점수가 아니다
+(예전엔 환경 신호만으로 재정규화돼 1.0, 새 hub 는 0.0). 판정 패널·영상 모드는 숫자 대신 "자리 비움 — 점수 없음",
+무드등 시점 패널은 그 tick 을 15 분 그래프와 유지 판정에서 빼고 한 줄 결론에 "자리 비움 — 점수 없음 — N 초째" 를 적는다.
+
 ### 휴식(REST) 알림
 
 hub 가 REST 에 들어가면 가상 기기 화면 위와 영상 모드에 큰 배너: 문구 · 남은 휴식 시간(카운트다운) · 이유.

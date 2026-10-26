@@ -89,6 +89,15 @@ def _txt(v: Any, fmt: str = "{}", unit: str = "") -> str:
         return str(v) + unit
 
 
+AWAY_TEXT = "자리 비움 — 점수 없음"
+
+
+def scores_away(data: dict[str, Any]) -> bool:
+    """hub 가 사람이 없다고 한 tick: scores_valid false 또는 sensor_summary.present false. 이때 c_fatigue·c_focus 는
+    점수가 아니다(전에는 환경 신호만으로 재정규화돼 1.0, 이제 0.0) — 숫자를 보이지도, 유지 판정에 세지도 않는다."""
+    return data.get("scores_valid") is False or _map(data.get("sensor_summary")).get("present") is False
+
+
 def phase_view(envelope: Any) -> dict[str, Any]:
     """`deskmate/state/phase` envelope → 판정 화면 데이터. 키가 없으면 '-' (숫자 막대는 None).
 
@@ -102,8 +111,9 @@ def phase_view(envelope: Any) -> dict[str, Any]:
     # (CNN, observe 전용 — 판정에 안 들어감. demo-b 는 linear 정규화라 unavailable 이 정상)
     pers = _map(ss.get("personalize"))
     stage2 = _map(ss.get("personalization"))
-    fatigue = _num(data.get("c_fatigue", data.get("C_fatigue")))
-    focus = _num(data.get("c_focus", data.get("C_focus")))
+    away = scores_away(data)
+    fatigue = None if away else _num(data.get("c_fatigue", data.get("C_fatigue")))
+    focus = None if away else _num(data.get("c_focus", data.get("C_focus")))
 
     hub_posture = DASH
     if tof.get("posture"):
@@ -159,6 +169,7 @@ def phase_view(envelope: Any) -> dict[str, Any]:
         "seq": _map(envelope).get("seq"),
         "fatigue": fatigue,
         "focus": focus,
+        "away": away,
         "fatigue_text": DASH if fatigue is None else f"{fatigue:.2f}",
         "focus_text": DASH if focus is None else f"{focus:.2f}",
         "cause": str(data.get("cause") or DASH),
@@ -958,13 +969,15 @@ def video_view(phase_env: Any, posture: Any, control: dict[str, Any]) -> dict[st
     if _num(ss.get("lux")) is not None:
         env.append(f"{ss['lux']:.0f} lx")
     state = str(data.get("fsm_state") or "")
-    fatigue = _num(data.get("c_fatigue"))
+    away = scores_away(data)
+    fatigue = None if away else _num(data.get("c_fatigue"))
     return {
         "posture": label,
         "posture_conf": _num(p.get("conf")) if p else None,
         "chips": ["허브", FSM_KO.get(state, state or DASH), CONTEXT_KO.get(str(data.get("context")), DASH)],
         "phase": str(data.get("phase") or ""),
         "fatigue": fatigue,
+        "away": away,
         "env": " · ".join(env) or DASH,
         "decision": control.get("headline") or DASH,
         "decision_status": " · ".join(x for x in (control.get("status"), control.get("time")) if x and x != DASH) or DASH,
@@ -2026,6 +2039,8 @@ class TriggerTracker:
         self.ticks: deque[dict[str, Any]] = deque()
         self.marks: deque[dict[str, Any]] = deque(maxlen=60)   # 그래프 표시: 명령·카드·조건 충족
         self._state_since: dict[str, Any] = {"state": None, "at": None}
+        self.away_since: float | None = None   # 자리 비움 tick 이 이어지는 동안(그래프·유지 판정에서 뺀다)
+        self.away_ticks = 0
         self._last_lamp: dict[str, float] = {}
         self._prior: str | None = None
         self._arm_ts: Any = None
@@ -2047,6 +2062,12 @@ class TriggerTracker:
             if state in ACTION_FSM:
                 self.marks.append({"at": at, "kind": "action_" + str(d.get("gate") or ""),
                                    "text": f"{FSM_KO.get(state, state)}({d.get('gate')})"})
+        if scores_away(d):
+            if self.away_since is None:
+                self.away_since = at
+            self.away_ticks += 1
+            return
+        self.away_since = None
         learn = _map(ss.get("learning"))
         ks = _map(ss.get("keystroke"))
         self.ticks.append({"at": at, "state": state, "c": float(d["c_fatigue"]), "gate": d.get("gate"),
@@ -2185,7 +2206,8 @@ class TriggerTracker:
         if r.get("error"):
             return {"error": r["error"], "source": r.get("source"), "profile": r.get("profile")}
         if not self.ticks:
-            return {"error": None, "headline": "hub state/phase 대기", "checks": [], "series": [], "marks": [],
+            return {"error": None, "headline": f"{AWAY_TEXT} (유지 판정·그래프에서 뺌)" if self.away_since is not None
+                    else "hub state/phase 대기", "checks": [], "series": [], "marks": [], "away": self.away_since is not None,
                     "rules": self._rules_brief(), "source": r.get("source"), "profile": r.get("profile")}
         t = self.ticks[-1]
         c, state = t["c"], t["state"]
@@ -2268,7 +2290,11 @@ class TriggerTracker:
         ]
         series = [{"at": x["at"], "c": round(x["c"], 3), "state": x["state"]} for x in self.ticks]
         marks = [m for m in self.marks if now - m["at"] <= self.keep_s]
+        away = self.away_since is not None
+        if away:
+            head, eta = f"{AWAY_TEXT} — {round(now - self.away_since)} 초째, 유지 판정·그래프에서 뺌 (자리 비움 tick {self.away_ticks})", None
         return {"error": None, "headline": head, "eta_s": None if eta is None else round(eta), "checks": checks,
+                "away": away,
                 "breakdown": self.breakdown(t, pp), "prior": self._prior,
                 "last_arm": self.last_arm, "arm_counts": self.arm_counts,
                 "series": series, "marks": marks, "now": now, "window_s": self.keep_s, "rules": self._rules_brief(),
