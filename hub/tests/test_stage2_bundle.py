@@ -40,7 +40,15 @@ def test_runtime_loads_from_package_relative_path_and_rejects_linear():
     rt = PersonalizationRuntime(cfg, period=10.0, normalization="baseline")
     assert rt.status == "warming_up" and rt.backend is not None
     # demo-b(선형 정규화)에서는 계약이 어긋나 꺼진다 — FSM 은 그대로
-    assert PersonalizationRuntime(cfg, period=10.0, normalization="linear").status == "unavailable"
+    linear = PersonalizationRuntime(cfg, period=10.0, normalization="linear")
+    assert linear.status == "unavailable"
+    view = linear.observe({"now": 0.0})
+    assert view["kind"] == "stage2_observe" and view["status"] == "unavailable"
+    assert "metadata contract mismatch" in view["reason"] and "normalization" in view["reason"] and "linear" in view["reason"]
+    # 정상 기동이면 reason 없음, kind 는 항상
+    ok = PersonalizationRuntime(cfg, period=10.0, normalization="baseline")
+    assert ok.observe({"now": 0.0, "present": True, "pc_ratio": 0.0, "signals": {}}).get("reason") is None
+    assert rt.observe({"now": 10.0, "present": True, "pc_ratio": 0.0, "signals": {}})["kind"] == "stage2_observe"
 
 
 def test_live_hub_default_reports_observe_only_personalization():
