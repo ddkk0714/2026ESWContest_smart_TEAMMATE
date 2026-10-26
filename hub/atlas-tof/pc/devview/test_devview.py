@@ -789,7 +789,9 @@ def test_trigger_facedown_counts_down_then_fires(hub_cfg):
     # 엎드림을 처음 본 tick 부터 예상 시각이 실제 명령 시각과 같다(추정이 hub 규칙과 맞음)
     preds = [round(t + e) for t, _, e, _ in seen if e is not None]
     assert preds and all(p == round(fired) for p in preds)
-    assert any("초 더 이어지면 무드등 +60 % (최소 153) (자동)" in h for *_, h in seen)
+    # ad76ff0: 자세 개입에서 무엇을 할지는 개인화가 고른다(결정 없으면 기본 무드등)
+    assert any("초 더 이어지면 자세 개입 — 개인화가 고름(" in h and "결정 없으면 무드등 +60 % (최소 153)) (자동)" in h
+               for *_, h in seen)
     assert any(h.startswith("무드등 올림") for *_, h in seen)
     assert {m["kind"] for m in st.trigger.marks} >= {"confirm", "lamp", "action_auto"}
     v = st.trigger.view(base + 100)
@@ -1095,15 +1097,40 @@ def test_dismiss_rest_notice_and_info_card():
 
 
 def test_chime_command_plays_laptop_sound():
+    """ad76ff0: chime {pattern: single|double|triple, volume: low|mid|high} — 볼륨을 잠깐 바꿔 울리고 되돌린다."""
     st, act, fake = _laptop_store()
-    st.on_mqtt(dv.TOPIC_CMD, payload({"command_id": "c9", "target_id": "speaker", "operation": "chime", "value": {"pattern": "soft"},
-                                      "gate": "notice", "requires_confirmation": False,
-                                      "expires_ts_ms": int((time.time() + 15) * 1000)}), at=time.time())
-    assert st.virtual.speaker["voice"] == "알림음 (soft)"
+    st.on_mqtt(dv.TOPIC_CMD, payload({"command_id": "c9", "target_id": "speaker", "operation": "chime",
+                                      "value": {"pattern": "double", "volume": "high"}, "gate": "notice",
+                                      "requires_confirmation": False, "expires_ts_ms": int((time.time() + 15) * 1000)}), at=time.time())
+    assert st.virtual.speaker["voice"] == "알림음 (double · high)"
     deadline = time.time() + 3
-    while "soft" not in fake.sounds and time.time() < deadline:
+    while "double" not in fake.sounds and time.time() < deadline:
         time.sleep(0.05)
-    assert "soft" in fake.sounds
+    assert "double" in fake.sounds
+    time.sleep(0.05)
+    assert ("v", 0.8) in fake.calls and fake.v == 0.41          # high = 0.8 로 울리고 원래 볼륨으로
+    assert any(e["text"] == "노트북 알림음 double · 볼륨 80 %" for e in st.virtual.timeline if e["kind"] == "laptop")
+
+
+def test_arm_notice_and_trigger_headline(hub_cfg):
+    rules = dv.load_hub_rules(hub_cfg, "demo-b")
+    tr = dv.TriggerTracker(rules)
+    tr.on_phase(env({"fsm_state": "FATIGUE_SUSPECT", "context": "npc", "c_fatigue": 0.81, "sensor_summary": {
+        "tof": {"posture": "face_down", "posture_confidence": 0.995}}}), at=100.0)
+    tr.on_phase(env({"fsm_state": "FATIGUE_SUSPECT", "context": "npc", "c_fatigue": 0.81, "sensor_summary": {
+        "tof": {"posture": "face_down", "posture_confidence": 0.995}}}), at=110.0)
+    h = tr.view(111.0)["headline"]
+    assert "자세 개입 — 개인화가 고름(무드등·음성 안내·알림음·자세 카드 중, 결정 없으면 무드등 +60 % (최소 153))" in h
+    tr.on_phase(env({"fsm_state": "ACTION_POSTURE", "context": "npc", "c_fatigue": 0.81, "gate": "auto", "sensor_summary": {
+        "tof": {"posture": "face_down", "posture_confidence": 0.995},
+        "personalize": {"arm": "sound_cue", "arm_label": "알림음", "source": "policy", "delivered_gate": "auto"},
+        "arm_notice": {"enabled": True, "counts": {"cards": 1, "speaks": 0, "chimes": 1, "dismissed": 0},
+                       "last": {"ts": 120.0, "arm": "sound_cue", "channel": "sound", "gate": "auto", "delivered": ["card", "chime"]}}}}),
+        at=120.0)
+    v = tr.view(121.0)
+    assert any(m["kind"] == "arm" and m["text"] == "개인화가 고른 것: 알림음 (sound) → 카드, 알림음" for m in v["marks"])
+    assert v["arm_counts"] == "안내 1 · 음성 0 · 알림음 1 · 닫음 0"
+    assert v["headline"].startswith("자세 개입 — 개인화가 고른 것: 알림음(무드등 아님)")
 
 
 def test_fake_rest_scenarios(hub_cfg):

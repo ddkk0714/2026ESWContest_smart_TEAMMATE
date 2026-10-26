@@ -139,6 +139,8 @@ def chime(kind: str = "alert") -> None:
     import winsound
     notes = {"alert": [(880, 160), (1175, 220)], "voice": [(660, 140), (880, 140), (990, 260)],
              "music": [(523, 220), (659, 220), (784, 220), (1047, 360)],
-             "soft": [(660, 180), (880, 260)], "triple": [(988, 120), (988, 120), (988, 120)]}.get(kind, [(880, 200)])
+             # hub chime pattern(ad76ff0): single · double · triple
+             "single": [(880, 220)], "double": [(880, 150), (1175, 200)], "triple": [(988, 120), (988, 120), (988, 120)],
+             "soft": [(660, 180), (880, 260)]}.get(kind, [(880, 200)])
     for f, ms in notes:
         winsound.Beep(f, ms)

@@ -866,11 +866,12 @@ function trigChart(tr) {
   });
   for (let v = 0; v <= 1.001; v += 0.5) g += `<text x="4" y="${y(v) + 4}" fill="#5d6578" font-size="11">${v.toFixed(1)}</text>`;
   if (sr.length) g += `<polyline fill="none" stroke="#f3f5f8" stroke-width="2.2" points="${sr.filter(p => p.at >= now - span).map(p => `${x(p.at).toFixed(1)},${y(p.c).toFixed(1)}`).join(" ")}"/>`;
-  const MC = {lamp: "#4cc38a", card: "#f5b93a", confirm: "#f06a6a", action_auto: "#4cc38a", action_suggest: "#f5b93a", action_none: "#9aa3b5"};
+  const MC = {lamp: "#4cc38a", card: "#f5b93a", confirm: "#f06a6a", action_auto: "#4cc38a", action_suggest: "#f5b93a", action_none: "#9aa3b5",
+    arm: "#8f9cff", prior: "#5d6578"};
   (tr.marks || []).forEach(m => {
     const xx = x(m.at).toFixed(1), col = MC[m.kind] || "#8f9cff";
     g += `<line x1="${xx}" x2="${xx}" y1="${T}" y2="${H - B}" stroke="${col}" stroke-width="${m.kind === "lamp" ? 3 : 1.5}"/>` +
-      `<text x="${xx}" y="${H - 6}" fill="${col}" font-size="11" text-anchor="middle">${m.kind === "lamp" ? "💡" : m.kind === "card" ? "카드" : m.kind === "confirm" ? "확정" : "개입"}</text>`;
+      `<text x="${xx}" y="${H - 6}" fill="${col}" font-size="11" text-anchor="middle">${m.kind === "lamp" ? "💡" : m.kind === "card" ? "카드" : m.kind === "confirm" ? "확정" : m.kind === "arm" ? "개인화" : m.kind === "prior" ? "첫설정" : "개입"}</text>`;
   });
   const mm = sec => sec >= 60 ? `-${(sec / 60).toFixed(sec % 60 ? 1 : 0)}분` : `-${Math.round(sec)}초`;
   [[span, mm(span)], [span / 2, mm(span / 2)], [0, "지금"]].forEach(([ago, lab]) =>
@@ -899,8 +900,10 @@ function renderTrigger(el, tr) {
     `<div class="chk">${(tr.checks || []).map(c => `<div class="r"><span class="${c.ok ? "y" : "n"}">${c.ok ? "✓" : "·"}</span><span>${esc(c.name)}</span><span class="v">${esc(c.value)}</span>` +
       (c.progress != null ? `<div class="pb"><i style="width:${(c.progress * 100).toFixed(0)}%"></i></div>` : "") + `</div>`).join("")}</div>` +
     (tr.breakdown ? breakdownHtml(tr.breakdown) : "") +
-    `<div>${trigChart(tr)}<div class="lg">흰 선 = C_fatigue · 배경 = FSM(초록 집중·노랑 의심·빨강 피로/개입) · 세로선: 💡 무드등 명령 · 카드 · 확정 · 개입(자동/제안)</div></div>` +
+    `<div>${trigChart(tr)}<div class="lg">흰 선 = C_fatigue · 배경 = FSM(초록 집중·노랑 의심·빨강 피로/개입) · 세로선: 💡 무드등 명령 · 카드 · 확정 · 개입(자동/제안) · 개인화가 고른 것</div></div>` +
     (tr.prior ? `<div class="prior">개입 선택 개인화 기준(첫 설정): ${esc(tr.prior)}</div>` : "") +
+    (tr.last_arm && tr.last_arm.text ? `<div class="prior">${esc(tr.last_arm.text)}</div>` : "") +
+    (tr.arm_counts ? `<div class="src">hub 개인화 안내 집계: ${esc(tr.arm_counts)}</div>` : "") +
     `<div class="src">설정: ${esc(tr.source)} · 프로파일 ${esc(tr.profile || "-")} · hub 는 유지 타이머를 싣지 않아 '남은 초'는 state/phase tick 으로 추정(engine.py 규칙)</div>`;
 }
 

@@ -729,6 +729,14 @@ ACTION_PLAN = {
     "cognitive": [],
 }
 # 개인화 arm → 하는 일(hub config/personalize.yaml arms 의 device·label_ko). 카드 머리줄을 원인 전체가 아니라 고른 arm 으로.
+# arm id → 화면 이름(hub config/personalize.yaml arms label_ko)
+ARM_LABEL = {"light_cool_bright": "조명 밝고 차갑게", "light_warm_dim": "조명 따뜻하고 어둡게", "air_fan_up": "공기청정기 풍량 올리기",
+             "fan_on": "환기팬(선풍기) 켜기", "ventilate_suggest": "창문 환기", "posture_card": "자세 안내 카드",
+             "wake_light": "무드등 밝혀 깨우기", "posture_voice": "자세 음성 안내", "sound_cue": "알림음",
+             "break_short": "5분 휴식", "break_long": "긴 휴식", "sleep_suggest": "취침 권유"}
+POSTURE_ARMS = ("wake_light", "posture_card", "posture_voice", "sound_cue")   # personalize.yaml causes 에 posture 가 있는 arm
+DELIVERED_KO = {"card": "카드", "speak": "음성", "chime": "알림음", "lamp": "무드등", "desk_lamp": "무드등", "fan": "선풍기",
+                "vent_fan": "선풍기", "air": "공기청정기", "cmd": "기기 명령", "display": "화면"}
 ARM_ACTION = {
     "light_cool_bright": [("desk_lamp", "adjust_brightness", {"percent": 50})],
     "light_warm_dim": [("desk_lamp", "adjust_brightness", {"percent": -50})],
@@ -779,8 +787,8 @@ def op_text(op: str, value: Any) -> str:
         t = value.get("text") if isinstance(value, dict) else value
         return f"말하기 “{_clip(str(t or ''), 40)}”"
     if op == "chime":
-        pat = value.get("pattern") if isinstance(value, dict) else value
-        return "알림음" + (f" {pat}" if pat else "")
+        v = value if isinstance(value, dict) else {"pattern": value}
+        return "알림음" + "".join(f" {v[k]}" for k in ("pattern", "volume") if v.get(k))
     return f"{op} {raw_value(value)}".strip()
 
 
@@ -1392,8 +1400,9 @@ class VirtualHome:
             self._stamp(self.speaker, self.speaker["voice"], at)
             return {"status": "succeeded", "actual_value": "spoken"}
         if op == "chime":
-            pattern = (value or {}).get("pattern") if isinstance(value, dict) else value
-            self.speaker["voice"] = "알림음" + (f" ({pattern})" if pattern else "")
+            v = value if isinstance(value, dict) else {"pattern": value}
+            parts = [str(x) for x in (v.get("pattern"), v.get("volume")) if x]
+            self.speaker["voice"] = "알림음" + (f" ({' · '.join(parts)})" if parts else "")
             self._stamp(self.speaker, self.speaker["voice"], at)
             return {"status": "succeeded", "actual_value": "chimed"}
         if target == "air_purifier":
@@ -1740,6 +1749,8 @@ class LaptopActuator:
             level = self._pref_volume()
             if dev.get("music"):
                 target, why, sound = level, "스피커 음악 재생", "music"
+            elif dev.get("voice") and text.startswith("알림음 ("):
+                target, why, sound = None, text, "chime:" + text[text.index("(") + 1:-1]
             elif dev.get("voice") and text.startswith(("음성", "알림음")):
                 target, why, sound = level, text, ("speak:" + text.split(":", 1)[1].strip()) if text.startswith("음성 안내:") \
                     else "voice" if text.startswith("음성") else \
@@ -1761,6 +1772,26 @@ class LaptopActuator:
             return None
         return SOUND_PREF_VOLUME.get(str(pref), DEFAULT_VOLUME)
 
+    def _chime_with_volume(self, pattern: str, volume: str | None) -> None:
+        """hub chime {pattern, volume}: 볼륨(low·mid·high → 첫 설정 소리 구간과 같은 값)으로 잠깐 바꿔 울리고 되돌린다."""
+        level = SOUND_PREF_VOLUME.get(str(volume)) if volume else None
+        before = self.cur["volume"]
+        try:
+            if level is not None:
+                self.b.set_volume(level)
+            self.b.chime(pattern)
+            with self.store.lock:
+                self.store.virtual.log_laptop(f"노트북 알림음 {pattern}" + (f" · 볼륨 {_pct(level)}" if level is not None else ""),
+                                              time.time())
+        except Exception as e:  # noqa: BLE001
+            self.error = f"소리 실패: {_reason(e)}"
+        finally:
+            if level is not None and before is not None:
+                try:
+                    self.b.set_volume(before)
+                except Exception as e:  # noqa: BLE001
+                    self.error = f"볼륨 되돌리기 실패: {_reason(e)}"
+
     def _chime(self, kind: str) -> None:
         if kind.startswith("speak:"):
             text = kind[len("speak:"):]
@@ -1774,7 +1805,10 @@ class LaptopActuator:
                 self.error = f"음성 실패 → 알림음: {_reason(e)}"
                 kind = "voice"
         if kind.startswith("chime:"):
-            kind = kind[len("chime:"):]    # hub 알림음 패턴 이름(모르는 이름은 laptop_win 이 기본 한 음)
+            # hub 알림음 "pattern · volume"(ad76ff0: single|double|triple · low|mid|high). 모르는 패턴은 기본 한 음
+            bits = [x.strip() for x in kind[len("chime:"):].split("·")]
+            self._chime_with_volume(bits[0] or "single", bits[1] if len(bits) > 1 else None)
+            return
         try:
             self.b.chime(kind)
             if kind not in ("music",):
@@ -1907,6 +1941,9 @@ class TriggerTracker:
         self._state_since: dict[str, Any] = {"state": None, "at": None}
         self._last_lamp: dict[str, float] = {}
         self._prior: str | None = None
+        self._arm_ts: Any = None
+        self.last_arm: dict[str, Any] | None = None
+        self.arm_counts: str | None = None
 
     def on_phase(self, env: Any, at: float) -> None:
         d = _map(_map(env).get("data"))
@@ -1932,6 +1969,25 @@ class TriggerTracker:
                            "env_flags": list(ss.get("env_flags") or []), "typing": ks.get("typing_active") if ks else None,
                            "c_fsm": _num(learn.get("c_fsm")), "c_adj": _num(learn.get("c_adj")), "alpha": _num(learn.get("alpha")),
                            "since": self._state_since["at"]})
+        an = _map(ss.get("arm_notice"))
+        last = _map(an.get("last"))
+        if last.get("ts") is not None and last.get("ts") != self._arm_ts:
+            self._arm_ts = last["ts"]
+            arm = str(last.get("arm") or "")
+            got = ", ".join(DELIVERED_KO.get(str(x), str(x)) for x in (last.get("delivered") or [])) or "실행됨"
+            text = f"개인화가 고른 것: {ARM_LABEL.get(arm, arm or '-')} ({last.get('channel') or '-'}) → {got}"
+            self.marks.append({"at": at, "kind": "arm", "text": text})
+            self.last_arm = {"arm": arm, "label": ARM_LABEL.get(arm, arm), "channel": last.get("channel"),
+                             "gate": last.get("gate"), "delivered": got, "at": at, "text": text}
+        if an:
+            c = _map(an.get("counts"))
+            self.arm_counts = ("꺼짐 · " if an.get("enabled") is False else "") + " · ".join(
+                f"{lab} {c[k]}" for k, lab in (("cards", "안내"), ("speaks", "음성"), ("chimes", "알림음"), ("dismissed", "닫음"))
+                if c.get(k) is not None)
+        pers = _map(ss.get("personalize"))
+        if pers.get("arm") and state in ACTION_FSM:
+            self.last_arm = {**(self.last_arm or {}), "arm": pers["arm"], "label": pers.get("arm_label") or ARM_LABEL.get(pers["arm"]),
+                             "source": pers.get("source"), "at": at}
         prior = prior_text(_map(ss.get("personalize")))
         if prior and prior != self._prior:
             self._prior = prior
@@ -2054,6 +2110,14 @@ class TriggerTracker:
         act_text = " + ".join(f"{'무드등' if a.get('target_id') == 'desk_lamp' else a.get('target_id')} "
                               f"{op_text(str(a.get('operation')), a.get('value'))}" for a in acts) or "기기 명령 없음(카드만)"
         act_text = act_text.replace("무드등 밝기", "무드등")   # "무드등 +60 % (최소 153)"
+        # hub ad76ff0: 자세 개입 때 개인화(밴딧)가 고른 arm 이 실행된다 — wake_light 일 때만 무드등. 정책 결정이 없으면 기본(무드등).
+        la = self.last_arm if self.last_arm and now - self.last_arm.get("at", 0) <= 600 and \
+            self.last_arm.get("arm") in POSTURE_ARMS else None
+        if la:
+            choice = act_text if la["arm"] == "wake_light" else f"{la['label']}(무드등 아님)"
+            act_text = f"자세 개입 — 개인화가 고른 것: {choice}"
+        else:
+            act_text = f"자세 개입 — 개인화가 고름(무드등·음성 안내·알림음·자세 카드 중, 결정 없으면 {act_text})"
         last = max(self._last_lamp.values()) if self._last_lamp else None
         if control_cooldown_from:
             last = max([x for x in [last, *control_cooldown_from.values()] if x is not None], default=None)
@@ -2082,8 +2146,8 @@ class TriggerTracker:
             head = f"피로 확정 — 다음 tick 원인 분석{' → 자세 → ' + act_text + ' (' + gate_ko + ')' if pp['dominant'] else ''}"
         elif state == "ACTION_POSTURE":
             sent = bool(self._last_lamp) and now - max(self._last_lamp.values()) <= 2 * tick
-            head = (f"무드등 올림 — {act_text} ({gate_ko}) 명령을 hub 가 보냄" if sent
-                    else f"자세 개입 중 — {act_text} ({gate_ko})" + (" · 쿨다운이라 생략될 수 있음" if cool_left else ""))
+            head = (f"무드등 올림 — hub 가 무드등 명령을 보냄 ({gate_ko})" if sent
+                    else f"{act_text} ({gate_ko})" + (" · 쿨다운이라 생략될 수 있음" if cool_left else ""))
         elif state == "FOCUS_BREAK":
             head = "집중 저하(FOCUS_BREAK) — 관찰이 끝난 뒤 피로가 오르면 피로 의심으로, 아직 무드등 판단 단계 아님"
         else:
@@ -2119,6 +2183,7 @@ class TriggerTracker:
         marks = [m for m in self.marks if now - m["at"] <= self.keep_s]
         return {"error": None, "headline": head, "eta_s": None if eta is None else round(eta), "checks": checks,
                 "breakdown": self.breakdown(t, pp), "prior": self._prior,
+                "last_arm": self.last_arm, "arm_counts": self.arm_counts,
                 "series": series, "marks": marks, "now": now, "window_s": self.keep_s, "rules": self._rules_brief(),
                 "source": r.get("source"), "profile": r.get("profile")}
 
