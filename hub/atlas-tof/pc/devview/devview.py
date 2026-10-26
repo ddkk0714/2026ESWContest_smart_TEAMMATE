@@ -1455,6 +1455,258 @@ def _page_version() -> float | None:
         return None
 
 
+# --------------------------------------------------------------------------- 무드등 올릴 시점 (hub 규칙을 설정에서 읽어 따라가기)
+
+def _deep_merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
+    """hub profile.deep_merge 와 같은 규칙: 둘 다 dict 인 키만 재귀, 나머지는 덮는다."""
+    out = json.loads(json.dumps(base))
+    for k, v in (over or {}).items():
+        out[k] = _deep_merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def _load_cfg_file(path: str) -> dict[str, Any]:
+    if path.endswith(".json"):
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    import yaml   # PyYAML — 이 기능에만 필요(없으면 화면에 '설정 못 읽음')
+    with open(path, encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def load_hub_rules(config_dir: str, profile: str = "") -> dict[str, Any]:
+    """hub config(fsm·ingest·control.yaml)와 시연 프로파일(profiles/<이름>.json|.yaml)을 hub 와 같은 방법으로 얹어
+    무드등 판단에 쓰는 값만 꺼낸다. 코드에 숫자를 박지 않는다 — 읽지 못하면 error 를 채워 돌려준다."""
+    out: dict[str, Any] = {"source": config_dir, "profile": profile or None, "error": None}
+    try:
+        fsm = _load_cfg_file(os.path.join(config_dir, "fsm.yaml"))
+        ingest = _load_cfg_file(os.path.join(config_dir, "ingest.yaml"))
+        control = _load_cfg_file(os.path.join(config_dir, "control.yaml"))
+        if profile:
+            base = os.path.join(config_dir, "profiles", profile)
+            path = base + ".json" if os.path.exists(base + ".json") else base + ".yaml"
+            prof = _load_cfg_file(path)
+            fsm = _deep_merge(fsm, prof.get("fsm") or {})
+            ingest = _deep_merge(ingest, prof.get("ingest") or {})
+            out["profile_file"] = path
+    except Exception as e:  # noqa: BLE001 — 파일·모듈·형식 어떤 문제든 화면에 이유로
+        out["error"] = f"{type(e).__name__}: {e}"
+        return out
+    th, tm, gate = fsm.get("thresholds") or {}, fsm.get("timers") or {}, fsm.get("gate") or {}
+    tof = ingest.get("tof") or {}
+    out.update(
+        focus_low=th.get("fatigue_focus_low"), suspect=th.get("fatigue_suspect_low"), confirm=th.get("fatigue_confirm"),
+        natural=th.get("natural_recovery"),
+        elevated_hold=tm.get("fatigue_elevated_hold_sec"), confirm_hold=tm.get("fatigue_confirm_hold_sec"),
+        hold_frac=tm.get("fatigue_hold_min_frac", 1.0), tick=tm.get("score_period_sec", 10),
+        conf_auto=gate.get("conf_auto"), conf_suggest=gate.get("conf_suggest"),
+        weights=(fsm.get("weights") or {}).get("fatigue") or {}, routing=fsm.get("routing") or {},
+        posture_delta=tof.get("posture_delta") or {}, min_conf=tof.get("min_confidence", 0.0),
+        floors=tof.get("min_confidence_by_label") or {}, nod_max=tof.get("nod_delta_max"),
+        cooldown=control.get("cooldown_sec"), posture_actions=(control.get("actions") or {}).get("posture") or [],
+    )
+    return out
+
+
+FOCUS_FSM = ("FOCUS_PC", "FOCUS_MIXED", "FOCUS_NPC")
+PAST_SUSPECT = ("FATIGUE_SUSPECT", "FATIGUE", "CAUSE_ANALYSIS", "ACTION_POSTURE")
+ACTION_FSM = ("ACTION_ENV", "ACTION_POSTURE", "ACTION_BREAK")
+
+
+class TriggerTracker:
+    """state/phase tick(10 s)으로 hub FSM 의 유지 판정을 따라간다. hub 가 유지 타이머를 싣지 않으므로 '추정'이다.
+
+    engine.py 와 같은 규칙: FOCUS 에서 C ≥ fatigue_focus_low 가 elevated_hold 초(이 단계 진입 뒤, 지난 hold 초 tick 의
+    hold_frac 이상) → FATIGUE_SUSPECT, 거기서 C ≥ fatigue_confirm 이 confirm_hold 초 → FATIGUE → CAUSE_ANALYSIS(원인 = 그룹 기여 최대)
+    → ACTION_POSTURE(게이트 = C vs conf_auto/conf_suggest) → control.yaml actions.posture 명령(쿨다운 cooldown_sec).
+    """
+
+    def __init__(self, rules: dict[str, Any], keep_s: float = 900.0) -> None:
+        self.rules = rules
+        self.keep_s = keep_s
+        self.ticks: deque[dict[str, Any]] = deque()
+        self.marks: deque[dict[str, Any]] = deque(maxlen=60)   # 그래프 표시: 명령·카드·조건 충족
+        self._state_since: dict[str, Any] = {"state": None, "at": None}
+        self._last_lamp: dict[str, float] = {}
+
+    def on_phase(self, env: Any, at: float) -> None:
+        d = _map(_map(env).get("data"))
+        if not d or _num(d.get("c_fatigue")) is None:
+            return
+        ss = _map(d.get("sensor_summary"))
+        tof = _map(ss.get("tof"))
+        state = str(d.get("fsm_state") or "")
+        prev = self.ticks[-1] if self.ticks else None
+        if state != self._state_since["state"]:
+            self._state_since = {"state": state, "at": at}
+            if state == "FATIGUE":
+                self.marks.append({"at": at, "kind": "confirm", "text": "피로 확정"})
+            if state in ACTION_FSM:
+                self.marks.append({"at": at, "kind": "action_" + str(d.get("gate") or ""),
+                                   "text": f"{FSM_KO.get(state, state)}({d.get('gate')})"})
+        self.ticks.append({"at": at, "state": state, "c": float(d["c_fatigue"]), "gate": d.get("gate"),
+                           "cause": d.get("cause"), "context": d.get("context"), "posture": tof.get("posture"),
+                           "conf": _num(tof.get("posture_confidence")), "source": tof.get("posture_source"),
+                           "since": self._state_since["at"]})
+        while self.ticks and at - self.ticks[0]["at"] > self.keep_s:
+            self.ticks.popleft()
+        _ = prev
+
+    def on_cmd(self, env: Any, at: float) -> None:
+        d = _map(_map(env).get("data"))
+        if d.get("target_id") == "desk_lamp":
+            self._last_lamp[str(d.get("operation"))] = at
+            self.marks.append({"at": at, "kind": "lamp", "text": "무드등 " + op_text(str(d.get("operation")), d.get("value"))})
+
+    def on_request(self, env: Any, at: float) -> None:
+        d = _map(_map(env).get("data"))
+        if d.get("kind") in ("posture_suggest",) or d.get("cause") == "posture":
+            self.marks.append({"at": at, "kind": "card", "text": "자세 제안 카드"})
+
+    # ---------------------------------------------------------------- 판단 따라가기
+    def _hold(self, key_thr: str, key_hold: str, now: float) -> dict[str, Any]:
+        """유지 판정까지 남은 시간(추정). engine.py 와 같은 규칙을 앞으로 tick 이 계속 임계 위라고 보고 굴려 본다.
+
+        hold_frac < 1: 이 단계 첫 tick(t0)부터 hold 초가 지났고, 지난 hold 초(t > T−hold) tick 중 frac 이상이 임계 위(_hold_ok).
+        hold_frac = 1: 임계 위가 끊기지 않고 hold 초 이어짐(_held).
+        """
+        r, t = self.rules, self.ticks[-1]
+        thr, hold, frac = r.get(key_thr), r.get(key_hold), float(r.get("hold_frac") or 1.0)
+        tick = float(r.get("tick") or 10)
+        if thr is None or hold is None:
+            return {"ok": False, "progress": 0.0, "left_s": None}
+        # 단계에 들어온 tick 은 그 단계의 판정을 하지 않는다(engine: 다음 tick 부터 기록) — 그래서 첫 tick 을 뺀다
+        hist = [(x["at"], x["c"] >= thr) for x in self.ticks if x["since"] == t["since"] and x["at"] > t["since"]]
+        if t["c"] < thr:
+            win = [a for x, a in hist if x > now - hold]
+            return {"ok": False, "progress": 0.0, "left_s": None, "thr": thr, "hold": hold,
+                    "ratio": round(sum(win) / len(win), 2) if win else 0.0}
+        last = t["at"]
+        t0 = hist[0][0] if hist else last + tick
+        for m in range(0, int(hold / tick) + 4):
+            T = last + m * tick
+            h = hist + [(last + k * tick, True) for k in range(1, m + 1)]
+            if not h:
+                continue
+            if frac < 1.0:
+                win = [a for x, a in h if x > T - hold]
+                ok = T - t0 >= hold and win and sum(win) / len(win) >= frac
+            else:
+                below = [x for x, a in h if not a]
+                run0 = min(x for x, a in h if a and (not below or x > max(below)))
+                ok = T - run0 >= hold
+            if ok:
+                left = max(0.0, T - now)
+                return {"ok": m == 0, "progress": max(0.0, min(1.0, 1 - left / hold)), "left_s": round(left),
+                        "thr": thr, "hold": hold, "frac": frac}
+        return {"ok": False, "progress": 0.0, "left_s": None, "thr": thr, "hold": hold, "frac": frac}
+
+    def _posture_part(self, t: dict[str, Any]) -> dict[str, Any]:
+        """hub 가 센 자세와 그 피로 기여(w·δ, 추정). 하한·min_confidence 아래면 δ 0."""
+        r = self.rules
+        p, conf = t.get("posture"), t.get("conf")
+        floor = (r.get("floors") or {}).get(p)
+        counted = p is not None and conf is not None and conf >= (r.get("min_conf") or 0) and (floor is None or conf >= floor)
+        delta = float((r.get("posture_delta") or {}).get(p, 0.0)) if counted else 0.0
+        ctx = {"pc": "pc", "npc": "npc"}.get(str(t.get("context")), "npc")
+        w = (r.get("weights") or {}).get(ctx) or {}
+        # 타이핑이 없으면 keystroke 가, 호흡은 respiration_enabled false(기본)라 빠지고 남은 가중치로 재정규화한다
+        total = sum(float(v) for k, v in w.items() if k not in ("keystroke", "respiration")) or 1.0
+        wp = float(w.get("posture", 0.0))
+        share = wp * delta / total
+        return {"posture": p, "conf": conf, "floor": floor, "counted": counted, "delta": delta, "w": wp,
+                "share": round(share, 3), "dominant": delta > 0 and share >= 0.5 * t["c"]}
+
+    def view(self, now: float, control_cooldown_from: dict[str, float] | None = None) -> dict[str, Any]:
+        r = self.rules
+        if r.get("error"):
+            return {"error": r["error"], "source": r.get("source"), "profile": r.get("profile")}
+        if not self.ticks:
+            return {"error": None, "headline": "hub state/phase 대기", "checks": [], "series": [], "marks": [],
+                    "rules": self._rules_brief(), "source": r.get("source"), "profile": r.get("profile")}
+        t = self.ticks[-1]
+        c, state = t["c"], t["state"]
+        pp = self._posture_part(t)
+        gate = "auto" if r.get("conf_auto") is not None and c >= r["conf_auto"] else \
+            "suggest" if r.get("conf_suggest") is not None and c >= r["conf_suggest"] else "none"
+        gate_ko = {"auto": "자동", "suggest": "제안 카드", "none": "무동작"}[gate]
+        acts = r.get("posture_actions") or []
+        act_text = " + ".join(f"{'무드등' if a.get('target_id') == 'desk_lamp' else a.get('target_id')} "
+                              f"{op_text(str(a.get('operation')), a.get('value'))}" for a in acts) or "기기 명령 없음(카드만)"
+        act_text = act_text.replace("무드등 밝기", "무드등")   # "무드등 +60 % (최소 153)"
+        last = max(self._last_lamp.values()) if self._last_lamp else None
+        if control_cooldown_from:
+            last = max([x for x in [last, *control_cooldown_from.values()] if x is not None], default=None)
+        cool_left = None if last is None or r.get("cooldown") is None else max(0, round(r["cooldown"] - (now - last)))
+        tick = float(r.get("tick") or 10)
+        elev = self._hold("focus_low", "elevated_hold", now) if state in FOCUS_FSM else None
+        conf = self._hold("confirm", "confirm_hold", now) if state == "FATIGUE_SUSPECT" else None
+        # 한 줄 결론
+        eta = None
+        if state in FOCUS_FSM:
+            if elev and elev["left_s"] is not None:
+                # 의심 진입 tick 은 확정 판정을 안 하므로 + tick, 확정 뒤 원인 분석·자세 개입 2 tick
+                eta = elev["left_s"] + tick + (r.get("confirm_hold") or 0) + 2 * tick
+                head = f"지금 상태가 약 {round(eta)}초 더 이어지면 {act_text} ({gate_ko}) — 추정" if pp["dominant"] \
+                    else f"피로 {c:.2f} ≥ {elev['thr']:.2f} — 의심까지 {elev['left_s']}초(추정), 다만 자세 원인이 아님 → 무드등 아닐 수 있음"
+            else:
+                head = f"올리지 않음: 피로 {c:.2f} < {r.get('focus_low')}"
+        elif state == "FATIGUE_SUSPECT":
+            if conf and conf["left_s"] is not None:
+                eta = conf["left_s"] + 2 * tick
+                head = (f"지금 상태가 약 {round(eta)}초 더 이어지면 {act_text} ({gate_ko}) — 추정" if pp["dominant"]
+                        else f"피로 {c:.2f} ≥ {conf['thr']:.2f} — 확정까지 {conf['left_s']}초(추정), 자세 원인이 아니면 무드등 아님")
+            else:
+                head = f"올리지 않음: 피로 {c:.2f} < {r.get('confirm')} (의심 유지)"
+        elif state in ("FATIGUE", "CAUSE_ANALYSIS"):
+            head = f"피로 확정 — 다음 tick 원인 분석{' → 자세 → ' + act_text + ' (' + gate_ko + ')' if pp['dominant'] else ''}"
+        elif state == "ACTION_POSTURE":
+            sent = bool(self._last_lamp) and now - max(self._last_lamp.values()) <= 2 * tick
+            head = (f"무드등 올림 — {act_text} ({gate_ko}) 명령을 hub 가 보냄" if sent
+                    else f"자세 개입 중 — {act_text} ({gate_ko})" + (" · 쿨다운이라 생략될 수 있음" if cool_left else ""))
+        elif state == "FOCUS_BREAK":
+            head = "집중 저하(FOCUS_BREAK) — 관찰이 끝난 뒤 피로가 오르면 피로 의심으로, 아직 무드등 판단 단계 아님"
+        else:
+            head = f"{FSM_KO.get(state, state)} ({state}) — 무드등 판단 단계 아님"
+        if cool_left and state != "ACTION_POSTURE":
+            head += f" · 쿨다운 {cool_left}초 남음"
+        checks = [
+            {"name": "FSM 상태", "ok": state in ("FATIGUE_SUSPECT", "FATIGUE", "CAUSE_ANALYSIS", "ACTION_POSTURE"),
+             "value": f"{FSM_KO.get(state, state)} ({state})"},
+            {"name": f"피로도 ≥ 의심 {r.get('suspect')}", "ok": c >= (r.get("suspect") or 1), "value": f"{c:.2f}"},
+            {"name": f"피로도 ≥ 확정 {r.get('confirm')}", "ok": c >= (r.get("confirm") or 1), "value": f"{c:.2f}"},
+            {"name": f"의심 유지 {r.get('elevated_hold')} s (비율 ≥ {r.get('hold_frac')})", "ok": state in PAST_SUSPECT,
+             "value": "통과" if state in PAST_SUSPECT else
+             (f"{elev['left_s']} s 남음(추정)" if elev and elev["left_s"] is not None else "임계 아래") if state in FOCUS_FSM
+             else "해당 없음(이 상태에선 판정 안 함)",
+             "progress": 1.0 if state in PAST_SUSPECT else (elev or {}).get("progress", 0.0)},
+            {"name": f"확정 유지 {r.get('confirm_hold')} s", "ok": state in ("FATIGUE", "CAUSE_ANALYSIS", "ACTION_POSTURE"),
+             "value": (f"{conf['left_s']} s 남음(추정)" if conf and conf["left_s"] is not None else "임계 아래") if state == "FATIGUE_SUSPECT"
+             else ("통과" if state in ("FATIGUE", "CAUSE_ANALYSIS", "ACTION_POSTURE") else "의심 전"),
+             "progress": (conf or {}).get("progress", 0.0) if state == "FATIGUE_SUSPECT"
+             else (1.0 if state in ("FATIGUE", "CAUSE_ANALYSIS", "ACTION_POSTURE") else 0.0)},
+            {"name": "hub 가 센 자세", "ok": pp["counted"] and pp["delta"] > 0,
+             "value": f"{POSTURE_KO.get(str(pp['posture']), pp['posture'] or '-')} {pp['conf'] if pp['conf'] is None else round(pp['conf'], 2)}"
+                      + (f" (하한 {pp['floor']})" if pp["floor"] is not None else "") + f" → δ {pp['delta']}"},
+            {"name": "주원인 = 자세 (추정)", "ok": pp["dominant"],
+             "value": f"자세 기여 {pp['w']}×{pp['delta']} → {pp['share']:.2f} / 피로 {c:.2f}"},
+            {"name": f"게이트 (자동 ≥ {r.get('conf_auto')}, 카드 ≥ {r.get('conf_suggest')})", "ok": gate != "none",
+             "value": f"{gate_ko} ({c:.2f})"},
+            {"name": f"쿨다운 {r.get('cooldown')} s", "ok": not cool_left,
+             "value": "없음" if not cool_left else f"{cool_left} s 남음"},
+        ]
+        series = [{"at": x["at"], "c": round(x["c"], 3), "state": x["state"]} for x in self.ticks]
+        marks = [m for m in self.marks if now - m["at"] <= self.keep_s]
+        return {"error": None, "headline": head, "eta_s": None if eta is None else round(eta), "checks": checks,
+                "series": series, "marks": marks, "now": now, "window_s": self.keep_s, "rules": self._rules_brief(),
+                "source": r.get("source"), "profile": r.get("profile")}
+
+    def _rules_brief(self) -> dict[str, Any]:
+        r = self.rules
+        return {k: r.get(k) for k in ("suspect", "confirm", "natural", "elevated_hold", "confirm_hold", "hold_frac",
+                                       "conf_auto", "conf_suggest", "cooldown", "floors", "tick")}
+
+
 # --------------------------------------------------------------------------- 상태 저장소
 
 class Store:
@@ -1476,6 +1728,7 @@ class Store:
         self.keystroke = KeystrokeTracker()
         self.control = ControlTracker()
         self.virtual = VirtualHome()
+        self.trigger = TriggerTracker({"error": "hub 설정을 아직 안 읽음(--hub-config)"})
         # 화면에서 보내기(프로필·카드 응답). None 이면 보내기 끔
         self.publisher: Publisher | None = None
         self.sent: deque[dict[str, Any]] = deque(maxlen=20)
@@ -1513,12 +1766,15 @@ class Store:
                 self.phase = env
                 self.control.on_phase(env)
                 self.virtual.on_phase(env, at)
+                self.trigger.on_phase(env, at)
             elif topic == TOPIC_CMD:
                 self.virtual.on_cmd(env, at)
+                self.trigger.on_cmd(env, at)
             elif topic == TOPIC_RESULT:
                 self.virtual.on_result(env)
             elif topic == TOPIC_REQUEST:
                 self.virtual.on_request(env, at)
+                self.trigger.on_request(env, at)
             elif topic == TOPIC_FEEDBACK:
                 self.virtual.on_feedback(env, at)
             elif topic == TOPIC_HEALTH_HUB:
@@ -1623,6 +1879,7 @@ class Store:
             return {
                 "page_version": _page_version(),
                 "virtual": self.virtual.view(now),
+                "trigger": self.trigger.view(now),
                 "persona": self.persona_view(),
                 "control": control,
                 "keystroke": self.keystroke.view(now),
@@ -2070,8 +2327,134 @@ class FakeScenario:
         return {"command_id": cid, **(e.get("virtual") or {"status": "failed", "error_code": "unknown"})}
 
 
-def fake_loop(store: Store, stop: threading.Event, start: float = 0.0) -> None:
-    sc = FakeScenario(store)
+class FakeHubScenario(FakeScenario):
+    """--fake-scenario facedown|recline: hub 규칙(load_hub_rules)대로 도는 가짜 FSM 으로 '무드등 올릴 시점'을 시험한다.
+
+    facedown: 15 s 부터 90 s 동안 엎드림(서비스 0.995, hub 가 셈) → 의심 → 확정 → 자세 개입(자동) → 무드등 명령.
+    recline:  15 s 부터 계속 뒤로 젖힘(δ 0.6) → 의심까지만, 확정(0.60)에 못 미쳐 무드등 없음.
+    피로도 = Σ w·δ / Σ w (keystroke·respiration 빠짐, 경과 δ 0.1, 환경 0) — 설정에서 읽은 가중치로.
+    """
+
+    PERIOD = 240.0
+
+    def __init__(self, store: Store, kind: str, rules: dict[str, Any]) -> None:
+        super().__init__(store)
+        self.kind, self.rules = kind, rules
+        self.state, self.since, self.hold_t0, self.hist = "FOCUS_NPC", 0.0, None, []
+        self.next_tick = 0.0
+        self.cause, self.gate = None, "none"
+
+    def _posture(self, t: float) -> str:
+        u = t % self.PERIOD
+        if self.kind == "facedown":
+            return "face_down" if 15 <= u < 105 else "upright"
+        return "recline" if u >= 15 else "upright"
+
+    def probs(self, t: float, sensor: int | None = None) -> dict[str, float]:
+        pst = self._posture(t)
+        top = 0.995 if pst == "face_down" else 0.86 if pst == "recline" else 0.9
+        rest = (1.0 - top) / (len(LABELS) - 1)
+        out = {l: rest for l in LABELS}
+        out[pst] = top
+        return out
+
+    def _c(self, t: float) -> float:
+        r = self.rules
+        w = (r.get("weights") or {}).get("npc") or {}
+        total = sum(float(v) for k, v in w.items() if k not in ("keystroke", "respiration")) or 1.0
+        pst = self._posture(t)
+        conf = self.probs(t)[pst]
+        floor = (r.get("floors") or {}).get(pst)
+        delta = float((r.get("posture_delta") or {}).get(pst, 0.0)) if floor is None or conf >= floor else 0.0
+        return (float(w.get("posture", 0)) * delta + float(w.get("elapsed", 0)) * 0.1) / total
+
+    def _goto(self, state: str, t: float) -> None:
+        self.state, self.since, self.hold_t0, self.hist = state, t, None, []
+
+    def _held(self, thr: float, hold: float, c: float, t: float) -> bool:
+        """engine._hold_note·_hold_ok: 이 단계 첫 기록(t0)부터 hold 초, 지난 hold 초 기록 중 frac 이상이 임계 위."""
+        if self.hold_t0 is None:
+            self.hold_t0 = t
+        self.hist.append((t, c >= thr))
+        self.hist = [(x, a) for x, a in self.hist if x > t - hold]
+        frac = self.rules.get("hold_frac") or 1.0
+        return c >= thr and t - self.hold_t0 >= hold and sum(1 for _, a in self.hist if a) / len(self.hist) >= frac
+
+    def _fsm(self, t: float) -> None:
+        r, c = self.rules, self._c(t)
+        st = self.state
+        if st == "FOCUS_NPC":
+            if self._held(r["focus_low"], r["elevated_hold"], c, t):   # 아래인 tick 도 기록된다(hold_frac < 1)
+                self._goto("FATIGUE_SUSPECT", t)
+        elif st == "FATIGUE_SUSPECT":
+            if c < r["natural"]:
+                self._goto("FOCUS_NPC", t)
+            elif self._held(r["confirm"], r["confirm_hold"], c, t):
+                self._goto("FATIGUE", t)
+        elif st == "FATIGUE":
+            self._goto("CAUSE_ANALYSIS", t)
+        elif st == "CAUSE_ANALYSIS":
+            self.cause = "posture"
+            self.gate = "auto" if c >= r["conf_auto"] else "suggest" if c >= r["conf_suggest"] else "none"
+            self._goto("ACTION_POSTURE", t)
+            if self.gate == "auto":
+                self._send_posture_cmd(t)
+        elif st == "ACTION_POSTURE":
+            self._goto("MONITOR", t)
+        elif st == "MONITOR":
+            if self._posture(t) not in ("face_down", "drowsy"):
+                self._goto("RECOVERY", t)
+        elif st == "RECOVERY":
+            self._goto("FOCUS_NPC", t)
+        self.c_now = c
+
+    def _send_posture_cmd(self, t: float) -> None:
+        for i, a in enumerate(self.rules.get("posture_actions") or []):
+            cid = f"fkh{int(t)}{i}"
+            self.seq += 1
+            self.store.on_mqtt(TOPIC_CMD, _fake_env(self.seq, {
+                "command_id": cid, "target_id": a.get("target_id"), "operation": a.get("operation"), "value": a.get("value"),
+                "gate": "auto", "cause": "posture", "origin_state": "ACTION_POSTURE", "requires_confirmation": False,
+                "expires_ts_ms": int((time.time() + 15) * 1000)}))
+            self.seq += 1
+            self.store.on_mqtt(TOPIC_RESULT, _fake_env(self.seq, self._result_like_app(cid), "display-control"))
+
+    def step(self, t: float) -> None:
+        st = self.store
+        n = int(t * 5)
+        st.set_raw({"dev": "fake", "frames": n, "type5": n * 2, "sent": 0, "bad": 0, "sensors": [
+            {"id": i, "have": True, "age_ms": 40, "w": 8, "h": 8, "dist_mm": self.grid(i, t),
+             "status": [5] * 64, "flip_rows": False, "flip_cols": False} for i in (0, 1)]})
+        pst, probs = self._posture(t), self.probs(t)
+        st.set_posture({"posture": pst, "posture_ko": POSTURE_KO[pst], "conf": probs[pst], "valid": True, "present": True,
+                        "online_sensors": 2, "probs": probs, "instant": {"posture": pst, "conf": probs[pst], "probs": probs},
+                        "placement": "left", "model": {"file": "models/posture_net.bin", "labels": LABELS},
+                        "rule": {"enabled": True, "face_down": pst == "face_down", "conf": 0.995, "share": 1 if pst == "face_down" else 0},
+                        "misplaced_rule": {"mode": "and", "baseline": True, "baseline_source": "post"}})
+        st.link("posture", True, f"가짜 각본 {self.kind}")
+        st.link("raw", True, f"가짜 각본 {self.kind}")
+        st.link("mqtt", True, f"가짜 각본 {self.kind}")
+        if "once" not in self.fired:
+            self.fired.add("once")
+            st.on_mqtt(TOPIC_HEALTH_HUB, _fake_env(self.seq, {"status": "online"}))
+        tick = float(self.rules.get("tick") or 10)
+        while t >= self.next_tick:   # hub 는 10 s 마다 판정한다
+            self._fsm(self.next_tick)
+            self.seq += 1
+            phase = {"FOCUS_NPC": "focus", "RECOVERY": "recovery"}.get(self.state, "fatigue")
+            st.on_mqtt(TOPIC_PHASE, _fake_env(self.seq, {
+                "fsm_state": self.state, "phase": phase, "context": "npc", "c_fatigue": round(self.c_now, 4),
+                "c_focus": 0.1, "gate": self.gate if self.state == "ACTION_POSTURE" else "none",
+                "cause": self.cause if self.state in ("ACTION_POSTURE", "MONITOR") else None, "reasons": [],
+                "sensor_summary": {"present": True, "presence_source": "both",
+                                   "tof": {"posture": pst, "posture_confidence": probs[pst], "posture_source": "service"},
+                                   "personalize": {"active_profile_id": self._active_profile(), "decision_source": "policy"}}}))
+            self.next_tick += tick
+
+
+def fake_loop(store: Store, stop: threading.Event, start: float = 0.0, scenario: str = "cycle",
+              rules: dict[str, Any] | None = None) -> None:
+    sc = FakeHubScenario(store, scenario, rules or {}) if scenario in ("facedown", "recline") else FakeScenario(store)
     store.link("mqtt", True, "가짜 각본")
     t0 = time.time() - start
     while not stop.is_set():
@@ -2141,24 +2524,33 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--port", type=int, default=8790, help="이 화면의 로컬 포트")
     ap.add_argument("--hub-profile", default="", metavar="NAME",
                     help="hub 시연 프로파일 이름(예: demo-b). 보드가 발행하지 않아서 화면에 '(노트북 지정)' 으로 표시")
+    ap.add_argument("--hub-config", default=os.path.normpath(os.path.join(HERE, "..", "..", "..", "deskmate_hub", "config")),
+                    metavar="DIR", help="hub config 디렉터리(fsm·ingest·control.yaml, profiles/). 보드와 같은 hub 커밋의 것을 준다")
     ap.add_argument("--hub-floor", default="face_down=0.99,drowsy=0.80", metavar="L=C,…",
                     help="hub 가 자세를 세는 신뢰도 하한(demo-b bd47052). 화면 라벨이 이 아래면 'hub 무시' 표시. 빈 값이면 표시 안 함")
     ap.add_argument("--read-only", action="store_true",
                     help="화면에서 보내기(프로필·카드 응답)도 끈다 — 녹화만 할 때")
     ap.add_argument("--fake", action="store_true", help="보드 없이 가짜 각본으로")
+    ap.add_argument("--fake-scenario", choices=("cycle", "facedown", "recline"), default="cycle",
+                    help="cycle = 40 s 각본 · facedown = 15 s 부터 90 s 엎드림(hub 규칙대로 → 무드등) · recline = 계속 젖힘(의심까지만)")
     ap.add_argument("--fake-start", type=float, default=0.0, metavar="S",
                     help=f"가짜 각본을 S 초부터(0–{FAKE_PERIOD:.0f}, 예: 26 = 졸음→무드등 직전)")
     args = ap.parse_args(argv)
 
     store = Store()
     store.hub_floors = parse_floors(args.hub_floor)
+    rules = load_hub_rules(args.hub_config, args.hub_profile or ("demo-b" if args.fake else ""))
+    store.trigger = TriggerTracker(rules)
+    if not rules.get("error") and rules.get("floors") is not None and args.hub_floor == ap.get_default("hub_floor"):
+        store.hub_floors = {k: float(v) for k, v in rules["floors"].items()}   # 하한도 설정에서
+    print(f"hub 규칙: {args.hub_config} · 프로파일 {rules.get('profile') or '-'}" + (f" — 못 읽음: {rules['error']}" if rules.get("error") else ""))
     stop = threading.Event()
     threads: list[threading.Thread] = []
     if args.fake:
         store.mode, store.target = "fake", "가짜 데이터"
         store.hub_profile = args.hub_profile or "demo-b"
         store.publisher = None if args.read_only else LoopbackPublisher(store)
-        threads.append(threading.Thread(target=fake_loop, args=(store, stop, args.fake_start), daemon=True))
+        threads.append(threading.Thread(target=fake_loop, args=(store, stop, args.fake_start, args.fake_scenario, rules), daemon=True))
     else:
         h = args.pi4
         store.target = h

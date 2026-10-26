@@ -686,6 +686,142 @@ def test_virtual_notices_and_auto_notice():
     assert h.notices[-1]["text"] == "제안 카드 — 지금 피곤하세요?"
 
 
+# ----------------------------------------------------------------- 무드등 올릴 시점
+
+import os as _os
+
+# demo-b(bd47052)에서 무드등 판단에 쓰는 값만 옮긴 최소 설정 — load_hub_rules 가 hub 처럼 base 위에 프로파일을 얹는지 본다
+FSM_YAML = """
+weights:
+  fatigue:
+    npc: {keystroke: 0.00, posture: 0.40, respiration: 0.25, environment: 0.20, elapsed: 0.15}
+thresholds: {fatigue_focus_low: 0.40, fatigue_suspect_low: 0.40, fatigue_confirm: 0.70, natural_recovery: 0.30}
+gate: {conf_auto: 0.75, conf_suggest: 0.45}
+timers: {score_period_sec: 10, fatigue_elevated_hold_sec: 180, fatigue_confirm_hold_sec: 180, fatigue_hold_min_frac: 1.0}
+routing: {environment: [environment], posture: [posture, respiration], cognitive: [elapsed, keystroke]}
+"""
+INGEST_YAML = """
+tof:
+  min_confidence: 0.3
+  min_confidence_by_label: {}
+  posture_delta: {upright: 0.0, recline: 0.6, face_down: 1.0, drowsy: 1.0, chin_rest: 0.6}
+"""
+CONTROL_YAML = """
+cooldown_sec: 300
+actions:
+  posture:
+    - {target_id: desk_lamp, operation: adjust_brightness, value: {percent: 60, min_raw: 153}, undo: previous}
+"""
+PROFILE_YAML = """
+fsm:
+  weights:
+    fatigue:
+      npc: {keystroke: 0.00, posture: 0.80, respiration: 0.0, environment: 0.10, elapsed: 0.10}
+  timers: {fatigue_elevated_hold_sec: 20, fatigue_confirm_hold_sec: 20, fatigue_hold_min_frac: 0.8}
+  gate: {conf_auto: 0.55}
+  thresholds: {fatigue_confirm: 0.60}
+ingest:
+  tof:
+    min_confidence_by_label: {face_down: 0.99, drowsy: 0.80}
+"""
+
+
+@pytest.fixture()
+def hub_cfg(tmp_path):
+    pytest.importorskip("yaml")
+    (tmp_path / "profiles").mkdir()
+    for name, text in (("fsm.yaml", FSM_YAML), ("ingest.yaml", INGEST_YAML), ("control.yaml", CONTROL_YAML),
+                       ("profiles/demo-b.yaml", PROFILE_YAML)):
+        (tmp_path / name).write_text(text, encoding="utf-8")
+    return str(tmp_path)
+
+
+def test_load_hub_rules_merges_profile(hub_cfg):
+    r = dv.load_hub_rules(hub_cfg, "demo-b")
+    assert r["error"] is None
+    assert (r["suspect"], r["confirm"], r["natural"], r["elevated_hold"], r["confirm_hold"], r["hold_frac"]) == \
+        (0.40, 0.60, 0.30, 20, 20, 0.8)
+    assert (r["conf_auto"], r["conf_suggest"], r["cooldown"], r["tick"]) == (0.55, 0.45, 300, 10)
+    assert r["floors"] == {"face_down": 0.99, "drowsy": 0.80} and r["weights"]["npc"]["posture"] == 0.80
+    assert r["posture_actions"][0]["value"] == {"percent": 60, "min_raw": 153}
+    base = dv.load_hub_rules(hub_cfg, "")
+    assert base["confirm"] == 0.70 and base["elevated_hold"] == 180   # 프로파일 없으면 보드 기본
+    assert dv.load_hub_rules(hub_cfg + "/nope", "demo-b")["error"]     # 못 읽으면 숫자 대신 오류
+
+
+def test_load_hub_rules_reads_repo_config():
+    """레포의 실제 hub config(이 브랜치의 main 기준)를 읽을 수 있는지 — 숫자를 박지 않았다는 확인."""
+    pytest.importorskip("yaml")
+    cfg = _os.path.normpath(_os.path.join(_os.path.dirname(dv.__file__), "..", "..", "..", "deskmate_hub", "config"))
+    if not _os.path.exists(_os.path.join(cfg, "fsm.yaml")):
+        pytest.skip("레포 밖에서 돌림")
+    r = dv.load_hub_rules(cfg, "")
+    assert r["error"] is None and r["suspect"] is not None and r["tick"] == 10
+
+
+def _run(hub_cfg, kind, seconds):
+    rules = dv.load_hub_rules(hub_cfg, "demo-b")
+    st = dv.Store()
+    st.trigger = dv.TriggerTracker(rules)
+    sc = dv.FakeHubScenario(st, kind, rules)
+    base = 1_000_000.0
+    real = dv.time.time
+    seen = []
+    try:
+        for i in range(int(seconds * 10)):
+            t = i * 0.1
+            dv.time.time = lambda t=t: base + t
+            sc.step(t)
+            if i % 50 == 0 and st.trigger.ticks:
+                v = st.trigger.view(base + t)
+                seen.append((t, st.trigger.ticks[-1]["state"], v.get("eta_s"), v["headline"]))
+    finally:
+        dv.time.time = real
+    return st, seen, base
+
+
+def test_trigger_facedown_counts_down_then_fires(hub_cfg):
+    st, seen, base = _run(hub_cfg, "facedown", 100)
+    lamp = [m for m in st.trigger.marks if m["kind"] == "lamp"]
+    assert len(lamp) == 1
+    fired = lamp[0]["at"] - base
+    # 엎드림을 처음 본 tick 부터 예상 시각이 실제 명령 시각과 같다(추정이 hub 규칙과 맞음)
+    preds = [round(t + e) for t, _, e, _ in seen if e is not None]
+    assert preds and all(p == round(fired) for p in preds)
+    assert any("초 더 이어지면 무드등 +60 % (최소 153) (자동)" in h for *_, h in seen)
+    assert any(h.startswith("무드등 올림") for *_, h in seen)
+    assert {m["kind"] for m in st.trigger.marks} >= {"confirm", "lamp", "action_auto"}
+    v = st.trigger.view(base + 100)
+    assert any(c["name"].startswith("쿨다운") and not c["ok"] for c in v["checks"])   # 명령 뒤 300 s 쿨다운
+    assert all(0 <= p["c"] <= 1 for p in v["series"])
+
+
+def test_trigger_recline_stays_suspect(hub_cfg):
+    st, seen, base = _run(hub_cfg, "recline", 150)
+    assert not [m for m in st.trigger.marks if m["kind"] == "lamp"]
+    assert seen[-1][1] == "FATIGUE_SUSPECT" and seen[-1][3] == "올리지 않음: 피로 0.49 < 0.6 (의심 유지)"
+    v = st.trigger.view(base + 150)
+    check = {c["name"]: c for c in v["checks"]}
+    assert check["피로도 ≥ 의심 0.4"]["ok"] and not check["피로도 ≥ 확정 0.6"]["ok"]
+    assert check["hub 가 센 자세"]["value"].startswith("젖힘 0.86")
+
+
+def test_trigger_floor_blocks_low_confidence_posture(hub_cfg):
+    rules = dv.load_hub_rules(hub_cfg, "demo-b")
+    tr = dv.TriggerTracker(rules)
+    tr.on_phase(env({"fsm_state": "FOCUS_NPC", "context": "npc", "c_fatigue": 0.2,
+                     "sensor_summary": {"tof": {"posture": "drowsy", "posture_confidence": 0.55}}}), at=10.0)
+    v = tr.view(11.0)
+    row = {c["name"]: c for c in v["checks"]}["hub 가 센 자세"]
+    assert row["ok"] is False and row["value"].endswith("(하한 0.8) → δ 0.0")
+    assert v["headline"] == "올리지 않음: 피로 0.20 < 0.4"
+
+
+def test_trigger_without_config_says_so():
+    v = dv.TriggerTracker({"error": "FileNotFoundError: fsm.yaml", "source": "/x"}).view(0.0)
+    assert v["error"].startswith("FileNotFoundError")
+
+
 # ----------------------------------------------------------------- 보내기(프로필·카드 응답)
 
 class FakePub(dv.Publisher):

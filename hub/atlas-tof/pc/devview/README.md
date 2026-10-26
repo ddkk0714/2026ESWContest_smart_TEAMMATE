@@ -118,6 +118,19 @@ hub 시연 프로파일은 `state/phase`·`health/hub`·`:8765/health` 어디에
 타임라인 한 줄: `자세 개입(자세 원인) → iLink 무드등 밝기 +60 % (최소 153) (110→176)` + FSM 상태·원인·자동/제안·개인화 arm·
 decision_source·이유(개인화 설명) + 실제 Pi 5 결과. 이 화면을 켠 뒤부터 쌓인다(그 전 밝기는 '모름').
 
+### 무드등 올릴 시점
+
+가상 기기 화면 맨 위와 개발자 화면 판정 줄 아래. **hub 규칙을 hub 설정 파일에서 읽어**(코드에 숫자 없음) 지금 무드등(자세 개입)까지
+무엇이 남았는지 한 줄로: "지금 상태가 약 32초 더 이어지면 무드등 +60 % (최소 153) (자동) — 추정" / "올리지 않음: 피로 0.49 < 0.6 (의심 유지)".
+- `--hub-config <hub/deskmate_hub/config>` 에 **보드와 같은 hub 커밋**의 config 를 준다(fsm·ingest·control.yaml + `profiles/<--hub-profile>.json|.yaml`,
+  hub `profile.py` 처럼 얹음). PyYAML 이 필요하다(없거나 못 읽으면 화면에 이유). 예: 10-26 보드 = `pi4-hub` 워크트리 bd47052.
+- 체크리스트: FSM 상태 · 피로도 vs 의심(fatigue_suspect_low)·확정(fatigue_confirm) · 의심/확정 유지(hold 초·hold_min_frac, 진행 막대와 남은 초) ·
+  hub 가 센 자세(min_confidence·라벨 하한 → posture_delta) · 주원인 = 자세(가중치 × δ, 추정) · 게이트(conf_auto 자동 / conf_suggest 카드) · 무드등 쿨다운(cooldown_sec).
+- hub 는 유지 타이머를 state/phase 에 싣지 않는다. 그래서 '남은 초'는 state/phase tick(10 s)으로 engine.py 규칙(단계 진입 tick 은 판정 안 함,
+  지난 hold 초 기록 중 frac 이상)을 앞으로 굴려 **추정**한다. 가짜 hub 로 재 보면 엎드림을 처음 본 tick 부터 예측 시각이 실제 명령 시각과 같다.
+- 그래프: 지난 15 분 C_fatigue(흰 선), 의심·확정·회복 선, FSM 상태 배경, 세로선(💡 무드등 명령 · 자세 카드 · 피로 확정 · 개입 자동/제안).
+- 시험: `--fake --fake-scenario facedown`(15 s 부터 90 s 엎드림 → 카운트다운 → 약 65 s 뒤 무드등) · `--fake-scenario recline`(의심까지만, 무드등 없음).
+
 ### 앱 화면(가상)과 알림
 
 블루투스가 끊겨도 Pi 5 앱이 **띄웠을 화면을 같은 문구로** 보여 준다(`ui_env_app/lib/intervention.dart`·`dashboard_view.dart`):

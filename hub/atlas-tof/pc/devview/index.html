@@ -18,8 +18,8 @@ body[data-mode="video"] { overflow: hidden; }
 #dev {
   display: grid; min-height: 100vh; grid-template-columns: minmax(0, 1fr); gap: calc(8px * var(--k)); padding: 0 calc(14px * var(--k)) calc(10px * var(--k));
   /* 배너가 숨으면(display:none) 자리가 밀리지 않게 영역 이름으로 놓는다 */
-  grid-template-areas: "band" "banner" "row1" "row2" "control" "row4";
-  grid-template-rows: minmax(calc(40px * var(--k)), auto) auto auto auto auto minmax(calc(260px * var(--k)), 1fr);
+  grid-template-areas: "band" "banner" "row1" "row2" "trig" "control" "row4";
+  grid-template-rows: minmax(calc(40px * var(--k)), auto) auto auto auto auto auto minmax(calc(260px * var(--k)), 1fr);
 }
 #band { grid-area: band; } #banner { grid-area: banner; } #row1 { grid-area: row1; }
 #row2 { grid-area: row2; } #control { grid-area: control; } #row4 { grid-area: row4; }
@@ -151,7 +151,7 @@ body:not([data-mode="virtual"]) #virt { display: none; }
 
 /* ---------- 가상 기기(/?mode=virtual): 주변기기가 다 연결돼 있었다면 ---------- */
 #virt { display: grid; min-height: 100vh; grid-template-columns: minmax(0, 1fr); gap: calc(10px * var(--k)); padding: 0 calc(16px * var(--k)) calc(12px * var(--k));
-  grid-template-rows: minmax(calc(44px * var(--k)), auto) auto auto minmax(calc(320px * var(--k)), 1fr); }
+  grid-template-rows: minmax(calc(44px * var(--k)), auto) auto auto auto minmax(calc(320px * var(--k)), 1fr); }
 #vband { display: flex; overflow: hidden; flex-wrap: wrap; row-gap: calc(4px * var(--k)); padding-top: calc(4px * var(--k)) !important; padding-bottom: calc(4px * var(--k)) !important; align-items: center; gap: calc(14px * var(--k)); border-bottom: 1px solid var(--line); margin: 0 -16px; padding: 0 calc(16px * var(--k)); white-space: nowrap; font-size: calc(15px * var(--k)); color: var(--dim); }
 #vband b { color: var(--fg); font-size: calc(17px * var(--k)); }
 #vband .virtTag { color: #111; background: var(--accent); border-radius: calc(4px * var(--k)); padding: 1px calc(8px * var(--k)); font-weight: 700; }
@@ -227,6 +227,23 @@ body:not([data-mode="virtual"]) #toasts { display: none; }
 #tl .tx { font-weight: 600; }
 #tl .why, #tl .rl { color: var(--dim); font-size: calc(13px * var(--k)); }
 
+/* ---------- 무드등 올릴 시점(트리거) ---------- */
+.trig { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: calc(8px * var(--k)) calc(18px * var(--k)); }
+body.narrow .trig { grid-template-columns: minmax(0, 1fr); }
+.trig .th { grid-column: 1 / -1; display: flex; align-items: baseline; gap: calc(14px * var(--k)); flex-wrap: wrap; }
+.trig .hl { font-size: calc(24px * var(--k)); font-weight: 800; }
+.trig .hl.go { color: var(--ok); } .trig .hl.wait { color: var(--warn); } .trig .hl.no { color: var(--dim); }
+.trig .eta { font-size: calc(40px * var(--k)); font-weight: 800; color: var(--warn); font-family: Consolas, monospace; }
+.trig .chk { font-size: calc(15px * var(--k)); }
+.trig .chk .r { display: grid; grid-template-columns: calc(22px * var(--k)) minmax(0, 1.2fr) minmax(0, 1fr); gap: calc(6px * var(--k)); align-items: center; padding: calc(2px * var(--k)) 0; }
+.trig .chk .r .y { color: var(--ok); font-weight: 800; } .trig .chk .r .n { color: var(--faint); font-weight: 800; }
+.trig .chk .r .v { color: var(--fg); font-family: Consolas, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trig .chk .r .pb { grid-column: 2 / -1; height: calc(8px * var(--k)); background: #222836; border-radius: 4px; overflow: hidden; }
+.trig .chk .r .pb i { display: block; height: 100%; background: var(--warn); }
+.trig .src { grid-column: 1 / -1; font-size: calc(12px * var(--k)); color: var(--faint); }
+.trig svg { width: 100%; height: calc(220px * var(--k)); display: block; background: #10141c; border-radius: calc(6px * var(--k)); }
+.trig .lg { font-size: calc(12px * var(--k)); color: var(--dim); margin-top: calc(4px * var(--k)); }
+
 /* ---------- 영상 모드(/?mode=video): 시뮬 영상 하단 띠와 같은 칸, 실제 영상 옆·위에 녹화 ---------- */
 #video { position: fixed; inset: 0; background: #000; --k: var(--kv, 1); }   /* 영상 모드는 화면 크기에 맞춰(1920 기준) */
 #video.green { background: #00b140; }
@@ -278,6 +295,7 @@ body.narrow #devices { border-left: none; padding-left: 0; border-top: 1px solid
 /* 좁은 화면: 앱 화면(카드·알림)과 기기를 먼저, 프로필 고르기는 그 아래 */
 body.narrow #virt { grid-template-rows: none; grid-auto-rows: auto; }
 body.narrow #vtop { display: contents; }
+body.narrow #trigV { order: 1; }
 body.narrow #vband { order: 0; } body.narrow #vnow { order: 1; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); }
 body.narrow #vdevs { order: 2; } body.narrow #vperson { order: 3; }
 body.narrow #vtl { order: 4; min-height: calc(320px * var(--k)); }
@@ -339,6 +357,7 @@ body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
   </div>
 </section>
 
+<section class="panel trig" id="trigD" style="grid-area: trig"></section>
 <section class="panel" id="control">
   <div>
     <div class="ptitle"><span><b>제어 결론</b> · 어느 블루투스 기기를 왜 — interaction/request · control/cmd · control/result</span><span class="mono" id="ctlTime"></span></div>
@@ -378,6 +397,7 @@ body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
     <button class="tg" data-go="dev" title="단축키 G">개발자 화면</button>
     <button class="tg" data-go="video">영상 모드</button>
   </header>
+  <section class="panel trig" id="trigV"></section>
   <section id="vtop">
     <div class="panel" id="vperson">
       <div class="ptitle"><span><b>나는 누구?</b> · 첫 설정 프로필 → hub 개인화 기준(prior)</span><span class="mono" id="pNode">node laptop-devview</span></div>
@@ -758,6 +778,62 @@ async function answer(rid, verdict) {
   cardMsg = r.ok ? `${VLABEL[verdict]} 보냄 ${z(n.getHours())}:${z(n.getMinutes())}:${z(n.getSeconds())}` : `보내기 실패: ${r.error}`;
 }
 
+// ---------------- 무드등 올릴 시점: 체크리스트 + 지난 15 분 피로도 그래프
+const STATE_SHADE = {focus: "rgba(76,195,138,.10)", suspect: "rgba(245,185,58,.16)", fatigue: "rgba(240,106,106,.18)",
+  action: "rgba(240,106,106,.32)", other: "rgba(143,156,255,.10)"};
+function shadeOf(st) {
+  if (/^FOCUS/.test(st)) return "focus";
+  if (st === "FATIGUE_SUSPECT") return "suspect";
+  if (st === "FATIGUE" || st === "CAUSE_ANALYSIS" || st === "MONITOR" || st === "ESCALATE") return "fatigue";
+  if (/^ACTION_/.test(st)) return "action";
+  return "other";
+}
+function trigChart(tr) {
+  const W = 900, H = 220, L = 36, R = 8, T = 10, B = 22, now = tr.now;
+  // 받은 만큼만 넓힌다: 최소 2 분, 최대 window_s(15 분)
+  const span = Math.min(tr.window_s, Math.max(120, tr.series.length ? now - tr.series[0].at + 20 : 120));
+  const x = at => L + (W - L - R) * (1 - (now - at) / span), y = c => T + (H - T - B) * (1 - Math.max(0, Math.min(1, c)));
+  let g = "";
+  const sr = tr.series;
+  for (let i = 0; i < sr.length; i++) {   // 상태별 배경
+    const a = sr[i].at, b = i + 1 < sr.length ? sr[i + 1].at : now;
+    if (b < now - span) continue;
+    g += `<rect x="${x(Math.max(a, now - span)).toFixed(1)}" y="${T}" width="${Math.max(0, x(b) - x(Math.max(a, now - span))).toFixed(1)}" height="${H - T - B}" fill="${STATE_SHADE[shadeOf(sr[i].state)]}"/>`;
+  }
+  const rl = tr.rules || {};
+  [["confirm", "#f06a6a", "확정"], ["suspect", "#f5b93a", "의심"], ["natural", "#4cc38a", "회복"]].forEach(([k, col, nm]) => {
+    if (rl[k] == null) return;
+    g += `<line x1="${L}" x2="${W - R}" y1="${y(rl[k])}" y2="${y(rl[k])}" stroke="${col}" stroke-dasharray="5 4" stroke-width="1.2"/>` +
+      `<text x="${L + 4}" y="${y(rl[k]) - 3}" fill="${col}" font-size="12">${nm} ${rl[k]}</text>`;
+  });
+  for (let v = 0; v <= 1.001; v += 0.5) g += `<text x="4" y="${y(v) + 4}" fill="#5d6578" font-size="11">${v.toFixed(1)}</text>`;
+  if (sr.length) g += `<polyline fill="none" stroke="#f3f5f8" stroke-width="2.2" points="${sr.filter(p => p.at >= now - span).map(p => `${x(p.at).toFixed(1)},${y(p.c).toFixed(1)}`).join(" ")}"/>`;
+  const MC = {lamp: "#4cc38a", card: "#f5b93a", confirm: "#f06a6a", action_auto: "#4cc38a", action_suggest: "#f5b93a", action_none: "#9aa3b5"};
+  (tr.marks || []).forEach(m => {
+    const xx = x(m.at).toFixed(1), col = MC[m.kind] || "#8f9cff";
+    g += `<line x1="${xx}" x2="${xx}" y1="${T}" y2="${H - B}" stroke="${col}" stroke-width="${m.kind === "lamp" ? 3 : 1.5}"/>` +
+      `<text x="${xx}" y="${H - 6}" fill="${col}" font-size="11" text-anchor="middle">${m.kind === "lamp" ? "💡" : m.kind === "card" ? "카드" : m.kind === "confirm" ? "확정" : "개입"}</text>`;
+  });
+  const mm = sec => sec >= 60 ? `-${(sec / 60).toFixed(sec % 60 ? 1 : 0)}분` : `-${Math.round(sec)}초`;
+  [[span, mm(span)], [span / 2, mm(span / 2)], [0, "지금"]].forEach(([ago, lab]) =>
+    g += `<text x="${x(now - ago)}" y="${H - 6}" fill="#5d6578" font-size="11" text-anchor="${ago === 0 ? "end" : "start"}">${lab}</text>`);
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${g}</svg>`;
+}
+function renderTrigger(el, tr) {
+  if (!el) return;
+  if (!tr || tr.error) {
+    el.innerHTML = `<div class="th"><span class="hl no">무드등 올릴 시점 — hub 설정을 못 읽음</span></div><div class="src">${esc(tr ? tr.error : "-")} · ${esc(tr ? tr.source : "")} — --hub-config 로 보드와 같은 hub 의 config 디렉터리를 주세요</div>`;
+    return;
+  }
+  const h = tr.headline || "-", cls = /^무드등 올림/.test(h) ? "go" : tr.eta_s != null ? "wait" : "no";
+  el.innerHTML = `<div class="th"><span class="ptitle" style="margin:0"><b>무드등 올릴 시점</b> · hub 규칙(설정에서 읽음) · 유지 시간은 tick 으로 추정</span></div>` +
+    `<div class="th"><span class="hl ${cls}">${esc(h)}</span>${tr.eta_s != null ? `<span class="eta">${tr.eta_s} s</span>` : ""}</div>` +
+    `<div class="chk">${(tr.checks || []).map(c => `<div class="r"><span class="${c.ok ? "y" : "n"}">${c.ok ? "✓" : "·"}</span><span>${esc(c.name)}</span><span class="v">${esc(c.value)}</span>` +
+      (c.progress != null ? `<div class="pb"><i style="width:${(c.progress * 100).toFixed(0)}%"></i></div>` : "") + `</div>`).join("")}</div>` +
+    `<div>${trigChart(tr)}<div class="lg">흰 선 = C_fatigue · 배경 = FSM(초록 집중·노랑 의심·빨강 피로/개입) · 세로선: 💡 무드등 명령 · 카드 · 확정 · 개입(자동/제안)</div></div>` +
+    `<div class="src">설정: ${esc(tr.source)} · 프로파일 ${esc(tr.profile || "-")} · hub 는 유지 타이머를 싣지 않아 '남은 초'는 state/phase tick 으로 추정(engine.py 규칙)</div>`;
+}
+
 function renderVirtual(d) {
   const v = d.virtual, P = d.persona, ph = d.phase;
   $("vFake2").style.display = d.mode === "fake" ? "inline" : "none";
@@ -894,6 +970,8 @@ async function tick() {
     renderKeystroke(d.keystroke);
     renderVideo(d);
     renderVirtual(d);
+    renderTrigger($("trigD"), d.trigger);
+    renderTrigger($("trigV"), d.trigger);
     renderLog(d.log);
     renderTopics(d.topics);
   } catch (e) {
