@@ -251,20 +251,29 @@ LEANED_BACK = {"upright": 0.02, "lean_forward": 0.005, "recline": 0.04, "face_do
                "drowsy": 0.015, "away": 0.90, "misplaced": 0.0, "forward_head": 0.01}
 
 
-def test_seated_away_is_masked_when_mmwave_sees_desk(cfg):
-    """mmWave 가 책상 재실이면 서비스 away 를 away·misplaced 를 뺀 1위로 — 화면 두 자세 줄 모두. FSM 증거는 그대로 0."""
-    assert cfg["tof"]["service"]["mask_away_when_present"] is True
+def grid(now, bottom_mm, *, rest_mm=1500, status=5, sensors=2):
+    """0x05 격자 표본: 위 7줄은 rest_mm, 가장 아랫줄(행 7)은 bottom_mm(센서 0 만, 나머지 센서는 전부 rest_mm)."""
+    def one(bottom):
+        return {"distance_mm": [rest_mm] * 56 + [bottom] * 8, "status": [status] * 64}
+    data = {"grid_width": 8, "grid_height": 8, "frame_id": 1, "sensors_ok": 3, "flags": 1,
+            "sensors": {0: one(bottom_mm), **{k: one(rest_mm) for k in range(1, sensors)}}}
+    return Sample(received=now, ts=now, seq=1, data=data)
+
+
+def test_seated_away_is_masked_when_bottom_row_is_near(cfg):
+    """아랫줄에 70 cm 보다 가까운 칸이 있으면 away 를 1위 자세로 — 화면 두 자세 줄 모두. FSM 증거·재실은 그대로."""
+    assert cfg["tof"]["service"]["away_bottom_row_mm"] == 700
     cache = SensorCache()
-    cache.put("mmwave", mm(100.0, present=True, dist=60))
+    cache.put("mmwave", mm(100.0, present=False))                       # mmWave 는 재실 판정만 — 가림과 무관
+    cache.put("tof_grid", grid(100.0, 620))
     cache.put("tof_service", svc_probs(100.0, LEANED_BACK))
     out = sensor_summary(cache.snapshot(), 100.0, cfg, SessionTracker())
-    assert out["present"] is True
     assert out["tof"]["posture"] == "recline" and out["tof"]["away_masked"] is True
     assert out["tof_service"]["posture"] == "recline" and out["tof_service"]["service_posture"] == "away"
-    assert out["tof_service"]["present"] is True
     assert out["tof"]["posture_confidence"] == pytest.approx(0.04)      # 원래 확률 그대로 — 다시 나눠 키우지 않는다
+    assert out["present"] is False and out["presence_source"] == "mmwave"   # 재실 판정은 이전대로 mmWave
+    cache.put("mmwave", mm(100.0, present=True, dist=60))
     f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.MONITOR)
-    assert f.present is True
     assert f.signals["posture"].phi == 0.0 and f.signals["posture"].delta == 0.0   # min_confidence 아래 → away 와 같은 0
 
 
@@ -273,26 +282,34 @@ def test_seated_away_mask_never_makes_drowsy_evidence(cfg):
     probs = dict(LEANED_BACK, recline=0.01, drowsy=0.06)
     cache = SensorCache()
     cache.put("mmwave", mm(100.0, present=True, dist=60))
+    cache.put("tof_grid", grid(100.0, 500))
     cache.put("tof_service", svc_probs(100.0, probs))
     f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.MONITOR)
     assert f.signals["posture"].delta == 0.0
 
 
-@pytest.mark.parametrize("mm_kw", [dict(present=False), dict(present=True, dist=300), dict(present=True, dist=None)])
-def test_away_kept_when_mmwave_does_not_see_desk(cfg, mm_kw):
-    """mmWave 가 없음·책상 밖·거리 모름이면 away 그대로(재실을 ToF 에 맡기는 경우)."""
+@pytest.mark.parametrize("bottom,status,age", [
+    (700, 5, 0.0),       # 70 cm 이상이면 사람 없음(가정)
+    (900, 5, 0.0),
+    (-1, 5, 0.0),        # 타깃 없음
+    (500, 255, 0.0),     # 무효 칸은 안 셈
+    (500, 5, 10.0),      # 격자가 낡음
+])
+def test_away_kept_when_bottom_row_is_far_or_unknown(cfg, bottom, status, age):
     cache = SensorCache()
-    cache.put("mmwave", mm(100.0, **mm_kw))
+    cache.put("mmwave", mm(100.0, present=True, dist=60))               # mmWave 가 재실이라 해도 가리지 않는다
+    cache.put("tof_grid", grid(100.0 - age, bottom, status=status))
     cache.put("tof_service", svc_probs(100.0, LEANED_BACK))
     out = sensor_summary(cache.snapshot(), 100.0, cfg, SessionTracker())
     assert out["tof_service"]["posture"] == "away" and "away_masked" not in out["tof_service"]
 
 
-def test_away_mask_can_be_turned_off(cfg):
-    cfg["tof"]["service"]["mask_away_when_present"] = False
+def test_away_kept_without_grid_and_mask_can_be_turned_off(cfg):
     cache = SensorCache()
-    cache.put("mmwave", mm(100.0, present=True, dist=60))
     cache.put("tof_service", svc_probs(100.0, LEANED_BACK))
+    assert sensor_summary(cache.snapshot(), 100.0, cfg, SessionTracker())["tof_service"]["posture"] == "away"
+    cfg["tof"]["service"]["away_bottom_row_mm"] = 0
+    cache.put("tof_grid", grid(100.0, 500))
     out = sensor_summary(cache.snapshot(), 100.0, cfg, SessionTracker())
     assert out["tof"]["posture"] == "away" and out["tof_service"]["posture"] == "away"
 

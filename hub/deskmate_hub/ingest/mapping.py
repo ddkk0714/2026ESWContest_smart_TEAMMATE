@@ -153,19 +153,34 @@ def _service_sample(view: CacheView, now: float, cfg: dict[str, Any]) -> Sample 
 
 
 _NOT_SEATED = ("away", "misplaced")
+_GRID_VALID_STATUS = (5, 9, 6, 10)   # tof_mlp 와 같은 유효(5·9)+준유효(6·10)
+
+
+def _bottom_row_seated(view: CacheView, now: float, cfg: dict[str, Any], max_mm: float) -> bool:
+    """최신 0x05 격자에서 어느 센서든 가장 아랫줄(행 h-1)에 max_mm 보다 가까운 유효 칸이 있으면 True. 격자가 없거나 낡으면 False."""
+    fresh = cfg["freshness_sec"]
+    grid = view.fresh("tof_grid", now, fresh.get("tof_grid", fresh.get("tof", 3)))
+    if grid is None:
+        return False
+    w, h = int(grid.data.get("grid_width") or 8), int(grid.data.get("grid_height") or 8)
+    for sensor in (grid.data.get("sensors") or {}).values():
+        dist, status = list(sensor.get("distance_mm") or []), list(sensor.get("status") or [])
+        for k in range((h - 1) * w, min(h * w, len(dist))):
+            st = status[k] if k < len(status) else None
+            if 0 < dist[k] < max_mm and (st is None or st in _GRID_VALID_STATUS):
+                return True
+    return False
 
 
 def _mask_seated_away(svc: Sample, view: CacheView, now: float, cfg: dict[str, Any]) -> Sample:
-    """`tof.service.mask_away_when_present` 이고 mmWave 가 책상 재실(거리 게이트 안)이라고 하면 서비스 away 를 away·misplaced
-    를 뺀 확률 1위 자세로 바꾼다. 신뢰도는 그 라벨의 원래 확률 그대로라 대개 `min_confidence` 아래 → FSM 에는 away 처럼 증거
-    0 이고(다시 나눠 키우면 약한 drowsy 가 시연 하한을 넘어 무드등이 헛켜질 수 있다) 화면 자세 칸만 away 가 아닌 라벨이 된다.
-    mmWave 가 없거나 거리를 모르면 그대로 — 재실 판단을 ToF 에 맡기는 경우라 away 가 근거다.
+    """`tof.service.away_bottom_row_mm` 이 있고 격자 가장 아랫줄에 그보다 가까운 칸이 있으면(앉아 있다) 서비스 away 를
+    away·misplaced 를 뺀 확률 1위 자세로 바꾼다. 신뢰도는 그 라벨의 원래 확률 그대로라 대개 `min_confidence` 아래 → FSM 에는
+    away 처럼 증거 0 이고(다시 나눠 키우면 약한 drowsy 가 시연 하한을 넘어 무드등이 헛켜질 수 있다) 화면 자세 칸만 away 가 아닌
+    라벨이 된다. 재실(presence.source)은 건드리지 않는다.
     바꾼 표본은 present True·drowsy False·away_masked True·service_posture(원래 라벨)."""
     d = svc.data
-    if d.get("posture") != "away" or not ((cfg.get("tof") or {}).get("service") or {}).get("mask_away_when_present"):
-        return svc
-    mm = _usable_mmwave(view.fresh("mmwave", now, cfg["freshness_sec"]["mmwave"]))
-    if mm is None or not _mmwave_at_desk(mm, cfg.get("presence") or {}):
+    max_mm = float(((cfg.get("tof") or {}).get("service") or {}).get("away_bottom_row_mm") or 0)
+    if d.get("posture") != "away" or max_mm <= 0 or not _bottom_row_seated(view, now, cfg, max_mm):
         return svc
     probs = {k: float(v) for k, v in (d.get("probs") or {}).items() if k not in _NOT_SEATED}
     if not probs:
@@ -554,7 +569,7 @@ def sensor_summary(view: CacheView, now: float, cfg: dict[str, Any],
     svc = view.fresh("tof_service", now, fresh.get("tof_service", fresh.get("tof", 3))) if "tof" in cfg else None
     if svc:
         # 별도 자세 서비스(GRU) 의 최근 판정 — posture_source 가 service 가 아니어도 화면·실기 로그용으로 보여 준다.
-        # 책상 재실인데 away 면 자세 칸과 같은 라벨로(_mask_seated_away) — 화면의 두 자세 줄이 다른 말을 하지 않게
+        # 아랫줄에 사람이 있는데 away 면 자세 칸과 같은 라벨로(_mask_seated_away) — 화면의 두 자세 줄이 다른 말을 하지 않게
         svc = _mask_seated_away(svc, view, now, cfg)
         out["tof_service"] = {
             k: svc.data[k]
