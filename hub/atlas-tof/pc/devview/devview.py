@@ -462,23 +462,31 @@ def hub_floor_note(posture: str, conf: float | None, floors: dict[str, float]) -
 AWAY_BOTTOM_ROW_MM = 700   # hub tof.service.away_bottom_row_mm (10-27) 과 같은 값
 
 
-def bottom_row_seated(raw: Any, max_mm: float = AWAY_BOTTOM_ROW_MM) -> bool:
-    """`/raw` 격자에서 어느 센서든 가장 아랫줄에 max_mm 보다 가까운 유효 칸이 있으면 True(앉아 있음). 격자 없으면 False."""
+def bottom_row_state(raw: Any, max_mm: float = AWAY_BOTTOM_ROW_MM) -> str | None:
+    """`/raw` 격자 가장 아랫줄 → 'near'(어느 센서든 max_mm 보다 가까운 유효 칸) | 'far'(유효 8칸 이상인 센서 모두 아랫줄이
+    max_mm 이상이거나 비었음) | None(격자 없음). hub _bottom_row_state 와 같은 규칙."""
+    working = 0
     for s in parse_raw(raw)["sensors"]:
-        if not s["grid"]:
+        if not s["grid"] or s["valid_count"] < 8:
             continue
+        working += 1
         w, h = int(s.get("w") or 8), int(s.get("h") or 8)
-        for k in range((h - 1) * w, min(h * w, len(s["grid"]))):
-            if s["valid"][k] and 0 < s["grid"][k] < max_mm:
-                return True
-    return False
+        if any(s["valid"][k] and 0 < s["grid"][k] < max_mm for k in range((h - 1) * w, min(h * w, len(s["grid"])))):
+            return "near"
+    return "far" if working else None
 
 
 def mask_seated_away(j: Any, raw: Any) -> Any:
-    """hub `tof.service.away_bottom_row_mm`(10-27)과 같은 규칙: 서비스가 away 인데 격자 가장 아랫줄에 70 cm 보다 가까운 칸이
-    있으면(앉아 있다) away·misplaced 를 뺀 확률 1위 라벨로 보인다. 신뢰도는 원래 확률."""
+    """hub `tof.service.away_bottom_row_mm`(10-27)과 같은 규칙. 아랫줄 near 인데 away → away·misplaced 뺀 확률 1위(신뢰도는
+    원래 확률), 아랫줄 far 인데 away 가 아님 → away(빈 의자의 엎드림·뒤로 기댐)."""
     j = _map(j)
-    if j.get("posture") != "away" or not bottom_row_seated(raw):
+    p = j.get("posture")
+    if p in (None, "unknown"):
+        return j
+    state = bottom_row_state(raw)
+    if state == "far" and p != "away":
+        return {**j, "posture": "away", "posture_ko": POSTURE_KO.get("away", "away"), "conf": 1.0, "away_forced": True}
+    if state != "near" or p != "away":
         return j
     cand = {str(k): _num(v) or 0.0 for k, v in _map(j.get("probs")).items() if k not in ("away", "misplaced")}
     if not cand:
@@ -514,6 +522,7 @@ def posture_view(j: Any, floors: dict[str, float] | None = None) -> dict[str, An
         "floors": floors,
         "rules": _rule_view(j),
         "away_masked": bool(j.get("away_masked")),
+        "away_forced": bool(j.get("away_forced")),
     }
 
 
