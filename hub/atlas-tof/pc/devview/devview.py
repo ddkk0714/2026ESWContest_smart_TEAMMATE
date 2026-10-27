@@ -459,14 +459,26 @@ def hub_floor_note(posture: str, conf: float | None, floors: dict[str, float]) -
     return f"hub 무시 ({conf:.2f} < {f:.2f})"
 
 
-def mask_seated_away(j: Any, phase_env: Any) -> Any:
-    """hub `tof.service.mask_away_when_present`(10-27)와 같은 규칙: 서비스가 away 인데 hub 가 mmWave 로 책상 재실이라고
-    하면(sensor_summary present ∧ presence_source mmwave) away·misplaced 를 뺀 확률 1위 라벨로 보인다. 신뢰도는 원래 확률."""
+AWAY_BOTTOM_ROW_MM = 700   # hub tof.service.away_bottom_row_mm (10-27) 과 같은 값
+
+
+def bottom_row_seated(raw: Any, max_mm: float = AWAY_BOTTOM_ROW_MM) -> bool:
+    """`/raw` 격자에서 어느 센서든 가장 아랫줄에 max_mm 보다 가까운 유효 칸이 있으면 True(앉아 있음). 격자 없으면 False."""
+    for s in parse_raw(raw)["sensors"]:
+        if not s["grid"]:
+            continue
+        w, h = int(s.get("w") or 8), int(s.get("h") or 8)
+        for k in range((h - 1) * w, min(h * w, len(s["grid"]))):
+            if s["valid"][k] and 0 < s["grid"][k] < max_mm:
+                return True
+    return False
+
+
+def mask_seated_away(j: Any, raw: Any) -> Any:
+    """hub `tof.service.away_bottom_row_mm`(10-27)과 같은 규칙: 서비스가 away 인데 격자 가장 아랫줄에 70 cm 보다 가까운 칸이
+    있으면(앉아 있다) away·misplaced 를 뺀 확률 1위 라벨로 보인다. 신뢰도는 원래 확률."""
     j = _map(j)
-    if j.get("posture") != "away":
-        return j
-    ss = _map(_map(_map(phase_env).get("data")).get("sensor_summary"))
-    if ss.get("present") is not True or ss.get("presence_source") != "mmwave":
+    if j.get("posture") != "away" or not bottom_row_seated(raw):
         return j
     cand = {str(k): _num(v) or 0.0 for k, v in _map(j.get("probs")).items() if k not in ("away", "misplaced")}
     if not cand:
@@ -2507,7 +2519,7 @@ class Store:
             links = {k: {**v, "age_s": None if v["last"] is None else round(now - v["last"], 1)}
                      for k, v in self.links.items()}
             control = self.control.view(self.phase, now)
-            posture = None if self.posture is None else mask_seated_away(self.posture, self.phase)
+            posture = None if self.posture is None else mask_seated_away(self.posture, self.raw)
             return {
                 "page_version": _page_version(),
                 "virtual": self.virtual.view(now),
