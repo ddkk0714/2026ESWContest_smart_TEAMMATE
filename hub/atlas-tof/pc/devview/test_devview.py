@@ -1464,3 +1464,18 @@ def test_away_ticks_show_no_score_and_skip_trigger():
     assert [p["c"] for p in view["series"]] == [0.3]
     tr.on_phase(env(here), 140.0)
     assert len(tr.ticks) == 2 and tr.view(141.0)["away"] is False
+
+
+def test_seated_away_is_masked_like_hub():
+    """hub mask_away_when_present 와 같게: mmWave 재실이면 away 대신 1위 자세, 아니면 그대로(10-27)."""
+    svc = {"valid": True, "posture": "away", "conf": 0.9, "posture_ko": "자리비움",
+           "probs": {"upright": 0.02, "recline": 0.04, "away": 0.9, "misplaced": 0.03, "drowsy": 0.01}}
+    seated = {"data": {"sensor_summary": {"present": True, "presence_source": "mmwave"}}}
+    v = dv.posture_view(dv.mask_seated_away(svc, seated))
+    assert v["posture"] == "recline" and v["away_masked"] is True and v["conf"] == 0.04
+    for phase in (None, {"data": {"sensor_summary": {"present": False, "presence_source": "mmwave"}}},
+                  {"data": {"sensor_summary": {"present": True, "presence_source": "tof"}}}):
+        v = dv.posture_view(dv.mask_seated_away(svc, phase))
+        assert v["posture"] == "away" and v["away_masked"] is False
+    up = dict(svc, posture="upright")
+    assert dv.mask_seated_away(up, seated)["posture"] == "upright"

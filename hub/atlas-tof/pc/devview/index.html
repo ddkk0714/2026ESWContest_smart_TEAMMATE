@@ -548,7 +548,8 @@ function renderSvc(p) {
   // hub 하한(demo-b: 졸음 0.80 · 엎드림 0.99) 아래면 화면엔 떠도 hub 는 세지 않는다 — 그 사실을 라벨 옆에
   const floor = p.floors ? p.floors[p.posture] : undefined;
   $("svcLabel").innerHTML = esc(p.valid ? p.label : `${p.label} (입력 없음)`) +
-    (p.hub_note ? ` <span class="hubIgnore">${esc(p.hub_note)}</span>` : floor != null && p.valid ? ` <span class="hubCount">hub 셈 (≥ ${floor.toFixed(2)})</span>` : "");
+    (p.hub_note ? ` <span class="hubIgnore">${esc(p.hub_note)}</span>` : floor != null && p.valid ? ` <span class="hubCount">hub 셈 (≥ ${floor.toFixed(2)})</span>` : "") +
+    (p.away_masked ? ` <span class="hubCount">자리 비움 가림 (mmWave 재실)</span>` : "");
   const r = p.rules;
   $("svcRules").innerHTML = r ? (r.model_raw ? `<div class="raw">모델 원 출력(게이트·규칙 전): ${esc(r.model_raw)}</div>` : "") +
     r.lines.map(x => `<div class="${/켜짐 →|적용 중|막음/.test(x) ? "on" : ""}">${esc(x)}</div>`).join("") : "";

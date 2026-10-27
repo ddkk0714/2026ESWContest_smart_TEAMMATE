@@ -459,6 +459,22 @@ def hub_floor_note(posture: str, conf: float | None, floors: dict[str, float]) -
     return f"hub 무시 ({conf:.2f} < {f:.2f})"
 
 
+def mask_seated_away(j: Any, phase_env: Any) -> Any:
+    """hub `tof.service.mask_away_when_present`(10-27)와 같은 규칙: 서비스가 away 인데 hub 가 mmWave 로 책상 재실이라고
+    하면(sensor_summary present ∧ presence_source mmwave) away·misplaced 를 뺀 확률 1위 라벨로 보인다. 신뢰도는 원래 확률."""
+    j = _map(j)
+    if j.get("posture") != "away":
+        return j
+    ss = _map(_map(_map(phase_env).get("data")).get("sensor_summary"))
+    if ss.get("present") is not True or ss.get("presence_source") != "mmwave":
+        return j
+    cand = {str(k): _num(v) or 0.0 for k, v in _map(j.get("probs")).items() if k not in ("away", "misplaced")}
+    if not cand:
+        return j
+    label = max(cand, key=cand.__getitem__)
+    return {**j, "posture": label, "posture_ko": POSTURE_KO.get(label, label), "conf": cand[label], "away_masked": True}
+
+
 def posture_view(j: Any, floors: dict[str, float] | None = None) -> dict[str, Any]:
     """자세 서비스 `/api/state` → 라벨·신뢰도·9 클래스 막대·장치 위치·보정 상태·hub 하한 표시.
 
@@ -485,6 +501,7 @@ def posture_view(j: Any, floors: dict[str, float] | None = None) -> dict[str, An
         "hub_note": hub_floor_note(p, _num(j.get("conf")), floors) if j.get("valid") else None,
         "floors": floors,
         "rules": _rule_view(j),
+        "away_masked": bool(j.get("away_masked")),
     }
 
 
@@ -2490,6 +2507,7 @@ class Store:
             links = {k: {**v, "age_s": None if v["last"] is None else round(now - v["last"], 1)}
                      for k, v in self.links.items()}
             control = self.control.view(self.phase, now)
+            posture = None if self.posture is None else mask_seated_away(self.posture, self.phase)
             return {
                 "page_version": _page_version(),
                 "virtual": self.virtual.view(now),
@@ -2498,14 +2516,14 @@ class Store:
                 "persona": self.persona_view(),
                 "control": control,
                 "keystroke": self.keystroke.view(now),
-                "video": video_view(self.phase, self.posture, control),
+                "video": video_view(self.phase, posture, control),
                 "mode": self.mode,
                 "target": self.target,
                 "now": time.strftime("%H:%M:%S"),
                 "links": links,
                 "phase": phase_view(self.phase),
                 "profile": profile_text(self.phase, self.profile_user, self.health_hub, self.hub_profile),
-                "posture": posture_view(self.posture, self.hub_floors) if self.posture is not None else None,
+                "posture": posture_view(posture, self.hub_floors) if posture is not None else None,
                 "face_down": self.face_down.view(now),
                 "raw": parse_raw(self.raw),
                 "sections": sensor_sections(self.raw, self.topics, self.phase, now),
