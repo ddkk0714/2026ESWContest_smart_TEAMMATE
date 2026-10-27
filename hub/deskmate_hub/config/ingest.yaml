@@ -88,11 +88,12 @@ tof:
     fallback: mlp                 # 서비스가 없거나 낡았거나 valid 가 아니면: mlp(hub MLP → 규칙) | rule
     min_online_sensors: 1         # 살아 있는 센서가 이보다 적으면 서비스 판정을 쓰지 않는다
     poller: auto                  # auto(DESKMATE_NATIVE_MQTT=1 인 보드는 끔) | on | off
-    # 서비스가 away 여도 0x05 격자 가장 아랫줄(행 h-1, 사람 몸통 쪽)에 이 거리(mm)보다 가까운 유효 칸이 하나라도 있으면 앉아 있는
-    # 것으로 보고 away·misplaced 를 뺀 확률 1위 자세로 바꾼다. 가정(10-27 사용자): 사람이 없으면 아랫줄은 전부 70 cm 이상.
-    # 10-27 실측: 뒤로 젖혀 머리가 75 cm 넘게 멀어지면 한 센서에 몸이 10칸 남짓만 잡혀 GRU 가 away 0.90~0.98, 움직이는 1~2 s 도
-    # away 로 튐. mmWave 재실로 가리던 판(6a44841)은 mmWave 가 너무 예민해 이 규칙으로 바꿨다. 바꾼 표본엔 away_masked: true.
-    # 0 이면 끔. 격자가 없거나 낡았으면(freshness_sec.tof_grid) away 그대로.
+    # 0x05 격자 가장 아랫줄(행 h-1, 사람 몸통 쪽) 규칙. 가정(10-27 사용자): 사람이 없으면 아랫줄은 전부 이 거리(mm) 이상.
+    #   아랫줄에 더 가까운 유효 칸이 하나라도 있으면(앉아 있음) 서비스 away 를 away·misplaced 뺀 확률 1위 자세로(away_masked),
+    #   일하는 센서(유효 8칸 이상) 모두 아랫줄이 이 거리 이상이거나 비었으면 서비스가 뭐라 하든 away(away_forced).
+    # 10-27 실측: 앉음 아랫줄 15~45 cm·뒤로 젖힘 62~67 cm, 빈자리 79~89 cm. 빈자리에서 GRU 가 40 s 동안 엎드림·뒤로 기댐을 냈고
+    # (away 0.10~0.27), 뒤로 젖히면 away 0.9 로 튐. mmWave 재실로 가리던 판(6a44841)은 mmWave 가 너무 예민해 이 규칙으로 바꿨다.
+    # 재실 판정(presence.source)은 그대로. 0 이면 끔. 격자가 없거나 낡았으면(freshness_sec.tof_grid) 서비스 판정 그대로.
     away_bottom_row_mm: 700
   min_confidence: 0.3           # posture_confidence 가 이보다 낮으면 unknown 으로 본다
   min_confidence_by_label: {}    # 라벨별 추가 하한(예 {face_down: 0.99}). 보드 기본 없음 — 시연 프로파일만 (10-25 PC 시뮬: 글쓰기 오판 거르기)

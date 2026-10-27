@@ -156,31 +156,48 @@ _NOT_SEATED = ("away", "misplaced")
 _GRID_VALID_STATUS = (5, 9, 6, 10)   # tof_mlp 와 같은 유효(5·9)+준유효(6·10)
 
 
-def _bottom_row_seated(view: CacheView, now: float, cfg: dict[str, Any], max_mm: float) -> bool:
-    """최신 0x05 격자에서 어느 센서든 가장 아랫줄(행 h-1)에 max_mm 보다 가까운 유효 칸이 있으면 True. 격자가 없거나 낡으면 False."""
+_BOTTOM_ROW_MIN_VALID = 8          # 센서가 일하고 있다고 볼 최소 유효 칸(격자 전체) — 다 무효인 센서는 '멀다'의 근거가 아니다
+
+
+def _bottom_row_state(view: CacheView, now: float, cfg: dict[str, Any], max_mm: float) -> str | None:
+    """최신 0x05 격자 가장 아랫줄(행 h-1) → 'near'(어느 센서든 max_mm 보다 가까운 유효 칸) | 'far'(일하는 센서 모두 아랫줄이
+    max_mm 이상이거나 비어 있음) | None(격자가 없거나 낡았거나 일하는 센서가 없음)."""
     fresh = cfg["freshness_sec"]
     grid = view.fresh("tof_grid", now, fresh.get("tof_grid", fresh.get("tof", 3)))
     if grid is None:
-        return False
+        return None
     w, h = int(grid.data.get("grid_width") or 8), int(grid.data.get("grid_height") or 8)
+    working = 0
     for sensor in (grid.data.get("sensors") or {}).values():
         dist, status = list(sensor.get("distance_mm") or []), list(sensor.get("status") or [])
-        for k in range((h - 1) * w, min(h * w, len(dist))):
-            st = status[k] if k < len(status) else None
-            if 0 < dist[k] < max_mm and (st is None or st in _GRID_VALID_STATUS):
-                return True
-    return False
+        valid = [0 < d and (k >= len(status) or status[k] in _GRID_VALID_STATUS) for k, d in enumerate(dist)]
+        if sum(valid) < _BOTTOM_ROW_MIN_VALID:
+            continue
+        working += 1
+        if any(valid[k] and dist[k] < max_mm for k in range((h - 1) * w, min(h * w, len(dist)))):
+            return "near"
+    return "far" if working else None
 
 
 def _mask_seated_away(svc: Sample, view: CacheView, now: float, cfg: dict[str, Any]) -> Sample:
-    """`tof.service.away_bottom_row_mm` 이 있고 격자 가장 아랫줄에 그보다 가까운 칸이 있으면(앉아 있다) 서비스 away 를
-    away·misplaced 를 뺀 확률 1위 자세로 바꾼다. 신뢰도는 그 라벨의 원래 확률 그대로라 대개 `min_confidence` 아래 → FSM 에는
-    away 처럼 증거 0 이고(다시 나눠 키우면 약한 drowsy 가 시연 하한을 넘어 무드등이 헛켜질 수 있다) 화면 자세 칸만 away 가 아닌
-    라벨이 된다. 재실(presence.source)은 건드리지 않는다.
-    바꾼 표본은 present True·drowsy False·away_masked True·service_posture(원래 라벨)."""
+    """`tof.service.away_bottom_row_mm` 규칙 — 가정(사용자 10-27): 사람이 없으면 격자 가장 아랫줄은 전부 그 거리 이상.
+
+    - 아랫줄이 가깝다(near)인데 서비스가 away → away·misplaced 를 뺀 확률 1위 자세. 신뢰도는 그 라벨의 원래 확률 그대로라 대개
+      `min_confidence` 아래 → FSM 에는 away 처럼 증거 0(다시 나눠 키우면 약한 drowsy 가 시연 하한을 넘어 무드등이 헛켜질 수
+      있다). 바꾼 표본은 present True·drowsy False·away_masked True·service_posture(원래 라벨).
+    - 아랫줄이 멀다(far)인데 서비스가 away 가 아님 → away(신뢰도 1.0). 10-27 실측: 빈자리에서 GRU 가 40 s 동안 엎드림·뒤로 기댐
+      (away 0.10~0.27)을 냈다 — 빈 의자의 엎드림이 피로 증거가 되지 않게. present False·drowsy False·away_forced True.
+    재실(presence.source)은 건드리지 않는다."""
     d = svc.data
     max_mm = float(((cfg.get("tof") or {}).get("service") or {}).get("away_bottom_row_mm") or 0)
-    if d.get("posture") != "away" or max_mm <= 0 or not _bottom_row_seated(view, now, cfg, max_mm):
+    if max_mm <= 0 or d.get("posture") in (None, "unknown"):
+        return svc
+    state = _bottom_row_state(view, now, cfg, max_mm)
+    if state == "far" and d.get("posture") != "away":
+        return Sample(received=svc.received, ts=svc.ts, seq=svc.seq, data=dict(
+            d, posture="away", posture_confidence=1.0, present=False, drowsy=False, misplaced=False,
+            away_forced=True, service_posture=d.get("posture")))
+    if state != "near" or d.get("posture") != "away":
         return svc
     probs = {k: float(v) for k, v in (d.get("probs") or {}).items() if k not in _NOT_SEATED}
     if not probs:
@@ -232,7 +249,7 @@ def _tof_with_model(view: CacheView, tof_data: dict[str, Any], now: float, cfg: 
                         drowsy_model=bool(svc.data.get("drowsy")),      # 모델 라벨 drowsy 는 상한 없이 1.0(_tof_posture_signal)
                         drowsy_rule=bool(tof_data.get("drowsy")),       # 0x03 규칙 플래그만 따로 — 모델 drowsy 가 걸러져도 규칙 경로로 새지 않게
                         misplaced=bool(svc.data.get("misplaced", False)), posture_source="service",
-                        **({"away_masked": True} if svc.data.get("away_masked") else {}))
+                        **{k: True for k in ("away_masked", "away_forced") if svc.data.get(k)})
         source = str((tcfg.get("service") or {}).get("fallback", "mlp"))
     if source != "mlp":
         return dict(tof_data, posture_source="rule")
@@ -563,18 +580,18 @@ def sensor_summary(view: CacheView, now: float, cfg: dict[str, Any],
             k: data[k]
             for k in ("posture", "posture_confidence", "posture_source", "motion_score", "head_delta_mm",
                       "nod_rate_hz", "drowsy", "misplaced", "nods_in_window", "baseline_ready", "grid_width",
-                      "grid_height", "coverage_ratio", "sensors_ok", "away_masked")
+                      "grid_height", "coverage_ratio", "sensors_ok", "away_masked", "away_forced")
             if k in data
         }
     svc = view.fresh("tof_service", now, fresh.get("tof_service", fresh.get("tof", 3))) if "tof" in cfg else None
     if svc:
         # 별도 자세 서비스(GRU) 의 최근 판정 — posture_source 가 service 가 아니어도 화면·실기 로그용으로 보여 준다.
-        # 아랫줄에 사람이 있는데 away 면 자세 칸과 같은 라벨로(_mask_seated_away) — 화면의 두 자세 줄이 다른 말을 하지 않게
+        # 아랫줄 규칙(_mask_seated_away)을 여기도 — 화면의 두 자세 줄이 다른 말을 하지 않게
         svc = _mask_seated_away(svc, view, now, cfg)
         out["tof_service"] = {
             k: svc.data[k]
             for k in ("posture", "posture_confidence", "valid", "present", "misplaced", "online_sensors", "since_ms",
-                      "presence_source", "away_masked", "service_posture")
+                      "presence_source", "away_masked", "away_forced", "service_posture")
             if k in svc.data
         }
         if isinstance(svc.data.get("model"), dict) and svc.data["model"].get("file"):

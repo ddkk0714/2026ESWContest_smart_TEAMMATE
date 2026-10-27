@@ -304,6 +304,45 @@ def test_away_kept_when_bottom_row_is_far_or_unknown(cfg, bottom, status, age):
     assert out["tof_service"]["posture"] == "away" and "away_masked" not in out["tof_service"]
 
 
+def test_far_bottom_row_forces_away_over_service_label(cfg):
+    """빈자리(아랫줄 전부 70 cm 이상)인데 GRU 가 엎드림을 내면 away 로 — 빈 의자의 엎드림이 피로 증거가 되지 않게(10-27 실측)."""
+    cache = SensorCache()
+    cache.put("mmwave", mm(100.0, present=True, dist=60))
+    cache.put("tof_grid", grid(100.0, 870))
+    cache.put("tof_service", svc(100.0, posture="face_down", conf=0.995))
+    out = sensor_summary(cache.snapshot(), 100.0, cfg, SessionTracker())
+    assert out["tof"]["posture"] == "away" and out["tof"]["away_forced"] is True
+    assert out["tof_service"]["posture"] == "away" and out["tof_service"]["service_posture"] == "face_down"
+    assert out["tof_service"]["present"] is False
+    forced = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.MONITOR).signals["posture"]
+    cache.put("tof_service", svc(100.0, posture="away", conf=0.95))
+    real = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.MONITOR).signals["posture"]
+    assert (forced.phi, forced.delta) == (real.phi, real.delta) and forced.delta < 1.0   # 엎드림 증거 1.0 이 사라진다
+
+
+def test_near_bottom_row_keeps_service_label(cfg):
+    """앉아 엎드리면(아랫줄 20 cm) 서비스 엎드림 그대로."""
+    cache = SensorCache()
+    cache.put("tof_grid", grid(100.0, 200))
+    cache.put("tof_service", svc(100.0, posture="face_down", conf=0.995))
+    out = sensor_summary(cache.snapshot(), 100.0, cfg, SessionTracker())
+    assert out["tof"]["posture"] == "face_down" and "away_forced" not in out["tof"]
+
+
+def test_dead_sensor_is_not_evidence_of_empty_seat(cfg):
+    """유효 칸이 8개 미만인 센서는 '멀다'의 근거가 아니다 — 두 센서가 다 그러면 서비스 판정 그대로."""
+    cache = SensorCache()
+    cache.put("tof_grid", grid(100.0, -1, rest_mm=-1))
+    cache.put("tof_service", svc(100.0, posture="upright", conf=0.8))
+    assert sensor_summary(cache.snapshot(), 100.0, cfg, SessionTracker())["tof"]["posture"] == "upright"
+    # 한 센서만 죽고 다른 센서 아랫줄이 가까우면 near
+    g = grid(100.0, 300)
+    g.data["sensors"][1] = {"distance_mm": [-1] * 64, "status": [255] * 64}
+    cache.put("tof_grid", g)
+    cache.put("tof_service", svc_probs(100.0, LEANED_BACK))
+    assert sensor_summary(cache.snapshot(), 100.0, cfg, SessionTracker())["tof"]["away_masked"] is True
+
+
 def test_away_kept_without_grid_and_mask_can_be_turned_off(cfg):
     cache = SensorCache()
     cache.put("tof_service", svc_probs(100.0, LEANED_BACK))
@@ -312,6 +351,9 @@ def test_away_kept_without_grid_and_mask_can_be_turned_off(cfg):
     cache.put("tof_grid", grid(100.0, 500))
     out = sensor_summary(cache.snapshot(), 100.0, cfg, SessionTracker())
     assert out["tof"]["posture"] == "away" and out["tof_service"]["posture"] == "away"
+    cache.put("tof_grid", grid(100.0, 900))
+    cache.put("tof_service", svc(100.0, posture="face_down", conf=0.995))
+    assert sensor_summary(cache.snapshot(), 100.0, cfg, SessionTracker())["tof"]["posture"] == "face_down"
 
 
 # ── 설정·폴러 ───────────────────────────────────────────────────────
