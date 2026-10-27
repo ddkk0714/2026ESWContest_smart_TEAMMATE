@@ -149,7 +149,31 @@ def _service_sample(view: CacheView, now: float, cfg: dict[str, Any]) -> Sample 
     scfg = (tcfg.get("service") or {})
     if int(svc.data.get("online_sensors") or 0) < int(scfg.get("min_online_sensors", 1)):
         return None
-    return svc
+    return _mask_seated_away(svc, view, now, cfg)
+
+
+_NOT_SEATED = ("away", "misplaced")
+
+
+def _mask_seated_away(svc: Sample, view: CacheView, now: float, cfg: dict[str, Any]) -> Sample:
+    """`tof.service.mask_away_when_present` 이고 mmWave 가 책상 재실(거리 게이트 안)이라고 하면 서비스 away 를 away·misplaced
+    를 뺀 확률 1위 자세로 바꾼다. 신뢰도는 그 라벨의 원래 확률 그대로라 대개 `min_confidence` 아래 → FSM 에는 away 처럼 증거
+    0 이고(다시 나눠 키우면 약한 drowsy 가 시연 하한을 넘어 무드등이 헛켜질 수 있다) 화면 자세 칸만 away 가 아닌 라벨이 된다.
+    mmWave 가 없거나 거리를 모르면 그대로 — 재실 판단을 ToF 에 맡기는 경우라 away 가 근거다.
+    바꾼 표본은 present True·drowsy False·away_masked True·service_posture(원래 라벨)."""
+    d = svc.data
+    if d.get("posture") != "away" or not ((cfg.get("tof") or {}).get("service") or {}).get("mask_away_when_present"):
+        return svc
+    mm = _usable_mmwave(view.fresh("mmwave", now, cfg["freshness_sec"]["mmwave"]))
+    if mm is None or not _mmwave_at_desk(mm, cfg.get("presence") or {}):
+        return svc
+    probs = {k: float(v) for k, v in (d.get("probs") or {}).items() if k not in _NOT_SEATED}
+    if not probs:
+        return svc
+    label = max(probs, key=probs.__getitem__)
+    return Sample(received=svc.received, ts=svc.ts, seq=svc.seq, data=dict(
+        d, posture=label, posture_confidence=round(probs[label], 4), present=True,
+        drowsy=False, away_masked=True, service_posture="away"))    # 대신 보여 주는 라벨일 뿐 — 졸음 플래그로 새지 않게
 
 
 def _tof_sample(view: CacheView, now: float, cfg: dict[str, Any]) -> Sample | None:
@@ -192,7 +216,8 @@ def _tof_with_model(view: CacheView, tof_data: dict[str, Any], now: float, cfg: 
                         drowsy=bool(tof_data.get("drowsy")) or bool(svc.data.get("drowsy")),
                         drowsy_model=bool(svc.data.get("drowsy")),      # 모델 라벨 drowsy 는 상한 없이 1.0(_tof_posture_signal)
                         drowsy_rule=bool(tof_data.get("drowsy")),       # 0x03 규칙 플래그만 따로 — 모델 drowsy 가 걸러져도 규칙 경로로 새지 않게
-                        misplaced=bool(svc.data.get("misplaced", False)), posture_source="service")
+                        misplaced=bool(svc.data.get("misplaced", False)), posture_source="service",
+                        **({"away_masked": True} if svc.data.get("away_masked") else {}))
         source = str((tcfg.get("service") or {}).get("fallback", "mlp"))
     if source != "mlp":
         return dict(tof_data, posture_source="rule")
@@ -523,16 +548,18 @@ def sensor_summary(view: CacheView, now: float, cfg: dict[str, Any],
             k: data[k]
             for k in ("posture", "posture_confidence", "posture_source", "motion_score", "head_delta_mm",
                       "nod_rate_hz", "drowsy", "misplaced", "nods_in_window", "baseline_ready", "grid_width",
-                      "grid_height", "coverage_ratio", "sensors_ok")
+                      "grid_height", "coverage_ratio", "sensors_ok", "away_masked")
             if k in data
         }
     svc = view.fresh("tof_service", now, fresh.get("tof_service", fresh.get("tof", 3))) if "tof" in cfg else None
     if svc:
-        # 별도 자세 서비스(GRU) 의 최근 판정 — posture_source 가 service 가 아니어도 화면·실기 로그용으로 보여 준다
+        # 별도 자세 서비스(GRU) 의 최근 판정 — posture_source 가 service 가 아니어도 화면·실기 로그용으로 보여 준다.
+        # 책상 재실인데 away 면 자세 칸과 같은 라벨로(_mask_seated_away) — 화면의 두 자세 줄이 다른 말을 하지 않게
+        svc = _mask_seated_away(svc, view, now, cfg)
         out["tof_service"] = {
             k: svc.data[k]
             for k in ("posture", "posture_confidence", "valid", "present", "misplaced", "online_sensors", "since_ms",
-                      "presence_source")
+                      "presence_source", "away_masked", "service_posture")
             if k in svc.data
         }
         if isinstance(svc.data.get("model"), dict) and svc.data["model"].get("file"):

@@ -87,7 +87,11 @@ tof:
     fallback: mlp                 # 서비스가 없거나 낡았거나 valid 가 아니면: mlp(hub MLP → 규칙) | rule
     min_online_sensors: 1         # 살아 있는 센서가 이보다 적으면 서비스 판정을 쓰지 않는다
     poller: auto                  # auto(DESKMATE_NATIVE_MQTT=1 인 보드는 끔) | on | off
-  min_confidence: 0.3            # posture_confidence 가 이보다 낮으면 unknown 으로 본다
+    # mmWave 가 책상 재실(presence.desk_max_cm 안)이라고 할 때 서비스 away 를 away·misplaced 를 뺀 확률 1위 자세로 바꾼다.
+    # 10-27 실측: 뒤로 젖혀 머리가 75 cm 넘게 멀어지면 한 센서에 몸이 10칸 남짓만 잡혀 GRU 가 away 0.90~0.98, 움직이는 1~2 s 도
+    # away 로 튐 — 재실은 이미 mmWave 가 정하므로(presence.source) 자세 칸에 away 를 띄우지 않는다. 바꾼 표본엔 away_masked: true.
+    mask_away_when_present: true
+  min_confidence: 0.3           # posture_confidence 가 이보다 낮으면 unknown 으로 본다
   min_confidence_by_label: {}    # 라벨별 추가 하한(예 {face_down: 0.99}). 보드 기본 없음 — 시연 프로파일만 (10-25 PC 시뮬: 글쓰기 오판 거르기)
   posture_phi:
     unknown: 0.0

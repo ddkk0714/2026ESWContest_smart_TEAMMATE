@@ -239,6 +239,64 @@ def test_mmwave_gate_still_blocks_service_posture(cfg):
     assert f.present is False and not f.signals["posture"].available
 
 
+def svc_probs(now, probs, *, posture="away"):
+    """확률을 직접 준 서비스 표본(평활 probs 의 1위가 posture)."""
+    state = state_json(posture=posture, conf=probs[posture])
+    state["probs"] = dict(probs)
+    return Sample(received=now, ts=now, seq=None, data=parse_service_state(state))
+
+
+# 10-27 실측 모양: 뒤로 젖혀 75 cm 넘게 멀어졌을 때 away 0.90, 나머지 1위는 recline
+LEANED_BACK = {"upright": 0.02, "lean_forward": 0.005, "recline": 0.04, "face_down": 0.005, "chin_rest": 0.005,
+               "drowsy": 0.015, "away": 0.90, "misplaced": 0.0, "forward_head": 0.01}
+
+
+def test_seated_away_is_masked_when_mmwave_sees_desk(cfg):
+    """mmWave 가 책상 재실이면 서비스 away 를 away·misplaced 를 뺀 1위로 — 화면 두 자세 줄 모두. FSM 증거는 그대로 0."""
+    assert cfg["tof"]["service"]["mask_away_when_present"] is True
+    cache = SensorCache()
+    cache.put("mmwave", mm(100.0, present=True, dist=60))
+    cache.put("tof_service", svc_probs(100.0, LEANED_BACK))
+    out = sensor_summary(cache.snapshot(), 100.0, cfg, SessionTracker())
+    assert out["present"] is True
+    assert out["tof"]["posture"] == "recline" and out["tof"]["away_masked"] is True
+    assert out["tof_service"]["posture"] == "recline" and out["tof_service"]["service_posture"] == "away"
+    assert out["tof_service"]["present"] is True
+    assert out["tof"]["posture_confidence"] == pytest.approx(0.04)      # 원래 확률 그대로 — 다시 나눠 키우지 않는다
+    f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.MONITOR)
+    assert f.present is True
+    assert f.signals["posture"].phi == 0.0 and f.signals["posture"].delta == 0.0   # min_confidence 아래 → away 와 같은 0
+
+
+def test_seated_away_mask_never_makes_drowsy_evidence(cfg):
+    """away 다음 1위가 drowsy 여도 확률이 낮으면 졸음 증거가 아니다(무드등 헛켜짐 방지)."""
+    probs = dict(LEANED_BACK, recline=0.01, drowsy=0.06)
+    cache = SensorCache()
+    cache.put("mmwave", mm(100.0, present=True, dist=60))
+    cache.put("tof_service", svc_probs(100.0, probs))
+    f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.MONITOR)
+    assert f.signals["posture"].delta == 0.0
+
+
+@pytest.mark.parametrize("mm_kw", [dict(present=False), dict(present=True, dist=300), dict(present=True, dist=None)])
+def test_away_kept_when_mmwave_does_not_see_desk(cfg, mm_kw):
+    """mmWave 가 없음·책상 밖·거리 모름이면 away 그대로(재실을 ToF 에 맡기는 경우)."""
+    cache = SensorCache()
+    cache.put("mmwave", mm(100.0, **mm_kw))
+    cache.put("tof_service", svc_probs(100.0, LEANED_BACK))
+    out = sensor_summary(cache.snapshot(), 100.0, cfg, SessionTracker())
+    assert out["tof_service"]["posture"] == "away" and "away_masked" not in out["tof_service"]
+
+
+def test_away_mask_can_be_turned_off(cfg):
+    cfg["tof"]["service"]["mask_away_when_present"] = False
+    cache = SensorCache()
+    cache.put("mmwave", mm(100.0, present=True, dist=60))
+    cache.put("tof_service", svc_probs(100.0, LEANED_BACK))
+    out = sensor_summary(cache.snapshot(), 100.0, cfg, SessionTracker())
+    assert out["tof"]["posture"] == "away" and out["tof_service"]["posture"] == "away"
+
+
 # ── 설정·폴러 ───────────────────────────────────────────────────────
 
 def test_service_config_defaults_and_should_poll(cfg):
