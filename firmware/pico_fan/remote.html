@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DESKMATE 팬 리모컨</title>
+<!--
+  PR #59 펌웨어(main.py, MicroPython) 용 Web Bluetooth 리모컨.
+  CMD 에 1 바이트 0~100(속도 %) 를 쓰고, STATUS notify 로 현재 속도를 받는다.
+  Web Bluetooth 는 보안 문맥이 필요하다:
+    python -m http.server 8792 --bind 127.0.0.1   (이 폴더에서)
+  → Chrome 에서 http://127.0.0.1:8792/remote.html
+-->
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1c1f24; --muted: #69707d;
+    --line: #dde1e7; --accent: #2f6fdf; --accent-text: #ffffff;
+    --ok: #1f8a4c; --warn: #b5541b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15171b; --card: #1e2127; --text: #e7e9ed; --muted: #9aa1ad;
+      --line: #2d323a; --accent: #5b8ff0; --accent-text: #0e1116;
+      --ok: #4cc683; --warn: #f0965b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.5 system-ui, "Segoe UI", "Malgun Gothic", sans-serif;
+  }
+  main { max-width: 420px; margin: 0 auto; padding: 24px 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 16px; margin-bottom: 12px;
+  }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .state { font-size: 14px; color: var(--muted); }
+  .state b { color: var(--text); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; }
+  .dot.on { background: var(--ok); }
+  button {
+    font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text);
+    border-radius: 8px; padding: 8px 14px; cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  button:disabled { opacity: .45; cursor: default; }
+  .speed { font-size: 48px; font-weight: 600; font-variant-numeric: tabular-nums; text-align: center; margin: 4px 0 8px; }
+  .speed small { font-size: 20px; color: var(--muted); font-weight: 400; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .presets { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-top: 12px; }
+  .presets button { padding: 8px 0; }
+  .presets button.active { border-color: var(--accent); color: var(--accent); }
+  #log {
+    font: 12px/1.45 ui-monospace, Consolas, monospace; color: var(--muted);
+    max-height: 160px; overflow-y: auto; white-space: pre-wrap; margin: 0;
+  }
+  .err { color: var(--warn); }
+</style>
+</head>
+<body>
+<main>
+  <h1>DESKMATE 팬 리모컨</h1>
+  <p class="sub">PR #59 펌웨어 · Pico 2 W · BLE <code>DESKMATE-FAN</code></p>
+
+  <div class="card row">
+    <span class="state"><span id="dot" class="dot"></span><b id="conn">연결 안 됨</b></span>
+    <button id="btnConnect" class="primary">연결</button>
+  </div>
+
+  <div class="card">
+    <div class="speed"><span id="speed">–</span><small> %</small></div>
+    <input id="slider" type="range" min="0" max="100" step="5" value="0" disabled>
+    <div class="presets" id="presets">
+      <button data-v="0" disabled>끄기</button>
+      <button data-v="30" disabled>30</button>
+      <button data-v="45" disabled>45</button>
+      <button data-v="60" disabled>60</button>
+      <button data-v="100" disabled>100</button>
+    </div>
+  </div>
+
+  <div class="card"><pre id="log"></pre></div>
+</main>
+
+<script>
+const SVC_UUID    = 'd35e0001-5f4a-4b2c-9c1e-0f6a7b8c9d01';
+const CMD_UUID    = 'd35e0002-5f4a-4b2c-9c1e-0f6a7b8c9d01';
+const STATUS_UUID = 'd35e0003-5f4a-4b2c-9c1e-0f6a7b8c9d01';
+
+const $ = (id) => document.getElementById(id);
+const presetButtons = [...document.querySelectorAll('#presets button')];
+let device = null, cmdChar = null, writing = Promise.resolve();
+
+function log(msg, isErr) {
+  const t = new Date().toLocaleTimeString('ko-KR', { hour12: false });
+  const line = document.createElement('span');
+  if (isErr) line.className = 'err';
+  line.textContent = `${t}  ${msg}\n`;
+  $('log').prepend(line);
+}
+
+function setConnected(on, name) {
+  $('dot').classList.toggle('on', on);
+  $('conn').textContent = on ? `연결됨 · ${name}` : '연결 안 됨';
+  $('btnConnect').textContent = on ? '끊기' : '연결';
+  $('slider').disabled = !on;
+  presetButtons.forEach((b) => (b.disabled = !on));
+  if (!on) { cmdChar = null; showSpeed(null); }
+}
+
+function showSpeed(pct) {
+  $('speed').textContent = pct == null ? '–' : pct;
+  if (pct != null) $('slider').value = pct;
+  presetButtons.forEach((b) => b.classList.toggle('active', pct != null && +b.dataset.v === pct));
+}
+
+// Windows 는 연결 직후 링크가 끊겨 "GATT Server is disconnected" 가 나는 일이 있다.
+// 기기를 다시 고를 필요 없이 같은 device 로 몇 번 더 붙어 본다.
+async function openService(dev, tries = 3) {
+  for (let i = 1; ; i++) {
+    try {
+      const server = await dev.gatt.connect();
+      return await server.getPrimaryService(SVC_UUID);
+    } catch (err) {
+      if (i >= tries) throw err;
+      log(`GATT 시도 ${i}/${tries} 실패, 1초 뒤 다시: ${err.message}`, true);
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+}
+
+async function connect() {
+  if (!navigator.bluetooth) {
+    log('이 브라우저는 Web Bluetooth 를 지원하지 않음 — Chrome 으로 열 것', true);
+    return;
+  }
+  try {
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ name: 'DESKMATE-FAN' }, { services: [SVC_UUID] }],
+      optionalServices: [SVC_UUID],
+    });
+    // 같은 기기면 Chrome 이 같은 객체를 돌려주므로 addEventListener 로 붙이면 핸들러가 쌓인다
+    device.ongattserverdisconnected = () => {
+      log('연결 끊김');
+      setConnected(false);
+    };
+    log(`선택: ${device.name || device.id} — GATT 연결 중`);
+    const svc = await openService(device);
+    cmdChar = await svc.getCharacteristic(CMD_UUID);
+    const statusChar = await svc.getCharacteristic(STATUS_UUID);
+    statusChar.addEventListener('characteristicvaluechanged', (e) => {
+      const pct = e.target.value.getUint8(0);
+      showSpeed(pct);
+      log(`상태 알림: ${pct} %`);
+    });
+    await statusChar.startNotifications();
+    const cur = (await statusChar.readValue()).getUint8(0);
+    setConnected(true, device.name || 'DESKMATE-FAN');
+    showSpeed(cur);
+    log(`연결 완료, 현재 ${cur} %`);
+  } catch (err) {
+    log(`연결 실패: ${err.message}`, true);
+    if (device && device.gatt.connected) device.gatt.disconnect();
+    setConnected(false);
+  }
+}
+
+// 쓰기는 한 번에 하나씩 (GATT 동시 쓰기는 "operation already in progress" 로 실패)
+function setSpeed(pct) {
+  if (!cmdChar) return;
+  writing = writing.then(async () => {
+    try {
+      await cmdChar.writeValueWithResponse(Uint8Array.of(pct));
+      log(`명령: ${pct} %`);
+    } catch (err) {
+      log(`쓰기 실패: ${err.message}`, true);
+    }
+  });
+}
+
+$('btnConnect').addEventListener('click', () => {
+  if (device && device.gatt.connected) device.gatt.disconnect();
+  else connect();
+});
+// 슬라이더는 놓을 때만 보낸다 (끌 때마다 보내면 쓰기가 밀림)
+$('slider').addEventListener('input', (e) => ($('speed').textContent = e.target.value));
+$('slider').addEventListener('change', (e) => setSpeed(+e.target.value));
+presetButtons.forEach((b) => b.addEventListener('click', () => setSpeed(+b.dataset.v)));
+</script>
+</body>
+</html>

@@ -28,8 +28,9 @@ from micropython import const
 PIN_INA = 16
 PIN_INB = 17
 PWM_FREQ_HZ = 20_000          # 가청 영역 위로 올려 모터 소음 감소
-KICK_MS = 150                 # 저속 시동 시 100 % 로 잠깐 밀어 주는 시간
-KICK_BELOW_PCT = 40
+KICK_MS = 250                 # 멈춘 상태에서 켤 때 100 % 로 잠깐 밀어 주는 시간
+SPINUP_PCT = 60               # 킥 뒤 이 세기로 더 돌려 속도를 붙인 다음 목표로 내린다
+SPINUP_MS = 1000
 
 ina = PWM(Pin(PIN_INA))
 ina.freq(PWM_FREQ_HZ)
@@ -38,17 +39,29 @@ inb = Pin(PIN_INB, Pin.OUT, value=0)
 led = Pin("LED", Pin.OUT, value=0)
 
 _speed = 0  # 현재 속도 %
+_spinup = Timer()
+
+
+def _apply_speed(_=None):
+    ina.duty_u16(_speed * 65535 // 100)
 
 
 def set_speed(pct):
-    """0~100 % 로 팬 속도 설정. 저속 시동은 짧게 100 % 를 줘 멈춤을 막는다."""
+    """0~100 % 로 팬 속도 설정. 멈춘 상태에서 켤 땐 100 % 킥 → SPINUP_PCT 로 SPINUP_MS
+    → 목표 순서로 출발시켜 낮은 속도에서도 출발 여유를 둔다 (실기: 일단 돌면 30 % 도 유지)."""
     global _speed
     pct = max(0, min(100, int(pct)))
-    if pct > 0 and _speed == 0 and pct < KICK_BELOW_PCT:
+    _spinup.deinit()
+    starting = pct > 0 and _speed == 0
+    _speed = pct
+    if starting:
         ina.duty_u16(65535)
         time.sleep_ms(KICK_MS)
-    ina.duty_u16(pct * 65535 // 100)
-    _speed = pct
+    if starting and pct < SPINUP_PCT:
+        ina.duty_u16(SPINUP_PCT * 65535 // 100)
+        _spinup.init(mode=Timer.ONE_SHOT, period=SPINUP_MS, callback=_apply_speed)
+    else:
+        _apply_speed()
     _notify_status()
     print("fan", pct, "%")
 
