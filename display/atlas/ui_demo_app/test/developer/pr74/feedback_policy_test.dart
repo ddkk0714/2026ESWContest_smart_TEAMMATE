@@ -606,8 +606,33 @@ void main() {
         await lamp.apply('focus');
       }
       expect(bluetooth.scans, 0);
-      expect(bluetooth.connectedAddresses,
-          hasLength(2)); // one write, then 30 s back-off
+      expect(bluetooth.connectedAddresses, hasLength(1)); // 첫 시도 한 번, 그 뒤 조용히
+    });
+
+    test('background connects: first try, quiet after a failure, one retry after a drop',
+        () async {
+      final bluetooth = _FakeBluetooth()..connectFailuresRemaining = 1;
+      final lamp = IlinkLampFeedback(bluetooth, settleDelay: Duration.zero)
+        ..select(firstAddress);
+      expect(await lamp.connectInBackground(), isFalse); // 첫 시도 — 실패
+      expect(await lamp.connectInBackground(), isFalse); // 실패 뒤엔 BlueZ 를 안 건드림
+      expect(bluetooth.connectedAddresses, hasLength(1));
+
+      expect(await lamp.connect(), isTrue); // 사람이 누른 "다시 연결"
+      bluetooth.writeFailuresRemaining = 1; // 링크가 끊겨 있었다
+      await lamp.apply('focus'); // 끊긴 뒤 한 번 다시 붙어 쓴다
+      expect(bluetooth.connectedAddresses, hasLength(3));
+      expect(lamp.connected, isTrue);
+
+      bluetooth
+        ..writeFailuresRemaining = 1
+        ..connectFailuresRemaining = 5;
+      await lamp.apply('idle'); // 또 끊김 → 한 번 다시 붙어 보고 실패
+      expect(bluetooth.connectedAddresses, hasLength(4));
+      await lamp.apply('focus'); // 그 뒤엔 조용히
+      await lamp.apply('idle');
+      expect(bluetooth.connectedAddresses, hasLength(4));
+      expect(lamp.connected, isFalse);
     });
 
     test('a lamp that connects first time is not scanned', () async {

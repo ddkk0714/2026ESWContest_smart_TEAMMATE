@@ -4,7 +4,7 @@
     "name": "DESKMATE V27",
     "description": "A personal workspace for your daily focus.",
     "entry": "deskmate_ui_v27 --bundle=./ --fullscreen --onscreen-keyboard -a com.atlas.app.deskmate_ui_v27",
-    "version": "0.27.0",
+    "version": "0.27.4",
     "required_permissions": {
         "privileged": [
             "com.atlas.permission.privileged.audiocontrol",

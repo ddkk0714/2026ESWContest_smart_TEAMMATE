@@ -2,7 +2,8 @@
 //   1) `deskmate/feedback/user`  — 제안 카드 응답(accept·reject·timeout)
 //   2) `deskmate/profile/user`   — 지금 프로필의 선호(retain, 이름 없음)
 //   3) `POST http://<보드>:8771/api/placement` — 장치 위치
-// 기기 제어 명령(control/cmd)은 보내지 않는다. 블루투스 실행은 deskmate_display 가 맡는다.
+// 기기 제어 명령(control/cmd)은 보내지 않는다. 블루투스 실행은 같은 앱의 DeveloperController 가 맡는다 —
+// 보드에서 deskmate_display(블루투스 권한 있음)와 같이 띄우면 실행자가 둘이 되니 하나만 띄운다.
 //
 // 주소가 비었거나 보드에 닿지 않으면 [live] 가 false 이고, 화면은 V17 과 같은 메모리 동작을 쓴다.
 library;
@@ -123,6 +124,9 @@ class LiveLink extends ChangeNotifier {
 
   String host = '';
   int port = LinkSettings.defaultPort;
+
+  /// 지금 주소가 어디서 왔는지(연결 상태 칸 표시용).
+  LinkSource hostSource = LinkSource.off;
   LinkStatus status = LinkStatus.off;
   final notices = NoticeBoard();
   DisplayState? state;
@@ -166,6 +170,7 @@ class LiveLink extends ChangeNotifier {
     final saved = _store?.load() ?? const LinkSettings();
     host = saved.host;
     port = saved.port;
+    hostSource = saved.source;
     if (configured) unawaited(_connect());
   }
 
@@ -174,6 +179,7 @@ class LiveLink extends ChangeNotifier {
     host = normalizeHost(rawHost);
     port = newPort > 0 && newPort < 65536 ? newPort : LinkSettings.defaultPort;
     final saved = _store?.save(LinkSettings(host: host, port: port)) ?? true;
+    hostSource = host.isEmpty ? LinkSource.off : LinkSource.saved;
     _teardown();
     if (configured) {
       unawaited(_connect());
