@@ -124,6 +124,9 @@ class LiveLink extends ChangeNotifier {
 
   String host = '';
   int port = LinkSettings.defaultPort;
+
+  /// 지금 주소가 어디서 왔는지(연결 상태 칸 표시용).
+  LinkSource hostSource = LinkSource.off;
   LinkStatus status = LinkStatus.off;
   final notices = NoticeBoard();
   DisplayState? state;
@@ -167,6 +170,7 @@ class LiveLink extends ChangeNotifier {
     final saved = _store?.load() ?? const LinkSettings();
     host = saved.host;
     port = saved.port;
+    hostSource = saved.source;
     if (configured) unawaited(_connect());
   }
 
@@ -175,6 +179,7 @@ class LiveLink extends ChangeNotifier {
     host = normalizeHost(rawHost);
     port = newPort > 0 && newPort < 65536 ? newPort : LinkSettings.defaultPort;
     final saved = _store?.save(LinkSettings(host: host, port: port)) ?? true;
+    hostSource = host.isEmpty ? LinkSource.off : LinkSource.saved;
     _teardown();
     if (configured) {
       unawaited(_connect());
