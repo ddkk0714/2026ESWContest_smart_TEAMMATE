@@ -20,10 +20,10 @@ def cfg():
     return load_ingest_config()
 
 
-def mm(now, *, present=True, level=5, drowsy="AWAKE", resp_valid=True, seq=None):
+def mm(now, *, present=True, level=5, drowsy="AWAKE", resp_valid=True, seq=None, dist=55):
     return Sample(received=now, ts=now, seq=seq, data={
         "present": present, "motion_state": "still" if level <= 10 else "active",
-        "motion_level": level, "distance_cm": 55, "resp_bpm": 15, "resp_valid": resp_valid,
+        "motion_level": level, "distance_cm": dist, "resp_bpm": 15, "resp_valid": resp_valid,
         "heart_bpm": None, "heart_valid": False, "drowsy_state": drowsy, "valid": True,
     })
 
@@ -47,9 +47,9 @@ def tof(now, *, present=True, posture="upright", conf=0.9, motion=0.05, nod=None
     })
 
 
-def env(now, *, co2=700, valid=True):
+def env(now, *, co2=700, valid=True, lux=300, temp=25.0):
     return Sample(received=now, ts=now, seq=None, data={
-        "co2_ppm": co2, "temp_c": 25.0, "humidity_pct": 45.0, "lux": 300,
+        "co2_ppm": co2, "temp_c": temp, "humidity_pct": 45.0, "lux": lux,
         "co2_valid": valid, "temp_valid": True, "humidity_valid": True, "lux_valid": True,
     })
 
@@ -138,6 +138,59 @@ def test_tof_away_without_mmwave_is_absent(cfg):
     cache.put("tof", tof(100.0, present=False, posture="away"))
     f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.IDLE)
     assert f.present is False and not f.get("posture").available
+
+
+def test_mmwave_absent_overrides_tof_ghost(cfg):
+    # ToF 가 빈 의자를 사람으로 봐도(present=True) mmWave 가 부재라고 하면 부재 — presence.source: mmwave
+    cache = SensorCache()
+    cache.put("tof", tof(100.0, present=True, posture="upright"))
+    cache.put("mmwave", mm(100.0, present=False, level=0))
+    f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.FOCUS_PC)
+    assert f.present is False and not f.get("posture").available
+    assert sensor_summary(cache.snapshot(), 100.0, cfg)["present"] is False
+    f_any = build_frame(cache.snapshot(), 100.0, dict(cfg, presence={"source": "either", "gate_posture": False}),
+                        SessionTracker(), fsm_state=State.FOCUS_PC)
+    assert f_any.present is True                  # 이전 동작(OR)
+
+
+def test_mmwave_far_target_is_not_at_desk(cfg):
+    # 원룸: 레이더는 침대·주방의 사람(3 m)을 재실로 보지만 책상은 비었다 → 부재. ToF 가 빈 의자를 사람으로 봐도 마찬가지
+    cache = SensorCache()
+    cache.put("tof", tof(100.0, present=True))
+    cache.put("mmwave", mm(100.0, present=True, dist=300))
+    f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.FOCUS_PC)
+    assert f.present is False and not f.get("posture").available
+    assert not f.get("respiration").available        # 방 안 먼 사람의 체동·호흡 대체 신호도 안 쓴다
+    out = sensor_summary(cache.snapshot(), 100.0, cfg)
+    assert out["present"] is False and out["in_room"] is True and out["presence_source"] == "mmwave_room"
+
+
+def test_mmwave_near_target_keeps_still_sleeper_present(cfg):
+    # 엎드려 자서 ToF 가 놓쳐도 레이더가 책상 앞(70 cm)에서 호흡을 잡으면 재실
+    cache = SensorCache()
+    cache.put("tof", tof(100.0, present=False, posture="away"))
+    cache.put("mmwave", mm(100.0, present=True, dist=70, level=2))
+    f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.FOCUS_PC)
+    assert f.present is True
+
+
+def test_mmwave_without_distance_defers_to_tof(cfg):
+    cache = SensorCache()
+    cache.put("tof", tof(100.0, present=False, posture="away"))
+    cache.put("mmwave", mm(100.0, present=True, dist=None))
+    f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.FOCUS_PC)
+    assert f.present is False
+    cache.put("tof", tof(101.0, present=True))
+    f2 = build_frame(cache.snapshot(), 101.0, cfg, SessionTracker(), fsm_state=State.FOCUS_PC)
+    assert f2.present is True
+
+
+def test_tof_fills_in_when_mmwave_is_stale(cfg):
+    cache = SensorCache()
+    cache.put("mmwave", mm(100.0, present=False))
+    cache.put("tof", tof(110.0, present=True))
+    f = build_frame(cache.snapshot(), 110.0, cfg, SessionTracker(), fsm_state=State.FOCUS_PC)
+    assert f.present is True and f.get("posture").available   # mmWave 가 끊기면 ToF 대체
 
 
 def test_sensor_summary_includes_tof(cfg):
@@ -345,3 +398,79 @@ def test_live_hub_publishes_request_on_suggest_and_matches_feedback(cfg):
     view_before = hub.tracker.pending_feedback
     hub.tick_once(130.0)          # tick 안에서 build_frame 이 pending_feedback 을 소비한다(IDLE 상태라 무시)
     assert view_before is None and hub.pending_request is None
+
+
+# ── 재실: mmWave 가 정하고 ToF 는 그 안에서 자세만 (2026-10-23) ─────────────
+
+def test_mmwave_decides_presence_and_gates_tof_posture(cfg):
+    cache = SensorCache()
+    cache.put("mmwave", mm(100.0, present=False))
+    cache.put("tof", tof(100.0, present=True, posture="face_down"))     # 빈 의자에 걸린 가방을 ToF 가 사람으로 봄
+    f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.IDLE)
+    assert f.present is False and f.touch is False and not f.get("posture").available
+    out = sensor_summary(cache.snapshot(), 100.0, cfg)
+    assert out["present"] is False and out["presence_source"] == "mmwave"
+
+
+def test_mmwave_present_tof_supplies_posture(cfg):
+    cache = SensorCache()
+    cache.put("mmwave", mm(100.0, present=True, level=80))
+    cache.put("tof", tof(100.0, present=True, posture="face_down"))
+    f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.IDLE)
+    assert f.present and f.get("posture").delta == cfg["tof"]["posture_delta"]["face_down"]
+
+
+def test_tof_stands_in_only_when_mmwave_is_missing(cfg):
+    cache = SensorCache()
+    cache.put("tof", tof(100.0, present=True))
+    f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.IDLE)
+    assert f.present and f.get("posture").available
+    assert sensor_summary(cache.snapshot(), 100.0, cfg)["presence_source"] == "tof"
+
+
+def test_presence_either_keeps_old_or_rule(cfg):
+    either = dict(cfg, presence={"source": "either", "gate_posture": False})
+    cache = SensorCache()
+    cache.put("mmwave", mm(100.0, present=False))
+    cache.put("tof", tof(100.0, present=True, posture="upright"))
+    f = build_frame(cache.snapshot(), 100.0, either, SessionTracker(), fsm_state=State.IDLE)
+    assert f.present and f.get("posture").available
+
+
+def test_invalid_mmwave_sample_is_ignored_for_presence(cfg):
+    """C1001 이 valid=false(락온 전·통신 오류)면 없는 것으로 보고 ToF 가 재실을 정한다."""
+    cache = SensorCache()
+    bad = mm(100.0, present=False)
+    bad.data["valid"] = False
+    cache.put("mmwave", bad)
+    cache.put("tof", tof(100.0, present=True))
+    f = build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.FOCUS_PC)
+    assert f.present is True and f.get("posture").available
+    assert sensor_summary(cache.snapshot(), 100.0, cfg)["presence_source"] == "tof"
+
+
+@pytest.mark.parametrize("reset,expected_start", [(False, 0.0), (True, 1300.0)])
+def test_elapsed_clock_restarts_after_rest_only_when_enabled(reset, expected_start):
+    tr = SessionTracker(elapsed_reset_on_rest=reset)
+    for state, now in [(State.START, 0.0), (State.FOCUS_PC, 400.0), (State.REST, 1000.0), (State.REST, 1290.0),
+                       (State.RECOVERY, 1300.0), (State.FOCUS_PC, 1310.0)]:
+        tr.observe_state(state, now)
+    assert tr.session_started == expected_start
+
+
+def test_live_hub_reads_elapsed_reset_on_rest_from_ingest_config(cfg):
+    assert LiveHub(SensorCache(), ingest_cfg=cfg, out=io.StringIO()).tracker.elapsed_reset_on_rest is True   # 10-25 보드 기본 true
+    cfg2 = dict(cfg, elapsed=dict(cfg["elapsed"], reset_on_rest=False))
+    assert LiveHub(SensorCache(), ingest_cfg=cfg2, out=io.StringIO()).tracker.elapsed_reset_on_rest is False
+
+
+def test_self_kss_passes_only_fresh_app_answer(cfg):
+    """반응 학습: 피로 기록 앱의 마지막 KSS 응답(live.py 가 tracker.self_kss 에 채움)을 신선할 때만 frame 에 싣는다."""
+    cache = SensorCache()
+    cache.put("tof", tof(100.0))
+    assert build_frame(cache.snapshot(), 100.0, cfg, SessionTracker(), fsm_state=State.FOCUS_NPC).self_kss is None
+    tr = SessionTracker()
+    tr.self_kss = (8.0, 100.0)
+    assert build_frame(cache.snapshot(), 100.0 + 899, cfg, tr, fsm_state=State.FOCUS_NPC).self_kss == 8.0
+    # 앱은 15 분마다 묻는다 — 그보다 옛 응답은 안 쓴다
+    assert build_frame(cache.snapshot(), 100.0 + 901, cfg, tr, fsm_state=State.FOCUS_NPC).self_kss is None

@@ -4,7 +4,7 @@
     "name": "DESKMATE",
     "description": "DESKMATE integrated environment, feedback, and session display",
     "entry": "deskmate_display --bundle=./ --fullscreen -a com.atlas.app.deskmate_display",
-    "version": "0.1.3",
+    "version": "0.1.12",
     "required_permissions": {
         "privileged": [
             "com.atlas.permission.privileged.audiocontrol",

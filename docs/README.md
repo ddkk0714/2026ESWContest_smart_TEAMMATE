@@ -21,6 +21,8 @@
 | [`data-spec.md`](data-spec.md) | 센서 특징, 유효성·정규화·통합 계약 |
 | [`fsm-spec.md`](fsm-spec.md) | FSM 상태·전이·점수·개입 규칙 |
 | [`mqtt-topics.md`](mqtt-topics.md) | MQTT topic과 payload 스키마 |
+| [`personalization-spec.md`](personalization-spec.md) | 사용자 맞춤 개입 선택 정책 3층 구조(규칙 FSM · 생활습관 프로필 · 컨텍스트 밴딧), 보상·취침 규칙·콜드 스타트·시연안 |
+| [`personalization-log.md`](personalization-log.md) | 개인화 로그 JSONL 한 줄 스키마(에피소드·세션 요약)와 예시 |
 
 ## 장비·배포·제출
 
@@ -35,5 +37,6 @@
 | [`demo-scenario.md`](demo-scenario.md) | 5분 시연 동선·리허설 명령·무대 전 체크 |
 | [`security-privacy.md`](security-privacy.md) | 보고서용 보안·프라이버시 절 초안(수집하지 않는 것·온디바이스·저장 위치·남은 위험) |
 | [`dataset-survey.md`](dataset-survey.md) | 2단계 학습용 공개 데이터셋 조사 |
+| [`fatigue-pipeline-literature-review.md`](fatigue-pipeline-literature-review.md) | 피로·졸음 판정 전 과정(키스트로크·졸음 행동·mmWave 심박·실내 환경·경과 시간·개입·라벨)의 문헌·법령 근거와 현재 설정값 45개 대조, 우선 실측 항목(Word 판 `.docx` 함께) |
 
 계약을 바꾸는 변경은 해당 문서와 구현·테스트를 같은 커밋에서 함께 갱신한다.

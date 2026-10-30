@@ -10,7 +10,6 @@
 <text x="84" y="346" font-size="11" text-anchor="start" font-weight="normal" fill="#f77f00" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">+3V3 레일 (ESP32 3V3 핀에서 점퍼)</text>
 <text x="84" y="381" font-size="11" text-anchor="start" font-weight="normal" fill="#222" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GND 레일</text>
 <text x="84" y="688" font-size="11" text-anchor="start" font-weight="normal" fill="#d62828" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">+5V 레일 (ESP32 VIN = USB 5V 에서 점퍼)</text>
-<text x="84" y="723" font-size="11" text-anchor="start" font-weight="normal" fill="#222" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GND 레일</text>
 <rect x="390" y="430" width="700" height="190" rx="10" fill="#1f2937" stroke="#0f172a" stroke-width="1.5"/>
 <rect x="350" y="503.0" width="46" height="44" rx="4" fill="#9ca3af" stroke="#4b5563" stroke-width="1.5"/>
 <text x="373" y="529.0" font-size="11" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">USB</text>
@@ -81,11 +80,11 @@
 <text x="245.0" y="140" font-size="14" text-anchor="middle" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">Raspberry Pi 4 (허브) 40핀 헤더</text>
 <text x="245.0" y="157" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#475569" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">UART /dev/serial0 115200 · 5V 는 연결하지 않는다</text>
 <rect x="158.5" y="225" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
-<text x="162.5" y="218" font-size="9.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 162.5 218)">GND(6)</text>
+<text x="162.5" y="218" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GND(6)</text>
 <rect x="241.0" y="225" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
-<text x="245.0" y="218" font-size="9.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 245.0 218)">GPIO14 TX(8)</text>
+<text x="245.0" y="218" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GPIO14 TX(8)</text>
 <rect x="323.5" y="225" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
-<text x="327.5" y="218" font-size="9.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 327.5 218)">GPIO15 RX(10)</text>
+<text x="327.5" y="218" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GPIO15 RX(10)</text>
 <rect x="450" y="120" width="220" height="110" rx="8" fill="#dcfce7" stroke="#334155" stroke-width="1.5"/>
 <text x="560.0" y="140" font-size="14" text-anchor="middle" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">DHT22 / AM2302 온습도</text>
 <text x="560.0" y="157" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#475569" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">단선 디지털 (모듈 내장 풀업)</text>
@@ -120,8 +119,8 @@
 <rect x="1222.6666666666667" y="225" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
 <text x="1226.6666666666667" y="218" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">ADDR</text>
 <rect x="80" y="810" width="300" height="110" rx="8" fill="#dbeafe" stroke="#334155" stroke-width="1.5"/>
-<text x="230.0" y="830" font-size="14" text-anchor="middle" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">VL53L8CX 모듈 A (장면 왼쪽/위)</text>
-<text x="230.0" y="847" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#475569" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">I2C 주소 0x52→0x54 로 펌웨어가 바꿈</text>
+<text x="230.0" y="852" font-size="14" text-anchor="middle" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">VL53L8CX 모듈 A (장면 왼쪽/위)</text>
+<text x="230.0" y="870" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#475569" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">I2C 주소 0x52→0x54 로 펌웨어가 바꿈</text>
 <rect x="106.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
 <text x="110.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">VIN</text>
 <rect x="136.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
@@ -139,10 +138,10 @@
 <rect x="316.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
 <text x="320.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">NCS</text>
 <rect x="346.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
-<text x="350.0" y="824" font-size="9.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 350.0 824)">SPI_I2C_N</text>
+<text x="350.0" y="822" font-size="9.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(90 350.0 822)">SPI_I2C_N</text>
 <rect x="420" y="810" width="300" height="110" rx="8" fill="#dbeafe" stroke="#334155" stroke-width="1.5"/>
-<text x="570.0" y="830" font-size="14" text-anchor="middle" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">VL53L8CX 모듈 B (장면 오른쪽/아래)</text>
-<text x="570.0" y="847" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#475569" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">I2C 주소 0x52 그대로</text>
+<text x="570.0" y="852" font-size="14" text-anchor="middle" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">VL53L8CX 모듈 B (장면 오른쪽/아래)</text>
+<text x="570.0" y="870" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#475569" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">I2C 주소 0x52 그대로</text>
 <rect x="446.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
 <text x="450.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">VIN</text>
 <rect x="476.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
@@ -160,10 +159,10 @@
 <rect x="656.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
 <text x="660.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">NCS</text>
 <rect x="686.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
-<text x="690.0" y="824" font-size="9.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(-90 690.0 824)">SPI_I2C_N</text>
+<text x="690.0" y="822" font-size="9.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif" transform="rotate(90 690.0 822)">SPI_I2C_N</text>
 <rect x="780" y="810" width="230" height="110" rx="8" fill="#fee2e2" stroke="#334155" stroke-width="1.5"/>
-<text x="895.0" y="830" font-size="14" text-anchor="middle" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">C1001 mmWave (SEN0623)</text>
-<text x="895.0" y="847" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#475569" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">UART 115200 8N1</text>
+<text x="895.0" y="852" font-size="14" text-anchor="middle" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">C1001 mmWave (SEN0623)</text>
+<text x="895.0" y="870" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#475569" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">UART 115200 8N1</text>
 <rect x="822.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
 <text x="826.0" y="824" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">VIN</text>
 <rect x="868.0" y="805" width="8" height="10" fill="#fbbf24" stroke="#78350f"/>
@@ -210,8 +209,8 @@
 <circle cx="786.6666666666666" cy="626" r="4" fill="#ca8a04" stroke="#fff" stroke-width="1"/>
 <polyline points="260.0,810 260.0,742 1170,742 1170,386 833.3333333333333,386 833.3333333333333,424" fill="none" stroke="#0e7490" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
 <circle cx="833.3333333333333" cy="424" r="4" fill="#0e7490" stroke="#fff" stroke-width="1"/>
-<polyline points="600.0,810 600.0,728 1184,728 1184,372 786.6666666666666,372 786.6666666666666,424" fill="none" stroke="#0e7490" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="786.6666666666666" cy="424" r="4" fill="#0e7490" stroke="#fff" stroke-width="1"/>
+<polyline points="600.0,810 600.0,728 1184,728 1184,372 786.6666666666666,372 786.6666666666666,424" fill="none" stroke="#db2777" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="786.6666666666666" cy="424" r="4" fill="#db2777" stroke="#fff" stroke-width="1"/>
 <polyline points="918.0,810 918.0,784 646.6666666666666,784 646.6666666666666,626" fill="none" stroke="#15803d" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
 <circle cx="646.6666666666666" cy="626" r="4" fill="#15803d" stroke="#fff" stroke-width="1"/>
 <polyline points="964.0,810 964.0,798 693.3333333333333,798 693.3333333333333,626" fill="none" stroke="#7e22ce" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
@@ -244,16 +243,18 @@
 <circle cx="460.0" cy="424" r="4" fill="#222" stroke="#fff" stroke-width="1"/>
 <circle cx="413.3333333333333" cy="626" r="4" fill="#f77f00" stroke="#fff" stroke-width="1"/>
 <circle cx="460.0" cy="424" r="4" fill="#222" stroke="#fff" stroke-width="1"/>
+<text x="150" y="723" font-size="11" text-anchor="start" font-weight="normal" fill="#222" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GND 레일</text>
 <rect x="1040" y="790" width="420" height="250" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
 <text x="1052" y="812" font-size="13" text-anchor="start" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">ESP32 핀 ↔ 장치 (겹침 없음)</text>
 <rect x="1052" y="826" width="10" height="10" fill="#1d4ed8"/>
 <text x="1070" y="836" font-size="11.5" text-anchor="start" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GPIO23 / 18</text>
 <text x="1170" y="836" font-size="11.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">SDA / SCL</text>
 <text x="1275" y="836" font-size="11" text-anchor="start" font-weight="normal" fill="#334155" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">L8 A·B 공유 (Wire1, 1 MHz)</text>
-<rect x="1052" y="848" width="10" height="10" fill="#0e7490"/>
+<rect x="1052" y="848" width="5" height="10" fill="#0e7490"/>
+<rect x="1057" y="848" width="5" height="10" fill="#db2777"/>
 <text x="1070" y="858" font-size="11.5" text-anchor="start" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GPIO32 / 33</text>
 <text x="1170" y="858" font-size="11.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">LPn</text>
-<text x="1275" y="858" font-size="11" text-anchor="start" font-weight="normal" fill="#334155" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">L8 A / L8 B</text>
+<text x="1275" y="858" font-size="11" text-anchor="start" font-weight="normal" fill="#334155" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">L8 A(청록) / L8 B(분홍)</text>
 <rect x="1052" y="870" width="10" height="10" fill="#15803d"/>
 <text x="1070" y="880" font-size="11.5" text-anchor="start" font-weight="bold" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">GPIO16 / 17</text>
 <text x="1170" y="880" font-size="11.5" text-anchor="start" font-weight="normal" fill="#111" font-family="system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif">UART1 RX / TX</text>

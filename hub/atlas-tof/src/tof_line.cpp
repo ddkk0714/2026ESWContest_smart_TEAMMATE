@@ -94,6 +94,7 @@ void fillFrame(TofFrame& f, const long* d, const long* st, int n, bool has_statu
         f.d[i] = static_cast<int16_t>(d[i] < -32768 ? -32768 : d[i] > 32767 ? 32767 : d[i]);
         if (has_status) f.st[i] = static_cast<uint8_t>(st[i] < 0 || st[i] > 255 ? 255 : st[i]);
         else f.st[i] = d[i] > 0 ? 5 : 255;
+        f.raw_d[i] = f.d[i]; f.raw_st[i] = f.st[i];           // /raw 원본 = 이 형식은 변환이 없다
     }
 }
 
@@ -231,12 +232,14 @@ bool parseUartZonesLine(const std::string& line, TofLine& out) {
             const uint8_t st = u8(8 + 2 * gn + i);
             g.d[i] = (dmm <= 0 || st == 255) ? int16_t(-1) : dmm;
             g.st[i] = st;
+            g.raw_d[i] = dmm; g.raw_st[i] = st;
         }
         g.flip_rows_hint = 0;                                      // 펌웨어가 이미 장면 방향으로 돌려 보냈다
         g.flip_cols_hint = 0;
+        g.uart_seq = static_cast<uint32_t>(seq);
+        g.frame_id = u8(4); g.sensor_mask = mask; g.raw_flags = u8(6);
         out.sensor_id = sensor;
         out.kind = LineKind::Frame;
-        (void)seq;
         return true;
     }
     const int w = u8(3), h = u8(4), n = w * h;
@@ -261,13 +264,15 @@ bool parseUartZonesLine(const std::string& line, TofLine& out) {
         f.d[i] = (dmm == 0 || dmm == 0xFFFF) ? int16_t(-1) : static_cast<int16_t>(dmm > 32767 ? 32767 : dmm);
         const uint8_t st = u8(8 + 2 * n + i);
         f.st[i] = f.has_status ? st : (f.d[i] > 0 ? 5 : 255);
+        f.raw_d[i] = f.d[i]; f.raw_st[i] = st;
     }
     f.flip_rows_hint = (flags & 4) ? 1 : 0;
     f.flip_cols_hint = (flags & 8) ? 1 : 0;
     f.seq16 = true;
+    f.uart_seq = static_cast<uint32_t>(seq);
+    f.raw_flags = flags;
     out.sensor_id = u8(1);
     out.kind = LineKind::Frame;
-    (void)seq;
     return true;
 }
 }  // namespace

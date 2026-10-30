@@ -1,0 +1,41 @@
+{
+  "contract_version": "1.0",
+  "features": [
+    "keystroke_phi",
+    "keystroke_delta",
+    "keystroke_available",
+    "posture_phi",
+    "posture_delta",
+    "posture_available",
+    "respiration_phi",
+    "respiration_delta",
+    "respiration_available",
+    "environment_phi",
+    "environment_delta",
+    "environment_available",
+    "elapsed_phi",
+    "elapsed_delta",
+    "elapsed_available",
+    "present",
+    "pc_ratio"
+  ],
+  "classes": [
+    "focus",
+    "fatigue",
+    "rest",
+    "idle"
+  ],
+  "input_shape": [
+    1,
+    6,
+    17
+  ],
+  "output_shape": [
+    1,
+    4
+  ],
+  "dtype": "float32",
+  "frame_period_sec": 10,
+  "normalization": "baseline",
+  "model_sha256": "fc85cccf97569db543a07cdf97d314192f5b01c71b8f36bd379a7139c1460c67"
+}

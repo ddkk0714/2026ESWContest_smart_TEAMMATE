@@ -86,3 +86,30 @@ hub 는 10 s 마다 판정하므로 실시간에서는 각 시각이 0~9 s 늦�
 ### 화면 종료 시 만료 보완 (2026-10-06)
 
 앱이 종료되어 timeout 메시지를 보내지 않아도 hub가 카드의 expires_in_s를 적용한다. 시연 환경 제안은 30초 후 만료되어 명령 없이 MONITOR로 넘어가며 무응답률에 반영된다. 운영 설정의 180초는 유지한다. 기한 전에 hub에 도착한 응답은 다음 tick에서 처리해도 유효하다. [개입 사이클 검증](intervention-cycle-check.md)에 상세 경로와 제한을 정리했다.
+
+## 6. 개인화 시연 — "되돌리기 한 번에 기기가 바뀐다" (2026-10-21)
+
+발표 클라이맥스용 2분대 시나리오. 개인화 정책(`personalize.yaml enabled: true`)이 켜진 hub 가 **같은 피로를 두 번** 만났을 때,
+사이에 사용자가 자동 실행을 되돌렸다는 이유만으로 두 번째엔 자동 대신 묻는 것을 보여 준다.
+
+```bash
+python tools/demo_dryrun.py --scenario undo_learn --personalize                # 기준: 조명 자동 2회
+python tools/demo_dryrun.py --scenario undo_learn --personalize --undo-at 155  # 150 s 자동 조명 → 155 s 되돌리기 → 320 s 묻기
+```
+
+| t | 단계 | 일어나는 일 |
+|---|---|---|
+| 10 s | start_typing | 어두운 방(80 lx)에서 타이핑 시작 |
+| 50 s | tired_typing | 거의 멈춘 채 리듬 흐트러짐 + 졸음 → 피로 의심 → 130 s 피로 확정 |
+| 150 s | ACTION_BREAK **auto** | 원인 인지성. 정책이 `light_cool_bright`(조명 밝고 차갑게) 를 골라 **자동 실행** — `desk_lamp.set_brightness=200`. 화면엔 자동 실행 알림 + 되돌리기 |
+| 155 s | 되돌리기 | 심사위원이 되돌리기를 누른다 → 160 s `set_brightness=110`(undo). 정책: 수용도 −2, 자동 문턱 +0.05, 이 세션에선 이 arm 자동 금지 |
+| 190~220 s | recover_typing | 회복 → 몰입 복귀 |
+| 320 s | ACTION_BREAK **suggest** | FSM 은 또 자동(0.83 ≥ 0.75)이지만 정책이 **제안으로 낮춘다**. 카드: "조도 80 lx 어두움 · 졸음 2회 · 지난번 조명 밝고 차갑게 되돌리셔서 이번엔 여쭙니다 · 기본 정책 · 피드백 1건" |
+
+기준 실행(되돌리기 없음)에서는 320 s 에도 조명이 자동으로 켜진다 — 두 실행을 나란히 보여 주면 차이가 한눈에 보인다.
+`tools/test_demo_scenario.py` 의 `test_undo_learn_*` 두 개가 이 동선을 지킨다.
+
+주의: 환경성 원인은 FSM 가중치(environment 0.10)상 첫 개입에서 자동 게이트가 나오지 않으므로 시나리오는 **인지성**으로 만든다(어두움은 설명에만 쓰인다).
+dry-run 은 재현을 위해 Thompson 대신 사후 평균(greedy)과 빈 정책 파일로 시작하고, 정책·제어 쿨다운을 `fsm.demo.yaml` 의 `cmd_cooldown_sec`(60 s)에 맞춘다.
+실시간 리허설(`tools/rehearsal_local.py`)은 아직 `--personalize` 가 없다.
+

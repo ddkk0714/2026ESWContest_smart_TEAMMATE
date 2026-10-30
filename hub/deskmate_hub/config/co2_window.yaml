@@ -1,0 +1,39 @@
+# CO₂ 창문 환기 타이밍 규칙(deskmate_hub/co2_window.py) — FSM 밖, CO₂ 가 높고 사람이 깨어 책상에 있을 때 창문 환기 카드를 먼저 띄운다.
+# 출처: life_sim ventilation.py VentRule(7070786, devices.yaml vent_control). 숫자는 전부 시뮬 근거, 실측 전.
+# 왜 FSM 밖인가: FSM 의 환경 개입(ACTION_ENV)은 피로 확정 뒤라 시뮬(v8, 10-23)에서 환기 카드가 사람이 이미 졸 때 떠 창문이 한 번도
+# 안 열렸다. 이 규칙을 켠 시뮬에서 재실 중 CO₂≥1000 분: 대학생 118→51, 수험생 112→70, 저녁 요리 60→33. 비·황사 대조 각본은 카드 0.
+# 환기는 학습 정책이 아니라 규칙이 맡는다(결정 규칙). 기기 명령은 없다 — 화면 카드만, 창문은 사람이 연다.
+#
+# 창문 상태: 보드에 창문 센서가 없다. 카드 수락 = 창문을 열었다고 보고 권유 길이(분) 동안 열림, 그 뒤 닫힘으로 보고 처음부터 다시 잰다.
+# CO₂ 기울기로 열림을 추정하는 것은 시뮬에 없고 검증 전이라 넣지 않았다.
+
+enabled: true               # 보드에서 켠다(시뮬 기능을 실기에). 끄면 카드·요약 둘 다 없다
+
+avg_s: 60                   # SCD41 측정값(co2_valid 일 때만) 이동평균 창 — 시뮬 근거, 실측 전
+on_ppm: 1000                # 평균이 이 이상인 상태가 hold_s 이어지면 환기 권유 — 시뮬 근거, 실측 전
+hold_s: 300
+high_ppm: 1400              # 이 이상이면 몰입 중이어도 기다리지 않는다 — 시뮬 근거, 실측 전
+awake_s: 60                 # 책상 재실 + 자세 모델이 sleepy_labels 아닌 상태로 이만큼 — 깨어 있을 때만 묻는다
+sleepy_labels: [drowsy, face_down]
+focus_states: [FOCUS_PC, FOCUS_MIXED, FOCUS_NPC]
+focus_defer_s: 600          # 몰입 중이면 끝나기를 최대 이만큼 기다린다 — 시뮬 근거, 실측 전
+retry_s: 1200               # 카드를 띄운 뒤 무응답(만료)이면 이만큼 지나야 다시 — 시뮬 근거, 실측 전
+reject_retry_s: 2400        # 거절이면 거절 시각부터 이만큼 쉰다 — 시뮬 근거, 실측 전
+expires_in_s: 180           # 화면 카드 만료(fsm timers.focus_break_poll_sec 와 같은 값)
+
+# FSM 과 싸우지 않기: FSM 이 ACTION_* 이거나 다른 카드가 떠 있으면 내지 않는다(카드는 한 번에 하나).
+# 이 카드가 떠 있는 동안 FSM 이 ACTION_* 제안을 내면 FSM 카드가 덮어쓴다(그 경우 무응답과 같이 retry_s 뒤 다시).
+respect_quiet_hours: true   # personalize.yaml bandit.quiet_hours(23~7 시, 지역시) 동안에는 내지 않는다
+
+# 날씨(deskmate/sensor/weather, Pi 5 앱) — 시뮬 DeviceWorld.ventilation_choice 와 같은 규칙. 낡음 기준은 personalize.yaml weather.stale_sec.
+weather:
+  exclude_conditions: [rain, snow]   # 이 condition 이면 창문 제외(카드 없이 로그만)
+  outdoor_warmer_c: 2.0     # 바깥 기온 − 실내 기온(DHT22) 이 이 이상이면 제외 — 시뮬 근거, 실측 전
+  exclude_pm25: 36          # 바깥 PM2.5(µg/m³, payload `pm25`) 가 이 이상이거나 `pm_bad: true` 면 제외. 지금 날씨 토픽 계약에는 PM 이 없어 이 조건은 건너뛴다
+  windy_ms: 4.0             # 바람이 이 이상이면 이유에 windy 만 덧붙인다(제외 아님)
+  when_unknown: allow       # 날씨가 없거나 낡으면 allow(창문 권유, 이유 weather_unknown) | skip(카드 없음)
+
+# 창문 열 시간(분)은 personalize.yaml `ventilation:`(계절 기본 봄·가을 15·여름 10·겨울 5 × 바람·온도 차·습도)을 그대로 쓴다.
+# personalize 설정을 못 읽을 때만 아래 값(시뮬 weather_rules: 15 분, 겨울 5 분).
+fallback_minutes: 15
+fallback_winter_minutes: 5

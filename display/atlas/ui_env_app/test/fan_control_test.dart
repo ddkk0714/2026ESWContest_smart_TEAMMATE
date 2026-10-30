@@ -114,6 +114,21 @@ void main() {
       expect(fan.lastState?.level, 2);
     });
 
+    test('a fan found again by a scan reports recovery rediscovered',
+        () async {
+      fan.select(_fanAddress);
+      bluetooth.state = _state();
+      bluetooth.connectFailuresRemaining = 2; // 두 번 실패 → 검색 → 세 번째에 붙음
+      final result = await coordinator.handleControlCommand(_command('c1r'));
+      expect(bluetooth.scans, 1);
+      expect(result?['status'], 'succeeded');
+      expect(result?['recovery'], 'rediscovered');
+      expect(fan.lastRediscovered, isTrue);
+      // 이미 붙어 있으면 다음 명령엔 recovery 가 없다.
+      final next = await coordinator.handleControlCommand(_command('c1s'));
+      expect(next?.containsKey('recovery'), isFalse);
+    });
+
     test('level change reports the level the fan is at', () async {
       fan.select(_fanAddress);
       bluetooth.state = _state(speed: 100, level: 3);
