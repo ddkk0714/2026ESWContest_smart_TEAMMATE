@@ -4,3 +4,4 @@ paho-mqtt>=2.0       # MQTT 구독/발행 (ingest, run 명령)
 
 # --- 개발/테스트 ---
 pytest>=7.0          # FSM 상태 전이 단위 테스트
+numpy>=1.24          # personalize/ 개입 선택 밴딧 (PC/개발 환경. 보드 제한 Python 탑재 여부는 미결)

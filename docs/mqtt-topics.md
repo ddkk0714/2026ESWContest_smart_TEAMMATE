@@ -34,13 +34,16 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 | `deskmate/sensor/mmwave/<node>` | ESP32 | hub | 1Hz | SEN0623 재실·모션·호흡/심박 보조 특징 |
 | `deskmate/sensor/env/<node>` | ESP32 | hub | 0.2Hz | CO₂ · 온습도 · 조도 |
 | `deskmate/sensor/keystroke` | PC 수집기 | hub, display/PC 키스트로크 탭 | 1Hz | 키 입력 타이밍 특징 |
+| `deskmate/sensor/weather` | Pi 5 앱 | hub(personalize) | 30 분 + 시작 시 1회(retain, QoS 0) | 바깥 날씨·계절. FSM 입력이 아니라 개입 선택(환기 vs 공기청정기, 겨울 짧은 환기)에만 쓴다 |
 | `deskmate/state/phase` | hub | display, control | 10 s 주기(retain) | 추론 결과 + 신뢰도. `python -m deskmate_hub run` 이 발행 |
 | `deskmate/display/message` | Node-RED/debug | display | 이벤트 | Pi 5 화면에 일회성 텍스트 표시 |
 | `deskmate/session/report` | hub | display | 10 s 주기 스냅샷(retain) + 세션 종료 시 | 화면용 세션 요약. 개별 행동 로그 없음 |
 | `deskmate/interaction/request` | hub | display | 이벤트 | 불확실한 판정의 사용자 확인 질문 |
 | `deskmate/control/cmd` | hub | control 어댑터, Pi 5 앱(조명) | 이벤트, QoS 1, retain 없음 | 기기 제어 명령 (`control_command`, data-spec §10) |
 | `deskmate/control/result` | control 어댑터, Pi 5 앱(조명) | hub | 이벤트, QoS 1 | 명령 결과 (`control_result`). hub 는 `command_id` 로 매칭 |
-| `deskmate/feedback/user` | display | hub | 이벤트 | 사용자 수락 · 정정 |
+| `deskmate/feedback/user` | display | hub | 이벤트 | 사용자 수락 · 정정 · 조명 직접 조절 보고(`kind: manual_adjust`) |
+| `deskmate/profile/user` | Pi 5 앱 | hub(personalize) | 온보딩·설정 변경 시(retain, QoS 1) | 첫 설정 프로필. FSM 입력이 아니라 개입 선택의 기준(prior)·취침 시각에만 쓴다 |
+| `deskmate/fatigue/label` | Pi 5 피로 기록 앱(`display/atlas/fatigue_app`) | PC `tools/fatigue_logger.py`, hub | 이벤트, QoS 1 | 피로 데이터 수집: 작업 시작·끝, 15분 KSS 응답. hub 는 피로 점수 문맥·프로필 보정에만 씀, FSM 입력 아님 ([fatigue-dataset.md](fatigue-dataset.md)) |
 | `deskmate/health/<node>` | 전 장치 | hub | LWT/retain | `{ts,node,status:online|offline,reconnects}`. hub 는 `deskmate/health/hub` |
 
 ## 페이로드 예시
@@ -131,6 +134,60 @@ Pi 5의 **PC 키스트로크** 탭은 앱에 설정된 동일 MQTT 브로커에�
 최근 60개 집계 표본의 추이는 탭을 연 동안 메모리에만 유지하고, 미입력·수신 공백을
 타이밍 곡선으로 연결하지 않는다. 내장 데모는 실제 PC 미연결임을 명시한다.
 
+### `deskmate/sensor/weather` (2026-10-21 최종 확정: 날씨는 Pi 5 앱이 받아 MQTT 로 허브에 넘긴다)
+
+발행자 Pi 5 앱(`node: pi5-display`), **retain, QoS 0, 30 분 주기 + 앱 시작 시 1회 즉시**. 공통 envelope 를 쓴다. 토픽 이름은 `deskmate/sensor/weather` 로 고정한다(`deskmate/env/weather` 는 계약 밖).
+`deskmate/sensor/#` 아래라 hub 의 기존 구독(PC paho·보드 C++ 브리지 모두)이 그대로 받는다. 허브 `SensorCache.weather` 에 마지막 표본만
+머물고 FSM `SensorFrame` 에는 들어가지 않는다 — `personalize/`(개입 선택)만 읽는다([`personalization-spec.md`](personalization-spec.md) §7).
+
+```json
+{
+  "schema_version": "1.0", "ts": 1792561200.0,
+  "node": "pi5-display", "boot_id": "c41d9a02", "seq": 17,
+  "data": {
+    "temp_c": 16.4,                 // 바깥 기온 °C
+    "humidity": 58,                 // 바깥 상대습도 %RH (int)
+    "wind_ms": 5.2,                 // 풍속 m/s. hub 는 personalize.yaml weather.windy_ms(4.0) 이상을 "바람 붊"으로 본다
+    "condition": "clear",           // clear | cloudy | rain | snow | fog | unknown — 뇌우·폭풍·소나기는 rain, 진눈깨비·우박은 snow, 매핑 불가는 unknown
+    "season": "autumn",             // spring | summer | autumn | winter (앱이 날짜로 계산). hub 는 자기 날짜를 우선한다
+    "fetched_at": 1792560900,       // 날씨를 외부에서 받은 Unix epoch s (int). 재발행해도 이 값은 바뀌지 않는다
+    "source": "kma-short-term"      // 출처 문자열(자유). 키·토큰·좌표는 넣지 않는다
+  }
+}
+```
+
+- **stale 기준**: hub 는 `now − fetched_at > weather.stale_sec`(기본 **2 h**) 이면 표본을 무시하고 **계절(월)만으로** 동작한다.
+  retain 된 옛 표본이 재시작 뒤 들어와도 같은 규칙으로 걸러진다. `fetched_at` 이 없으면 envelope `ts` 를 쓴다.
+- 앱이 날씨를 못 받으면 발행하지 않는다(빈 값·추정값을 만들어 보내지 않는다). 선택 필드 `pm_bad: true`(미세먼지 나쁨)는 넣으면 환기 후보 제외에 쓴다.
+- 좌표·주소·API 키는 토픽에 싣지 않는다. 위치 설정은 앱 안에만 둔다.
+
+### `deskmate/profile/user` (2026-10-25: 첫 설정 → 개인화 기준)
+
+발행자 Pi 5 앱(`node: pi5-display`), **retain, QoS 1**, 온보딩을 마칠 때와 설정을 바꿀 때. 공통 envelope 를 쓴다. 허브는 보드 C++ 브리지·PC paho
+둘 다 이 토픽을 따로 구독한다(`deskmate/sensor/#` 밖). 필드는 모두 선택이고 모르는 키는 버린다 — 표·사용처는 [data-spec](data-spec.md#사용자-첫-설정직접-조절-보고-2026-10-25).
+
+```json
+{
+  "ts": 1792561200.0, "node": "pi5-display", "seq": 3,
+  "data": {
+    "profile_id": "u-7f3a",           // 불투명 id (이름·이메일 아님)
+    "age_band": "20s",                // 10s | 20s | 30s | 40s | 50s+ (허브는 지금 저장하지 않는다)
+    "sleep_hours": 6.5,
+    "bedtime": "00:30", "wake_time": "07:30",
+    "light_pref": "low",              // low | mid | high
+    "sound_pref": "off",              // off | low | mid | high — off 면 알림음·음성 안내 후보 제외
+    "wind_pref": "mid",               // off | low | mid | high
+    "focus_help": ["light", "break"], // light | sound | wind | break | voice 중 복수, 순서 = 몰입 도움 순위. 별칭 lamp·fan·notify 도 받는다
+    "placement": "left"               // left | center | right
+  }
+}
+```
+
+- envelope `node` 는 거르지 않는다(제품 UI `pi5-ui`·개발자 앱 `display` 모두). profile_id 는 앱이 재시작해도 같은 값을 유지한다.
+- 다른 profile_id 가 오면 그 사람의 정책으로 바꾼다(사람별 `logs/profiles/<profile_id>/`, 지금 사용자 `active_profile.json`).
+- 허브는 받으면 `logs/profiles/<profile_id>/user_profile.json` 에 저장하고(재시작·브로커 재시작 뒤에도 유지) 화면 `sensor_summary.personalize.signal` 에
+  "첫 설정 반영: …" 한 줄을 싣는다. 같은 내용을 다시 받으면(retain 재수신) 아무것도 바꾸지 않는다.
+
 ### `deskmate/state/phase`
 
 ```json
@@ -143,6 +200,7 @@ Pi 5의 **PC 키스트로크** 탭은 앱에 설정된 동일 MQTT 브로커에�
   "context": "pc",
   "c_focus": 0.22, "c_fatigue": 0.81,
   "confidence": 0.81,
+  "present": true, "scores_valid": true,   // 자리 비움(present false)이면 c_focus·c_fatigue·confidence 0.0, scores_valid false → 숫자 대신 "자리 비움" 표시(10-26). 카드 payload 도 같은 두 필드
   "source": "fsm",             // fsm | classifier | fused
   "gate": "auto",              // auto | suggest | none
   "cause": "environment",
@@ -255,6 +313,22 @@ hub 가 현재 발행하는 종류(2026-09-16, `live.py`): **제안 게이트(0.
 자동(≥0.75)은 실행 후 알림이라 질문하지 않는다. retain 하지 않는다. display 는 `request_id` 를 기억해 `feedback/user` 에 실어 보내고,
 hub 는 현재 질문의 `request_id`(또는 `request_id` 생략·`atlas-display`)만 반영한다. 신호 충돌(`state_disambiguation`)은 4-B §5 에서 추가.
 
+**개인화 정책이 켜져 있으면(`personalize.yaml enabled: true`, 2026-10-21)** `data` 에 세 필드가 더 실린다 — `explanation`(왜 이 개입인지 한 줄,
+예 `"조도 80 lx 어두움 · 졸음 2회 · 지난번 조명 밝고 차갑게 되돌리셔서 이번엔 여쭙니다 · 기본 정책 · 피드백 1건"`), `arm`(개입 id, `personalization-spec.md` §4),
+`arm_label`(한국어 이름). 창문 환기(`arm: ventilate_suggest`)면 `ventilate_minutes`(날씨가 정한 권유 길이, 분, 2026-10-23)도 실린다 —
+화면은 "N 분만 열어 주세요" 로 쓴다. 화면은 카드에 `explanation` 을 그대로 보여 준다. 정책이 FSM 의 자동 게이트를 제안으로 낮춘 경우 `evidence` 에 `personalize:ask` 가 들어 있다.
+같은 내용이 `state/phase` 의 `data.sensor_summary.personalize` 에도 실린다(`{episode_id, arm, arm_label, source, explanation, fsm_gate, delivered_gate,
+policy_mode, n_personal, auto_threshold, ventilate_minutes}`; 에피소드가 닫히면 `closed: true, outcome`) — 자동 실행 알림이 "왜" 를 보여 줄 때 쓴다.
+
+**CO₂ 창문 환기 카드(2026-10-25, `co2_window.py`·`config/co2_window.yaml`, 보드 기본 켜짐)** — FSM 과 따로, SCD41 1 분 평균 CO₂ ≥ 1000 ppm 이 5 분 +
+책상 재실 + 깨어 있음(자세가 drowsy·face_down 아님 60 s) + 날씨 허용(비·눈·바깥이 2 °C 이상 더움·바깥 PM2.5 ≥ 36 제외)일 때 1건.
+자동 실행 안내 카드(2026-10-26): 개인화 정책이 기기 없는 arm(자세 카드·알림음·음성 안내·휴식 제안)을 골랐고 게이트가 자동이면 같은 `kind`(`posture_suggest`·`break_suggest`·`env_suggest`)에 `auto: true`, `options: ["dismiss"]`, `arm`, `arm_label`, `channel`(display|sound|voice), `explanation`, `text`, `speak`/`chime`(스피커 명령도 보냈는지), `request_id` 끝이 `-arm` 으로 나간다 — 수락·거절 없이 보여 주기만 한다(응답은 선택, FSM·ESM 에 안 들어감). 같은 때 channel voice 면 `control/cmd {target_id: speaker, operation: speak, value: {text, lang: ko}}`, sound 면 `control/cmd {target_id: speaker, operation: chime, value: {pattern: single|double|triple, volume: low|mid|high}}`(volume = 사용자 sound_pref, off 면 소리 명령 없음). 제안 게이트면 기존 제안 카드가 arm 을 싣고 가고 소리 명령만 더해진다. 기기 없는 arm 을 골랐을 때 control.yaml 기본 램프는 나가지 않는다(기본 램프는 정책 결정이 없을 때만).
+`kind: rest_notice`(2026-10-26, 안내 — FSM 이 REST 에 들어가면 허브가 보낸다. `prompt_code: rest_now`, `options: ["dismiss"]`, `reason`: `accepted`(휴식 제안 수락) | `asleep`(아직 졸음·엎드림) | `escalated`(개입 실패 뒤 강제) | `reminder`(REST 가 길어짐), `cause`, `text`(한국어 안내 문구), `minutes`·`rest_min_sec`(휴식 길이), `speak`(스피커 명령도 보냈는지), `variant`(default|study), `expires_in_s`. 응답은 선택: `feedback/user {verdict: dismiss|timeout, request_id}` — FSM·ESM 에 들어가지 않는다. 같은 때 `control/cmd` 로 `{target_id: speaker, operation: speak, value: {text, lang: ko}, origin_state: REST, gate: notice}` 를 보내고(사용자 sound_pref off 면 안 보냄), 앱은 Pi 5 스피커(TTS)로 읽고 `control/result` 를 돌려준다. 설정 `control.yaml rest_notice:`),
+`kind: vent_suggest`, `prompt_code: ventilate_window`, `minutes` = `ventilate_minutes`(창문 열 시간, personalize.yaml `ventilation:` 계산),
+`why`(예 `["co2_rule","co2_avg=1180","windy"]`), `explanation`, `arm: ventilate_suggest`, `arm_label: 창문 환기`, `cause: environment`, `source: co2_window`, `expires_in_s: 180`.
+FSM 이 `ACTION_*` 이거나 다른 카드가 떠 있으면 내지 않는다. 응답은 FSM·제어로 가지 않는다(기기 명령 없음). 수락 = 창문을 열었다고 보고
+권유 시간 동안 다시 묻지 않는다(창문 센서 없음). 무응답 20 분·거절 40 분 뒤 재시도. 상태는 `state/phase` 의 `sensor_summary.co2_window`.
+
 ### `deskmate/control/cmd`
 
 data-spec §10 `control_command` 필드 그대로(2026-09-16, `hub/deskmate_hub/control/`). 발행 조건은 `config/control.yaml`:
@@ -267,6 +341,7 @@ ACTION_ENV 진입 시 원인별 명령 목록, 게이트 auto 면 즉시 · sugg
   "data": {
     "command_id": "9f3c1a2b7d4e",          // 멱등 키. result 가 이 값으로 돌아온다
     "target_id": "vent_fan",               // vent_fan | desk_lamp | air_purifier | plug_1 (control.yaml)
+                                           // air_purifier: set_mode off|auto|low|mid|high (auto = 자체 PM 자동, high = 3단계)
     "operation": "set_power", "value": "on",
     "origin_state": "ACTION_ENV", "cause": "environment",
     "gate": "auto",                        // auto | suggest(수락 후) | undo(자동 실행 뒤 거절 시 되돌리기)
@@ -294,9 +369,10 @@ ACTION_ENV 진입 시 원인별 명령 목록, 게이트 auto 면 즉시 · sugg
 FSM 을 MONITOR 로 보낸다. `state/phase.sensor_summary.control` 에 진행 중 에피소드(명령·상태)가 실린다.
 어댑터가 없을 때의 리허설: `python tools/mock_plug.py --broker <ip>` (결과 응답 + `deskmate/control/state/<target>` retain).
 
-Pi 5 앱은 `desk_lamp`의 `set_brightness`(iLink 원시 밝기 정수 **0~255**, 퍼센트 아님)와
-`set_power`(`on`/`off`)를 실행하고 `display-control` 노드의 결과를 QoS 1·retain 없음으로
-돌려준다. 기존 설정의 밝기 70은 약 27%, 되돌림 40은 약 16%다. 다른 대상은 해당 어댑터가
+Pi 5 앱은 `desk_lamp`의 `adjust_brightness`(`value: {"percent": ±정수}` — **지금 밝기 대비 %**, 2026-10-25. 앱이 지금 원시 밝기로
+계산·상하한을 정하고 결과에 `previous`·`actual`(원시 0~255)을 싣는다; value 에 `min_raw` 가 있으면 결과 = max(계산값, min_raw)), `set_brightness`(iLink 원시 밝기 정수 **0~255**, 허브의
+되돌리기가 `previous` 로 보낸다)와 `set_power`(`on`/`off`)를 실행하고 `display-control` 노드의 결과를 QoS 1·retain 없음으로
+돌려준다. 기본 설정은 환경 +30 %, 졸음 +60 %, 개인화 arm ±50 % 다. 다른 대상은 해당 어댑터가
 처리하며, 앱이 환기팬 등의 성공 응답을 대신 만들지 않는다.
 
 `vent_fan` 은 Pico 2 W 블루투스 선풍기(`firmware/pico2w_ble_fan/`)다. **Pi 5 앱의 블루투스 탭에서 `DESKMATE-FAN` 을
@@ -340,9 +416,15 @@ retain으로 들어온 명령은 무시한다. 최근 128개 `command_id`의 처
 저장하고 FSM 판정이나 제어 명령을 바꾸지 않는다. 선택 필드 `response_ms` 는 응답까지 걸린 밀리초다.
 라벨은 hub 로컬 JSONL에 기록하며 별도 MQTT 토픽으로 발행하지 않는다.
 
+조명 직접 조절 보고(2026-10-25): 사용자가 앱의 조명 조절로 밝기를 바꾸면 앱이 `{"kind": "manual_adjust", "target_id": "desk_lamp",
+"from": 180, "to": 90, "input": "app"}`(원시 0~255)를 같은 토픽에 보낸다. 허브 명령으로 생긴 변화는 보내지 않는다. 허브는 이 보고를
+ESM·제어 승인에 쓰지 않고, 허브가 밝힌 뒤 `implicit.dim_window_min`(10 분) 안의 어둡게 하기를 그 개입의 음의 보상으로만 쓴다
+([data-spec](data-spec.md#사용자-첫-설정직접-조절-보고-2026-10-25)).
+
 ## QoS · 보존
 
 - 센서 스트림: QoS 0 (유실 허용, 고빈도)
+- `sensor/weather` 는 QoS 0 + retain (주기가 길어 재시작 시 마지막 값을 바로 받는다. stale 판정은 hub 가 `fetched_at` 으로)
 - `state/phase` · `display/message` · `session/report` · `interaction/request` · `control/cmd` · `feedback/user`: QoS 1
 - `state/phase` 는 retain 을 켜서 디스플레이 재시작 시 즉시 현재 상태를 받는다
 - `display/message` 는 retain 을 끈다. 이전 문구가 재시작 뒤 다시 표시되거나 broker에 남지 않게 한다.
@@ -392,3 +474,20 @@ retain으로 들어온 명령은 무시한다. 최근 128개 `command_id`의 처
 실행 중인 학습 job이 있고 실제 상태가 IDLE/END 밖이면 status=paused로 표시한다. 입력·판단·제어는 유지하고, 다시 유휴 상태가 되면 training으로 재개한다. Pi 5는 이 snapshot을 표시하며 연결 끊김이나 동의 철회 때 이전 개인 모델 상태를 현재처럼 표시하지 않는다. 서비스 시작 self-check는 stderr 진단만 사용하며 MQTT 명령·개인 표본을 새로 만들지 않는다.
 
 ondevice.yaml이 활성화된 경우에만 `state/phase.data.sensor_summary.ondevice_learning`을 추가한다. `execution: local`, `decision_source: fsm`, `head_source: common|personal`, `samples`, `sessions`, `training_step`(job이 없으면 null)을 제공한다. status는 disabled, unavailable, awaiting_consent, awaiting_portable_model, collecting, training, paused, accepted, rejected, storage_error, head_load_failed이다. embedding·개인 head·표본·파일 경로는 MQTT로 보내지 않는다. 기본 비활성에서는 기존 출력과 FSM을 유지한다. [실행·학습 계약](ondevice-personalization.md)을 따른다.
+
+## 피로 데이터 수집 (2026-10-20)
+
+`deskmate/fatigue/label` 은 Pi 5 피로 기록 앱(`com.atlas.app.deskmate_fatigue`)이 보내는 학습 라벨이다. hub FSM 입력은 아니다 —
+hub 는 이 토픽을 구독해 피로 점수의 세션 문맥과 프로필 보정에만 쓰고, 점수는 `state/phase.data.sensor_summary.fatigue`
+(`{kss, kss_personal, window_s, n_ticks, model_id, valid, ts}`, 1분마다 갱신, 모델이 없으면 생략)로 낸다([fatigue-dataset.md](fatigue-dataset.md) §6).
+QoS 1, retain 없음. 연결이 끊긴 동안의 기록은 앱이 순서대로 쌓아 두었다가 다시 보낸다(중복은 기록기가 거른다).
+
+```json
+{"schema_version":"1.0","ts":1792900000.0,"node":"display-fatigue","boot_id":"fatigue-1","seq":4,
+ "data":{"event":"kss","session_id":"A-3f2k-1792899100000","profile_id":"A-3f2k","ts":1792900000.0,
+         "kss":6,"prompt_ts":1792899992.0,"response_ms":8000}}
+```
+
+`event`: `session_start`(kss, sleep_hours_last_night, profile{chronotype, usual_sleep_h, work_type}) ·
+`kss`(kss 1~9, prompt_ts, response_ms) · `sleepy` · `prompt_missed`(prompt_ts) · `session_end`(kss).
+프로필 슬롯 이름(A~F)은 보내지 않고 `profile_id` 만 보낸다.

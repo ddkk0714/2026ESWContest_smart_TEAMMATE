@@ -1,0 +1,16 @@
+{
+  "schema": "deskmate-portable-export/1",
+  "samples": 37939,
+  "model_bytes": 40250,
+  "source_sha256": "f8d0b0975e60f61b428ff368031ddd3ede1f7ecf1a4101509d81a4eb1658abc9",
+  "max_absolute_error": 1.2759825659403035e-06,
+  "top1_agreement": 1.0,
+  "pc_p50_ms": 0.6185750244185328,
+  "pc_p95_ms": 0.6287043011980131,
+  "policy": {
+    "max_absolute_error": 1e-05,
+    "min_top1_agreement": 1.0,
+    "max_model_bytes": 262144
+  },
+  "board_verified": false
+}
