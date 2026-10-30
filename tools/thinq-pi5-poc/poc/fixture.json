@@ -1,0 +1,163 @@
+{
+  "provenance": "Minimal reconstruction from user-reported AS183HWWA GET observations; not a raw Profile/State response. Unreported fields and device identifiers are omitted. Operational fields are synthetic fixtures reconstructed from reported supported enum values. NOT live data.",
+  "profile": {
+    "property": {
+      "airQualitySensor": {
+        "PM1": {
+          "type": "number",
+          "mode": [
+            "r"
+          ],
+          "value": {
+            "r": null
+          }
+        },
+        "PM2": {
+          "type": "number",
+          "mode": [
+            "r"
+          ],
+          "value": {
+            "r": null
+          }
+        },
+        "PM10": {
+          "type": "number",
+          "mode": [
+            "r"
+          ],
+          "value": {
+            "r": null
+          }
+        },
+        "odor": {
+          "type": "number",
+          "mode": [
+            "r"
+          ],
+          "value": {
+            "r": null
+          }
+        },
+        "totalPollution": {
+          "type": "number",
+          "mode": [
+            "r"
+          ],
+          "value": {
+            "r": null
+          }
+        },
+        "monitoringEnabled": {
+          "type": "enum",
+          "mode": [
+            "r"
+          ],
+          "value": {
+            "r": [
+              "ON_WORKING",
+              "ALWAYS"
+            ]
+          }
+        }
+      },
+      "filterInfo": {
+        "filterRemainPercent": {
+          "type": "number",
+          "mode": [
+            "r"
+          ],
+          "value": {
+            "r": null
+          }
+        }
+      },
+      "airFlow": {
+        "windStrength": {
+          "type": "enum",
+          "mode": [
+            "r",
+            "w"
+          ],
+          "value": {
+            "r": [
+              "LOW",
+              "MID",
+              "HIGH",
+              "POWER",
+              "AUTO"
+            ],
+            "w": [
+              "LOW",
+              "MID",
+              "HIGH",
+              "POWER",
+              "AUTO"
+            ]
+          }
+        }
+      },
+      "operation": {
+        "airPurifierOperationMode": {
+          "type": "enum",
+          "mode": [
+            "r",
+            "w"
+          ],
+          "value": {
+            "r": [
+              "POWER_ON",
+              "POWER_OFF"
+            ],
+            "w": [
+              "POWER_ON",
+              "POWER_OFF"
+            ]
+          }
+        }
+      },
+      "airPurifierJobMode": {
+        "currentJobMode": {
+          "type": "enum",
+          "mode": [
+            "r",
+            "w"
+          ],
+          "value": {
+            "r": [
+              "SLEEP",
+              "CLEAN"
+            ],
+            "w": [
+              "SLEEP",
+              "CLEAN"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "state": {
+    "airQualitySensor": {
+      "PM1": 8,
+      "PM2": 8,
+      "PM10": 10,
+      "odor": 1,
+      "totalPollution": 1,
+      "monitoringEnabled": "ON_WORKING"
+    },
+    "filterInfo": {
+      "filterRemainPercent": 96
+    },
+    "airFlow": {
+      "windStrength": "AUTO",
+      "windStrengthDetail": "AUTO"
+    },
+    "operation": {
+      "airPurifierOperationMode": "POWER_ON"
+    },
+    "airPurifierJobMode": {
+      "currentJobMode": "CLEAN"
+    }
+  }
+}

@@ -1,0 +1,110 @@
+{
+  "status": "read_ok",
+  "fields": {
+    "pm1": {
+      "value": 8,
+      "valid": true,
+      "status": "ok",
+      "unit": null,
+      "measured_at": null
+    },
+    "pm1_level": {
+      "value": null,
+      "valid": false,
+      "status": "unsupported",
+      "unit": null,
+      "measured_at": null
+    },
+    "pm2": {
+      "value": 8,
+      "valid": true,
+      "status": "ok",
+      "unit": null,
+      "measured_at": null
+    },
+    "pm2_level": {
+      "value": null,
+      "valid": false,
+      "status": "unsupported",
+      "unit": null,
+      "measured_at": null
+    },
+    "pm10": {
+      "value": 10,
+      "valid": true,
+      "status": "ok",
+      "unit": null,
+      "measured_at": null
+    },
+    "pm10_level": {
+      "value": null,
+      "valid": false,
+      "status": "unsupported",
+      "unit": null,
+      "measured_at": null
+    },
+    "odor": {
+      "value": 1,
+      "valid": true,
+      "status": "ok",
+      "unit": null,
+      "measured_at": null
+    },
+    "odor_level": {
+      "value": null,
+      "valid": false,
+      "status": "unsupported",
+      "unit": null,
+      "measured_at": null
+    },
+    "total_pollution": {
+      "value": 1,
+      "valid": true,
+      "status": "ok",
+      "unit": null,
+      "measured_at": null
+    },
+    "total_pollution_level": {
+      "value": null,
+      "valid": false,
+      "status": "unsupported",
+      "unit": null,
+      "measured_at": null
+    },
+    "power": {
+      "value": "POWER_ON",
+      "valid": true,
+      "status": "ok",
+      "unit": null,
+      "measured_at": null
+    },
+    "monitoring_mode": {
+      "value": "ON_WORKING",
+      "valid": true,
+      "status": "ok",
+      "unit": null,
+      "measured_at": null
+    },
+    "filter_remain_percent": {
+      "value": 96,
+      "valid": true,
+      "status": "ok",
+      "unit": null,
+      "measured_at": null
+    }
+  },
+  "received_at": 1,
+  "measured_at": null,
+  "connection": "unknown",
+  "pm2_meaning": "unverified",
+  "wind_profile_verified": true,
+  "state": {
+    "power": "POWER_ON",
+    "job": "CLEAN",
+    "windStrength": "AUTO",
+    "windStrengthDetail": "AUTO"
+  },
+  "backend": "fixture",
+  "post_enabled": false,
+  "automatic_control": false
+}
