@@ -36,6 +36,69 @@ void main() {
         settings.toJson());
   });
 
+  test('dev_mode_default round-trips and is omitted when false', () {
+    final on = const DeskmateSettings(devModeDefault: true);
+    expect(on.toJson()['dev_mode_default'], isTrue);
+    expect(on.isEmpty, isFalse);
+    expect(DeskmateSettings.empty.toJson().containsKey('dev_mode_default'),
+        isFalse);
+    expect(SettingsStore(candidates: [path('dev')]).save(on), isTrue);
+    final loaded = SettingsStore(candidates: [path('dev')]).load();
+    expect(loaded.devModeDefault, isTrue);
+    expect(loaded.copyWith(devModeDefault: false).devModeDefault, isFalse);
+    // 다른 타입이 들어 있으면 false.
+    expect(DeskmateSettings.fromJson({'dev_mode_default': 'yes'}).devModeDefault,
+        isFalse);
+  });
+
+  test('placement round-trips, rejects unknown values, and records placement_asked',
+      () {
+    const on = DeskmateSettings(placement: 'left', placementAsked: true);
+    expect(on.toJson(), {'schema_version': 1, 'placement': 'left', 'placement_asked': true});
+    expect(on.isEmpty, isFalse);
+    expect(DeskmateSettings.empty.toJson().containsKey('placement'), isFalse);
+    expect(SettingsStore(candidates: [path('place')]).save(on), isTrue);
+    final loaded = SettingsStore(candidates: [path('place')]).load();
+    expect(loaded.placement, 'left');
+    expect(loaded.placementAsked, isTrue);
+    expect(loaded.copyWith(clearPlacement: true).placement, isNull);
+    expect(loaded.copyWith(placement: 'right').placement, 'right');
+    expect(DeskmateSettings.fromJson({'placement': 'top'}).placement, isNull);
+    expect(DeskmateSettings.fromJson({'placement': ' Center '}).placement, 'center');
+    expect(DeskmateSettings.fromJson({'placement': 3}).placement, isNull);
+    expect(DeskmateSettings.validPlacement('right'), 'right');
+    expect(DeskmateSettings.validPlacement('back'), isNull);
+  });
+
+  test('lamp_brightness_floor round-trips and only accepts 0..255 integers', () {
+    const on = DeskmateSettings(lampBrightnessFloor: 45);
+    expect(on.toJson()['lamp_brightness_floor'], 45);
+    expect(on.isEmpty, isFalse);
+    expect(DeskmateSettings.empty.toJson().containsKey('lamp_brightness_floor'), isFalse);
+    expect(SettingsStore(candidates: [path('floor')]).save(on), isTrue);
+    final loaded = SettingsStore(candidates: [path('floor')]).load();
+    expect(loaded.lampBrightnessFloor, 45);
+    expect(loaded.copyWith(clearLampBrightnessFloor: true).lampBrightnessFloor, isNull);
+    expect(DeskmateSettings.fromJson({'lamp_brightness_floor': 300}).lampBrightnessFloor, isNull);
+    expect(DeskmateSettings.fromJson({'lamp_brightness_floor': -1}).lampBrightnessFloor, isNull);
+    expect(DeskmateSettings.fromJson({'lamp_brightness_floor': '30'}).lampBrightnessFloor, isNull);
+    expect(DeskmateSettings.fromJson({'lamp_brightness_floor': 0}).lampBrightnessFloor, 0);
+  });
+
+  test('feedback_enabled round-trips and is absent until the switch is used', () {
+    expect(DeskmateSettings.empty.feedbackEnabled, isNull);
+    expect(DeskmateSettings.empty.toJson().containsKey('feedback_enabled'), isFalse);
+    const off = DeskmateSettings(feedbackEnabled: false);
+    expect(off.toJson()['feedback_enabled'], isFalse);
+    expect(off.isEmpty, isFalse);
+    expect(SettingsStore(candidates: [path('feedback')]).save(off), isTrue);
+    final loaded = SettingsStore(candidates: [path('feedback')]).load();
+    expect(loaded.feedbackEnabled, isFalse);
+    expect(loaded.copyWith(feedbackEnabled: true).feedbackEnabled, isTrue);
+    expect(loaded.copyWith(mqttHost: '10.0.0.2').feedbackEnabled, isFalse);
+    expect(DeskmateSettings.fromJson({'feedback_enabled': 'yes'}).feedbackEnabled, isNull);
+  });
+
   test('missing and malformed files return empty without throwing', () {
     final missing = SettingsStore(candidates: [path('missing')]);
     expect(missing.load().isEmpty, isTrue);

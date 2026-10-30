@@ -153,11 +153,22 @@ hub 의 환경 개입 대상 `vent_fan`(`config/control.yaml`)이 이 선풍기�
 >   "Failed to connect with remote device" 로 끝났다. 랜덤 정적 주소로 바꾸자 같은 앱이 붙었다.
 > - **앱은 PR #40 방식 그대로다**: 앱이 받는 Adapter.GetInfo 는 비어 있고, 빈 어댑터로 `Gatt.Connect` → 연결 번호,
 >   서비스 검색·쓰기에는 GetStatus 의 어댑터를 쓴다. root 로 어댑터 주소를 **채워** Connect 하면 실패하니 시험할 때 주의.
-> - 연결 번호를 받고도 링크가 안 올라오거나(서비스 검색 "Device with supplied address is not available"),
->   붙었다가 끊길 때가 있다. 앱이 검색 후 최대 5회 다시 붙는다(`BleFanControl`). Pi 5 → 선풍기 링크 성공률이 노트북보다 낮다
->   (root BlueZ 직접 연결 약 절반 `le-connection-abort-by-local`). 2.4 GHz 핫스팟 Wi-Fi 간섭 여부는 확인하지 않았다.
+> - **"자주 끊긴다"의 대부분은 연결이 처음부터 안 맺어진 것이다.** Pi 5 BlueZ 는 `Connected` 를 1 로 올렸다가 1초 안에 0 으로
+>   내리는데(매번 시스템 "Bluetooth device disconnected" 창), 그때 선풍기 로그에는 `[fan] connected` 가 없다. 즉 Pi 5 가 보낸
+>   연결 요청을 선풍기가 받지 못했다. 10-24 16:06~16:10 에 앱이 9번 시도해 1번 붙었다(root BlueZ 직접 연결도 약 절반
+>   `le-connection-abort-by-local`). 노트북에서는 거의 한 번에 붙으므로 Pi 5 쪽 무선(같은 칩의 2.4 GHz Wi-Fi 핫스팟·A2DP 스피커와
+>   시간 나눠 쓰기)이 유력하지만 확인하지는 않았다. 앱은 3초 간격으로 8번까지, 두 번 실패할 때마다 검색 후 다시 붙는다(`BleFanControl`).
+> - **붙은 뒤 끊김**: BlueZ 기본 감시 시간이 420 ms 라 무선이 잠깐만 막혀도 끊긴다. 선풍기가 연결 2초 뒤 4 s 로 늘려 달라고
+>   요청하고 Pi 5 가 받아들인다(`[fan] link params: status=0x00 interval=36 x1.25ms supervision=4000 ms`). 끊기면 이유 코드를
+>   `[fan] link lost, reason 0x..` 로 남긴다(0x08 감시 시간 초과, 0x13 Pi 5 가 끊음, 0x3e 연결 수립 실패).
+> - **끊긴 지 30초 지나면 BlueZ 가 기기를 잊는다.** 페어링하지 않은 BLE 기기(선풍기·램프)는 BlueZ 임시 기기라 연결이 끊기고
+>   30초 뒤 목록에서 지워지고, 그 뒤 `Gatt.Connect` 는 BlueZ 를 부르지도 않고 바로 실패한다(서비스 검색 "Device with supplied
+>   address is not available"). 다시 검색해야 보인다. 선풍기는 앱이 검색 후 다시 붙지만 **램프는 아직 그 재시도가 없어**, 앱을
+>   다시 켰을 때 램프가 "연결 끊김"이면 블루투스 탭에서 기기 검색 뒤 다시 연결한다.
 >
-> Pi 5 에서 시험할 때 걸리는 것: 앱을 다시 설치하면 저장된 기기(스피커·램프·선풍기)가 지워지고 **블루투스 권한 동의 창**이 뜬다(화면에서 Ok).
+> Pi 5 에서 시험할 때 걸리는 것: 앱을 지우고 다시 설치하면 저장된 기기(스피커·램프·선풍기)가 지워지고 **블루투스 권한 동의 창**이 뜬다(화면에서 Ok).
+> 지우지 않고 버전만 올려 설치해도(`appinfo.json` version 을 올리고 Remove 없이 `PackageManager1 Install`) 기기 목록은 남지만
+> 권한 동의 창은 다시 뜬다(10-24 0.1.2). 동의 전에 시작한 자동 연결은 실패하니, Ok 를 누른 뒤 앱을 한 번 더 켠다.
 > 블루투스 연결이 끊길 때마다 시스템 "Bluetooth device disconnected" 창이 뜨는데, 멈춰서 안 눌리면
 > `abusctl call com.atlas.AppManager1 Stop "com.atlas.app.notification"` 뒤 Start 로 치운다. 기기는 시스템 설정의 Bluetooth 가 아니라
 > DESKMATE 앱 블루투스 탭에서 고른다(시스템 설정은 OS 페어링을 시도해 "Pairing failed").
