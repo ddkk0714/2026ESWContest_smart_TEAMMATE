@@ -164,6 +164,8 @@ ToF 원본 zone 배열은 L0이며 MQTT·로그 등 운영 스키마에 포함�
 | `mouse_active` | boolean | 윈도우 내 마우스 move/click/scroll ≥ 1 (좌표·버튼 미수집). |
 | `input_active` | boolean | `typing_active or mouse_active` — "마우스 작업 vs 글 읽기" 구분용. |
 | `mouse_event_rate` | float, /min | 분당 마우스 이벤트 수(move 는 50 ms throttle). |
+| `event_count` | int | 윈도우 내 keydown 개수(auto-repeat 는 1타). hub 피로 특징이 `event_count / window_s × 60` 으로 분당 타건 수를 만든다(10-26 추가, 개수만). |
+| `valid` | boolean | 표본이 제대로 계산됐는지. 수집기는 늘 true(미입력 창 포함 — 타이핑 여부는 `typing_active`). Pi 5 키스트로크 탭·연결 화면은 false 를 '유효하지 않은 표본'·끊김으로, hub 피로 특징(`hub/deskmate_hub/fatigue/features.py`)은 true 일 때만 키 특징을 읽는다(10-26 추가). |
 
 **미입력 구간 규칙**: keydown 이 없으면 `typing_active=false`, `idle_ratio=1.0`, dwell/flight/correction 통계는 **0**(null 아님).
 hub 는 `typing_active=false` 인 프레임에서 키스트로크 신호를 **미가용(available=false)** 으로 보고 가중치를 재정규화한다.
