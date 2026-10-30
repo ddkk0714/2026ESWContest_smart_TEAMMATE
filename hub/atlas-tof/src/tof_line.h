@@ -47,6 +47,13 @@ struct TofFrame {
     int8_t flip_cols_hint = -1;
     bool seq16 = false;         // seq 가 UART 0x05 순번(delta 규칙)인가
     uint32_t seq_mask = 0xFFFFu; // seq16 의 순환 폭: 옛 v1 frame_seq u16 = 0xFFFF, 표준 배치 frame_id u8 = 0xFF
+    // /raw 용 원본(받은 그대로, 뒤집기·-1 규약 변환 전). uart_relay_board 의 GET /raw 와 같은 스키마로 내보낸다
+    uint32_t uart_seq = 0;      // UART 봉투 seq (0x05 줄의 "seq")
+    int frame_id = 0;           // 표준 배치 frame_id(u8). v1 은 0
+    int sensor_mask = 0;        // 표준 배치 sensor_mask. v1 은 0
+    int raw_flags = 0;          // 받은 flags 바이트 그대로
+    int16_t raw_d[kMaxZones] = {};   // 표준 배치: i16 그대로(-1 = 없음). v1: 0·0xFFFF → -1 (중계기와 같게)
+    uint8_t raw_st[kMaxZones] = {};
 };
 
 struct TofHello {
