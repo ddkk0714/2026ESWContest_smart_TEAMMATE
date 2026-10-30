@@ -12,6 +12,8 @@ logs/
 *.jsonl
 *.csv
 *.mp3
+# 예외: 시뮬 결과 집계 표(수집 데이터·라벨 아님 — docs/sim-results/README.md)
+!docs/sim-results/data/*.csv
 # 센서 실측값(개인정보 없음)은 올린다 — 10-25 팀 확인: 위 규칙은 얼굴 이미지 같은 민감 정보용
 !dataset/tof_wall_noise/**/*.jsonl
 
