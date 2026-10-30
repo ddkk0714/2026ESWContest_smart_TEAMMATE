@@ -21,6 +21,8 @@
 | [`data-spec.md`](data-spec.md) | 센서 특징, 유효성·정규화·통합 계약 |
 | [`fsm-spec.md`](fsm-spec.md) | FSM 상태·전이·점수·개입 규칙 |
 | [`mqtt-topics.md`](mqtt-topics.md) | MQTT topic과 payload 스키마 |
+| [`personalization-spec.md`](personalization-spec.md) | 사용자 맞춤 개입 선택 정책 3층 구조(규칙 FSM · 생활습관 프로필 · 컨텍스트 밴딧), 보상·취침 규칙·콜드 스타트·시연안 |
+| [`personalization-log.md`](personalization-log.md) | 개인화 로그 JSONL 한 줄 스키마(에피소드·세션 요약)와 예시 |
 
 ## 장비·배포·제출
 

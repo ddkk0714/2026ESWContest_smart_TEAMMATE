@@ -23,7 +23,16 @@ import 'keystroke_page.dart';
 import 'link_status.dart';
 import 'music_playback.dart';
 import 'mqtt_watchdog.dart';
+import 'notice_banner.dart';
 import 'posture_screen.dart';
+import 'preview_page.dart';
+import 'command_log.dart';
+import 'dev_mode_page.dart';
+import 'device_state_board.dart';
+import 'lamp_defaults.dart';
+import 'placement_client.dart' show placementKo;
+import 'placement_controller.dart';
+import 'placement_page.dart';
 import 'sensor_overview_page.dart';
 import 'developer_page.dart';
 import 'session_report.dart';
@@ -31,6 +40,7 @@ import 'settings_store.dart';
 import 'state_source.dart';
 import 'privacy_page.dart';
 import 'privacy_state.dart';
+import 'voice_alert.dart';
 
 const _hubUrl = String.fromEnvironment('DESKMATE_HUB_URL');
 const _mqttHost = String.fromEnvironment('DESKMATE_MQTT_HOST');
@@ -120,6 +130,15 @@ class _DashboardPageState extends State<DashboardPage> {
   Set<String> _devFlags = const {};
   Timer? _screenCycleTimer;
   _AppView _view = _AppView.dashboard;
+  // 개발자 모드의 명령 로그. MQTT 소스가 네 토픽의 envelope 를 넘기면 줄로 쌓는다(최근 200줄).
+  final _commandLog = CommandLog();
+
+  // 화면 알림(쉬기 알림·자동 정보 카드·TTS 대신 띄운 문구). 한 번에 한 장.
+  final _notices = NoticeBoard();
+  // 기기별 현재 상태(hub 마지막 명령 기준). 블루투스가 안 붙어도 "선풍기 ON" 처럼 표기한다.
+  final _deviceBoard = DeviceStateBoard();
+  // 장치 위치(왼쪽·가운데·오른쪽): 저장값과 Pi 4 자세 서비스(:8771 /api/placement) 동기화.
+  late final PlacementController _placement;
   late final MusicPlayback _music;
   late final StreamSubscription<bool> _musicChanges;
   late final StreamSubscription<double> _musicVolumeChanges;
@@ -173,11 +192,27 @@ class _DashboardPageState extends State<DashboardPage> {
       lamp: IlinkLampFeedback(_bluetooth),
       bluetooth: _bluetooth,
       fan: BleFanControl(_bluetooth),
+      alerts: AtlasAlertSound(),
+      speech: AtlasSpeech(),
+      notices: _notices,
     );
     HardwareKeyboard.instance.addHandler(_onKey);
     _settingsStore = widget.settings ?? SettingsStore();
+    _placement = PlacementController(
+      store: _settingsStore,
+      onSettingsChanged: (next) {
+        if (mounted) setState(() => _settings = next);
+      },
+    )..addListener(() {
+        if (mounted) setState(() {});
+      });
     _startupCheck = MqttStartupCheck(prober: widget.prober);
     _source = _initialSource();
+    _feedbackController.brightnessFloor =
+        _settings.lampBrightnessFloor ?? kLampBrightnessFloorDefault;
+    _connectPlacement();
+    // 설정 dev_mode_default: 켜자마자 개발자 모드 화면(ToF 열지도·판정·명령 로그).
+    if (_settings.devModeDefault) _view = _AppView.devMode;
     // 이 보드는 앱 표준출력이 journal 에도 app_log 에도 안 남는다. 허브에 왜 못
     // 붙었는지 알 방법이 화면밖에 없어서, 첫 판단과 그 결과를 파일로 남긴다.
     diag.write(
@@ -193,6 +228,8 @@ class _DashboardPageState extends State<DashboardPage> {
       diag.write('bluetooth: 복원 스피커=${_btLinks.speakerStatus.health.name} '
           '램프=${_btLinks.lampStatus.health.name} '
           '선풍기=${_btLinks.fanStatus.health.name}');
+      // 복원 뒤에도 램프가 끊기면 45 s 마다 다시 붙여 둔다(BlueZ 가 잊지 않게).
+      if (mounted) _btLinks.keepLampConnected();
     }));
     _startMqttCheck();
     _refresh();
@@ -233,8 +270,13 @@ class _DashboardPageState extends State<DashboardPage> {
     _busy = true;
     try {
       final next = await _source.fetch();
-      _lastStateAt = DateTime.now();
-      _watchdog.stateReceived();
+      if (isFreshState(
+          mqtt: _source is MqttStateSource,
+          previousSequence: _state?.sequence,
+          sequence: next.sequence)) {
+        _lastStateAt = DateTime.now();
+        _watchdog.stateReceived();
+      }
       if (_override == null) {
         _intervention.update(next,
             hasPendingRequest: _source.hasPendingRequest,
@@ -395,6 +437,7 @@ class _DashboardPageState extends State<DashboardPage> {
         state: state,
         displayMessage: _source.displayMessage,
         hasPendingRequest: _hasPendingRequest,
+        pendingRequest: _override != null ? null : _source.pendingRequest,
         keystroke: _localKeystroke ?? state.keystroke,
         keystrokeReference:
             _localKeystroke != null ? DateTime.now() : state.timestamp,
@@ -450,7 +493,13 @@ class _DashboardPageState extends State<DashboardPage> {
   MqttStateSource _mqttSource(String host, {required int port}) =>
       MqttStateSource(host,
           port: port,
-          onControlCommand: _feedbackController.handleControlCommand);
+          onControlCommand: _feedbackController.handleControlCommand,
+          onNotice: (data) =>
+              _notices.show(ScreenNotice.fromRequest(data, DateTime.now())),
+          onTopicEvent: (topic, envelope) {
+            _commandLog.addMessage(topic, envelope);
+            _deviceBoard.addMessage(topic, envelope);
+          });
 
   /// MQTT 로 붙을 때만 시작 점검을 돌린다. 결과는 대기 화면의 가이드가 그린다.
   void _startMqttCheck() {
@@ -489,7 +538,27 @@ class _DashboardPageState extends State<DashboardPage> {
     previous.close();
     diag.write('state: 연결 대상 변경 → ${next.label}');
     _startMqttCheck();
+    _connectPlacement();
     _refresh();
+  }
+
+  /// Pi 4 주소가 정해질 때마다 장치 위치를 맞춘다(GET → 저장값과 다르면 POST). 끝나면 첫 실행 질문.
+  void _connectPlacement() {
+    final host = _previewHost;
+    unawaited(_placement.connect(host).then((_) {
+      if (!mounted) return;
+      diag.write('placement: host=${host ?? '-'} supported=${_placement.supported} '
+          'remote=${_placement.remote?.summary ?? '-'} saved=${_settings.placement ?? '-'}'
+          '${_placement.lastError == null ? '' : ' err=${_placement.lastError}'}');
+      _maybeAskPlacement();
+    }));
+  }
+
+  /// 저장값이 없고 건너뛴 적도 없고 서비스가 지원하면 한 번 묻는다. 건너뛰면 다시 묻지 않는다.
+  void _maybeAskPlacement() {
+    if (!mounted || !_placement.shouldAskOnStart) return;
+    _placement.askedThisRun = true;
+    unawaited(showPlacementDialog(context, _placement, allowSkip: true));
   }
 
   /// 같은 주소로 새 클라이언트를 만든다. 자동 재연결이 멈춘 상태도 이걸로 풀린다.
@@ -533,6 +602,22 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   /// 같은 주소로 MQTT 클라이언트를 새로 만든다. 화면은 유지한다.
+  /// 알림 닫기. hub 가 보낸 알림(request_id 있음)이면 feedback/user 에 dismiss 를 보낸다.
+  void _dismissNotice() {
+    final now = DateTime.now();
+    final notice = _notices.dismiss(now);
+    final requestId = notice?.requestId;
+    if (notice == null || requestId == null) return;
+    unawaited(_source
+        .publishFeedbackData(buildFeedbackData(
+            requestId: requestId,
+            verdict: 'dismiss',
+            responseMs: now.difference(notice.shownAt).inMilliseconds))
+        .catchError((Object error) {
+      diag.write('알림 닫기 전송 실패: $error');
+    }));
+  }
+
   void _reconnectMqtt({bool auto = false}) {
     final source = _source;
     if (source is! MqttStateSource) return;
@@ -643,6 +728,53 @@ class _DashboardPageState extends State<DashboardPage> {
   void _notify(String text) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  // ── 프리뷰 탭(개발 도구 안) ───────────────────────────────────────────────
+
+  /// 프리뷰 탭이 ToF 격자·자세 라벨을 읽을 Pi 4 주소. 설정에 적은 값 → MQTT 브로커 호스트
+  /// → 빌드 HUB_URL 의 호스트 순. 전부 없으면 null 이고 탭이 입력칸을 띄운다.
+  String? get _previewHost {
+    final saved = _settings.previewHost;
+    if (saved != null && saved.isNotEmpty) return saved;
+    final source = _source;
+    if (source is MqttStateSource) return source.host;
+    final hub = Uri.tryParse(_hubUrl.trim());
+    if (hub != null && hub.host.isNotEmpty) return hub.host;
+    return null;
+  }
+
+  void _setPreviewHost(String host) {
+    final next = _settingsStore.load().copyWith(previewHost: host);
+    final saved = _settingsStore.save(next);
+    setState(() => _settings = next);
+    _connectPlacement();
+    _notify(saved
+        ? 'ToF 주소를 $host 로 저장했습니다.'
+        : '$host 로 읽습니다 — 저장할 곳이 없어 이번 실행에만 적용됩니다.');
+  }
+
+  /// 프리뷰 탭의 "지금 판정이 맞나요?". 기존 `feedback/user` 경로 그대로 — request_id 는
+  /// 현재 질문이 있으면 그것, 없으면 atlas-display(소스가 정한다). 메모는 `data.note`.
+  Future<void> _previewFeedback(PreviewFeedback feedback) async {
+    if (_override != null) {
+      _devAnswer('프리뷰 ${feedback.verdict}'
+          '${feedback.correctedState == null ? '' : ' → ${feedback.correctedState}'}');
+      return;
+    }
+    try {
+      await _source.feedback(feedback.verdict,
+          correctedState: feedback.correctedState,
+          responseMs: _intervention.responseMs(DateTime.now()),
+          note: feedback.note);
+      _notify(switch (feedback.verdict) {
+        'accept' => '판정이 맞다고 기록했어요.',
+        'reject' => '판정이 틀렸다고 기록했어요.',
+        _ => '정정(${feedback.correctedState})을 기록했어요. 판정은 바꾸지 않아요.',
+      });
+    } catch (error) {
+      _notify('전송 실패: $error');
+    }
   }
 
   Future<void> _toggleMusic() async {
@@ -764,6 +896,10 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void dispose() {
     _timer?.cancel();
+    _notices.dispose();
+    _commandLog.dispose();
+    _deviceBoard.dispose();
+    _placement.dispose();
     _screenCycleTimer?.cancel();
     _linkBadgeTimer?.cancel();
     HardwareKeyboard.instance.removeHandler(_onKey);
@@ -785,7 +921,10 @@ class _DashboardPageState extends State<DashboardPage> {
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(44, 24, 44, 28),
-          child: state == null
+          child: state == null && _view == _AppView.devMode
+              // 개발자 모드는 hub 상태가 아직 없어도 뜬다 — ToF 중계기·로그는 hub 와 따로 볼 수 있다.
+              ? _devModeWithoutState()
+              : state == null
               ? (_source is MqttStateSource
                   // MQTT 는 시작 점검 결과를 보여 준다. 실패해도 앱은 막지 않고,
                   // 상태가 오면 곧바로 평소 화면으로 넘어간다.
@@ -838,6 +977,22 @@ class _DashboardPageState extends State<DashboardPage> {
                             setState(() => _statusBar.dismiss(_links)),
                       ),
                     ],
+                    // 쉬기 알림·자동 정보 카드·TTS 대신 띄운 문구. 남은 시간은 1초 갱신을 따라 준다.
+                    ListenableBuilder(
+                      listenable: _notices,
+                      builder: (context, _) {
+                        final now = DateTime.now();
+                        final notice = _notices.current(now);
+                        if (notice == null) return const SizedBox.shrink();
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: NoticeBanner(
+                              notice: notice,
+                              now: now,
+                              onDismiss: _dismissNotice),
+                        );
+                      },
+                    ),
                     const SizedBox(height: 12),
                     Expanded(
                         child: switch (_view) {
@@ -864,6 +1019,8 @@ class _DashboardPageState extends State<DashboardPage> {
                           onClear: _clearDev,
                           preview: _buildDashboard(state),
                         ),
+                      // 카메라 자세 탭(ESP32-CAM/camsvc)은 개발용. 탭은 숨겨 두고(kShowCameraPostureTab)
+                      // 그 자리에 ToF 프리뷰가 온다 — 카메라 미사용 원칙(열린 결정 I7). 코드는 남긴다.
                       _AppView.posture => PostureScreen(
                           // 전체 리로드·연결 탭의 '다시 찾기' 가 이 값을 올린다.
                           reconnectSignal: _postureReloadToken,
@@ -873,6 +1030,8 @@ class _DashboardPageState extends State<DashboardPage> {
                             }
                           },
                         ),
+                      _AppView.preview => _buildPreview(state),
+                      _AppView.devMode => _buildDevMode(state),
                       _AppView.fsmGraph =>
                         FsmGraphPage(currentState: state.fsmState),
                       _AppView.bluetooth => BluetoothControlPage(
@@ -880,6 +1039,7 @@ class _DashboardPageState extends State<DashboardPage> {
                           feedback: _feedbackController,
                           music: _music,
                           links: _btLinks,
+                          onManualAdjust: _reportManualAdjust,
                         ),
                       _AppView.sessionReport =>
                         SessionReportCard(report: _source.sessionReport),
@@ -894,6 +1054,10 @@ class _DashboardPageState extends State<DashboardPage> {
                           onAction: _linkAction,
                           onReloadAll: _reloadAll,
                           onChangeAddress: _changeMqttAddress,
+                          placementLabel: placementKo(_settings.placement),
+                          placementApplied: _placement.appliedLabel,
+                          onChangePlacement: () =>
+                              unawaited(showPlacementDialog(context, _placement)),
                         ),
                     }),
                   ],
@@ -902,6 +1066,85 @@ class _DashboardPageState extends State<DashboardPage> {
       ),
     );
   }
+
+  // ── 개발자 모드(ToF 열지도 · 판정 · 명령 로그) ─────────────────────────────
+
+  Widget _buildDevMode(DisplayState? state) => DevModePage(
+        state: state,
+        host: _previewHost,
+        onHostChanged: _setPreviewHost,
+        log: _commandLog,
+        board: _deviceBoard,
+        deviceAvailable: {
+          'desk_lamp': _feedbackController.lamp.configured,
+          'vent_fan': _feedbackController.fan?.configured ?? false,
+        },
+        bluetoothLine: '램프 ${linkHealthLabel(_btLinks.lampStatus)}'
+            ' · 선풍기 ${linkHealthLabel(_btLinks.fanStatus)}'
+            ' · 스피커 ${linkHealthLabel(_btLinks.speakerStatus)}'
+            ' · 자동피드백 ${_feedbackController.enabled ? 'ON' : 'OFF'}',
+        placement: _settings.placement,
+        defaultOnStart: _settings.devModeDefault,
+        onDefaultOnStartChanged: _setDevModeDefault,
+        connectionLabel: _source.connectionLabel,
+      );
+
+  /// 사람이 블루투스 탭에서 직접 밝기·단계를 바꿨다 → `feedback/user` kind=manual_adjust. 실패해도 조용히.
+  void _reportManualAdjust(String targetId, int? from, int to) {
+    if (_override != null) return;
+    final data = buildManualAdjustData(
+        targetId: targetId,
+        from: from,
+        to: to,
+        tsMs: DateTime.now().millisecondsSinceEpoch);
+    unawaited(_source
+        .publishFeedbackData(data)
+        .catchError((Object e) => diag.write('manual_adjust 전송 실패: $e')));
+  }
+
+  /// hub 상태가 아직 없을 때의 개발자 모드 — 위에 대기 문구 한 줄, 아래는 같은 화면.
+  Widget _devModeWithoutState() => Column(
+        key: const ValueKey('devmode-no-state'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(children: [
+            Expanded(
+              child: Text(
+                'hub 상태 대기 중 · ${_source.label} · ${_source.connectionLabel}'
+                '${_error == null ? '' : ' · $_error'}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
+            ),
+            TextButton(
+              key: const ValueKey('devmode-to-dashboard'),
+              onPressed: () => setState(() => _view = _AppView.dashboard),
+              child: const Text('대시보드로'),
+            ),
+          ]),
+          const SizedBox(height: 6),
+          Expanded(child: _buildDevMode(null)),
+        ],
+      );
+
+  void _setDevModeDefault(bool on) {
+    final next = _settingsStore.load().copyWith(devModeDefault: on);
+    final saved = _settingsStore.save(next);
+    setState(() => _settings = next);
+    _notify(saved
+        ? (on ? '다음부터 개발자 모드로 시작합니다.' : '다음부터 대시보드로 시작합니다.')
+        : '저장할 곳이 없어 이번 실행에만 적용됩니다.');
+  }
+
+  Widget _buildPreview(DisplayState state) => PreviewPage(
+        state: state,
+        host: _previewHost,
+        onHostChanged: _setPreviewHost,
+        onFeedback: _previewFeedback,
+        // 개발자 화면으로 고정 중이면 가짜 상태에 대한 라벨을 hub 에 남기지 않는다.
+        feedbackEnabled: _override == null,
+      );
 }
 
 class _MusicVolumeDialog extends StatefulWidget {
@@ -965,8 +1208,17 @@ enum _AppView {
   bluetooth,
   sessionReport,
   privacy,
-  connection
+  connection,
+  // 개발 도구의 프리뷰 탭(ToF 열지도·전 센서·피드백). posture(카메라) 탭 자리에 온다.
+  preview,
+  // 개발자 모드: 열지도 두 장 + hub 판정 + 명령 로그를 한 화면에(설정 dev_mode_default 로 시작 화면).
+  devMode,
 }
+
+/// 카메라 자세 탭(ESP32-CAM/camsvc, `posture_screen.dart`)을 개발 도구 헤더에 보일지.
+/// "카메라 미사용" 원칙과 충돌하는 열린 결정(I7)이라 탭만 숨기고 코드는 지우지 않는다 —
+/// 팀이 채택하면 true 로.
+const kShowCameraPostureTab = false;
 
 class _Header extends StatelessWidget {
   const _Header(
@@ -1079,11 +1331,23 @@ class _Header extends StatelessWidget {
               icon: Icons.developer_mode,
               label: '\uAC1C\uBC1C\uC790',
               onTap: () => onViewChanged(_AppView.sensorTest)),
+          // \uD504\uB9AC\uBDF0(ToF \uC5F4\uC9C0\uB3C4\u00B7\uC804 \uC13C\uC11C\u00B7\uD53C\uB4DC\uBC31). \uC815\uC2DD \uAE30\uB2A5\uC774 \uC544\uB2C8\uB77C \uAC1C\uBC1C \uB3C4\uAD6C \uC548\uC5D0\uB9CC \uC788\uB2E4.
           _HeaderNav(
-              selected: view == _AppView.posture,
-              icon: Icons.chair_alt,
-              label: '\uC790\uC138',
-              onTap: () => onViewChanged(_AppView.posture)),
+              selected: view == _AppView.preview,
+              icon: Icons.science_outlined,
+              label: '\uD504\uB9AC\uBDF0',
+              onTap: () => onViewChanged(_AppView.preview)),
+          _HeaderNav(
+              selected: view == _AppView.devMode,
+              icon: Icons.terminal_rounded,
+              label: '개발자 모드',
+              onTap: () => onViewChanged(_AppView.devMode)),
+          if (kShowCameraPostureTab)
+            _HeaderNav(
+                selected: view == _AppView.posture,
+                icon: Icons.chair_alt,
+                label: '\uC790\uC138',
+                onTap: () => onViewChanged(_AppView.posture)),
           _HeaderNav(
               selected: view == _AppView.fsmGraph,
               icon: Icons.account_tree_outlined,

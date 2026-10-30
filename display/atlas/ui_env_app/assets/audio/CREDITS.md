@@ -63,3 +63,8 @@ Beethoven → Mozart → Bach → repeat.
 - Downloaded Wikimedia's MP3 transcode on 2026-09-15 and renamed it; no further
   audio edits were made.
 - SHA-256: `76b8e5374c9195d3e5dfe90fdeec232e0ce5176c6506735038d84ce1d8d3aab8`
+
+## Alert chimes
+
+- Files: `chime_single.mp3` (one tone), `chime_soft.mp3` (two-note chime), `chime_alert.mp3` (three short beeps).
+- Synthesized from sine tones for this project on 2026-10-26; no third-party audio.

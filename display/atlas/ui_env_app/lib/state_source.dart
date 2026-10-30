@@ -6,8 +6,78 @@ import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 
 import 'display_state.dart';
+import 'voice_alert.dart' show ScreenNotice;
 import 'session_report.dart';
 import 'privacy_state.dart';
+
+/// MQTT payload 바이트 → 문자열. hub 는 UTF-8 JSON 을 보낸다.
+/// `MqttPublishPayload.bytesToStringAsString` 은 바이트 하나를 글자 하나로 읽어(Latin-1)
+/// 한글이 `ì¡°ëª…` 처럼 깨진다(10-24 실기). 깨진 바이트가 섞여 있어도 화면은 멈추지 않게 대체 문자로 둔다.
+String mqttPayloadText(List<int> bytes) => utf8.decode(bytes, allowMalformed: true);
+
+/// hub 가 보낸 질문(`deskmate/interaction/request`)의 화면용 상세. kind 로 카드 문구가 갈린다.
+class PendingRequest {
+  const PendingRequest({
+    required this.requestId,
+    required this.kind,
+    this.promptCode,
+    this.explanation,
+    this.minutes,
+    this.why = const [],
+    this.expiresInS,
+  });
+
+  final String requestId;
+
+  /// break_suggest · env_suggest · posture_suggest · checkin_suggest · vent_suggest …
+  final String kind;
+  final String? promptCode;
+  final String? explanation;
+
+  /// vent_suggest 의 `data.minutes`(창문 여는 분). 없으면 null.
+  final int? minutes;
+
+  /// vent_suggest 의 `data.why[]` 이유 코드.
+  final List<String> why;
+  final int? expiresInS;
+
+  static PendingRequest? fromData(Map<String, dynamic> data) {
+    final id = data['request_id'];
+    if (id is! String || id.isEmpty) return null;
+    final minutes = data['minutes'] ?? data['ventilate_minutes'];
+    final explanation = data['explanation'];
+    final expires = data['expires_in_s'];
+    return PendingRequest(
+      requestId: id,
+      kind: data['kind']?.toString() ?? 'unknown',
+      promptCode: data['prompt_code']?.toString(),
+      explanation: explanation is String && explanation.trim().isNotEmpty
+          ? explanation.trim()
+          : null,
+      minutes: minutes is num ? minutes.round() : null,
+      why: (data['why'] as List? ?? const [])
+          .map((e) => e.toString())
+          .toList(growable: false),
+      expiresInS: expires is num ? expires.round() : null,
+    );
+  }
+}
+
+/// 사용자가 앱에서 직접 바꾼 기기 값(블루투스 탭의 밝기·단계 버튼). hub 가 "밝힌 뒤 직접 어둡게 = 밝음 싫음" 신호로 쓴다.
+/// hub 명령 실행·국면 조명은 보내지 않는다. [from] 을 모르면(앱 시작 뒤 한 번도 안 씀) 키를 넣지 않는다.
+Map<String, Object?> buildManualAdjustData({
+  required String targetId,
+  required int? from,
+  required int to,
+  required int tsMs,
+}) =>
+    {
+      'kind': 'manual_adjust',
+      'target_id': targetId,
+      if (from != null) 'from': from,
+      'to': to,
+      'ts': tsMs,
+    };
 
 abstract interface class StateSource {
   String get label;
@@ -18,14 +88,22 @@ abstract interface class StateSource {
   SessionReport? get sessionReport;
   bool get hasPendingRequest;
 
+  /// 지금 떠 있는 질문의 상세(kind·문구). 없으면 null.
+  PendingRequest? get pendingRequest;
+
+  /// `deskmate/feedback/user` 로 verdict 가 아닌 데이터(manual_adjust 등)를 공통 envelope 로 보낸다.
+  /// 보낼 곳이 없는 소스(HTTP·데모)는 조용히 무시한다.
+  Future<void> publishFeedbackData(Map<String, Object?> data);
+
   /// hub 가 준 질문의 응답 제한 시간(`expires_in_s`). 질문이 없거나 모르면 null.
   int? get pendingRequestExpiresInS;
   Future<DisplayState> fetch();
 
   /// [verdict] = accept | reject | correct | timeout (mqtt-topics.md `feedback/user`).
   /// correct 면 [correctedState](FSM 상태 이름), [responseMs] 는 카드를 띄운 뒤 응답까지 걸린 시간.
+  /// [note] 는 프리뷰 탭의 짧은 메모(선택, `data.note`). 키 값·원시 센서는 싣지 않는다.
   Future<void> feedback(String verdict,
-      {String? correctedState, int? responseMs});
+      {String? correctedState, int? responseMs, String? note});
   Future<void> sendTestFrame(TestSensorInput input,
       {required String command, int advanceSeconds = 30, String? event});
   void close();
@@ -64,6 +142,32 @@ class TestSensorInput {
       };
 }
 
+/// `deskmate/feedback/user` 의 `data`. MQTT·HTTP 두 경로가 같은 모양을 쓰게 한곳에 둔다.
+///
+/// `note` 는 프리뷰 탭의 메모(선택). 비어 있으면 키를 넣지 않고, 길이는 [kFeedbackNoteMaxChars] 로
+/// 자른다 — 토픽 계약에 없던 필드라 짧은 문자열 하나로만 둔다.
+Map<String, Object> buildFeedbackData({
+  required String requestId,
+  required String verdict,
+  String? correctedState,
+  int? responseMs,
+  String? note,
+}) {
+  final trimmed = note?.trim() ?? '';
+  final clipped = trimmed.length > kFeedbackNoteMaxChars
+      ? trimmed.substring(0, kFeedbackNoteMaxChars)
+      : trimmed;
+  return {
+    'request_id': requestId,
+    'verdict': verdict,
+    if (correctedState != null) 'corrected_state': correctedState,
+    'response_ms': responseMs ?? 0,
+    if (clipped.isNotEmpty) 'note': clipped,
+  };
+}
+
+const kFeedbackNoteMaxChars = 200;
+
 class HttpStateSource implements StateSource {
   HttpStateSource(String hubUrl)
       : _base = Uri.parse(hubUrl),
@@ -94,6 +198,12 @@ class HttpStateSource implements StateSource {
   bool get hasPendingRequest => false;
 
   @override
+  PendingRequest? get pendingRequest => null;
+
+  @override
+  Future<void> publishFeedbackData(Map<String, Object?> data) async {}
+
+  @override
   int? get pendingRequestExpiresInS => null;
 
   @override
@@ -110,18 +220,19 @@ class HttpStateSource implements StateSource {
 
   @override
   Future<void> feedback(String verdict,
-      {String? correctedState, int? responseMs}) async {
+      {String? correctedState, int? responseMs, String? note}) async {
     // HTTP 미리보기 API 는 accept·reject·correct 만 받는다(개발용 경로). 무응답은
     // 보낼 곳이 없어 버린다 — 제품 경로(MQTT)에서만 기록된다.
     if (verdict == 'timeout') return;
     final request = await _client.postUrl(_base.resolve('/api/feedback'));
     request.headers.contentType = ContentType.json;
-    final payload = utf8.encode(jsonEncode({
-      'request_id': 'atlas-display',
-      'verdict': verdict,
-      if (correctedState != null) 'corrected_state': correctedState,
-      'response_ms': responseMs ?? 0,
-    }));
+    final payload = utf8.encode(jsonEncode(buildFeedbackData(
+      requestId: 'atlas-display',
+      verdict: verdict,
+      correctedState: correctedState,
+      responseMs: responseMs,
+      note: note,
+    )));
     // contentLength 를 안 정하면 Dart 는 chunked 로 보낸다. 허브의 preview_api 는
     // Content-Length 를 필수로 읽어서 없으면 400 invalid_feedback 으로 떨어진다.
     // 실기에서 '진행' 을 눌러도 hub 가 못 받던 원인이라 명시적으로 지정한다.
@@ -167,7 +278,11 @@ class HttpStateSource implements StateSource {
 /// 남겨 둔다. MQTT가 끊겨도 display는 재연결할 뿐, Pi 4의 FSM에는 영향을
 /// 주지 않는다.
 class MqttStateSource implements StateSource, PrivacySource {
-  MqttStateSource(this._host, {required this.port, this.onControlCommand})
+  MqttStateSource(this._host,
+      {required this.port,
+      this.onControlCommand,
+      this.onTopicEvent,
+      this.onNotice})
       : _bootId = 'display-${DateTime.now().microsecondsSinceEpoch}',
         _client = MqttServerClient.withPort(
           _host,
@@ -182,7 +297,6 @@ class MqttStateSource implements StateSource, PrivacySource {
         .withClientIdentifier(_client.clientIdentifier)
         .startClean()
         .withWillQos(MqttQos.atLeastOnce);
-    _updates = _client.updates?.listen(_onUpdates);
   }
 
   static const _stateTopic = 'deskmate/state/phase';
@@ -199,10 +313,28 @@ class MqttStateSource implements StateSource, PrivacySource {
   final int port;
   final Future<Map<String, dynamic>?> Function(Map<String, dynamic>)?
       onControlCommand;
+
+  /// 개발자 모드의 명령 로그가 받는 콜백 — `control/cmd`·`control/result`·`interaction/request`·
+  /// `feedback/user` 의 envelope 를 받은 그대로(retain 제외) 넘긴다. 해석·실행은 바꾸지 않는다.
+  /// 이 콜백이 있으면 result·feedback 토픽도 구독한다(앱이 낸 결과도 브로커를 거쳐 돌아온다).
+  final void Function(String topic, Map<String, dynamic> envelope)?
+      onTopicEvent;
+
+  /// 닫기만 있는 `interaction/request`(rest_notice, `auto: true` 정보 카드)를 받는다.
+  /// 이런 요청은 수락·거절 카드(pendingRequest)로 두지 않는다.
+  final void Function(Map<String, dynamic> data)? onNotice;
+  static const _loggedTopics = {
+    _controlTopic,
+    _controlResultTopic,
+    _requestTopic,
+    _feedbackTopic,
+  };
   bool _closed = false;
   final String _bootId;
   final MqttServerClient _client;
   StreamSubscription<List<MqttReceivedMessage<MqttMessage?>>>? _updates;
+  Stream<List<MqttReceivedMessage<MqttMessage?>>>? _listening;
+  bool _connectedOnce = false;
   Future<void>? _connection;
   DisplayState? _latest;
   String? _displayMessage;
@@ -246,7 +378,7 @@ class MqttStateSource implements StateSource, PrivacySource {
           'hub_boot_id': state.hubBootId
         }
       });
-      final builder = MqttClientPayloadBuilder()..addString(payload);
+      final builder = MqttClientPayloadBuilder()..addUTF8String(payload);
       _client.publishMessage(
           _feedbackTopic, MqttQos.atLeastOnce, builder.payload!);
       return await completion.future.timeout(const Duration(seconds: 35));
@@ -257,6 +389,7 @@ class MqttStateSource implements StateSource, PrivacySource {
 
   String? _pendingRequestId;
   int? _pendingExpiresInS;
+  PendingRequest? _pendingRequest;
   int _sequence = 0;
   String? _hubHealth;
   DateTime? _hubHealthAt;
@@ -299,8 +432,27 @@ class MqttStateSource implements StateSource, PrivacySource {
   bool get hasPendingRequest => _pendingRequestId != null;
 
   @override
+  PendingRequest? get pendingRequest =>
+      _pendingRequestId == null ? null : _pendingRequest;
+
+  @override
   int? get pendingRequestExpiresInS =>
       _pendingRequestId == null ? null : _pendingExpiresInS;
+
+  @override
+  Future<void> publishFeedbackData(Map<String, Object?> data) async {
+    await _ensureConnected();
+    final payload = jsonEncode({
+      'schema_version': '1.0',
+      'ts': DateTime.now().millisecondsSinceEpoch / 1000,
+      'node': 'display',
+      'boot_id': _bootId,
+      'seq': ++_sequence,
+      'data': data,
+    });
+    final builder = MqttClientPayloadBuilder()..addUTF8String(payload);
+    _client.publishMessage(_feedbackTopic, MqttQos.atLeastOnce, builder.payload!);
+  }
 
   @override
   Future<DisplayState> fetch() async {
@@ -316,7 +468,23 @@ class MqttStateSource implements StateSource, PrivacySource {
     if (_client.connectionStatus?.state == MqttConnectionState.connected) {
       return Future.value();
     }
+    // 10-26 Pi 5: once connected, autoReconnect owns the link. Calling connect() again
+    // while it reconnects (fetch() runs every second) makes mqtt_client build a new
+    // subscriptions manager, and its updates stream had no listener — after a broker
+    // restart the app stayed "connected" and never received another message.
+    if (_connectedOnce) {
+      return Future.error(StateError('MQTT 다시 연결 중입니다.'));
+    }
     return _connection ??= _connect().whenComplete(() => _connection = null);
+  }
+
+  /// Listen to the client's current updates stream; connect() replaces it.
+  void _listen() {
+    final updates = _client.updates;
+    if (identical(updates, _listening)) return;
+    unawaited(_updates?.cancel());
+    _listening = updates;
+    _updates = updates?.listen(_onUpdates);
   }
 
   Future<void> _connect() async {
@@ -326,15 +494,20 @@ class MqttStateSource implements StateSource, PrivacySource {
         _client.disconnect();
         throw StateError('MQTT broker 연결에 실패했습니다.');
       }
-      _updates ??= _client.updates?.listen(_onUpdates);
+      _listen();
+      _connectedOnce = true;
       _client.subscribe(_stateTopic, MqttQos.atLeastOnce);
       _client.subscribe(_requestTopic, MqttQos.atLeastOnce);
       _client.subscribe(_messageTopic, MqttQos.atLeastOnce);
       _client.subscribe(_reportTopic, MqttQos.atLeastOnce);
       _client.subscribe(_hubHealthTopic, MqttQos.atLeastOnce);
       _client.subscribe(_keystrokeTopic, MqttQos.atMostOnce);
-      if (onControlCommand != null) {
+      if (onControlCommand != null || onTopicEvent != null) {
         _client.subscribe(_controlTopic, MqttQos.atLeastOnce);
+      }
+      if (onTopicEvent != null) {
+        _client.subscribe(_controlResultTopic, MqttQos.atLeastOnce);
+        _client.subscribe(_feedbackTopic, MqttQos.atLeastOnce);
       }
     } catch (_) {
       _client.disconnect();
@@ -347,20 +520,28 @@ class MqttStateSource implements StateSource, PrivacySource {
       final publish = received.payload;
       if (publish is! MqttPublishMessage) continue;
       try {
-        final text = MqttPublishPayload.bytesToStringAsString(
-          publish.payload.message,
-        );
+        final text = mqttPayloadText(publish.payload.message);
         if (text.isEmpty && received.topic == _reportTopic) {
           // 빈 retain = 브로커에서 리포트를 지웠다. 지난 숫자를 계속 보여 주지 않는다.
           _sessionReport = null;
           continue;
         }
         final envelope = jsonDecode(text) as Map<String, dynamic>;
+        final logger = onTopicEvent;
+        if (logger != null &&
+            _loggedTopics.contains(received.topic) &&
+            publish.header?.retain != true) {
+          logger(received.topic, envelope);
+        }
         if (received.topic == _stateTopic) {
           _latest = DisplayState.fromEnvelope(envelope);
-          if (!_latest!.fsmState.startsWith('ACTION_')) {
+          // 질문이 있는 동안 FSM 이 ACTION_* 를 벗어나면 카드도 내린다. 다만 상태와 무관한
+          // 질문(checkin_suggest·vent_suggest)은 응답·만료까지 둔다.
+          if (!_latest!.fsmState.startsWith('ACTION_') &&
+              !keepsPendingAcrossStates(_pendingRequest?.kind)) {
             _pendingRequestId = null;
             _pendingExpiresInS = null;
+            _pendingRequest = null;
           }
           final data = envelope['data'];
           final summary = data is Map ? data['sensor_summary'] : null;
@@ -387,12 +568,16 @@ class MqttStateSource implements StateSource, PrivacySource {
           }
         } else if (received.topic == _requestTopic) {
           final data = envelope['data'];
-          if (data is Map<String, dynamic>) {
+          if (data is Map<String, dynamic> && ScreenNotice.isNoticeRequest(data)) {
+            // 시작할 때 retain 으로 다시 오는 지난 알림은 띄우지 않는다.
+            if (publish.header?.retain != true) onNotice?.call(data);
+          } else if (data is Map<String, dynamic>) {
             final requestId = data['request_id'];
             if (requestId is String && requestId.isNotEmpty) {
               _pendingRequestId = requestId;
               final expires = data['expires_in_s'];
               _pendingExpiresInS = expires is num ? expires.round() : null;
+              _pendingRequest = PendingRequest.fromData(data);
             }
           }
         } else if (received.topic == _hubHealthTopic) {
@@ -431,7 +616,7 @@ class MqttStateSource implements StateSource, PrivacySource {
       final result = await handler(command);
       if (result == null || _closed || !isConnected) return;
       final builder = MqttClientPayloadBuilder()
-        ..addString(jsonEncode({
+        ..addUTF8String(jsonEncode({
           'schema_version': '1.0',
           'ts': DateTime.now().millisecondsSinceEpoch / 1000,
           'node': 'display-control',
@@ -448,7 +633,7 @@ class MqttStateSource implements StateSource, PrivacySource {
 
   @override
   Future<void> feedback(String verdict,
-      {String? correctedState, int? responseMs}) async {
+      {String? correctedState, int? responseMs, String? note}) async {
     await _ensureConnected();
     final payload = jsonEncode({
       'schema_version': '1.0',
@@ -456,14 +641,15 @@ class MqttStateSource implements StateSource, PrivacySource {
       'node': 'display',
       'boot_id': _bootId,
       'seq': ++_sequence,
-      'data': {
-        'request_id': _pendingRequestId ?? 'atlas-display',
-        'verdict': verdict,
-        if (correctedState != null) 'corrected_state': correctedState,
-        'response_ms': responseMs ?? 0,
-      },
+      'data': buildFeedbackData(
+        requestId: _pendingRequestId ?? 'atlas-display',
+        verdict: verdict,
+        correctedState: correctedState,
+        responseMs: responseMs,
+        note: note,
+      ),
     });
-    final builder = MqttClientPayloadBuilder()..addString(payload);
+    final builder = MqttClientPayloadBuilder()..addUTF8String(payload);
     _client.publishMessage(
       _feedbackTopic,
       MqttQos.atLeastOnce,
@@ -471,7 +657,12 @@ class MqttStateSource implements StateSource, PrivacySource {
     );
     _pendingRequestId = null;
     _pendingExpiresInS = null;
+    _pendingRequest = null;
   }
+
+  /// 이 종류의 질문은 FSM 이 ACTION_* 가 아닐 때(FOCUS_* 등)도 오고, 상태 전이로 지우지 않는다 — 응답·만료까지.
+  static bool keepsPendingAcrossStates(String? kind) =>
+      kind == 'checkin_suggest' || kind == 'vent_suggest';
 
   @override
   Future<void> sendTestFrame(TestSensorInput input,
@@ -635,6 +826,12 @@ class DemoStateSource implements StateSource {
   bool get hasPendingRequest => false;
 
   @override
+  PendingRequest? get pendingRequest => null;
+
+  @override
+  Future<void> publishFeedbackData(Map<String, Object?> data) async {}
+
+  @override
   int? get pendingRequestExpiresInS => null;
 
   @override
@@ -677,7 +874,7 @@ class DemoStateSource implements StateSource {
 
   @override
   Future<void> feedback(String verdict,
-      {String? correctedState, int? responseMs}) async {}
+      {String? correctedState, int? responseMs, String? note}) async {}
 
   @override
   Future<void> sendTestFrame(TestSensorInput input,

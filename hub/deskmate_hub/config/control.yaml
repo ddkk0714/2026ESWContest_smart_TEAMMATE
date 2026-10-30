@@ -11,11 +11,61 @@ undo_window_sec: 60      # 자동 실행 뒤 한 tick 이 지나도 이 시간 �
 cooldown_sec: 300        # 같은 target 에 같은 operation 을 다시 보내기까지 최소 간격 (fsm timers.cmd_cooldown_sec 와 맞춤)
 irreversible_operations: [set_power_off, power_cycle]   # 사용자 확인 없이는 실행하지 않는 동작
 
+# REST 진입 알림(deskmate_hub/rest_notice.py, 2026-10-26) — FSM 이 어떤 길(휴식 제안 수락·개입 실패 뒤 강제·졸음 재시도)로든 REST 에
+# 들어가면 interaction/request kind rest_notice(닫기만 있는 안내 카드) + control/cmd target speaker operation speak {text, lang}.
+# 10-26 실기: 다시 엎드려 강제 휴식이 됐는데 허브가 아무 말도 안 했다. 사용자 첫 설정 sound_pref 가 off 면 카드만.
+# 밴딧이 고른 기기 없는 arm(자세 카드·알림음·음성 안내·휴식 제안)의 전달(deskmate_hub/arm_notice.py, 2026-10-26).
+# AUTO 게이트에서도 안내 카드(interaction/request, auto: true, options [dismiss])로 보이고, channel voice 는 speaker speak,
+# channel sound 는 speaker chime {pattern, volume}(volume = 사용자 sound_pref). sound_pref off 면 카드만. 기본 램프는 정책 결정이 없을 때만.
+arm_notice:
+  enabled: true
+  expires_in_s: 60          # 안내 카드 표시 시간(초). 제안 카드는 fsm focus_break_poll_sec 를 따른다
+  lang: ko
+  chime_pattern: double     # 알림음 패턴(앱 계약: single | double | triple)
+  voice_text:               # channel voice 의 음성 문구. {label} = arm label_ko
+    posture_voice: "자세를 바로 해 볼까요? 허리를 펴고 고개를 들어 주세요."
+    default: "{label}"
+  card_text:                # 안내 카드 문구. 없으면 {label}
+    posture_card: "자세를 바로 해 볼까요?"
+    sound_cue: "잠깐, 자세와 집중을 확인해 주세요."
+    posture_voice: "자세를 바로 해 볼까요?"
+    break_short: "5분만 쉬어 가요."
+    break_long: "조금 길게 쉬어 가요."
+    ventilate_suggest: "창문을 잠깐 열어 환기해요."
+    default: "{label}"
+
+rest_notice:
+  enabled: true
+  expires_in_s: 60          # 카드 표시 시간(초)
+  cooldown_sec: 120         # REST 에 다시 들어와도 이 안에는 다시 알리지 않는다
+  reminder_after_sec: 600   # REST 가 이만큼 이어지면 한 번 더(null = 안 함). 시연 프로파일은 120
+  speak: true               # 스피커 음성(speak). false 면 카드만
+  speaker_target: speaker
+  lang: ko
+  messages:                 # {minutes} = fsm timers.rest_min_sec / 60. default = 일반, study = 수험생(demo-b-study)
+    asleep:    {default: "졸음이 이어지고 있어요. {minutes}분만 일어나서 쉬어 가세요.", study: "졸음이 계속되네요. {minutes}분만 일어나 기지개를 켜고 돌아와요."}
+    escalated: {default: "피로가 가시지 않아요. {minutes}분 쉬고 다시 시작해요.", study: "집중이 잘 안 되고 있어요. {minutes}분만 쉬었다가 다시 풀어요."}
+    accepted:  {default: "좋아요, {minutes}분 쉬어요. 끝나면 알려 드릴게요.", study: "좋아요, {minutes}분 쉬어요. 끝나면 다시 알려 드릴게요."}
+    reminder:  {default: "아직 쉬는 중이에요. 조금만 더 쉬고 돌아와요.", study: "아직 쉬는 시간이에요. 조금만 더 쉬고 다시 시작해요."}
+
+# 제어 대상(target_id): speaker(Pi 5 앱 블루투스 스피커 TTS, speak {text, lang} — rest_notice 전용) ·
+#   vent_fan(보조 환기팬·선풍기, set_power on|off) · desk_lamp(iLink 무드등 — adjust_brightness {percent: ±정수}
+#     = 지금 밝기 대비 %(2026-10-25, 앱이 지금 밝기를 알고 계산·상하한 결정, 결과에 previous·actual), set_brightness 0~255 는 되돌리기용)
+#   · air_purifier(LG ThinQ 공기청정기, set_mode off|auto|low|mid|high — 2026-10-23. auto = 공기청정기 자체 PM 자동 운전,
+#     high = 3단계 고정. CO₂ 를 못 내리므로 ACTION_ENV 기본 명령에는 넣지 않고 개인화 arm air_fan_up 만 쓴다).
 # ACTION_ENV 진입 시 원인(cause)별로 내보낼 명령. 가역 동작만 둔다. undo_value 는 자동 실행 후 사용자가 거절했을 때 되돌리는 값.
+# `undo: previous` 는 앱 결과의 previous(바꾸기 전 원시 밝기)로 set_brightness 되돌림 — adjust_brightness 전용.
 actions:
   environment:
     # vent_fan 실물 = Pico 2 W 블루투스 선풍기(firmware/pico2w_ble_fan). Pi 5 앱이 블루투스 탭에서 고른 선풍기에 실행한다.
     # 받는 operation: set_power on|off · set_level 0~3(풍량) · set_speed 0~100 · set_mode normal|natural · set_timer 초.
     # 풍량으로 켜려면 예: {target_id: vent_fan, operation: set_level, value: 3, undo_value: 0}
     - {target_id: vent_fan, operation: set_power, value: "on", undo_value: "off"}
-    - {target_id: desk_lamp, operation: set_brightness, value: 70, undo_value: 40}
+    - {target_id: desk_lamp, operation: adjust_brightness, value: {percent: 30}, undo: previous}   # 10-25: 절대값 70/undo 40 대체
+  # ACTION_POSTURE(졸음 drowsy·face_down → 자세성 라우팅) 진입 시 깨우기 (2026-10-24). PC life_sim(devices.yaml) 의
+  # posture_auto → lamp_cool 과 같은 뜻. 색온도(cool)는 Pi 5 어댑터(feedback_policy.dart)가 아직 받지 않아 밝기만 올린다.
+  # 10-25: 절대값(set_brightness 230, undo 110) 대신 지금 밝기 대비 +60 %(1.6 배) — 사용자 지시 "기존 대비 % 올리기".
+  # 개인화 정책이 기기 arm(spec)을 준 경우에는 그쪽이 우선이고, 이 묶음을 지우면 ACTION_POSTURE 는 예전처럼 명령 없이(화면 카드만) 지나간다.
+  # min_raw(선택, 깨우기만): 계산 결과가 이보다 낮으면 min_raw 까지 올린다 — 꺼진 램프(0)도 60 %(153/255)로 켜진다. 다른 묶음·개인화 arm 에는 없다.
+  posture:
+    - {target_id: desk_lamp, operation: adjust_brightness, value: {percent: 60, min_raw: 153}, undo: previous}

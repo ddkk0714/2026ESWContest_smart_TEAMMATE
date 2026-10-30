@@ -326,8 +326,9 @@ def test_field_self_check_uses_synthetic_inputs_without_persistent_writes(tmp_pa
     assert result["head_update_verified"] and result["backbone_unchanged"]
     assert result["persistent_writes"] is False
     assert before == {p.name: p.read_bytes() for p in tmp_path.iterdir()}
-    # The check must not enable or mutate the actual deployment config.
-    assert config["enabled"] is False
+    # The check must not mutate the actual deployment config (10-25 부터 배포 기본값은 enabled true — stage2 관찰 전용).
+    assert config["enabled"] is load_personalization_config()["enabled"]
+    assert config["model_path"] == str(path) and config["mode"] == "observe"
     assert run_self_check(dict(config, backend="tflite"), {}, period=10, normalization="baseline")["status"] == "not_run"
     assert run_self_check(dict(config, model_path="missing"), {}, period=10, normalization="baseline")["status"] == "failed"
     assert run_self_check(config, {"learning_rate": "bad", "l2": 0}, period=10, normalization="baseline")["status"] == "failed"

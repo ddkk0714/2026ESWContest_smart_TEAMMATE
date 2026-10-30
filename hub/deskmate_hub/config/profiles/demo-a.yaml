@@ -1,0 +1,81 @@
+# 시연 프로파일 demo-a (2026-10-24) — DESKMATE_PROFILE=demo-a 로 켠다. 기본 fsm.yaml·ingest.yaml 위에 깊은 병합으로 얹는다.
+# 전부 "시연 전용 — 시뮬 근거(PC life_sim 10-23), 실측 성공 기록에 쓰지 말 것". 적지 않은 키는 기본값 그대로.
+# 뜻: 사람이 졸면(drowsy·face_down) 몇 분 안에 ACTION_POSTURE → 무드등(control.yaml actions.posture)까지 닿게 타이머만 줄인다.
+# 진행 조건(10-25): demo-a 는 기준선 정규화(normalization baseline)를 그대로 쓰므로 START 보정 300 s 동안 **바르게 앉아 있어야**
+#   하고 엎드림은 그 뒤(약 5 분 뒤)에 시작한다. 보정 중에 엎드리면 자세 모델이 face_down→lean_forward 로 흘러 점수가 0.1~0.2 에 머문다
+#   (PC 시뮬 seed 3). 보정 창을 줄이려면 선형 정규화·확정 0.60 을 함께 바꿔야 하는데 그것이 demo-b 다 — 시연 주력은 demo-b.
+fsm:
+  # 10-25 PC 폐루프 시뮬: 엎드림(face_down δ 1.0)만으로는 기본 가중치(npc posture 0.40, 호흡 꺼져 재정규화 → 0.53)가
+  # 확정 기준에 못 미쳐 무드등이 안 켜졌다(실측 끄덕임 recall 0.16 이라 시연은 엎드림으로 간다). 자세 몫을 올린다 — 보드 기본(fsm.yaml)은 그대로.
+  # 점수(Σw·δ/Σw, 키 입력 없음 → keystroke 제외, 환경 δ 0, 경과 e): face_down 0.80+0.1e · recline/chin_rest(δ 0.6) 0.48+0.1e ·
+  #   demo-b-study chin_rest(δ 0.3) 0.24+0.1e — pc(타이핑 멈춤)·npc·MIXED 모두 자세 몫 0.80 으로 같다. 타이핑 중(keystroke δ 0.1) face_down pc 0.63.
+  #   → 엎드림만 0.70 확정을 여유 있게 넘고, 기대기(0.48)는 의심(0.40)엔 들지만 확정은 안 된다(경과 90 분에도 0.58). 기본 face_down 0.53.
+  weights:
+    fatigue:
+      pc:  {keystroke: 0.25, posture: 0.60, respiration: 0.0, environment: 0.075, elapsed: 0.075}   # 기본 0.35/0.25/0.15/0.10/0.15
+      npc: {keystroke: 0.00, posture: 0.80, respiration: 0.0, environment: 0.10, elapsed: 0.10}     # 기본 0.00/0.40/0.25/0.20/0.15
+  timers:
+    fatigue_elevated_hold_sec: 20   # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 180 (FOCUS→FATIGUE_SUSPECT 유지)
+    fatigue_confirm_hold_sec: 20    # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 180 (SUSPECT→FATIGUE 유지)
+    monitor_window_sec: 30          # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 0 (MONITOR 가 개입 효과를 기다리는 시간)
+    rest_min_sec: 60                # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 300 (REST 최소 유지)
+    fatigue_hold_min_frac: 0.8      # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 1.0 (지난 hold 초 tick 중 이 비율 이상 임계 위면 유지 성립, 1fd856d)
+  gate:
+    asleep_retry: rest
+    conf_auto: 0.60                 # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 0.75 (이상이면 자동 실행)
+  thresholds:
+    still_asleep_delta: 0.9
+    monitor_recovered_below: 0.30   # 기본 null. 점수가 회복 수준(recovery_success)이면 진입 대비 부호 잡음으로 격상하지 않는다(PC 시뮬 10-25)
+learning:
+  keep_floor: 0.70                 # 확정 기준을 넘은 점수는 학습기가 끌어내리지 못함 — PC 리허설 10-25 근거(keep_floor 0.60 → demo-B 첫 깨우기 662/292/102 s → 102/102/102 s). 기본 0.85 = 이 프로파일의 fsm thresholds.fatigue_confirm
+control:
+  rest_notice:
+    cooldown_sec: 30                # 기본 120. 시연은 REST 가 60 s 라 재진입이 빠르다
+    reminder_after_sec: 120         # 기본 600. 휴식(60 s)을 넘겨 계속 쉬면 한 번 더
+personalize:
+  # 10-26 총괄 결정: 시연은 온보딩 prior 가 결정적으로 기기를 고르게 평균만 쓴다(greedy). 기본(보드) Thompson 은 n_personal 0 에서
+  # 탐색 잡음(계수 σ≈0.5)이 prior 차이(0.2)를 묻어 sound_cue 가 1.32 로 뽑혔고, explore 0.2 로도 wake_light 1위가 41 % 뿐이었다.
+  # 피드백 학습은 그대로 평균을 움직인다. **시연은 온보딩(deskmate/profile/user)을 먼저 보내야 한다** — 온보딩이 없으면 평균으로도
+  # 졸음에서 sound_cue 0.55 > wake_light 0.45 라 램프 대신 알림음이 나간다(수험생 prior: wake_light 0.55 > sound_cue 0.35, 대학생 prior: 0.45 > 0.35).
+  bandit:
+    algorithm: greedy               # 기본 thompson
+  gate:
+    conf_auto: 0.60                 # 시연 전용 — PC 리허설 10-24 근거. 기본 0.75. FSM gate.conf_auto 와 같은 값으로 맞춘 것 — 다르면 정책이 FSM 자동을 제안(personalize:ask)으로 낮춰 무드등이 자동으로 안 켜진다
+ingest:
+  tof:
+    # 10-25 PC 시뮬: 자세 몫 0.80 에서 ESP32 0x03 규칙 졸음 플래그·끄덕임(δ 1.0)이 깨어 있는 사람(턱 괴기·타이핑)에게 무드등을
+    # 헛켰다(턱 괴기 600 s 플래그 49/60 tick → C 0.81). posture_source: service 라 자세 모델 라벨(face_down·drowsy)은 그대로 1.0,
+    # 규칙 플래그·끄덕임만은 0.3 으로 — 자세 몫 0.80 × 0.3 = 0.24 (+0.1e) 로 의심(0.40) 아래, still_asleep_delta 0.9 에도 못 미친다.
+    # 0 이 아니라 0.3 인 이유: 모델이 라벨을 놓친(unknown) 구간의 약한 보조 증거로는 남긴다 — 단독으로는 아무 상태도 못 바꾼다.
+    # 10-25 PC 시뮬(수험생 하루): 깨어서 글 쓰는 사람을 GRU 가 face_down 으로 읽어(중앙값 conf 0.87, p10 0.34) MONITOR 가 C 0.88~0.94 로
+    # ESCALATE → 깬 지 30~50 s 뒤 헛 강제 휴식(demo-b 3회·study 2회). 실제 엎드림의 conf p10 은 1.00 → 하한 0.99 로 실제 96 % 유지·오판 9 % 만 통과.
+    # **0.99 는 시뮬 값 — 실기에서 엎드린 채 /api/state 의 conf 를 보고 더 낮으면 현장에서 이 값만 낮춘다(설정만).** 보드 기본엔 키 없음.
+    # drowsy 0.80 — 10-26 실측 근거, 왼쪽 고정 기울기: 이 위치에서 모델 drowsy 는 신호가 없다(실제 졸음 구간 P(drowsy) < 0.3, 깨어 있을 때 오발).
+    #   평활 P ≥ 0.80 이면 참·거짓 tick 모두 0 → 사실상 모델 drowsy 를 끈다. 졸음은 0x03 끄덕임 플래그(상한 0.3)·mmWave·FSM 이 맡는다.
+    #   서비스가 conf 를 어떻게 내놓든(원시 기하 규칙 face_down 0.995, misplaced 재정규화) 하한은 보고된 conf 에 그대로 적용된다.
+    min_confidence_by_label: {face_down: 0.99, drowsy: 0.80}
+    # 10-26 실기(보드 demo-b, 18:22~19:22): 바르게 앉아 타이핑하는데 FATIGUE_SUSPECT 가 세션 57 분 중 760 s(22 %), 마지막 15 분 tick 의 23 %.
+    #   점수 c_fsm 0.535 = 키 입력 0.25×1.0(실측 flight_cv 1.1~1.2·정정률 0.27 → 선형 정규화 δ 1.0) + 자세 0.60×0.3(0x03 플래그·끄덕임 0.12~0.22 Hz,
+    #   모델은 upright 0.78) + 환경 0.075×1.0(lux 11 too_dark) + 경과 0.03 → 학습기 뒤 0.485 ≥ 의심 0.40. 0x03 규칙은 타이핑하는 사람의 고개 움직임을
+    #   끄덕임으로 세고(10-25 recall 0.16), 0.3 '단독으로는 아무 상태도 못 바꾼다' 는 전제가 실제 키 입력 δ 1.0 과 합쳐지면 깨진다.
+    #   → 0 으로: 규칙 플래그·끄덕임은 시연 점수에 안 넣는다(요약·밴딧의 drowsy 표시는 그대로). 아래 keystroke 램프 보정과 함께 타이핑 중
+    #   c_fsm ≤ 0.25·δks(≈0~0.1) + 0.075·env + 0.075·e ≈ 0.10~0.25 (의심 0.40·자연 회복 0.30 아래). 플래그만 0 으로 두면 0.347 이지만 집중 저하
+    #   (c_focus 0.45, 아래)→FOCUS_BREAK→180 s 뒤 점수가 조금이라도 오르면(경과 δ) FATIGUE_SUSPECT 로 가고 0.30 위라 안 빠져나온다(test_demo_typing_real).
+    #   졸음 격상은 그대로: 모델 face_down(δ 1.0, 하한 0.99)·모델 drowsy(하한 0.80). 대안 검토: 의심 0.45 는 0.485 라 소용없고, 키 입력 몫
+    #   0.25→0.10 은 δ 1.0 이 그대로라 플래그와 합쳐 0.43. 보드 기본(1.0·baseline 정규화)은 그대로.
+    rule_drowsy_delta: 0.0          # 기본 1.0 (10-25 0.3 → 10-26 0)
+    nod_delta_max: 0.0              # 기본 1.0 (10-25 0.3 → 10-26 0)
+  keystroke:
+    # 10-26 실측(이 PC collector, 오늘 11:52~19:32 typing_active 창 14 753개): idle_ratio p50 0.83·p90 0.99, flight_cv p50 0.83·p90 1.21·p97 1.38,
+    # correction_rate p50 0.09·p90 0.27·p97 0.53. 기본 램프(idle 0.10~0.60·cv 0.25~0.70·정정 0.15)는 baseline 정규화의 폴백이라, 선형 정규화인
+    # 시연에선 깨어서 일하는 창의 81 %(idle)·70 %(cv) 가 δ·φ 1.0 → 키 입력 몫 0.25 가 통째로 피로로, c_focus 0.45 로 집중 저하. 램프를 오늘 p90 위로:
+    # 보드 19:19 창(cv 1.10·정정 0.017·idle 0.65) → δ 0.03·φ 0, p90 창 → δ ≤ 0.44(정정 0.27/0.6), p97 → 0.88. 더 못 치는 날이 아니면 거의 안 센다.
+    # demo-a 는 baseline 정규화라 보정 창(300 s)이 끝나기 전 폴백에만 쓰인다.
+    idle_ratio_low: 0.99            # 기본 0.10 (φ: 집중 저하 증거)
+    idle_ratio_high: 1.0            # 기본 0.60 (1.0 = keydown 없음 → typing_active false 로 이미 빠짐)
+    flight_cv_low: 1.2              # 기본 0.25 (δ: 피로 증거)
+    flight_cv_high: 2.0             # 기본 0.70
+    correction_rate_high: 0.6       # 기본 0.15 (δ = 정정률/이 값)
+  pc_ratio_window_sec: 120          # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 기본 900 (PC/비PC 컨텍스트 창)
+  elapsed:
+    reset_on_rest: true             # 시연 전용 — 시뮬 근거, 실측 성공 기록에 쓰지 말 것. 10-25 부터 보드 기본도 true (휴식 뒤 경과 시간 초기화)
