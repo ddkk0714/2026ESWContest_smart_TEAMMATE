@@ -142,7 +142,7 @@ def build_report(
 
 
 def report_envelope(r: SessionReport, *, now: float, node: str = "hub",
-                    control_episodes: Iterable = ()) -> dict:
+                    control_episodes: Iterable = (), rest_notices: dict | None = None) -> dict:
     """진행 중인 세션의 스냅샷을 display 가 읽는 봉투로 만든다.
 
     세션이 끝나야만 리포트를 낼 수 있으면 화면의 리포트 탭은 세션 내내 비어
@@ -201,6 +201,9 @@ def report_envelope(r: SessionReport, *, now: float, node: str = "hub",
                 fatigue_episodes=r.episodes,
             ),
             "state_durations_s": {k: round(v, 3) for k, v in r.durations.items()},
+            # REST 진입 알림(rest_notice.py) 횟수 — 문구는 싣지 않는다(10-26)
+            "rest_notices": dict(rest_notices) if rest_notices else {"count": 0, "spoken": 0, "reminders": 0,
+                                                                   "suppressed": 0, "dismissed": 0, "last_reason": None, "last_ts": None},
         },
     }
 

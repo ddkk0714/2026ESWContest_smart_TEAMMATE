@@ -4,3 +4,6 @@ display/atlas/camtest/atlas/** text eol=lf
 
 # 컨테이너와 Pi 에서 실행되는 스크립트는 CRLF 로 체크아웃되면 shebang 이 깨진다.
 *.sh text eol=lf
+
+# stage2 피로 모델(portable CNN)은 바이트 지문(metadata.model_sha256)으로 검증한다 — Windows CRLF 변환이 끼면 보드에서 unavailable (10-25 실제로 발생).
+hub/deskmate_hub/config/stage2/* -text

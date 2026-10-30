@@ -97,8 +97,9 @@ class Head:
 class PortableBackend:
     """Exact supported architecture: same Conv1D x2, mean pool, dense ReLU, head."""
     def __init__(self, path, metadata):
-        with open(path, "rb") as source:
-            content = source.read()
+        from .assets import read_asset
+
+        content = read_asset(path)      # 파일 또는 패키지 안(보드 payload) 경로
         self.fingerprint = sha256_hex(content)
         if metadata.get("model_sha256") != self.fingerprint:
             raise ValueError("portable fingerprint required")

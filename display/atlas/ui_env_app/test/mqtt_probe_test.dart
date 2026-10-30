@@ -87,8 +87,8 @@ void main() {
           find.textContaining('$target · set_brightness = 70'), findsOneWidget);
       expect(find.textContaining('MOCK'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('control-accept')));
-      await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 40)));
+      await tester
+          .runAsync(() => _waitUntil(() => broker.feedbackEvents.isNotEmpty));
       await tester.pump();
       expect(broker.feedbackEvents.single['data']['request_id'],
           proposalCase['request']['data']['request_id']);

@@ -115,6 +115,20 @@ void main() {
       expect(fan.lastState?.level, 2);
     });
 
+    test('a fan found again by a scan reports recovery rediscovered', () async {
+      fan.select(_fanAddress);
+      bluetooth.state = _state();
+      bluetooth.connectFailuresRemaining = 2; // 두 번 실패 → 검색 → 세 번째에 붙음
+      final result = await coordinator.handleControlCommand(_command('c1r'));
+      expect(bluetooth.scans, 1);
+      expect(result?['status'], 'succeeded');
+      expect(result?['recovery'], 'rediscovered');
+      expect(fan.lastRediscovered, isTrue);
+      // 이미 붙어 있으면 다음 명령엔 recovery 가 없다.
+      final next = await coordinator.handleControlCommand(_command('c1s'));
+      expect(next?.containsKey('recovery'), isFalse);
+    });
+
     test('level change reports the level the fan is at', () async {
       fan.select(_fanAddress);
       bluetooth.state = _state(speed: 100, level: 3);
@@ -258,7 +272,7 @@ void main() {
       expect(bluetooth.connects, 2);
     });
 
-    test('a link that fails to come up is retried after a short scan',
+    test('a link that fails to come up is retried, rescanning every other try',
         () async {
       // 10-24 Pi 5: about half the GATT connects to the Pico 2 W fail at once.
       fan.select(_fanAddress);
@@ -268,7 +282,8 @@ void main() {
       final result = await coordinator.handleControlCommand(_command('c6'));
       expect(result?['status'], 'succeeded');
       expect(bluetooth.connects, 4);
-      expect(bluetooth.scans, 3);
+      // A scan right after a failed Connect aborts the link BlueZ is still making: every other try only.
+      expect(bluetooth.scans, 1);
     });
 
     test('gives up after the configured attempts', () async {
@@ -357,6 +372,23 @@ void main() {
       expect(restored.savedFan?.name, 'DESKMATE-FAN');
     });
 
+    test('restore connects the lamp and the fan one after the other', () async {
+      // 10-24 Pi 5: connecting speaker, lamp and fan at once left only the speaker up.
+      store.save(const DeskmateSettings(
+        lamp: SavedBluetoothDevice(
+            address: 'AA:BB:CC:00:00:02', name: 'KLZS-L1 app'),
+        fan: SavedBluetoothDevice(address: _fanAddress, name: 'DESKMATE-FAN'),
+      ));
+      bluetooth.connectDelay = const Duration(milliseconds: 20);
+      final links = manager();
+      addTearDown(links.dispose);
+      await links.restore();
+      expect(bluetooth.connects, 2);
+      expect(bluetooth.maxInFlight, 1);
+      expect(links.lampStatus.health, LinkHealth.ok);
+      expect(links.fanStatus.health, LinkHealth.ok);
+    });
+
     test('forgetting the fan hands vent_fan back to other adapters', () async {
       final links = manager();
       addTearDown(links.dispose);
@@ -384,10 +416,12 @@ Map<String, dynamic> _command(String id) => {
 
 // implements는 실제 시스템 D-Bus 클라이언트를 생성하지 않는다.
 class _FakeBluetooth implements AtlasBluetoothService {
-  Duration connectDelay = Duration.zero;
   int connects = 0;
   int connectFailuresRemaining = 0;
   int scans = 0;
+  Duration connectDelay = Duration.zero;
+  int _inFlight = 0;
+  int maxInFlight = 0;
   int writeFailuresRemaining = 0;
   List<int>? state;
   final List<List<int>> frames = [];
@@ -397,6 +431,14 @@ class _FakeBluetooth implements AtlasBluetoothService {
   Future<GattConnection> connectLamp(String address) async {
     connects++;
     if (connectDelay != Duration.zero) await Future<void>.delayed(connectDelay);
+    _inFlight++;
+    if (_inFlight > maxInFlight) maxInFlight = _inFlight;
+    try {
+      if (connectDelay > Duration.zero)
+        await Future<void>.delayed(connectDelay);
+    } finally {
+      _inFlight--;
+    }
     if (connectFailuresRemaining > 0) {
       connectFailuresRemaining--;
       throw StateError('Failed to connect with remote device');

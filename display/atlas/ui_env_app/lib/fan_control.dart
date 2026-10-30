@@ -98,14 +98,16 @@ class FanState {
 
 class BleFanControl {
   BleFanControl(this._bluetooth,
-      {this.connectAttempts = 5,
-      this.retryDelay = const Duration(milliseconds: 1500),
+      {this.connectAttempts = 3,
+      this.retryDelay = const Duration(seconds: 3),
       this.rescanFor = const Duration(seconds: 6)});
   final AtlasBluetoothService _bluetooth;
 
-  /// 10-24 Pi 5 실기: Pi 5 → Pico 2 W 링크는 두세 번에 한 번만 맺어지고
-  /// (`le-connection-abort-by-local`, 노트북은 매번 성공), 페어링하지 않은 기기는 BlueZ 가 곧 잊어서
-  /// 저장된 주소로 바로 붙으면 실패한다. 그래서 실패하면 잠깐 검색해 다시 찾은 뒤 다시 붙는다.
+  /// 10-24 Pi 5 실기: Pi 5 → Pico 2 W 링크는 두 번에 한 번꼴로만 맺어지고
+  /// (`le-connection-abort-by-local`, 스피커 연결 여부와 무관, 노트북은 매번 성공), 페어링하지 않은 기기는
+  /// BlueZ 가 곧 잊는다. Atlas Connect 는 실패를 먼저 돌려준 뒤에도 BlueZ 가 링크를 계속 맺고 있어서,
+  /// 곧바로 검색을 시작하면 그 링크가 끊긴다. 그래서 실패하면 [retryDelay] 기다렸다 다시 붙고,
+  /// BlueZ 가 잊었을 때를 위해 두 번에 한 번만 검색한다.
   final int connectAttempts;
   final Duration retryDelay;
   final Duration rescanFor;
@@ -120,8 +122,12 @@ class BleFanControl {
   DateTime? _lastOkAt;
   Object? _lastError;
   FanState? _lastState;
+  bool? _lastRediscovered;
 
   bool get configured => _address?.isNotEmpty ?? false;
+
+  /// 마지막 [send] 에서 선풍기를 검색해 다시 찾았는지: null = 검색 안 함, true = 찾음, false = 못 찾음.
+  bool? get lastRediscovered => _lastRediscovered;
   String? get address => _address;
   bool get connected => _connection != null;
   DateTime? get lastOkAt => _lastOkAt;
@@ -157,6 +163,34 @@ class BleFanControl {
     _lastState = null;
   }
 
+  /// 시작 복원용: 한 번만 붙어 본다(검색·재시도 없음). 실패한 연결마다 시스템 팝업이 뜬다(10-26).
+  /// 다시 붙는 길은 hub 명령([send])과 블루투스 탭의 "다시 연결"([connect])뿐이다.
+  Future<bool> connectOnce() {
+    if (!configured) return Future.value(false);
+    if (_connection != null) return Future.value(true);
+    return _connecting ??=
+        _connectOnce().whenComplete(() => _connecting = null);
+  }
+
+  Future<bool> _connectOnce() async {
+    final address = _address!;
+    final generation = _selectionGeneration;
+    try {
+      final connection = await _bluetooth.connectLamp(address);
+      if (_selectionGeneration != generation || _address != address)
+        return false;
+      _connection = connection;
+      _lastError = null;
+      return true;
+    } catch (error) {
+      if (_selectionGeneration != generation) return false;
+      _connectionGeneration++;
+      _connection = null;
+      _lastError = error;
+      return false;
+    }
+  }
+
   /// 동시에 불러도 GATT Connect 는 한 번 — 두 번째는 "Already Connected" 로 실패한다.
   Future<bool> connect() {
     if (!configured) return Future.value(false);
@@ -184,21 +218,25 @@ class BleFanControl {
         if (attempt >= connectAttempts) return false;
       }
       if (_selectionGeneration != generation) return false;
-      await _rediscover();
       await Future<void>.delayed(retryDelay);
+      if (attempt.isEven) {
+        final found = await _rediscover();
+        _lastRediscovered = (_lastRediscovered ?? false) || found;
+      }
       if (_selectionGeneration != generation) return false;
     }
   }
 
-  /// 선풍기가 다시 보일 때까지(최대 [rescanFor]) 검색한다. 검색 실패는 다음 연결 시도가 판정한다.
-  Future<void> _rediscover() async {
+  /// 선풍기가 다시 보일 때까지(최대 [rescanFor]) 검색한다. 찾았는지 돌려준다.
+  Future<bool> _rediscover() async {
     final wanted = _address!.toLowerCase();
     try {
       await for (final devices
           in _bluetooth.scanProgressive(duration: rescanFor)) {
-        if (devices.any((d) => d.address.toLowerCase() == wanted)) break;
+        if (devices.any((d) => d.address.toLowerCase() == wanted)) return true;
       }
     } catch (_) {}
+    return false;
   }
 
   /// 명령 하나를 쓰고 상태를 읽는다. 쓰기는 순서대로, 끊긴 연결은 한 번만 다시 붙는다.
@@ -224,6 +262,7 @@ class BleFanControl {
   Future<({bool written, FanState? state})> _send(
       List<int> frame, num? expiresTsMs, bool Function() authorized) async {
     const notSent = (written: false, state: null);
+    _lastRediscovered = null;
     if (!configured) return notSent;
     bool expired() =>
         expiresTsMs != null &&
