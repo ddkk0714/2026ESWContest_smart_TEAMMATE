@@ -19,6 +19,7 @@ import argparse
 import json
 import math
 import os
+import re
 import socket
 import struct
 import sys
@@ -2357,6 +2358,101 @@ def _clock_text(ts: Any) -> str:
     return time.strftime("%H:%M:%S", time.localtime(t)) if t is not None else DASH
 
 
+# 제어 진행 표를 심사·시연에서 바로 읽게 — 원인·동작·사유를 사람 말로. 원값(state·op·reason·error_code)은 행에 그대로 두고
+# 화면은 아래 말만 쓴다(마우스를 올리면 원값).
+CAUSE_WHY = {"posture": "자세 — 졸음·엎드림 신호", "environment": "환경 — CO₂·온습도", "cognitive": "인지 — 오래 집중함",
+             "respiration": "호흡 신호", "elapsed": "작업 시간이 길어짐", "keystroke": "타이핑 리듬 흐트러짐"}
+MODE_KO = {"auto": "자동", "suggest": "제안 → 수락", "notice": "알림", "undo": "되돌리기", "none": "기록만"}
+DEVICE_SHORT = {"desk_lamp": "무드등", "vent_fan": "선풍기", "speaker": "스피커", "air_purifier": "공기청정기",
+                "plug_1": "스마트 플러그"}
+ERROR_KO = {"ble_not_connected": "블루투스 연결 안 됨", "device_not_found": "기기를 찾지 못함",
+            "device_state_unconfirmed": "기기 상태 확인 안 됨", "lamp_not_configured": "무드등 미설정",
+            "speaker_unavailable": "스피커 사용 불가", "lamp_automation_disabled": "무드등 자동 제어 꺼짐",
+            "speaker_automation_disabled": "스피커 자동 제어 꺼짐", "lamp_brightness_floor": "밝기 하한에 걸림"}
+STATUS_KO = {"succeeded": "성공", "failed": "실패", "timeout": "응답 없음", "executing": "실행 중",
+             "accepted": "제안 대기", "skipped": "생략", "cancelled": "취소"}
+
+
+def _action_ko(op: str, value: Any, undo: bool) -> str:
+    v = _map(value)
+    if op == "adjust_brightness" and _num(v.get("percent")) is not None:
+        p = round(v["percent"])
+        return f"밝기 {abs(p)} % {'올림' if p >= 0 else '낮춤'}"
+    if op == "set_brightness":
+        return f"원래 밝기로 ({value})" if undo else f"밝기 {value}"
+    if op == "set_power":
+        return {"on": "켜기", "off": "끄기"}.get(str(value).lower(), f"전원 {value}")
+    if op == "speak":
+        t = value.get("text") if isinstance(value, dict) else value
+        return f"음성 안내 “{_clip(str(t or ''), 40)}”"
+    if op == "chime":
+        return "알림음"
+    return op_text(op, value)
+
+
+def _reason_ko(reason: Any) -> str | None:
+    if not reason:
+        return None
+    r = str(reason)
+    m = re.match(r"cooldown (\d+)s/(\d+)s", r)
+    if m:
+        return f"같은 조치는 {int(m.group(2)) // 60}분에 한 번 — {m.group(1)}초 전에 이미 실행"
+    if r.startswith("expired"):
+        return "제안에 응답이 없어 만료"
+    if r.startswith("unknown_status"):
+        return "기기가 알 수 없는 응답을 보냄"
+    return {"gate_none": "확신이 낮아 실행하지 않고 기록만", "user_rejected": "사용자가 제안을 거절",
+            "irreversible_auto": "되돌릴 수 없는 동작이라 자동 실행 안 함",
+            "no_result": f"기기 응답이 {CONTROL_RESULT_TIMEOUT_S:.0f}초 안에 안 옴",
+            "result_after_deadline": "응답이 제한 시간 뒤에 옴", "actual_value_mismatch": "기기 값이 명령과 다름"}.get(r, r)
+
+
+def _latency_ko(ms: Any) -> str:
+    n = _num(ms)
+    if n is None:
+        return ""
+    return f"{n / 1000:.0f}초" if n >= 10000 else f"{n / 1000:.2f}초"
+
+
+def progress_words(r: dict[str, Any], latency: Any) -> dict[str, Any]:
+    """제어 진행 한 줄의 화면 문구: 왜(원인·판단) → 어떻게(자동·제안·알림·되돌리기) → 무엇을 → 결과·사유."""
+    undo = bool(r.get("undo"))
+    cause, state, arm = r.get("cause"), r.get("state"), r.get("arm")
+    why_sub = [FSM_KO.get(str(state), str(state))] if state else []
+    if arm:
+        why_sub.append(f"개인화: {ARM_LABEL.get(str(arm), arm)}")
+    notes = [n for n in (_reason_ko(r.get("reason")),) if n]
+    if r.get("error_code"):
+        notes.append(ERROR_KO.get(str(r["error_code"]), f"오류 {r['error_code']}"))
+    if r.get("previous") is not None and r.get("actual") is not None and r.get("target_id") == "desk_lamp":
+        notes.append(f"밝기 {r['previous']} → {r['actual']} 확인")
+    if undo:
+        notes.append("사용자가 거절해 직전 조치를 되돌림")
+    if r.get("undone_by"):
+        notes.append("사용자가 거절 → 되돌림")
+    op = str(r.get("operation") or "?")
+    return {"why_ko": CAUSE_WHY.get(str(cause), CAUSE_KO.get(str(cause), cause)) if cause else "원인 미기록",
+            "why_sub_ko": " · ".join(why_sub), "mode_ko": MODE_KO["undo"] if undo else MODE_KO.get(str(r.get("gate")), ""),
+            "device_ko": DEVICE_SHORT.get(str(r.get("target_id")), r.get("target_id") or "?"),
+            "action_ko": _action_ko(op, r.get("value"), undo), "notes_ko": notes,
+            "status_ko": STATUS_KO.get(str(r.get("status")), r.get("status") or "?"),
+            # 응답 없음의 latency 는 '포기할 때까지 기다린 시간'이라 응답 시간 칸에 두지 않는다
+            "latency_ko": "" if r.get("status") == "timeout" else _latency_ko(latency)}
+
+
+def progress_summary(rows: list[dict[str, Any]], ok_latencies: list[Any]) -> dict[str, Any]:
+    """표 위 요약: 전체·성공·실패(응답 없음 포함)·생략·진행 중, 성공률(끝난 것 중), 성공한 명령의 평균 응답."""
+    c: dict[str, int] = {}
+    for r in rows:
+        c[r.get("status") or "?"] = c.get(r.get("status") or "?", 0) + 1
+    ok, bad = c.get("succeeded", 0), c.get("failed", 0) + c.get("timeout", 0)
+    lat = [x for x in (_num(v) for v in ok_latencies) if x is not None]
+    return {"total": len(rows), "succeeded": ok, "failed": bad,
+            "skipped": c.get("skipped", 0) + c.get("cancelled", 0), "pending": c.get("executing", 0) + c.get("accepted", 0),
+            "success_rate": round(100 * ok / (ok + bad)) if ok + bad else None,
+            "avg_latency_ko": _latency_ko(sum(lat) / len(lat)) if lat else ""}
+
+
 class ControlProgress:
     """제어 진행 표(2026-10-31) — control/cmd 로 나간 명령 하나당 한 줄: 시각 · 원인 → 기기·동작·값 → 상태 · 소요 ms · 되돌림.
 
@@ -2439,10 +2535,12 @@ class ControlProgress:
                 "node": r.get("node"), "undo": bool(r.get("undo")), "undo_of": _short(r.get("undo_of")) if r.get("undo_of") else None,
                 "undone_by": _short(r.get("undone_by")) if r.get("undone_by") else None,
             })
+            out[-1].update(progress_words(r, latency))
         counts: dict[str, int] = {}
         for r in rows:
             counts[r.get("status") or "?"] = counts.get(r.get("status") or "?", 0) + 1
-        return {"source": source, "rows": out, "total": len(rows), "counts": counts}
+        return {"source": source, "rows": out, "total": len(rows), "counts": counts,
+                "summary": progress_summary(rows, [o["latency_ms"] for o in out if o["status"] == "succeeded"])}
 
 
 class Store:

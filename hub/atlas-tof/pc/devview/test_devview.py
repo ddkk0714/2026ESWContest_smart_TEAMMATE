@@ -1508,8 +1508,23 @@ def test_progress_from_mqtt_when_hub_log_missing():
     assert (lamp["status"], lamp["latency_ms"], lamp["value"], lamp["previous"], lamp["actual"], lamp["node"]) == \
         ("succeeded", 800, "+60%", 110, 176, "display-control")
     assert v["rows"][0]["status"] == "executing"
-    late = st.progress.view(now=116.5)["rows"][0]
-    assert late["status"] == "timeout" and "추정" in late["reason"]
+    assert (lamp["why_ko"], lamp["why_sub_ko"], lamp["action_ko"], lamp["status_ko"], lamp["latency_ko"]) == \
+        ("자세 — 졸음·엎드림 신호", "자세 개입", "밝기 60 % 올림", "성공", "0.80초")
+    assert lamp["notes_ko"] == ["밝기 110 → 176 확인"]
+    late = st.progress.view(now=116.5)
+    assert late["rows"][0]["status"] == "timeout" and "추정" in late["rows"][0]["reason"]
+    assert late["rows"][0]["latency_ko"] == "" and late["summary"]["success_rate"] == 50
+
+
+def test_progress_words_failure_and_unknowns():
+    w = dv.progress_words({"target_id": "vent_fan", "operation": "set_power", "value": "on", "gate": "suggest",
+                           "cause": "environment", "status": "failed", "error_code": "ble_not_connected"}, 1100)
+    assert (w["mode_ko"], w["status_ko"], w["latency_ko"], w["notes_ko"]) == \
+        ("제안 → 수락", "실패", "1.10초", ["블루투스 연결 안 됨"])
+    w = dv.progress_words({"target_id": "speaker", "operation": "speak", "value": {"text": "쉬어요"},
+                           "status": "skipped", "reason": "expired: no_response", "error_code": "weird"}, None)
+    assert w["why_ko"] == "원인 미기록" and w["action_ko"] == "음성 안내 “쉬어요”"
+    assert w["notes_ko"] == ["제안에 응답이 없어 만료", "오류 weird"] and w["latency_ko"] == ""
 
 
 def test_progress_prefers_fresh_hub_log():
@@ -1529,6 +1544,13 @@ def test_progress_prefers_fresh_hub_log():
     assert v["counts"] == {"skipped": 1, "succeeded": 1}
     fallback = st.progress.view(now=70.0)                                     # 5 s 넘게 안 오면 MQTT 로 돌아간다
     assert fallback["source"] == "mqtt" and fallback["rows"][0]["value"] == "“쉬어요”"
+    skip, undo = v["rows"][1], v["rows"][0]
+    assert skip["why_ko"].startswith("환경") and skip["mode_ko"] == "자동" and skip["action_ko"] == "켜기"
+    assert skip["notes_ko"] == ["같은 조치는 5분에 한 번 — 40초 전에 이미 실행"]
+    assert (undo["mode_ko"], undo["device_ko"], undo["action_ko"], undo["latency_ko"]) == \
+        ("되돌리기", "무드등", "원래 밝기로 (100)", "0.32초")
+    assert v["summary"] == {"total": 2, "succeeded": 1, "failed": 0, "skipped": 1, "pending": 0,
+                            "success_rate": 100, "avg_latency_ko": "0.32초"}
     with pytest.raises(ValueError):
         st.set_control_log({"error": "not_found"})
     snap = st.snapshot()
