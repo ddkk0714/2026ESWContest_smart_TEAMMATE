@@ -3,10 +3,11 @@
 결선 시연영상에서 **내부 상태를 보여 주는 화면**이자, 실기 중에 보드의 원값을 실시간으로 보는 개발자 화면이다.
 Pi 5 앱의 개발자 모드와 같은 정보에 센서 원값·엎드림(face_down) 신뢰도 추적을 더해 노트북 브라우저 한 페이지(1920×1080)에 띄운다.
 
-- **보기 전용(예외 둘).** 판단(FSM·개인화)과 제어는 전부 Pi 4·Pi 5 보드에서 한다. 이 프로그램은 Pi 4 브로커를
-  구독하고 자세 서비스에 GET 만 한다. 예외로 **가상 기기 화면에서 사람이 누를 때만** 두 가지를 보낸다(10-26 사용자 요청):
-  첫 설정 프로필 `deskmate/profile/user`(retain)와 카드 응답 `deskmate/feedback/user`. 제어 명령(`control/cmd`)은 보내지 않는다.
-  `--read-only` 로 켜면 이 둘도 끈다(녹화만 할 때).
+- **보기 전용(예외 셋).** 판단(FSM·개인화)과 제어는 전부 Pi 4·Pi 5 보드에서 한다. 이 프로그램은 Pi 4 브로커를
+  구독하고 자세 서비스에 GET 만 한다. 예외로 **화면에서 사람이 누를 때만** 세 가지를 보낸다(10-26·10-31 사용자 요청):
+  첫 설정 프로필 `deskmate/profile/user`(retain), 카드 응답 `deskmate/feedback/user`, 판정 칸의 **빠른 시연** 버튼
+  `deskmate/demo/mode {"speed": "fast"|"normal"}`(hub 시연 프로파일에서만 피로 유지 시간을 줄인다 — hub `demo_mode.py`).
+  제어 명령(`control/cmd`)은 보내지 않는다. `--read-only` 로 켜면 이 셋도 끈다(녹화만 할 때).
 - **원시 센서 값은 화면에만.** 받은 값은 메모리에만 두고 `127.0.0.1` 로만 연다. 파일로 쓰지 않는다
   (녹화는 사람이 화면 캡처로 한다).
 - 표준 라이브러리만 쓴다(Python 3.10+). `pip install` 이 필요 없고 외부 CDN 도 없다(오프라인 동작).
@@ -52,6 +53,7 @@ python hub/atlas-tof/pc/devview/devview.py --fake
 | MQTT `deskmate/interaction/request`·`feedback/user` | 이벤트 | 명령 로그(REQUEST·FEEDBACK) |
 | MQTT `deskmate/health/hub`·`deskmate/profile/user` | retain | 프로필 줄(hub 시연 프로파일 demo-a/b 가 실려 있으면 · 개인화 `active_profile_id` · 첫 설정 `profile_id`) |
 | MQTT `deskmate/#` 전부 | — | MQTT 토픽 목록(토픽별 개수·마지막 수신) — 실시간으로 들어오는지 확인 |
+| `GET :8765/api/control-log` | 1 s | **제어 진행** 표(10-31): 명령 하나당 한 줄 — 시각 · 왜(상태·원인·게이트·arm) → 기기·동작·값(+비고: 실패 error_code·쿨다운 생략·밝기 previous→actual·되돌리기 연결·노드) · 결과 배지 · 소요. 10-31 hub(feat/control-log) 부터. 응답이 없으면(옛 hub·가짜 각본) MQTT cmd·result 로 같은 표를 만든다(생략·되돌림 연결 없음, 결과 없는 명령은 15 s 뒤 '응답 없음(추정)'). 배너에는 안 띄우고 표 제목에 출처를 쓴다 |
 | `GET :8771/api/state` | 0.3 s | 자세 서비스 라벨·신뢰도·9 클래스 확률·장치 위치(`placement`, 없으면 '-'), 엎드림 추적 |
 | `GET :8772/raw` (없으면 `:8771/raw`) | 0.2 s | ToF 8×8 열지도 — **화면 왼쪽 B·오른쪽, 오른쪽 A·왼쪽**(격자가 센서가 보는 사진 방향이라 사용자 왼쪽 센서 A 가 화면 오른쪽, Pi 5 앱 PR #83 과 같음. 이름표는 사용자 기준)(칸 숫자 cm, 회색 = 무효 상태값), 유효 칸 수·최소 거리, `other` 블록 |
 
