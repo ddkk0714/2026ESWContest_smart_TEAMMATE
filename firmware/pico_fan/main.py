@@ -91,7 +91,14 @@ _SERVICE = (
 
 ble = bluetooth.BLE()
 ble.active(True)
+# 랜덤 정적 주소(addr_mode 0x01 RANDOM). Pi 5 ATLAS 는 10-24 에 공용 주소 기기의 Gatt.Connect 를 거절했고 C 펌웨어는
+# 랜덤 정적 주소로 풀렸다(adc845d). 0x02 는 RPA(페어링 전제)라 쓰지 않는다. 지원 안 하는 빌드면 공용 주소로 그대로 간다.
+try:
+    ble.config(addr_mode=0x01)
+except (ValueError, OSError) as e:
+    print("addr_mode 설정 실패, 공용 주소 사용:", e)
 ble.config(gap_name=DEVICE_NAME)
+print("BLE 주소:", ble.config("mac"))
 ((_h_cmd, _h_status),) = ble.gatts_register_services((_SERVICE,))
 ble.gatts_write(_h_status, bytes([0]))
 
