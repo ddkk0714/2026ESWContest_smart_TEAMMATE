@@ -28,6 +28,7 @@ from .co2_window import CARD_KIND as CO2_CARD_KIND, PROMPT_CODE as CO2_PROMPT, A
 from .co2_window import Co2WindowRule, load_co2_window_config
 from .rest_notice import RestNotifier
 from .arm_notice import ArmDeliverer
+from .demo_mode import DemoSpeed
 from .personalization import PersonalizationRuntime, load_personalization_config
 from .personalization.privacy import PersonalizationPrivacy, load_privacy_config
 from .personalization.ondevice import OnDeviceLearner, load_ondevice_config
@@ -92,6 +93,9 @@ class LiveHub:
         self.fsm_cfg, self.ingest_cfg, self.profile = apply_profile(
             self.fsm_cfg, self.ingest_cfg, profile, log=lambda m: print(m, file=out, flush=True))
         self.engine = FSMEngine(self.fsm_cfg)
+        # 빠른 시연(demo_mode.py, fsm.yaml demo_fast:): 화면 버튼 토픽으로 엔진 피로 유지 타이머를 줄였다 되돌린다
+        self.demo_speed = DemoSpeed(self.fsm_cfg.get("demo_fast"), self.engine.tm,
+                                    on_log=lambda m: print(m, file=out, flush=True))
         self.tracker = SessionTracker(
             elapsed_reset_on_rest=bool((self.ingest_cfg.get("elapsed") or {}).get("reset_on_rest", False)))
         self.privacy_cfg = privacy_cfg if privacy_cfg is not None else load_privacy_config()
@@ -333,6 +337,7 @@ class LiveHub:
             if self.control_log is not None:
                 self.control_log.tick(now)
 
+        self.demo_speed.observe(view.demo_mode, now)          # 엔진 tick 전에 — 이번 tick 부터 바뀐 유지 시간으로 본다
         frame = build_frame(view, now, self.ingest_cfg, self.tracker, fsm_state=self.engine.state)
         self._last_present = bool(frame.present)            # 발행용: 자리 비움이면 점수 0.0·scores_valid false (_pub_scores)
         request_kind = self._REQUEST_STATES.get(self.engine.state)
@@ -357,6 +362,7 @@ class LiveHub:
         self.recorder.observe(frame, result)
         # tracker 를 넘겨야 세션 시작 대비 CO₂ 상승(co2_rising)도 화면 이유에 실린다.
         summary = sensor_summary(view, now, self.ingest_cfg, self.tracker)
+        summary["demo_mode"] = self.demo_speed.snapshot(now)   # 화면 '빠른 시연' 배지
         # 개인화: 결정 tick(route:<cause>)에 에피소드를 열고, 정책이 켜져 있으면 arm·전달 게이트를 고른다.
         # 정책은 FSM 게이트를 낮추기만 한다(auto → suggest). 제어·질문·발행보다 먼저 돌아야 그 결과가 반영된다.
         specs = None

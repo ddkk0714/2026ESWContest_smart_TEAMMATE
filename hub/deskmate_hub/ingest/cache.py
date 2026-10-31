@@ -40,6 +40,7 @@ class SensorCache:
     tof_service: Sample | None = None    # 별도 자세 서비스 deskmate_tofposture(GRU, HTTP 8771 /api/state) 의 판정 (1 s 폴링, 2026-10-23)
     weather: Sample | None = None        # deskmate/sensor/weather (Pi 5 앱, retain, 30 분). FSM 입력 아님 — personalize 만 읽는다
     user_profile: Sample | None = None   # deskmate/profile/user (Pi 5 앱 첫 설정, retain). FSM 입력 아님 — personalize 만 읽는다
+    demo_mode: Sample | None = None      # deskmate/demo/mode (화면 '빠른 시연' 버튼). FSM 입력 아님 — demo_mode.py 가 타이머만 바꾼다
     feedback: deque = field(default_factory=lambda: deque(maxlen=16))
     control_results: deque = field(default_factory=lambda: deque(maxlen=64))
     feedback_received: deque = field(default_factory=lambda: deque(maxlen=16))
@@ -109,6 +110,7 @@ class SensorCache:
                 tof_service=self.tof_service,
                 weather=self.weather,
                 user_profile=self.user_profile,
+                demo_mode=self.demo_mode,
                 keystroke_history=list(self.keystroke_history),
                 feedback=list(self.feedback),
             )
@@ -145,6 +147,7 @@ class CacheView:
     tof_service: Sample | None = None
     weather: Sample | None = None
     user_profile: Sample | None = None
+    demo_mode: Sample | None = None
 
     def fresh(self, kind: str, now: float, max_age: float) -> Sample | None:
         sample: Sample | None = getattr(self, kind)
