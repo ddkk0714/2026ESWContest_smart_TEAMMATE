@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from ..inference import GateMode
+from .devices import same_value
 
 Publish = Callable[[dict[str, Any]], None]
 Record = Callable[..., Any]
@@ -52,15 +53,19 @@ class ControlCommand:
     undo_mode: str | None = None      # "previous" = 결과의 previous 로 set_brightness (adjust_brightness 용). None = undo_value
     result: dict[str, Any] | None = None   # 마지막 control/result payload(previous·actual 등)
     status: str = "accepted"          # accepted | executing | succeeded | failed | timeout | cancelled | skipped
+    context: dict[str, Any] = field(default_factory=dict)  # Internal planner data, never MQTT.
     sent_ts: float | None = None
     completed_ts: float | None = None
     arm: str | None = None            # 개인화 정책이 고른 arm(그 arm 의 spec 으로 만든 명령일 때) — 로그용, payload 에는 안 싣는다
+    error_code: str | None = None
+    state_confirmed: bool = False
 
     def to_payload(self) -> dict[str, Any]:
         return {
             "command_id": self.command_id, "target_id": self.target_id, "operation": self.operation,
             "value": self.value, "origin_state": self.origin_state, "cause": self.cause, "gate": self.gate,
             "requires_confirmation": self.requires_confirmation, "expires_ts_ms": int(self.expires_ts * 1000),
+            **({"undo_of_command_id": self.context["undo_of_command_id"]} if "undo_of_command_id" in self.context else {}),
         }
 
     @property
@@ -76,6 +81,7 @@ class Episode:
     gate: GateMode
     started_ts: float
     commands: list[ControlCommand] = field(default_factory=list)
+    advice: list[dict[str, Any]] = field(default_factory=list)
     awaiting_user: bool = False
     executed: bool = False
     executed_ts: float | None = None
@@ -90,8 +96,17 @@ class Episode:
 
 class ControlDispatcher:
     def __init__(self, cfg: dict[str, Any], *, publish_cmd: Publish, on_log: Callable[[str], None] | None = None,
-                 on_record: Record | None = None, clock: Callable[[], float] = time.time) -> None:
+                 clock: Callable[[], float] = time.time,
+                 plan_commands: Callable | None = None,
+                 plan_advice: Callable | None = None,
+                 dispatch_guard: Callable | None = None,
+                 on_dispatched: Callable | None = None,
+                 on_record: Record | None = None) -> None:
         self.cfg = cfg
+        self._plan_commands = plan_commands
+        self._plan_advice = plan_advice
+        self._dispatch_guard = dispatch_guard
+        self._on_dispatched = on_dispatched
         self.publish_cmd = publish_cmd
         self._log = on_log or (lambda m: None)
         self._on_record = on_record
@@ -124,8 +139,12 @@ class ControlDispatcher:
         now = self._clock() if now is None else now
         ep = Episode(state=state, cause=cause, gate=gate, started_ts=now)
         ep.commands = self._plan(state, cause, gate, now, specs=specs, arm=arm)
+        if self._plan_advice is not None and state == "ACTION_ENV" and cause == "environment":
+            ep.advice = [dict(item) for item in self._plan_advice()]
         self.episode = ep
-        if not ep.commands:
+        if not ep.commands and ep.advice and gate is GateMode.SUGGEST:
+            ep.awaiting_user = True  # A manual ventilation suggestion needs the same feedback path.
+        elif not ep.commands:
             ep.outcome = "skipped"
             self._log(f"[control] {state}/{cause}: 실행할 명령 없음(쿨다운·비가역·미정의) → skipped")
         elif gate is GateMode.AUTO:
@@ -191,35 +210,53 @@ class ControlDispatcher:
                         self._log(f"[control] {c.target_id}.{c.operation} 늦은 결과로 previous/actual 보충 {late}")
                         self._record(c, "late_result", now)
                     continue
-                if c.command_id == cid and not c.terminal:
-                    if c.sent_ts is not None and now >= c.expires_ts:
-                        c.status, c.completed_ts = "timeout", now
+                if c.command_id == cid and not c.terminal and c.sent_ts is not None:
+                    if now >= c.expires_ts:
+                        c.status, c.completed_ts, c.error_code = "timeout", now, "result_expired"
                         self._record(c, "timeout", now, reason="result_after_deadline")
                         return False
-                    status = reported = str(payload.get("status", "")).lower()
                     c.result = dict(payload)
-                    if status in IN_PROGRESS:
-                        # 앱이 받았다(accepted)·하는 중(executing) — 아직 끝이 아니다. 실패로 닫으면 뒤의 succeeded 가
-                        # 늦은 결과로 버려진다. 상태는 보낸 뒤 그대로(executing), 최종 결과나 시간 초과(tick)가 닫는다
-                        self._record(c, "progress", now)
-                        return True
-                    if status == "succeeded" and "actual_value" in payload:
-                        av = payload["actual_value"]
-                        if isinstance(c.value, dict):
-                            # 상대 명령({percent}): actual_value 는 앱이 계산한 원시 밝기여야 하고, actual 이 함께 오면 같아야 한다
-                            numeric = isinstance(av, (int, float)) and not isinstance(av, bool)
-                            if not numeric or ("actual" in payload and av != payload["actual"]):
-                                status = "failed"
-                        elif av != c.value:
-                            status = "failed"
-                    c.status = status if status in ("executing", "succeeded", "failed", "cancelled") else "failed"
+                    status = reported = str(payload.get("status", "")).lower()
+                    error = payload.get("error_code")
+                    c.error_code = error if isinstance(error, str) and len(error) <= 64 and all(
+                        char.isalnum() or char == "_" for char in error) else None
+                    actual_matches = same_value(payload.get("actual_value"), c.value)
+                    if c.operation == "adjust_brightness" and isinstance(c.value, dict):
+                        av = payload.get("actual_value")
+                        actual_matches = (type(av) in (int, float) and 0 <= av <= 255
+                                          and ("actual" not in payload or same_value(av, payload["actual"])))
+                    # Pico fan countdown may advance between write/read, matching
+                    # FanState.matches' existing two-second comparison contract.
+                    if (c.target_id == "vent_fan" and c.operation == "set_timer"
+                            and payload.get("confirmation") == "state_readback"
+                            and type(payload.get("actual_value")) is int and type(c.value) is int):
+                        actual_matches = (0 <= payload["actual_value"] <= 65535
+                                          and 0 <= c.value <= 65535
+                                          and abs(payload["actual_value"] - c.value) <= 2)
+                    ble_unconfirmed = (c.target_id in ("desk_lamp", "vent_fan")
+                                       and payload.get("confirmation") != "state_readback")
+                    if status == "succeeded" and (payload.get("confirmation") == "transport_only"
+                            or (ble_unconfirmed and c.context.get("policy_rule"))):
+                        status, c.error_code = "executing", "device_state_unconfirmed"
+                    elif status == "succeeded" and "actual_value" in payload and not actual_matches:
+                        status, c.error_code = "failed", "actual_value_mismatch"
+                    elif status == "succeeded" and c.context.get("policy_rule") and "actual_value" not in payload:
+                        status, c.error_code = "failed", "actual_value_unconfirmed"
+                    c.state_confirmed = (status == "succeeded" and "actual_value" in payload
+                                         and actual_matches and not ble_unconfirmed
+                                         and payload.get("confirmation") != "transport_only")
+                    c.status = status if status in ("accepted", "executing", "succeeded", "failed", "timeout", "cancelled") else "failed"
                     if c.terminal:
                         c.completed_ts = now
                     self._log(f"[control] {c.target_id}.{c.operation}={c.value!r} → {c.status}")
+                    if not c.terminal:
+                        # accepted·executing(기기 상태 미확인 포함)은 중간 상태 — 최종 결과나 시간 초과(tick)가 닫는다
+                        self._record(c, "progress", now)
+                        return True
                     reason = None
-                    if c.status == "failed" and reported == "succeeded":
+                    if c.error_code == "actual_value_mismatch":
                         reason = "actual_value_mismatch"
-                    elif c.status == "failed" and reported != "failed":
+                    elif c.status == "failed" and reported not in ("failed", "succeeded"):
                         reason = f"unknown_status:{reported}"
                     self._record(c, "result", now, reason=reason)
                     return True
@@ -236,7 +273,7 @@ class ControlDispatcher:
         for episode in episodes:
             for c in episode.commands:
                 if not c.terminal and c.sent_ts is not None and now >= c.expires_ts:
-                    c.status, c.completed_ts = "timeout", now
+                    c.status, c.completed_ts, c.error_code = "timeout", now, "result_timeout"
                     self._log(f"[control] {c.target_id}.{c.operation} result timeout")
                     self._record(c, "timeout", now, reason="no_result")
 
@@ -260,18 +297,30 @@ class ControlDispatcher:
             self.history.append(self.episode)
             self.episode = None
 
-    def summary(self) -> dict[str, Any]:
-        ep = self.episode
-        if ep is None:
-            return {"active": False}
-        return {"active": True, "state": ep.state, "cause": ep.cause, "gate": ep.gate.value, "outcome": ep.outcome,
+    @staticmethod
+    def _episode_summary(ep: Episode) -> dict[str, Any]:
+        return {"state": ep.state, "cause": ep.cause, "gate": ep.gate.value, "outcome": ep.outcome,
                 "awaiting_user": ep.awaiting_user,
-                "commands": [{"target": c.target_id, "op": c.operation, "value": c.value, "status": c.status} for c in ep.commands]}
+                "commands": [{"command_id": c.command_id, "target": c.target_id, "op": c.operation,
+                              "value": c.value, "status": c.status, "error_code": c.error_code,
+                              "reason": c.context.get("policy_rule") or c.cause, "state_confirmed": c.state_confirmed}
+                             for c in ep.commands],
+                **({"advice": ep.advice} if ep.advice else {})}
+
+    def summary(self) -> dict[str, Any]:
+        if self.episode is not None:
+            return {"active": True, **self._episode_summary(self.episode)}
+        # Preserve the outcome through MONITOR instead of dropping the only
+        # state that would let a display distinguish failure from completion.
+        return {"active": False, **({"last_episode": self._episode_summary(self.history[-1])}
+                                   if self.history else {})}
 
     # ---------------------------------------------------------------- 내부
     def _plan(self, state: str, cause: str | None, gate: GateMode, now: float,
               *, specs: list[dict[str, Any]] | None = None, arm: str | None = None) -> list[ControlCommand]:
-        if specs is None:
+        if state == "ACTION_ENV" and self._plan_commands is not None:
+            specs = self._plan_commands(state, cause, gate, now)
+        elif specs is None:
             specs = self.actions.get(cause or "", []) if state in self.default_action_states else []
         cmds: list[ControlCommand] = []
         for spec in specs:
@@ -282,6 +331,7 @@ class ControlDispatcher:
                 value=spec.get("value"), undo_value=spec.get("undo_value"), undo_mode=spec.get("undo"),
                 origin_state=state, cause=cause,
                 gate=gate.value, requires_confirmation=irreversible, expires_ts=now + self.timeout, arm=arm,
+                context=dict(spec.get("context") or {}),
             )
             last = self._last_sent.get(key)
             if last is not None and now - last < self.cooldown:
@@ -298,17 +348,25 @@ class ControlDispatcher:
         return cmds
 
     def _dispatch(self, ep: Episode, now: float) -> None:
+        sent = False
         for c in ep.commands:
+            if self._dispatch_guard is not None and not self._dispatch_guard(c, now):
+                c.status = "skipped"
+                self._record(c, "skipped", now, reason="dispatch_guard")
+                continue
             c.sent_ts, c.status = now, "executing"
             # A suggestion can wait 180 s before dispatch; its execution timeout
             # starts when the user accepts, not when the card was created.
             c.expires_ts = now + self.timeout
             self._last_sent[(c.target_id, c.operation)] = now
+            if self._on_dispatched is not None:
+                self._on_dispatched(c, now)
             self.publish_cmd(c.to_payload())
             self._record(c, "sent", now)
-        ep.executed = True
-        ep.executed_ts = now
-        ep.outcome = "executed"
+            sent = True
+        ep.executed = sent
+        ep.executed_ts = now if sent else None
+        ep.outcome = "executed" if sent else "advised" if ep.advice and not ep.commands else "skipped"
         self._log(f"[control] {ep.state}/{ep.cause}: {len(ep.commands)}건 발행 ({ep.gate.value})")
 
     def _undo_plan(self, c: ControlCommand) -> tuple[str, Any] | None:
@@ -340,7 +398,10 @@ class ControlDispatcher:
                 command_id=uuid.uuid4().hex[:12], target_id=c.target_id, operation=undo_op, value=undo_value,
                 origin_state=ep.state, cause=ep.cause, gate="undo", requires_confirmation=False,
                 expires_ts=now + self.timeout, sent_ts=now, status="executing", arm=c.arm,
+                context=dict(c.context, undo_of_value=c.value, undo_of_command_id=c.command_id),
             )
+            if self._dispatch_guard is not None and not self._dispatch_guard(undo, now):
+                continue
             ep.commands.append(undo)
             self.publish_cmd(undo.to_payload())
             self._record(undo, "sent", now, undo_of=c.command_id)

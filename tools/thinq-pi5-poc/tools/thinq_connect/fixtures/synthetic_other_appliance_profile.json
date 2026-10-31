@@ -1,0 +1,17 @@
+{
+  "provenance": "Purely synthetic other-appliance properties for parser reuse tests. No actual LG model, API property, unit, or device support is asserted.",
+  "profile": {
+    "property": {
+      "syntheticTelemetry": {
+        "temperature": {"type": "number", "mode": ["r"], "value": {"r": null}}
+      },
+      "syntheticOperation": {
+        "fanMode": {"type": "enum", "mode": ["r"], "value": {"r": ["ECO", "BOOST"]}}
+      }
+    }
+  },
+  "state": {
+    "syntheticTelemetry": {"temperature": -5.5},
+    "syntheticOperation": {"fanMode": "BOOST"}
+  }
+}

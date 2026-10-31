@@ -64,7 +64,7 @@ class SensorOverviewPage extends StatelessWidget {
                   value: _motionLabel(state.mmwaveMotionState),
                   unit: state.mmwaveMotionLevel == null
                       ? ''
-                      : state.mmwaveMotionLevel.toString() + ' / 100'),
+                      : '${state.mmwaveMotionLevel} / 100'),
               _SensorValueCard(
                   icon: Icons.straighten_rounded,
                   label: '\uAC70\uB9AC',

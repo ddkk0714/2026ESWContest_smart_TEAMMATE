@@ -1,0 +1,72 @@
+# Development examples, not calibrated product thresholds. No live activation.
+enabled: false
+mode: mock
+automatic_control: false
+sensor_max_age_sec: 15
+sensor_future_skew_sec: 2
+state_max_age_sec: 30
+manual_override_sec: 1800
+rules:
+  co2_high:
+    sensor: co2_ppm
+    valid_field: co2_valid
+    valid_range: [0, 40000]
+    direction: above
+    threshold: 1000
+    hysteresis: 100
+    minimum_duration_sec: 60
+    cooldown_sec: 300
+    role: outside_air
+    operation: set_power
+    value: 'on'
+  temperature_high:
+    sensor: temp_c
+    valid_field: temp_valid
+    valid_range: [-40, 80]
+    direction: above
+    threshold: 28
+    hysteresis: 1
+    minimum_duration_sec: 120
+    cooldown_sec: 600
+    role: cooling
+    operation: set_power
+    value: 'on'
+  humidity_low:
+    sensor: humidity_pct
+    valid_field: humidity_valid
+    valid_range: [0, 100]
+    direction: below
+    threshold: 35
+    hysteresis: 5
+    minimum_duration_sec: 120
+    cooldown_sec: 600
+    role: humidifying
+    operation: set_power
+    value: 'on'
+  humidity_high:
+    sensor: humidity_pct
+    valid_field: humidity_valid
+    valid_range: [0, 100]
+    direction: above
+    threshold: 65
+    hysteresis: 5
+    minimum_duration_sec: 120
+    cooldown_sec: 600
+    role: dehumidifying
+    operation: set_power
+    value: 'on'
+  lux_low:
+    sensor: lux
+    valid_field: lux_valid
+    valid_range: [0, 200000]
+    direction: below
+    threshold: 300
+    hysteresis: 50
+    minimum_duration_sec: 30
+    cooldown_sec: 300
+    role: lighting
+    operation: set_brightness
+    value: 70
+# No air-cleaner rule: CO2 is not particulate pollution and purification does
+# not exchange outside air. PM/air-quality sensing and a verified profile are
+# prerequisites for a future air-cleaner rule.

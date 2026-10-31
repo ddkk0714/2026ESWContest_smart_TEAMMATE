@@ -16,6 +16,21 @@ abstract interface class MusicPlayback {
   Future<void> dispose();
 }
 
+/// Optional timeline capability; callers without native timing remain usable.
+abstract interface class MusicTimeline {
+  Duration get position;
+  Duration? get duration;
+  Stream<Duration> get positionChanges;
+  Stream<Duration?> get durationChanges;
+  Future<void> seek(Duration position);
+}
+
+/// Optional queues keep custom playlists and station playback within their set.
+abstract interface class MusicQueue {
+  List<int> get queue;
+  void setQueue(List<int> tracks);
+}
+
 /// Local assets, played in order and wrapped back to Debussy after Bach.
 const classicalPlaylist = [
   'audio/deskmate_test_music.mp3',
@@ -52,7 +67,19 @@ abstract interface class MusicOutputVolume {
   Future<void> dispose();
 }
 
-class AtlasMusicPlayback implements MusicPlayback {
+class AtlasMusicPlayback implements MusicPlayback, MusicTimeline, MusicQueue {
+  List<int> _queue = List.generate(classicalPlaylist.length, (i) => i);
+  @override
+  List<int> get queue => List.unmodifiable(_queue);
+  @override
+  void setQueue(List<int> tracks) {
+    if (tracks.isEmpty ||
+        tracks.any((i) => i < 0 || i >= classicalPlaylist.length)) {
+      throw ArgumentError.value(tracks, 'tracks');
+    }
+    _queue = tracks.toSet().toList();
+  }
+
   AtlasMusicPlayback({
     MusicTrackPlayer Function()? playerFactory,
     MusicOutputVolume? outputVolume,
@@ -69,10 +96,20 @@ class AtlasMusicPlayback implements MusicPlayback {
   }
 
   void _listenForCompletion(MusicTrackPlayer player) {
+    if (player case final MusicTimeline timeline) {
+      _positionSubscription = timeline.positionChanges.listen((v) {
+        _position = v;
+        if (!_disposed) _positions.add(v);
+      });
+      _durationSubscription = timeline.durationChanges.listen((v) {
+        _duration = v;
+        if (!_disposed) _durations.add(v);
+      });
+    }
     _completion = player.completed.listen((_) {
       unawaited(_enqueue(() async {
         if (!_prepared || !identical(player, _player)) return;
-        _index = (_index + 1) % classicalPlaylist.length;
+        _index = _queue[(_queue.indexOf(_index) + 1) % _queue.length];
         _prepared = false;
         if (_playing) await _startTrack();
         _setPlaying(_playing);
@@ -88,6 +125,30 @@ class AtlasMusicPlayback implements MusicPlayback {
   MusicTrackPlayer? _player;
   final _changes = StreamController<bool>.broadcast();
   final _volumeChanges = StreamController<double>.broadcast();
+  final _positions = StreamController<Duration>.broadcast();
+  final _durations = StreamController<Duration?>.broadcast();
+  StreamSubscription<Duration>? _positionSubscription;
+  StreamSubscription<Duration?>? _durationSubscription;
+  Duration _position = Duration.zero;
+  Duration? _duration;
+  @override
+  Duration get position => _position;
+  @override
+  Duration? get duration => _duration;
+  @override
+  Stream<Duration> get positionChanges => _positions.stream;
+  @override
+  Stream<Duration?> get durationChanges => _durations.stream;
+  @override
+  Future<void> seek(Duration position) => _enqueue(() async {
+        final player = _player;
+        if (player case final MusicTimeline timeline when _duration != null) {
+          final target = Duration(
+              milliseconds:
+                  position.inMilliseconds.clamp(0, _duration!.inMilliseconds));
+          await timeline.seek(target);
+        }
+      });
   StreamSubscription<void>? _completion;
   late final StreamSubscription<double> _volumeSubscription;
   late final Future<void> _volumeReady;
@@ -144,6 +205,14 @@ class AtlasMusicPlayback implements MusicPlayback {
     // Atlas PlayerClient rejects load() while another source is loaded.
     // Fully dispose the old native player before loading a different track.
     await _completion?.cancel();
+    await _positionSubscription?.cancel();
+    await _durationSubscription?.cancel();
+    _position = Duration.zero;
+    _duration = null;
+    if (!_disposed) {
+      _positions.add(_position);
+      _durations.add(null);
+    }
     await _player?.dispose();
     final player = _createPlayer();
     _player = player;
@@ -206,6 +275,8 @@ class AtlasMusicPlayback implements MusicPlayback {
   Future<void> dispose() async {
     _disposed = true;
     await _completion?.cancel();
+    await _positionSubscription?.cancel();
+    await _durationSubscription?.cancel();
     await _pending;
     await _volumeReady;
     await _volumeSubscription.cancel();
@@ -214,13 +285,25 @@ class AtlasMusicPlayback implements MusicPlayback {
     await _outputVolume.dispose();
     await _changes.close();
     await _volumeChanges.close();
+    await _positions.close();
+    await _durations.close();
   }
 }
 
-class _AtlasTrackPlayer implements MusicTrackPlayer {
+class _AtlasTrackPlayer implements MusicTrackPlayer, MusicTimeline {
   final AudioPlayer _player = AudioPlayer();
   final AtlasMediaPermission _permission = AtlasMediaPermission();
   bool _permissionGranted = false;
+  @override
+  Duration get position => Duration.zero;
+  @override
+  Duration? get duration => null;
+  @override
+  Stream<Duration> get positionChanges => _player.onPositionChanged;
+  @override
+  Stream<Duration?> get durationChanges => _player.onDurationChanged;
+  @override
+  Future<void> seek(Duration position) => _player.seek(position);
 
   @override
   Stream<void> get completed => _player.onPlayerComplete;

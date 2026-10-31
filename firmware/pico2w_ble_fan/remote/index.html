@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DESKMATE 선풍기</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #ffffff; --text: #1d2330; --muted: #6b7280; --line: #e3e6eb;
+    --accent: #2563eb; --accent-soft: #e6eefe; --on: #16a34a; --warn: #b45309; --shadow: 0 1px 3px rgb(0 0 0 / 8%);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --card: #1b2029; --text: #e7eaf0; --muted: #9aa3b2; --line: #2a313d;
+      --accent: #6c9cff; --accent-soft: #1f2b45; --on: #4ade80; --warn: #fbbf24; --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  }
+  main { max-width: 420px; margin: 0 auto; padding: 16px; display: grid; gap: 12px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  h1 { font-size: 18px; margin: 0; }
+  .chip { font-size: 13px; padding: 4px 10px; border-radius: 999px; background: var(--line); color: var(--muted); }
+  .chip.ok { background: var(--accent-soft); color: var(--accent); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px; box-shadow: var(--shadow); }
+  .hero { display: grid; justify-items: center; gap: 8px; text-align: center; }
+  .fan { width: 132px; height: 132px; color: var(--muted); }
+  .fan.on { color: var(--accent); }
+  .fan .blades { transform-origin: 50px 50px; }
+  .fan.on .blades { animation: spin var(--spin, 1s) linear infinite; }
+  .fan.natural .blades { animation-timing-function: ease-in-out; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .fan.on .blades { animation: none; } }
+  .status { font-size: 15px; color: var(--muted); min-height: 1.45em; }
+  .status b { color: var(--text); }
+  button {
+    font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 12px; cursor: pointer; min-height: 48px;
+  }
+  button:disabled { opacity: .45; cursor: default; }
+  button.sel { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .power { width: 100%; font-weight: 600; font-size: 17px; }
+  .power.on { background: var(--on); border-color: var(--on); color: #fff; }
+  .row { display: grid; gap: 8px; }
+  .row.three { grid-template-columns: repeat(3, 1fr); }
+  .row.two { grid-template-columns: repeat(2, 1fr); }
+  .label { font-size: 13px; color: var(--muted); margin: 0 0 6px; }
+  .big { font-size: 22px; font-weight: 600; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .speed { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); }
+  .note { font-size: 13px; color: var(--muted); margin: 0; }
+  .err { color: var(--warn); }
+  details summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+  details .row { margin-top: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>DESKMATE 선풍기</h1>
+    <span id="chip" class="chip">연결 안 됨</span>
+  </header>
+
+  <section class="card hero">
+    <svg id="fan" class="fan" viewBox="0 0 100 100" aria-hidden="true">
+      <circle cx="50" cy="50" r="46" fill="none" stroke="currentColor" stroke-width="3" opacity=".35"/>
+      <g class="blades" fill="currentColor">
+        <path d="M50 50 C44 34 46 14 58 10 C68 8 66 30 50 50Z"/>
+        <path d="M50 50 C44 34 46 14 58 10 C68 8 66 30 50 50Z" transform="rotate(120 50 50)"/>
+        <path d="M50 50 C44 34 46 14 58 10 C68 8 66 30 50 50Z" transform="rotate(240 50 50)"/>
+      </g>
+      <circle cx="50" cy="50" r="7" fill="currentColor"/>
+    </svg>
+    <div id="status" class="status">아래 버튼으로 선풍기에 연결하세요</div>
+    <button id="connect" class="power">블루투스 연결</button>
+    <p id="msg" class="note"></p>
+  </section>
+
+  <section class="card row">
+    <button id="power" class="power" disabled>전원</button>
+    <div>
+      <p class="label">풍량</p>
+      <div class="row three">
+        <button data-level="1" disabled>1 약</button>
+        <button data-level="2" disabled>2 중</button>
+        <button data-level="3" disabled>3 강</button>
+      </div>
+    </div>
+    <div class="row two">
+      <button id="natural" disabled>자연풍</button>
+      <button id="timer" disabled>타이머</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>세밀하게 · 방향</summary>
+      <div class="row">
+        <div>
+          <div class="speed"><span>세기 (100 = 3단)</span><span id="speedval">-</span></div>
+          <input id="speed" type="range" min="0" max="100" step="5" disabled>
+        </div>
+        <button id="dir" disabled>방향: 정회전</button>
+      </div>
+    </details>
+  </section>
+
+  <p class="note">Android·PC 의 Chrome/Edge 에서 동작합니다(Web Bluetooth). 블루투스는 한 번에 한 기기만 붙으니
+    다른 휴대폰·PC 가 연결돼 있으면 먼저 끊으세요. <a href="?demo">선풍기 없이 화면만 보기</a></p>
+</main>
+
+<script>
+const SERVICE = 'f1970001-51e1-4b0e-a7f1-8d27d8e34683';
+const COMMAND = 'f1970002-51e1-4b0e-a7f1-8d27d8e34683';
+const STATE = 'f1970003-51e1-4b0e-a7f1-8d27d8e34683';
+const TIMER_PRESETS_MIN = [30, 60, 120, 240];   // firmware FAN_TIMER_PRESETS_MIN
+const LEVEL_SPEED = [0, 50, 75, 100];           // firmware FAN_LEVEL1..3_SPEED (duty 30/45/60 %)
+const OP = {power: 1, speed: 2, level: 3, mode: 4, dir: 5, timer: 6};
+
+const $ = (id) => document.getElementById(id);
+const demo = new URLSearchParams(location.search).has('demo');
+let command = null;        // GATT characteristic
+let state = null;          // {power, speed, level, natural, reverse, timer}
+let stateAt = 0;           // when state.timer was read
+let timerStep = -1;        // preset index in use, like the firmware's timer_step
+
+function decode(view) {
+  if (view.byteLength < 8 || view.getUint8(0) !== 1) throw new Error('알 수 없는 상태 형식');
+  return {power: view.getUint8(1) === 1, speed: view.getUint8(2), level: view.getUint8(3),
+          natural: view.getUint8(4) === 1, reverse: view.getUint8(5) === 1, timer: view.getUint16(6, true)};
+}
+
+function remaining() {
+  return state ? Math.max(0, Math.ceil(state.timer - (Date.now() - stateAt) / 1000)) : 0;
+}
+
+function fmt(seconds) {
+  const h = Math.floor(seconds / 3600), m = Math.floor(seconds / 60) % 60, s = seconds % 60;
+  return h ? `${h}시간 ${m}분` : m ? `${m}분 ${String(s).padStart(2, '0')}초` : `${s}초`;
+}
+
+function setState(next) {
+  state = next;
+  stateAt = Date.now();
+  const preset = TIMER_PRESETS_MIN.findIndex((m) => m * 60 === next.timer);
+  if (preset >= 0) timerStep = preset;
+  if (!next.timer) timerStep = -1;
+  render();
+}
+
+function render() {
+  const live = !!state;
+  for (const el of document.querySelectorAll('main button:not(#connect), main input')) el.disabled = !live;
+  $('connect').hidden = live;
+  if (!live) return;
+  const fan = $('fan');
+  fan.classList.toggle('on', state.power);
+  fan.classList.toggle('natural', state.power && state.natural);
+  fan.style.setProperty('--spin', `${(1.9 - state.speed / 100 * 1.5).toFixed(2)}s`);
+  const left = remaining();
+  $('status').innerHTML = state.power
+    ? `<b>${state.level}단</b>${state.natural ? ' · 자연풍' : ''}${left ? ` · ${fmt(left)} 뒤 꺼짐` : ''}`
+    : '<b>꺼짐</b>';
+  $('power').textContent = state.power ? '전원 끄기' : '전원 켜기';
+  $('power').classList.toggle('on', state.power);
+  for (const b of document.querySelectorAll('[data-level]')) {
+    b.classList.toggle('sel', state.power && Number(b.dataset.level) === state.level);
+  }
+  $('natural').classList.toggle('sel', state.power && state.natural);
+  $('natural').textContent = state.natural ? '자연풍 켜짐' : '자연풍';
+  $('timer').classList.toggle('sel', left > 0);
+  $('timer').textContent = left > 0 ? `타이머 ${timerStep >= 0 ? label(timerStep) : fmt(left)}` : '타이머';
+  $('timer').disabled = !state.power;
+  if (document.activeElement !== $('speed')) $('speed').value = state.speed;
+  $('speedval').textContent = `${state.speed}`;
+  $('dir').textContent = `방향: ${state.reverse ? '역회전' : '정회전'}`;
+}
+
+function label(step) {
+  const m = TIMER_PRESETS_MIN[step];
+  return m % 60 ? `${m}분` : `${m / 60}시간`;
+}
+
+function say(text, isError = false) {
+  $('msg').textContent = text;
+  $('msg').classList.toggle('err', isError);
+}
+
+async function send(...bytes) {
+  try {
+    if (demo) demoApply(bytes);
+    else await command.writeValueWithResponse(new Uint8Array(bytes));
+    say('');
+  } catch (e) {
+    say(`보내지 못했습니다: ${e.message}`, true);
+  }
+}
+
+async function connect() {
+  if (demo) return demoStart();
+  if (!navigator.bluetooth) {
+    say('이 브라우저는 Web Bluetooth 를 지원하지 않습니다. Android·PC 의 Chrome/Edge 로 여세요.', true);
+    return;
+  }
+  try {
+    say('선풍기를 고르세요…');
+    const device = await navigator.bluetooth.requestDevice({filters: [{name: 'DESKMATE-FAN'}], optionalServices: [SERVICE]});
+    device.addEventListener('gattserverdisconnected', () => {
+      state = null; command = null; render();
+      $('chip').textContent = '끊김'; $('chip').classList.remove('ok');
+      $('status').textContent = '연결이 끊겼습니다. 다시 연결하세요.';
+    });
+    say('연결 중…');
+    // 10-27 Windows Chrome: the first try failed with "GATT Server is disconnected" while
+    // the fan itself stayed connected, so try the same device again before giving up.
+    let service;
+    for (let tries = 1; ; tries++) {
+      try {
+        service = await (await device.gatt.connect()).getPrimaryService(SERVICE);
+        break;
+      } catch (e) {
+        if (tries >= 3) { device.gatt.disconnect(); throw e; }
+        say(`다시 연결 중… (${tries + 1}/3)`);
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+    command = await service.getCharacteristic(COMMAND);
+    const stateChar = await service.getCharacteristic(STATE);
+    stateChar.addEventListener('characteristicvaluechanged', (e) => setState(decode(e.target.value)));
+    await stateChar.startNotifications();
+    setState(decode(await stateChar.readValue()));
+    $('chip').textContent = '연결됨'; $('chip').classList.add('ok');
+    say('');
+  } catch (e) {
+    say(e.name === 'NotFoundError' ? '선택을 취소했습니다.' : `연결 실패: ${e.message}`, e.name !== 'NotFoundError');
+  }
+}
+
+$('connect').onclick = connect;
+$('power').onclick = () => send(OP.power, 2);
+for (const b of document.querySelectorAll('[data-level]')) b.onclick = () => send(OP.level, Number(b.dataset.level));
+// Like the fan's own button: when off, natural wind starts at level 1.
+$('natural').onclick = () => state.power ? send(OP.mode, state.natural ? 0 : 1) : send(OP.mode, 1, OP.level, 1);
+$('timer').onclick = () => {
+  // Same order as the timer button: next preset, then none.
+  let next = 0;
+  if (timerStep >= 0 && remaining() > 0) next = timerStep + 1;
+  else while (next < TIMER_PRESETS_MIN.length && TIMER_PRESETS_MIN[next] * 60 <= remaining()) next++;
+  if (next >= TIMER_PRESETS_MIN.length) { timerStep = -1; return send(OP.timer, 0, 0); }
+  const seconds = TIMER_PRESETS_MIN[next] * 60;
+  send(OP.timer, seconds & 0xff, seconds >> 8);
+};
+$('speed').onchange = (e) => send(OP.speed, Number(e.target.value));
+$('dir').onclick = () => send(OP.dir, state.reverse ? 0 : 1);
+setInterval(() => { if (state && state.timer) render(); }, 1000);
+
+// ?demo: the firmware's command handling in miniature, so the page can be tried without a fan.
+let sim = {power: false, speed: 75, natural: false, reverse: false, timerEnd: 0};
+function demoState() {
+  const timer = sim.timerEnd ? Math.max(0, Math.ceil((sim.timerEnd - Date.now()) / 1000)) : 0;
+  if (sim.timerEnd && !timer) { sim.power = false; sim.timerEnd = 0; }
+  const level = !sim.power ? 0 : sim.speed <= 62 ? 1 : sim.speed <= 87 ? 2 : 3;
+  return {power: sim.power, speed: sim.speed, level, natural: sim.natural, reverse: sim.reverse, timer};
+}
+function demoApply(bytes) {
+  for (let i = 0; i < bytes.length; i += bytes[i] === OP.timer ? 3 : 2) {
+    const [op, v] = [bytes[i], bytes[i + 1]];
+    if (op === OP.power) sim.power = v === 2 ? !sim.power : v === 1;
+    if (op === OP.speed || op === OP.level) {
+      const speed = op === OP.level ? LEVEL_SPEED[v] : v;
+      if (speed) { sim.speed = speed; sim.power = true; } else sim.power = false;
+    }
+    if (op === OP.mode) sim.natural = v === 1;
+    if (op === OP.dir) sim.reverse = v === 1;
+    if (op === OP.timer) { const s = v | (bytes[i + 2] << 8); sim.timerEnd = s ? Date.now() + s * 1000 : 0; }
+    if (!sim.power) sim.timerEnd = 0;
+  }
+  setState(demoState());
+}
+function demoStart() {
+  $('chip').textContent = '데모'; $('chip').classList.add('ok');
+  setState(demoState());
+  setInterval(() => { if (sim.timerEnd) setState(demoState()); }, 1000);
+}
+if (demo) { $('connect').textContent = '데모 시작'; say('데모: 선풍기 없이 화면만 움직입니다.'); }
+</script>
+</body>
+</html>
