@@ -370,7 +370,7 @@ class LiveLink extends ChangeNotifier {
             requestId: 'atlas-display',
             verdict: 'reject',
             responseMs: ms < 0 ? 0 : ms));
-    if (sent) autoActions.markUndoing();
+    if (sent) autoActions.markUndoing(_clock());
     return sent;
   }
 

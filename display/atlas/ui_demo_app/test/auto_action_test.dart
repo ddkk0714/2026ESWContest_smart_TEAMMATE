@@ -104,7 +104,7 @@ void main() {
           cmd('desk_lamp', 'set_brightness', 120, gate: 'undo', id: 'u1'));
       card = link.autoActions.current(now)!;
       expect(card.status, AutoActionStatus.undone);
-      expect(card.statusText, '되돌렸어요 · 다음엔 이 방법을 덜 고를게요');
+      expect(card.statusTextAt(now), '되돌렸어요 · 다음엔 이 방법을 덜 고를게요');
       link.dispose();
     });
 
@@ -131,7 +131,7 @@ void main() {
       transport.deliver(LiveLink.resultTopic,
           result('c1', 'failed', error: 'lamp_not_configured'));
       final card = link.autoActions.current(now)!;
-      expect(card.statusText, '기기에 닿지 못했어요 (lamp_not_configured)');
+      expect(card.statusTextAt(now), '기기에 닿지 못했어요 (lamp_not_configured)');
       expect(card.canUndo(now), isFalse);
       link.dispose();
     });
@@ -165,6 +165,20 @@ void main() {
           '지금까지의 반응을 보고 이 방법을 골랐어요');
       link.dispose();
     });
+  });
+
+  test('되돌리기를 보냈는데 hub 되돌리기 명령이 없으면 — 기기는 그대로, 학습만', () async {
+    var now = DateTime(2026, 11, 6, 14);
+    final (link, transport) = await connected(clock: () => now);
+    transport.deliver(LiveLink.commandTopic,
+        cmd('desk_lamp', 'adjust_brightness', {'percent': 60}));
+    now = now.add(const Duration(seconds: 50));
+    expect(link.undoAutoAction(), isTrue);
+    expect(link.autoActions.current(now)!.statusTextAt(now), '되돌리는 중이에요…');
+    now = now.add(const Duration(seconds: 10));
+    expect(link.autoActions.current(now)!.statusTextAt(now),
+        '기기는 그대로예요 · 다음엔 이 방법을 덜 고를게요');
+    link.dispose();
   });
 
   group('빠른 시연', () {

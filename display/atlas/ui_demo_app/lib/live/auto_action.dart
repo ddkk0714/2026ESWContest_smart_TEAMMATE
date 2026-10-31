@@ -26,6 +26,10 @@ const autoUndoWindow = Duration(seconds: 60);
 /// 카드를 띄워 두는 시간(되돌리기 창 + 여유).
 const autoCardShowFor = Duration(seconds: 90);
 
+/// 되돌리기를 보낸 뒤 hub 의 되돌리기 명령(gate undo)을 기다리는 시간. 안 오면 기기는 그대로이고 학습만 남은 것이다
+/// (hub 가 이전 밝기를 모르거나 되돌리기 창을 넘겼을 때 — dispatcher 는 명령 없이 정책에만 undo 를 준다).
+const autoUndoWait = Duration(seconds: 10);
+
 enum AutoActionStatus { sent, done, failed, undoing, undone }
 
 @immutable
@@ -39,6 +43,7 @@ class AutoActionCard {
     this.personalNote,
     this.status = AutoActionStatus.sent,
     this.failure,
+    this.undoSentAt,
   });
 
   final String commandId;
@@ -53,6 +58,9 @@ class AutoActionCard {
   final DateTime executedAt;
   final AutoActionStatus status;
   final String? failure;
+
+  /// 되돌리기를 보낸 시각. 보내지 않았으면 null.
+  final DateTime? undoSentAt;
 
   DateTime get undoUntil => executedAt.add(autoUndoWindow);
 
@@ -69,14 +77,21 @@ class AutoActionCard {
   }
 
   /// 제목 아래 상태 한 줄. 실행 중·성공이면 null(제목이 이미 말한다).
-  String? get statusText => switch (status) {
+  /// 되돌리기는 두 갈래: hub 가 기기를 되돌렸으면(gate undo 명령) "되돌렸어요", [autoUndoWait] 안에 그 명령이 없으면
+  /// 기기는 그대로이고 학습(다음엔 덜 고름)만 남았다.
+  String? statusTextAt(DateTime now) => switch (status) {
         AutoActionStatus.failed => '기기에 닿지 못했어요${failure == null ? '' : ' ($failure)'}',
+        AutoActionStatus.undoing
+            when undoSentAt != null &&
+                !now.isBefore(undoSentAt!.add(autoUndoWait)) =>
+          '기기는 그대로예요 · 다음엔 이 방법을 덜 고를게요',
         AutoActionStatus.undoing => '되돌리는 중이에요…',
         AutoActionStatus.undone => '되돌렸어요 · 다음엔 이 방법을 덜 고를게요',
         _ => null,
       };
 
-  AutoActionCard copyWith({AutoActionStatus? status, String? failure}) =>
+  AutoActionCard copyWith(
+          {AutoActionStatus? status, String? failure, DateTime? undoSentAt}) =>
       AutoActionCard(
         commandId: commandId,
         targetId: targetId,
@@ -86,6 +101,7 @@ class AutoActionCard {
         executedAt: executedAt,
         status: status ?? this.status,
         failure: failure ?? this.failure,
+        undoSentAt: undoSentAt ?? this.undoSentAt,
       );
 }
 
@@ -248,10 +264,10 @@ class AutoActionBoard extends ChangeNotifier {
   }
 
   /// 되돌리기를 보냈다 — hub 의 되돌리기 명령(gate undo)이 오면 [AutoActionStatus.undone].
-  void markUndoing() {
+  void markUndoing(DateTime now) {
     final card = _current;
     if (card == null) return;
-    _current = card.copyWith(status: AutoActionStatus.undoing);
+    _current = card.copyWith(status: AutoActionStatus.undoing, undoSentAt: now);
     notifyListeners();
   }
 

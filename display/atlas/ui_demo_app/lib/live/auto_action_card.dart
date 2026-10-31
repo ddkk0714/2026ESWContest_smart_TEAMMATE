@@ -22,7 +22,7 @@ class AutoActionCardView extends StatelessWidget {
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     final canUndo = card.canUndo(now);
-    final status = card.statusText;
+    final status = card.statusTextAt(now);
     final lines = [
       if (card.reason != null) card.reason!,
       if (card.personalNote != null) card.personalNote!,
