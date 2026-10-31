@@ -26,7 +26,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from collections import deque
+from collections import OrderedDict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 
@@ -2346,6 +2346,105 @@ class TriggerTracker:
 
 # --------------------------------------------------------------------------- 상태 저장소
 
+# --------------------------------------------------------------------------- 제어 진행(명령 하나당 한 줄)
+
+CONTROL_RESULT_TIMEOUT_S = 15.0     # hub control.yaml result_timeout_sec — MQTT 로 추정할 때만 쓴다
+TERMINAL_STATUSES = ("succeeded", "failed", "timeout", "cancelled", "skipped")
+
+
+def _clock_text(ts: Any) -> str:
+    t = _num(ts)
+    return time.strftime("%H:%M:%S", time.localtime(t)) if t is not None else DASH
+
+
+class ControlProgress:
+    """제어 진행 표(2026-10-31) — control/cmd 로 나간 명령 하나당 한 줄: 시각 · 원인 → 기기·동작·값 → 상태 · 소요 ms · 되돌림.
+
+    hub 가 GET :8765/api/control-log 를 주면(hub control_log.py → C++ 링버퍼) 그 기록을 그대로 쓴다 — 원인·arm·쿨다운/비가역
+    생략·제안 대기·거절·만료·시간 초과·되돌림 연결까지 hub 가 아는 단계가 다 있다. 응답이 없으면(옛 hub IPK·연결 끊김·가짜 각본)
+    MQTT control/cmd·result 로 같은 줄을 만든다 — 생략·되돌림 연결은 없고, 결과 없는 명령은 15 s 뒤 '응답 없음(추정)'.
+    """
+
+    HUB_FRESH_S = 5.0
+
+    def __init__(self, max_rows: int = 200) -> None:
+        self.max_rows = max_rows
+        self.hub_rows: list[dict[str, Any]] | None = None
+        self.hub_at: float | None = None
+        self.mqtt_rows: OrderedDict[str, dict[str, Any]] = OrderedDict()
+
+    def set_hub(self, rows: Any, at: float) -> None:
+        if not isinstance(rows, list):
+            raise ValueError("control-log 응답이 배열이 아님")
+        self.hub_rows = [r for r in rows if isinstance(r, dict) and r.get("command_id")]
+        self.hub_at = at
+
+    def on_mqtt(self, topic: str, env: Any, at: float) -> None:
+        data = _map(_map(env).get("data"))
+        cid = data.get("command_id")
+        if not cid:
+            return
+        cid = str(cid)
+        if topic == TOPIC_CMD:
+            row = self.mqtt_rows.setdefault(cid, {"command_id": cid, "source": "mqtt", "created_ts": at})
+            row.update(state=data.get("origin_state"), cause=data.get("cause"), gate=data.get("gate"),
+                       target_id=data.get("target_id"), operation=data.get("operation"), value=data.get("value"),
+                       status="executing", sent_ts=at, undo=data.get("gate") == "undo")
+        elif topic == TOPIC_RESULT:
+            row = self.mqtt_rows.get(cid)
+            if row is None:
+                return                      # 이 화면이 명령을 못 본 결과(켜기 전 명령)는 줄을 만들지 않는다
+            status = str(data.get("status") or "").lower()
+            if row.get("status") not in TERMINAL_STATUSES or status in TERMINAL_STATUSES:
+                row["status"] = status if status in ("executing",) + TERMINAL_STATUSES else "failed"
+            if row["status"] in TERMINAL_STATUSES and row.get("completed_ts") is None:
+                row["completed_ts"] = at
+            for k in ("error_code", "previous", "actual", "recovery"):
+                if k in data:
+                    row[k] = data[k]
+            row["node"] = _map(env).get("node")
+        else:
+            return
+        self.mqtt_rows.move_to_end(cid)
+        while len(self.mqtt_rows) > self.max_rows:
+            self.mqtt_rows.popitem(last=False)
+
+    def view(self, now: float, limit: int = 40) -> dict[str, Any]:
+        hub_ok = self.hub_rows is not None and self.hub_at is not None and now - self.hub_at <= self.HUB_FRESH_S
+        if hub_ok:
+            rows, source = [dict(r) for r in self.hub_rows or []], "hub"
+        else:
+            rows, source = [dict(r) for r in self.mqtt_rows.values()], "mqtt"
+            for r in rows:
+                if (r.get("status") == "executing" and r.get("sent_ts") is not None
+                        and now - r["sent_ts"] >= CONTROL_RESULT_TIMEOUT_S):
+                    r["status"], r["reason"] = "timeout", f"결과 없음 {CONTROL_RESULT_TIMEOUT_S:.0f} s(추정)"
+        rows.sort(key=lambda r: _num(r.get("created_ts")) or 0.0, reverse=True)
+        out = []
+        for r in rows[:limit]:
+            sent, done = _num(r.get("sent_ts")), _num(r.get("completed_ts"))
+            latency = r.get("latency_ms")
+            if latency is None and sent is not None and done is not None:
+                latency = int(round((done - sent) * 1000))
+            op = str(r.get("operation") or "?")
+            value = _value_text(op, r.get("value")).strip()
+            if op == "speak" and isinstance(r.get("value"), dict) and r["value"].get("text"):
+                value = f"“{r['value']['text']}”"           # 음성 안내는 문구만
+            out.append({
+                "id": str(r["command_id"]), "t": _clock_text(r.get("created_ts")), "source": r.get("source") or source,
+                "state": r.get("state"), "cause": r.get("cause"), "gate": r.get("gate"), "arm": r.get("arm"),
+                "target": r.get("target_id"), "op": op, "value": value,
+                "status": r.get("status") or "?", "reason": r.get("reason"), "error": r.get("error_code"),
+                "latency_ms": latency, "previous": r.get("previous"), "actual": r.get("actual"),
+                "node": r.get("node"), "undo": bool(r.get("undo")), "undo_of": _short(r.get("undo_of")) if r.get("undo_of") else None,
+                "undone_by": _short(r.get("undone_by")) if r.get("undone_by") else None,
+            })
+        counts: dict[str, int] = {}
+        for r in rows:
+            counts[r.get("status") or "?"] = counts.get(r.get("status") or "?", 0) + 1
+        return {"source": source, "rows": out, "total": len(rows), "counts": counts}
+
+
 class Store:
     """받은 최신값을 메모리에만 둔다. 모든 쓰기는 lock 안에서."""
 
@@ -2364,6 +2463,7 @@ class Store:
         self.face_down = FaceDownTracker()
         self.keystroke = KeystrokeTracker()
         self.control = ControlTracker()
+        self.progress = ControlProgress()
         self.virtual = VirtualHome()
         self.trigger = TriggerTracker({"error": "hub 설정을 아직 안 읽음(--hub-config)"})
         self.laptop: LaptopActuator | None = None
@@ -2373,7 +2473,7 @@ class Store:
         self.profile_sent: dict[str, Any] | None = None
         # 연결별 상태: ok, reason, last(마지막 수신 epoch)
         self.links: dict[str, dict[str, Any]] = {
-            k: {"ok": False, "reason": "아직 연결 시도 전", "last": None} for k in ("mqtt", "posture", "raw")}
+            k: {"ok": False, "reason": "아직 연결 시도 전", "last": None} for k in ("mqtt", "posture", "raw", "control_log")}
         self.mode = "board"
         self.target = ""
         self.hub_profile = ""  # --hub-profile: 보드가 싣지 않는 시연 프로파일을 노트북에서 적은 값
@@ -2430,6 +2530,7 @@ class Store:
                 self.log.append(entry)
             if topic in (TOPIC_CMD, TOPIC_RESULT):
                 self.board.on_message(topic, env)
+                self.progress.on_mqtt(topic, env, at)
 
     # ---------------------------------------------------------------- 화면에서 보내기(사용자 요청: 프로필·카드 응답만)
     def _send(self, topic: str, data: dict[str, Any], what: str) -> dict[str, Any]:
@@ -2522,6 +2623,11 @@ class Store:
         with self.lock:
             self.raw = j
 
+    def set_control_log(self, j: Any, at: float | None = None) -> None:
+        """hub GET :8765/api/control-log — 배열이 아니면 예외(poll_loop 가 연결 실패로 띄운다)."""
+        with self.lock:
+            self.progress.set_hub(j, time.time() if at is None else at)
+
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
             now = time.time()
@@ -2550,6 +2656,7 @@ class Store:
                 "sections": sensor_sections(self.raw, self.topics, self.phase, now),
                 "topics": topics_view(self.topics, now),
                 "devices": self.board.lines(),
+                "progress": dict(self.progress.view(now), hub_link=links["control_log"]),
                 "log": list(self.log),
             }
 
@@ -3242,6 +3349,7 @@ def main(argv: list[str] | None = None) -> None:
     threads: list[threading.Thread] = []
     if args.fake:
         store.mode, store.target = "fake", "가짜 데이터"
+        store.link("control_log", False, "가짜 각본 — hub 없음")
         store.hub_profile = args.hub_profile or "demo-b"
         store.publisher = None if args.read_only else LoopbackPublisher(store)
         threads.append(threading.Thread(target=fake_loop, args=(store, stop, args.fake_start, args.fake_scenario, rules), daemon=True))
@@ -3256,6 +3364,9 @@ def main(argv: list[str] | None = None) -> None:
                                                      store.set_posture, store, stop), daemon=True),
             threading.Thread(target=poll_loop, args=("raw", [f"http://{h}:8772/raw", f"http://{h}:8771/raw"], 0.2,
                                                      store.set_raw, store, stop), daemon=True),
+            # 제어 진행 로그(hub :8765, 10-31 hub 부터). 없으면 표는 MQTT cmd·result 로 만든다 — 배너에는 안 띄운다
+            threading.Thread(target=poll_loop, args=("control_log", [f"http://{h}:8765/api/control-log"], 1.0,
+                                                     store.set_control_log, store, stop), daemon=True),
         ]
     if args.act_laptop:
         if sys.platform != "win32":

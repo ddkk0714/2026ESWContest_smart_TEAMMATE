@@ -1488,3 +1488,48 @@ def test_seated_away_is_masked_like_hub():
     assert dv.mask_seated_away(fd, raw(200))["posture"] == "face_down"
     dead = {"sensors": [{"id": 0, "have": True, "w": 8, "h": 8, "dist_mm": [-1] * 64, "status": [255] * 64}]}
     assert dv.mask_seated_away(fd, dead)["posture"] == "face_down"
+
+
+# ----------------------------------------------------------------- 제어 진행(10-31)
+
+def test_progress_from_mqtt_when_hub_log_missing():
+    st = dv.Store()
+    st.on_mqtt(dv.TOPIC_CMD, payload({"command_id": "c1", "target_id": "desk_lamp", "operation": "adjust_brightness",
+                                      "value": {"percent": 60}, "origin_state": "ACTION_POSTURE", "cause": "posture",
+                                      "gate": "auto"}), at=100.0)
+    st.on_mqtt(dv.TOPIC_RESULT, payload({"command_id": "c1", "status": "succeeded", "previous": 110, "actual": 176},
+                                        node="display-control"), at=100.8)
+    st.on_mqtt(dv.TOPIC_CMD, payload({"command_id": "c2", "target_id": "vent_fan", "operation": "set_power",
+                                      "value": "on", "gate": "auto"}), at=101.0)
+    st.on_mqtt(dv.TOPIC_RESULT, payload({"command_id": "zz", "status": "failed"}), at=101.5)     # 못 본 명령의 결과
+    v = st.progress.view(now=110.0)
+    assert v["source"] == "mqtt" and [r["id"] for r in v["rows"]] == ["c2", "c1"]
+    lamp = v["rows"][1]
+    assert (lamp["status"], lamp["latency_ms"], lamp["value"], lamp["previous"], lamp["actual"], lamp["node"]) == \
+        ("succeeded", 800, "+60%", 110, 176, "display-control")
+    assert v["rows"][0]["status"] == "executing"
+    late = st.progress.view(now=116.5)["rows"][0]
+    assert late["status"] == "timeout" and "추정" in late["reason"]
+
+
+def test_progress_prefers_fresh_hub_log():
+    st = dv.Store()
+    st.on_mqtt(dv.TOPIC_CMD, payload({"command_id": "m1", "target_id": "speaker", "operation": "speak",
+                                      "value": {"text": "쉬어요", "lang": "ko"}}), at=50.0)
+    hub_rows = [{"command_id": "h1", "source": "dispatcher", "created_ts": 40.0, "state": "ACTION_ENV",
+                 "cause": "environment", "gate": "auto", "target_id": "vent_fan", "operation": "set_power",
+                 "value": "on", "status": "skipped", "reason": "cooldown 40s/300s"},
+                {"command_id": "h2", "source": "dispatcher", "created_ts": 45.0, "target_id": "desk_lamp",
+                 "operation": "set_brightness", "value": 100, "status": "succeeded", "latency_ms": 320,
+                 "undo": True, "undo_of": "abcdef123456"}]
+    st.set_control_log(hub_rows, at=60.0)
+    v = st.progress.view(now=62.0)
+    assert v["source"] == "hub" and [r["id"] for r in v["rows"]] == ["h2", "h1"]
+    assert v["rows"][1]["reason"] == "cooldown 40s/300s" and v["rows"][0]["undo_of"] == "abcdef"
+    assert v["counts"] == {"skipped": 1, "succeeded": 1}
+    fallback = st.progress.view(now=70.0)                                     # 5 s 넘게 안 오면 MQTT 로 돌아간다
+    assert fallback["source"] == "mqtt" and fallback["rows"][0]["value"] == "“쉬어요”"
+    with pytest.raises(ValueError):
+        st.set_control_log({"error": "not_found"})
+    snap = st.snapshot()
+    assert "progress" in snap and snap["progress"]["hub_link"]["ok"] is False

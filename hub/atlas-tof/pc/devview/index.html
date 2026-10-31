@@ -18,11 +18,11 @@ body[data-mode="video"] { overflow: hidden; }
 #dev {
   display: grid; min-height: 100vh; grid-template-columns: minmax(0, 1fr); gap: calc(8px * var(--k)); padding: 0 calc(14px * var(--k)) calc(10px * var(--k));
   /* 배너가 숨으면(display:none) 자리가 밀리지 않게 영역 이름으로 놓는다 */
-  grid-template-areas: "band" "banner" "row1" "row2" "trig" "control" "row4";
-  grid-template-rows: minmax(calc(40px * var(--k)), auto) auto auto auto auto auto minmax(calc(260px * var(--k)), 1fr);
+  grid-template-areas: "band" "banner" "row1" "row2" "trig" "control" "progress" "row4";
+  grid-template-rows: minmax(calc(40px * var(--k)), auto) auto auto auto auto auto auto minmax(calc(260px * var(--k)), 1fr);
 }
 #band { grid-area: band; } #banner { grid-area: banner; } #row1 { grid-area: row1; }
-#row2 { grid-area: row2; } #control { grid-area: control; } #row4 { grid-area: row4; }
+#row2 { grid-area: row2; } #control { grid-area: control; } #progress { grid-area: progress; } #row4 { grid-area: row4; }
 body:not([data-mode="dev"]) #dev { display: none; }
 body:not([data-mode="video"]) #video { display: none; }
 body:not([data-mode="virtual"]) #virt { display: none; }
@@ -135,6 +135,25 @@ body:not([data-mode="virtual"]) #virt { display: none; }
 #devices div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
 #devices b { display: inline-block; min-width: calc(92px * var(--k)); color: var(--dim); font-weight: 600; }
 #devices .node { color: var(--faint); font-size: calc(12px * var(--k)); margin-left: calc(4px * var(--k)); }
+
+/* 제어 진행: 명령 하나당 한 줄(hub /api/control-log, 없으면 MQTT 로 추정) */
+#progBox { max-height: calc(250px * var(--k)); overflow-y: auto; }
+#progTable { width: 100%; border-collapse: collapse; font-size: calc(14px * var(--k)); table-layout: fixed; }
+#progTable th { text-align: left; color: var(--faint); font-weight: 600; font-size: calc(12px * var(--k)); padding: 0 calc(6px * var(--k)) calc(3px * var(--k)); position: sticky; top: 0; background: var(--panel); }
+#progTable td { padding: calc(3px * var(--k)) calc(6px * var(--k)); border-top: 1px solid var(--line); vertical-align: top; word-break: keep-all; overflow-wrap: anywhere; }
+#progTable td.t, #progTable td.ms, #progTable td.res { white-space: nowrap; }
+#progTable td.t { color: var(--faint); }
+#progTable td.why { color: var(--dim); }
+#progTable td.what b { color: var(--fg); font-weight: 700; }
+#progTable .note { display: block; color: var(--dim); font-size: calc(13px * var(--k)); }
+#progTable tr.undo td.what { color: var(--info); }
+.st { display: inline-block; border-radius: calc(5px * var(--k)); padding: 0 calc(7px * var(--k)); font-weight: 700; font-size: calc(13px * var(--k)); }
+.st.succeeded { background: var(--ok); color: #06130c; }
+.st.failed, .st.timeout { background: var(--bad); color: #1d0607; }
+.st.executing { background: var(--info); color: #04121b; }
+.st.accepted { background: var(--warn); color: #1a1204; }
+.st.skipped, .st.cancelled { background: var(--invalid); color: var(--dim); }
+#progSrc.hub { color: var(--ok); } #progSrc.mqtt { color: var(--warn); }
 
 /* 4행: 명령 로그 + MQTT 토픽 */
 #row4 { display: grid; grid-template-columns: minmax(0, 1.9fr) minmax(0, 1.25fr) minmax(0, 0.85fr); gap: calc(8px * var(--k)); min-height: 0; }
@@ -412,6 +431,15 @@ body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
     <div id="ctlCmds" class="mono"></div>
   </div>
   <div id="devices"></div>
+</section>
+
+<section class="panel" id="progress">
+  <div class="ptitle"><span><b>제어 진행</b> · 명령 하나당 한 줄 — 왜(상태·원인) → 기기·동작 → 결과 · 소요 · 되돌림</span><span><span id="progSrc">-</span> · <span class="mono" id="progCount">0</span></span></div>
+  <div id="progBox"><table id="progTable">
+    <colgroup><col style="width: calc(78px * var(--k))"><col style="width: 30%"><col><col style="width: calc(92px * var(--k))"><col style="width: calc(68px * var(--k))"></colgroup>
+    <thead><tr><th>시각</th><th>왜</th><th>기기 · 동작 · 비고</th><th>결과</th><th>소요</th></tr></thead>
+    <tbody id="progRows"><tr><td colspan="5" class="empty">아직 나간 제어 명령 없음</td></tr></tbody>
+  </table></div>
 </section>
 
 <section id="row4">
@@ -1071,6 +1099,41 @@ function renderLog(log) {
   if (stick) box.scrollTop = box.scrollHeight;
 }
 
+const DEV_KO = {desk_lamp: "무드등", vent_fan: "선풍기", speaker: "스피커", air_purifier: "공기청정기"};
+const ST_KO = {succeeded: "성공", failed: "실패", timeout: "응답 없음", executing: "진행 중", accepted: "제안 대기", skipped: "생략", cancelled: "취소"};
+const REASON_KO = {gate_none: "게이트 none(확신 부족)", user_rejected: "사용자 거절", irreversible_auto: "비가역 — 자동 금지",
+  no_result: "결과 안 옴", result_after_deadline: "마감 뒤 결과", actual_value_mismatch: "결과 값이 명령과 다름"};
+const reasonText = r => r == null ? "" : REASON_KO[r] || String(r).replace(/^cooldown /, "쿨다운 ").replace(/^expired: /, "만료: ");
+let progKey = "";
+function renderProgress(pg) {
+  if (!pg) return;
+  const hl = pg.hub_link || {};
+  const src = $("progSrc");
+  src.className = pg.source;
+  src.textContent = pg.source === "hub" ? "hub 기록 :8765" : "MQTT 로 추정" + (hl.reason ? ` (hub 기록 없음: ${hl.reason})` : "");
+  src.title = pg.source === "hub" ? "hub control_log — 생략·제안 대기·되돌림까지" : "옛 hub 이거나 :8765 연결 안 됨 — 생략·되돌림 연결 없음";
+  const c = pg.counts || {};
+  $("progCount").textContent = `${pg.total}건` + (c.succeeded ? ` · 성공 ${c.succeeded}` : "") + ((c.failed || 0) + (c.timeout || 0) ? ` · 실패 ${(c.failed || 0) + (c.timeout || 0)}` : "");
+  const key = JSON.stringify(pg.rows);
+  if (key === progKey) return;
+  progKey = key;
+  $("progRows").innerHTML = pg.rows.length ? pg.rows.map(r => {
+    const why = [r.state, r.cause].filter(Boolean).join(" · ") + (r.gate && r.gate !== "auto" ? ` (${r.gate})` : "") + (r.arm ? ` · arm ${r.arm}` : "");
+    const what = `<b>${esc(DEV_KO[r.target] || r.target || "?")}</b> ${esc(r.op)} ${esc(r.value || "")}`;
+    const note = [];
+    if (r.reason) note.push(reasonText(r.reason));
+    if (r.error) note.push(`오류 ${r.error}`);
+    if (r.previous != null || r.actual != null) note.push(`밝기 ${r.previous ?? "?"}→${r.actual ?? "?"}`);
+    if (r.undo) note.push(`되돌리기${r.undo_of ? " ← " + r.undo_of : ""}`);
+    if (r.undone_by) note.push(`되돌려짐 → ${r.undone_by}`);
+    if (r.node) note.push(r.node);
+    const ms = r.latency_ms == null ? "" : r.latency_ms >= 10000 ? (r.latency_ms / 1000).toFixed(0) + " s" : r.latency_ms + " ms";
+    return `<tr class="${r.undo ? "undo" : ""}" title="${esc(r.id)} · ${esc(r.source)}"><td class="t mono">${esc(r.t)}</td><td class="why">${esc(why || "-")}</td>` +
+      `<td class="what">${what}${note.length ? `<span class="note">${esc(note.join(" · "))}</span>` : ""}</td><td class="res"><span class="st ${esc(r.status)}">${esc(ST_KO[r.status] || r.status)}</span></td>` +
+      `<td class="ms mono">${ms}</td></tr>`;
+  }).join("") : `<tr><td colspan="5" class="empty">아직 나간 제어 명령 없음</td></tr>`;
+}
+
 function renderTopics(ts) {
   $("topicCount").textContent = `${ts.length}개`;
   $("topics").innerHTML = ts.length ? ts.map(t =>
@@ -1120,6 +1183,7 @@ async function tick() {
     renderVirtual(d);
     renderTrigger($("trigD"), d.trigger);
     renderTrigger($("trigV"), d.trigger);
+    renderProgress(d.progress);
     renderLog(d.log);
     renderTopics(d.topics);
   } catch (e) {
