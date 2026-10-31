@@ -1508,8 +1508,70 @@ def test_progress_from_mqtt_when_hub_log_missing():
     assert (lamp["status"], lamp["latency_ms"], lamp["value"], lamp["previous"], lamp["actual"], lamp["node"]) == \
         ("succeeded", 800, "+60%", 110, 176, "display-control")
     assert v["rows"][0]["status"] == "executing"
-    late = st.progress.view(now=116.5)["rows"][0]
-    assert late["status"] == "timeout" and "추정" in late["reason"]
+    assert (lamp["why_ko"], lamp["why_sub_ko"], lamp["action_ko"], lamp["status_ko"], lamp["latency_ko"]) == \
+        ("자세 — 졸음·엎드림 신호", "자세 개입", "밝기 60 % 올림", "성공", "0.80초")
+    assert lamp["notes_ko"] == ["밝기 110 → 176 확인"]
+    late = st.progress.view(now=116.5)
+    assert late["rows"][0]["status"] == "timeout" and "추정" in late["rows"][0]["reason"]
+    assert late["rows"][0]["latency_ko"] == "" and late["summary"]["success_rate"] == 50
+
+
+def _speak_cmd(st, cid, at):
+    st.on_mqtt(dv.TOPIC_CMD, payload({"command_id": cid, "target_id": "speaker", "operation": "speak"}), at=at)
+
+
+def test_progress_mqtt_accepted_is_not_terminal():
+    # PR #88 리뷰 재현: accepted 를 failed 로 닫고 latency 를 accepted 시각(1000 ms)에 고정했다
+    st = dv.Store()
+    _speak_cmd(st, "review88", 100.0)
+    st.on_mqtt(dv.TOPIC_RESULT, payload({"command_id": "review88", "status": "accepted"}), at=101.0)
+    v = st.progress.view(now=101.5)
+    [r] = v["rows"]
+    assert (r["status"], r["latency_ms"], r["latency_ko"]) == ("executing", None, "")
+    assert (v["summary"]["failed"], v["summary"]["pending"], v["summary"]["success_rate"]) == (0, 1, None)
+    st.on_mqtt(dv.TOPIC_RESULT, payload({"command_id": "review88", "status": "executing"}), at=102.0)
+    st.on_mqtt(dv.TOPIC_RESULT, payload({"command_id": "review88", "status": "succeeded"}), at=103.0)
+    v = st.progress.view(now=104.0)
+    [r] = v["rows"]
+    assert (r["status"], r["latency_ms"], r["latency_ko"]) == ("succeeded", 3000, "3.00초")
+    assert (v["summary"]["succeeded"], v["summary"]["failed"], v["summary"]["success_rate"],
+            v["summary"]["avg_latency_ko"]) == (1, 0, 100, "3.00초")
+    # 끝난 뒤 다시 온 결과는 상태·소요를 바꾸지 않는다
+    st.on_mqtt(dv.TOPIC_RESULT, payload({"command_id": "review88", "status": "failed"}), at=105.0)
+    assert st.progress.view(now=105.0)["rows"][0]["latency_ms"] == 3000
+
+
+def test_progress_mqtt_accepted_then_failed_or_timeout():
+    st = dv.Store()
+    _speak_cmd(st, "f", 100.0)
+    st.on_mqtt(dv.TOPIC_RESULT, payload({"command_id": "f", "status": "accepted"}), at=101.0)
+    st.on_mqtt(dv.TOPIC_RESULT, payload({"command_id": "f", "status": "failed", "error_code": "speaker_unavailable"}),
+               at=102.0)
+    _speak_cmd(st, "t", 200.0)
+    st.on_mqtt(dv.TOPIC_RESULT, payload({"command_id": "t", "status": "accepted"}), at=201.0)
+    v = st.progress.view(now=214.9)
+    t, f = v["rows"]
+    assert (f["status"], f["latency_ms"], f["error"]) == ("failed", 2000, "speaker_unavailable")
+    assert (t["status"], v["summary"]["pending"], v["summary"]["failed"]) == ("executing", 1, 1)
+    v = st.progress.view(now=215.0)                       # accepted 만 받고 15 s → 응답 없음(추정)
+    t = v["rows"][0]
+    assert (t["status"], t["latency_ms"], t["latency_ko"]) == ("timeout", None, "") and "추정" in t["reason"]
+    assert (v["summary"]["failed"], v["summary"]["pending"], v["summary"]["success_rate"], v["summary"]["avg_latency_ko"])         == (2, 0, 0, "")
+    _speak_cmd(st, "u", 300.0)
+    st.on_mqtt(dv.TOPIC_RESULT, payload({"command_id": "u", "status": "weird"}), at=300.5)
+    u = st.progress.view(now=301.0)["rows"][0]
+    assert (u["status"], u["reason"]) == ("failed", "unknown_status:weird")
+
+
+def test_progress_words_failure_and_unknowns():
+    w = dv.progress_words({"target_id": "vent_fan", "operation": "set_power", "value": "on", "gate": "suggest",
+                           "cause": "environment", "status": "failed", "error_code": "ble_not_connected"}, 1100)
+    assert (w["mode_ko"], w["status_ko"], w["latency_ko"], w["notes_ko"]) == \
+        ("제안 → 수락", "실패", "1.10초", ["블루투스 연결 안 됨"])
+    w = dv.progress_words({"target_id": "speaker", "operation": "speak", "value": {"text": "쉬어요"},
+                           "status": "skipped", "reason": "expired: no_response", "error_code": "weird"}, None)
+    assert w["why_ko"] == "원인 미기록" and w["action_ko"] == "음성 안내 “쉬어요”"
+    assert w["notes_ko"] == ["제안에 응답이 없어 만료", "오류 weird"] and w["latency_ko"] == ""
 
 
 def test_progress_prefers_fresh_hub_log():
@@ -1529,6 +1591,13 @@ def test_progress_prefers_fresh_hub_log():
     assert v["counts"] == {"skipped": 1, "succeeded": 1}
     fallback = st.progress.view(now=70.0)                                     # 5 s 넘게 안 오면 MQTT 로 돌아간다
     assert fallback["source"] == "mqtt" and fallback["rows"][0]["value"] == "“쉬어요”"
+    skip, undo = v["rows"][1], v["rows"][0]
+    assert skip["why_ko"].startswith("환경") and skip["mode_ko"] == "자동" and skip["action_ko"] == "켜기"
+    assert skip["notes_ko"] == ["같은 조치는 5분에 한 번 — 40초 전에 이미 실행"]
+    assert (undo["mode_ko"], undo["device_ko"], undo["action_ko"], undo["latency_ko"]) == \
+        ("되돌리기", "무드등", "원래 밝기로 (100)", "0.32초")
+    assert v["summary"] == {"total": 2, "succeeded": 1, "failed": 0, "skipped": 1, "pending": 0,
+                            "success_rate": 100, "avg_latency_ko": "0.32초"}
     with pytest.raises(ValueError):
         st.set_control_log({"error": "not_found"})
     snap = st.snapshot()
