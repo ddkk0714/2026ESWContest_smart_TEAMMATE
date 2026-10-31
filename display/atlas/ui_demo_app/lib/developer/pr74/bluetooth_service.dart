@@ -413,18 +413,27 @@ class AtlasBluetoothService {
     final result = await _bluetooth.callMethod(
       _gattInterface,
       'Connect',
-      [DBusString(adapter), DBusString(address), const DBusUint32(0)],
+      [DBusString(adapter), DBusString(address), const DBusUint32(gattManualConnect)],
     );
     final clientId = result.returnValues.first.asString();
-    if (adapter.isEmpty) {
-      // Connect tolerates an empty adapter; DiscoverServices and writes do not.
-      final status =
-          await _bluetooth.callMethod(_gattInterface, 'GetStatus', []);
-      final values = status.returnValues;
-      if (values.isNotEmpty && values.first is DBusArray) {
-        adapter = gattAdapterFor(values.first as DBusArray, address);
+    try {
+      // Connect returns the client id before the link is up. Discovering at
+      // once failed with "Device with supplied address is not available"
+      // (fan 10-24, lamp 10-26), then our Disconnect dropped the late link.
+      final link = await waitForGattLink(_gattStatus, address,
+          onChange: (state, elapsed) => diag.write(
+              'GATT 링크 $address ($clientId): "$state" ${elapsed.inMilliseconds} ms'));
+      if (adapter.isEmpty) {
+        // Connect tolerates an empty adapter; DiscoverServices and writes do not.
+        adapter = link.adapter;
+        diag.write('램프 어댑터: GetInfo 비어 있음 → GetStatus "$adapter"');
       }
-      diag.write('램프 어댑터: GetInfo 비어 있음 → GetStatus "$adapter"');
+    } catch (_) {
+      try {
+        await _bluetooth.callMethod(_gattInterface, 'Disconnect',
+            [DBusString(adapter), DBusString(clientId)]);
+      } catch (_) {}
+      rethrow;
     }
     try {
       await discoverWithRetry(
@@ -447,6 +456,14 @@ class AtlasBluetoothService {
     final connection = GattConnection(adapter: adapter, clientId: clientId);
     _gattConnections[address] = connection;
     return connection;
+  }
+
+  Future<DBusArray?> _gattStatus() async {
+    final status = await _bluetooth.callMethod(_gattInterface, 'GetStatus', []);
+    final values = status.returnValues;
+    return values.isNotEmpty && values.first is DBusArray
+        ? values.first as DBusArray
+        : null;
   }
 
   Future<void> disconnectGatt(GattConnection connection) =>
@@ -587,16 +604,58 @@ List<int>? gattReadBytes(List<DBusValue> reply, String characteristicId) {
   return null;
 }
 
+/// Gatt.Connect `auto_connect`: 1 = connect now. 0 (used until 0.1.12) is
+/// "connect whenever the device becomes available" — a background connection
+/// that returns at once and comes up late or never (ATLAS Gatt spec, Connect).
+const gattManualConnect = 1;
+
 /// Adapter of [address] in a Gatt.GetStatus reply, or '' when not connected.
-String gattAdapterFor(DBusArray status, String address) {
+String gattAdapterFor(DBusArray status, String address) =>
+    _gattEntry(status, address, 'adapterAddress');
+
+/// Link state of [address] in a Gatt.GetStatus reply: "connecting",
+/// "connected", "discovering", or '' when the device is not listed.
+String gattStateFor(DBusArray status, String address) =>
+    _gattEntry(status, address, 'status');
+
+String _gattEntry(DBusArray status, String address, String key) {
   final wanted = address.toLowerCase();
   for (final entry in status.children.whereType<DBusDict>()) {
-    if (AtlasBluetoothService._string(entry, 'address').toLowerCase() ==
-        wanted) {
-      return AtlasBluetoothService._string(entry, 'adapterAddress');
+    if (AtlasBluetoothService._string(entry, 'address').toLowerCase() == wanted) {
+      return AtlasBluetoothService._string(entry, key);
     }
   }
   return '';
+}
+
+/// Polls Gatt.GetStatus until [address] is "connected" (or already
+/// "discovering") and returns that entry's adapter. Never-seen states are
+/// reported through [onChange] so the diag log shows how long the link took.
+/// Throws a StateError when the link is not up within [timeout].
+Future<({String adapter, String state})> waitForGattLink(
+    Future<DBusArray?> Function() status, String address,
+    {Duration timeout = const Duration(seconds: 15),
+    Duration interval = const Duration(milliseconds: 500),
+    void Function(String state, Duration elapsed)? onChange}) async {
+  final clock = Stopwatch()..start();
+  String? last;
+  while (true) {
+    final reply = await status();
+    final state =
+        reply == null ? '' : gattStateFor(reply, address).toLowerCase();
+    if (state != last) {
+      last = state;
+      onChange?.call(state, clock.elapsed);
+    }
+    if (state == 'connected' || state == 'discovering') {
+      return (adapter: gattAdapterFor(reply!, address), state: state);
+    }
+    if (clock.elapsed >= timeout) {
+      throw StateError('GATT 링크가 ${timeout.inSeconds}초 안에 올라오지 않았습니다 '
+          '(마지막 상태 "${state.isEmpty ? '목록에 없음' : state}"). 기기 전원과 다른 기기 연결을 확인하세요.');
+    }
+    await Future<void>.delayed(interval);
+  }
 }
 
 /// Retries DiscoverServices; the first call after Connect can fail.
