@@ -64,7 +64,7 @@ class AutoActionCardView extends StatelessWidget {
             OutlinedButton(
               key: const ValueKey('auto-action-undo'),
               onPressed: onUndo,
-              child: Text('되돌리기 ${card.undoSecondsLeft(now)}초'),
+              child: Text('원래대로 ${card.undoSecondsLeft(now)}초'),
             ),
           ],
           IconButton(

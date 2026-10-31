@@ -7,13 +7,15 @@
 // 겹치지 않게: 기기 없는 arm(알림음·음성·자세 카드)은 hub 가 이미 자동 정보 카드(auto: true)를 내므로 여기서 안 띄운다.
 // 휴식 안내(rest_notice)·창문 환기(vent_suggest)도 각자의 카드가 있다. 이 카드는 기기 명령(무드등·선풍기·공기청정기)만.
 //
-// 문구표 (기기 × 원인) — [autoActionTitle]
-// | 기기·동작                      | 자세(ACTION_POSTURE)                | 환경(ACTION_ENV)                 | 인지(ACTION_BREAK)                   |
-// | desk_lamp 밝게                 | 졸음이 느껴져 무드등을 밝혔어요       | 방이 어두워 무드등을 밝혔어요       | 집중이 흐려져 조명을 밝게 바꿨어요      |
-// | desk_lamp 어둡게               | 조명을 낮춰 눈을 쉬게 했어요          | (같음)                            | (같음)                               |
-// | vent_fan 켜기                  | 졸음을 깨우려고 선풍기를 켰어요       | 공기가 답답해 선풍기를 켰어요       | 머리를 식히려고 선풍기를 켰어요          |
-// | air_purifier 세게              | 공기를 맑게 하려고 공기청정기를 세게 돌렸어요 (원인 무관)                                                  |
-// | speaker 알림음·음성·휴식 안내   | 이 카드 없음 — hub 자동 정보 카드·rest_notice 배너가 맡는다                                            |
+// 문구 — 기계가 보고하는 말투가 아니라 곁에서 챙겨 주는 말투로(V29, 10-31 사용자). 숫자(피로 %)·오류 코드는 제품 화면에
+// 내지 않는다(개발자 화면·제어 로그에 있다).
+// 제목 (기기 × 원인) — [autoActionTitle]
+// | 기기·동작        | 자세(ACTION_POSTURE)                 | 환경(ACTION_ENV)                  | 인지(ACTION_BREAK)                  |
+// | desk_lamp 밝게   | 졸음이 내려앉기 전에, 불빛을 밝혀 둘게요 | 주변이 어둑해져 불빛을 조금 더했어요   | 머리가 무거워 보여 환한 빛으로 바꿨어요 |
+// | desk_lamp 어둡게 | 눈이 쉴 수 있게 불빛을 낮췄어요        | (같음)                              | (같음)                              |
+// | vent_fan 켜기    | 선선한 바람으로 잠을 깨워 볼게요        | 공기가 무거워 바람을 조금 들였어요     | 잠깐 바람으로 머리를 식혀요            |
+// | air_purifier 세게 | 숨 쉬기 편하게 공기를 맑게 하고 있어요 (원인 무관)                                                     |
+// | speaker 알림음·음성·휴식 안내 | 이 카드 없음 — hub 자동 정보 카드·rest_notice 배너가 맡는다                                  |
 library;
 
 import 'package:flutter/foundation.dart';
@@ -80,13 +82,13 @@ class AutoActionCard {
   /// 되돌리기는 두 갈래: hub 가 기기를 되돌렸으면(gate undo 명령) "되돌렸어요", [autoUndoWait] 안에 그 명령이 없으면
   /// 기기는 그대로이고 학습(다음엔 덜 고름)만 남았다.
   String? statusTextAt(DateTime now) => switch (status) {
-        AutoActionStatus.failed => '기기에 닿지 못했어요${failure == null ? '' : ' ($failure)'}',
+        AutoActionStatus.failed => '잠시 기기에 닿지 못했어요',
         AutoActionStatus.undoing
             when undoSentAt != null &&
                 !now.isBefore(undoSentAt!.add(autoUndoWait)) =>
-          '기기는 그대로예요 · 다음엔 이 방법을 덜 고를게요',
-        AutoActionStatus.undoing => '되돌리는 중이에요…',
-        AutoActionStatus.undone => '되돌렸어요 · 다음엔 이 방법을 덜 고를게요',
+          '알겠어요. 다음엔 다른 방법으로 다가갈게요',
+        AutoActionStatus.undoing => '원래대로 돌려 두는 중이에요…',
+        AutoActionStatus.undone => '원래대로 돌려 뒀어요. 다음엔 다른 방법을 찾아볼게요',
         _ => null,
       };
 
@@ -112,24 +114,24 @@ String? autoActionTitle(
     case 'desk_lamp':
       final brighter = _lampBrighter(operation, value);
       if (brighter == null) return null;
-      if (!brighter) return '조명을 낮춰 눈을 쉬게 했어요';
+      if (!brighter) return '눈이 쉴 수 있게 불빛을 낮췄어요';
       return switch (cause) {
-        'posture' => '졸음이 느껴져 무드등을 밝혔어요',
-        'environment' => '방이 어두워 무드등을 밝혔어요',
-        'cognitive' => '집중이 흐려져 조명을 밝게 바꿨어요',
-        _ => '무드등을 밝혔어요',
+        'posture' => '졸음이 내려앉기 전에, 불빛을 밝혀 둘게요',
+        'environment' => '주변이 어둑해져 불빛을 조금 더했어요',
+        'cognitive' => '머리가 무거워 보여 환한 빛으로 바꿨어요',
+        _ => '불빛을 조금 밝혀 둘게요',
       };
     case 'vent_fan':
     case 'fan':
       if (operation == 'set_power' && value.toString() != 'on') return null;
       return switch (cause) {
-        'posture' => '졸음을 깨우려고 선풍기를 켰어요',
-        'environment' => '공기가 답답해 선풍기를 켰어요',
-        'cognitive' => '머리를 식히려고 선풍기를 켰어요',
-        _ => '선풍기를 켰어요',
+        'posture' => '선선한 바람으로 잠을 깨워 볼게요',
+        'environment' => '공기가 무거워 바람을 조금 들였어요',
+        'cognitive' => '잠깐 바람으로 머리를 식혀요',
+        _ => '바람을 조금 들였어요',
       };
     case 'air_purifier':
-      return '공기를 맑게 하려고 공기청정기를 세게 돌렸어요';
+      return '숨 쉬기 편하게 공기를 맑게 하고 있어요';
   }
   return null; // speaker(알림음·음성·휴식 안내)는 hub 정보 카드·rest_notice 가 맡는다
 }
@@ -146,33 +148,30 @@ bool? _lampBrighter(String operation, Object? value) {
   return null;
 }
 
-/// 왜 했는지 한 줄 — 지금 state/phase 에서.
+/// 왜 했는지 한 줄 — 지금 state/phase 에서. 숫자 없이 지켜본 모습만 말한다.
 String? autoActionReason(String? cause, DisplayState? state) {
   if (state == null) return null;
-  final fatigue = '피로 ${(state.fatigue * 100).round()}%';
   switch (cause) {
     case 'posture':
-      final posture = switch (state.tofPosture) {
-        'face_down' => '엎드린 자세가 이어졌어요',
-        'drowsy' => '꾸벅이는 자세가 이어졌어요',
-        'chin_rest' => '턱을 괸 자세가 이어졌어요',
-        _ => '자세가 무너진 채 이어졌어요',
+      return switch (state.tofPosture) {
+        'face_down' => '책상에 엎드린 채 한참이 지났어요',
+        'drowsy' => '고개가 자꾸 꾸벅이고 있었어요',
+        'chin_rest' => '턱을 괸 채 오래 머물러 있었어요',
+        _ => '자세가 조금씩 무너지고 있었어요',
       };
-      return '$posture · $fatigue';
     case 'environment':
       final flags = state.envFlags;
-      final env = flags.contains('too_dark')
-          ? '방이 어두워요'
+      return flags.contains('too_dark')
+          ? '책상 위가 어둑해졌어요'
           : flags.contains('co2_high') || flags.contains('co2_rising')
-              ? '공기가 답답해졌어요'
+              ? '공기가 조금 답답해졌어요'
               : flags.contains('too_hot')
-                  ? '방이 조금 더워요'
-                  : '주변 환경이 바뀌었어요';
-      return '$env · $fatigue';
+                  ? '방이 조금 더워졌어요'
+                  : '주변이 조금 달라졌어요';
     case 'cognitive':
-      return '오래 이어서 일했어요 · $fatigue';
+      return '쉼 없이 오래 집중하고 있었어요';
   }
-  return fatigue;
+  return null;
 }
 
 /// 개인화 정책이 이 기기를 골랐으면 그 이유 한 줄. FSM 기본 명령(정책 결정 없음)이면 null.
@@ -190,13 +189,12 @@ String? autoActionPersonalNote(String target, DisplayState? state) {
     return null;
   }
   final count = state.interventionPersonalCount ?? 0;
-  if (count > 0) return '지금까지의 반응을 보고 이 방법을 골랐어요';
-  final pref = switch (channel) {
-    'desk_lamp' => '빛',
-    'vent_fan' => '바람',
-    _ => '공기',
+  if (count > 0) return '그동안의 반응을 기억해서 골랐어요';
+  return switch (channel) {
+    'desk_lamp' => '처음에 알려 준 대로, 빛으로 깨워 드려요',
+    'vent_fan' => '처음에 알려 준 대로, 바람으로 깨워 드려요',
+    _ => '처음에 알려 준 취향을 기억하고 있어요',
   };
-  return '처음 설정한 취향($pref)으로 골랐어요';
 }
 
 /// 자동 실행 카드 하나를 들고 있는다. 새 자동 명령이 오면 바꾼다.

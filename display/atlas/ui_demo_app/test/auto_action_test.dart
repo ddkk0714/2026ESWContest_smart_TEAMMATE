@@ -54,22 +54,22 @@ void main() {
     test('기기 × 원인', () {
       const up = {'percent': 60, 'min_raw': 153};
       expect(autoActionTitle('desk_lamp', 'adjust_brightness', up, 'posture'),
-          '졸음이 느껴져 무드등을 밝혔어요');
+          '졸음이 내려앉기 전에, 불빛을 밝혀 둘게요');
       expect(
           autoActionTitle('desk_lamp', 'adjust_brightness', up, 'environment'),
-          '방이 어두워 무드등을 밝혔어요');
+          '주변이 어둑해져 불빛을 조금 더했어요');
       expect(autoActionTitle('desk_lamp', 'adjust_brightness', up, 'cognitive'),
-          '집중이 흐려져 조명을 밝게 바꿨어요');
+          '머리가 무거워 보여 환한 빛으로 바꿨어요');
       expect(
           autoActionTitle(
               'desk_lamp', 'adjust_brightness', {'percent': -50}, 'cognitive'),
-          '조명을 낮춰 눈을 쉬게 했어요');
+          '눈이 쉴 수 있게 불빛을 낮췄어요');
       expect(autoActionTitle('vent_fan', 'set_power', 'on', 'environment'),
-          '공기가 답답해 선풍기를 켰어요');
+          '공기가 무거워 바람을 조금 들였어요');
       expect(autoActionTitle('vent_fan', 'set_power', 'off', 'environment'),
           isNull);
       expect(autoActionTitle('air_purifier', 'set_mode', 'high', 'environment'),
-          '공기를 맑게 하려고 공기청정기를 세게 돌렸어요');
+          '숨 쉬기 편하게 공기를 맑게 하고 있어요');
       // 알림음·음성·휴식 안내는 hub 정보 카드·rest_notice 가 맡는다 — 겹치지 않게 카드 없음
       expect(autoActionTitle('speaker', 'chime', {}, 'posture'), isNull);
       expect(autoActionTitle('speaker', 'speak', {'text': '쉬어요'}, 'cognitive'),
@@ -86,9 +86,9 @@ void main() {
       transport.deliver(LiveLink.commandTopic,
           cmd('desk_lamp', 'adjust_brightness', {'percent': 60, 'min_raw': 153}));
       var card = link.autoActions.current(now)!;
-      expect(card.title, '졸음이 느껴져 무드등을 밝혔어요');
-      expect(card.reason, '엎드린 자세가 이어졌어요 · 피로 82%');
-      expect(card.personalNote, '처음 설정한 취향(빛)으로 골랐어요');
+      expect(card.title, '졸음이 내려앉기 전에, 불빛을 밝혀 둘게요');
+      expect(card.reason, '책상에 엎드린 채 한참이 지났어요'); // 숫자(피로 %)는 제품 화면에 안 낸다
+      expect(card.personalNote, '처음에 알려 준 대로, 빛으로 깨워 드려요');
       transport.deliver(LiveLink.resultTopic, result('c1', 'succeeded'));
       expect(link.autoActions.current(now)!.status, AutoActionStatus.done);
 
@@ -104,7 +104,7 @@ void main() {
           cmd('desk_lamp', 'set_brightness', 120, gate: 'undo', id: 'u1'));
       card = link.autoActions.current(now)!;
       expect(card.status, AutoActionStatus.undone);
-      expect(card.statusTextAt(now), '되돌렸어요 · 다음엔 이 방법을 덜 고를게요');
+      expect(card.statusTextAt(now), '원래대로 돌려 뒀어요. 다음엔 다른 방법을 찾아볼게요');
       link.dispose();
     });
 
@@ -131,7 +131,7 @@ void main() {
       transport.deliver(LiveLink.resultTopic,
           result('c1', 'failed', error: 'lamp_not_configured'));
       final card = link.autoActions.current(now)!;
-      expect(card.statusTextAt(now), '기기에 닿지 못했어요 (lamp_not_configured)');
+      expect(card.statusTextAt(now), '잠시 기기에 닿지 못했어요'); // 오류 코드는 개발자 화면에만
       expect(card.canUndo(now), isFalse);
       link.dispose();
     });
@@ -162,7 +162,7 @@ void main() {
       transport.deliver(LiveLink.commandTopic,
           cmd('desk_lamp', 'adjust_brightness', {'percent': 60}));
       expect(link.autoActions.current(now)!.personalNote,
-          '지금까지의 반응을 보고 이 방법을 골랐어요');
+          '그동안의 반응을 기억해서 골랐어요');
       link.dispose();
     });
   });
@@ -174,10 +174,10 @@ void main() {
         cmd('desk_lamp', 'adjust_brightness', {'percent': 60}));
     now = now.add(const Duration(seconds: 50));
     expect(link.undoAutoAction(), isTrue);
-    expect(link.autoActions.current(now)!.statusTextAt(now), '되돌리는 중이에요…');
+    expect(link.autoActions.current(now)!.statusTextAt(now), '원래대로 돌려 두는 중이에요…');
     now = now.add(const Duration(seconds: 10));
     expect(link.autoActions.current(now)!.statusTextAt(now),
-        '기기는 그대로예요 · 다음엔 이 방법을 덜 고를게요');
+        '알겠어요. 다음엔 다른 방법으로 다가갈게요');
     link.dispose();
   });
 
@@ -225,14 +225,14 @@ void main() {
         cmd('desk_lamp', 'adjust_brightness', {'percent': 60, 'min_raw': 153}));
     await tester.pump();
     expect(find.byKey(const ValueKey('auto-action-card')), findsOneWidget);
-    expect(find.text('졸음이 느껴져 무드등을 밝혔어요'), findsOneWidget);
-    expect(find.text('처음 설정한 취향(빛)으로 골랐어요'), findsOneWidget);
+    expect(find.text('졸음이 내려앉기 전에, 불빛을 밝혀 둘게요'), findsOneWidget);
+    expect(find.text('처음에 알려 준 대로, 빛으로 깨워 드려요'), findsOneWidget);
     expect(find.byKey(const ValueKey('demo-fast-badge')), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('auto-action-undo')));
     await tester.pump();
     expect(transport.sent(LiveLink.feedbackTopic).last['data']['verdict'],
         'reject');
-    expect(find.text('되돌리는 중이에요…'), findsOneWidget);
+    expect(find.text('원래대로 돌려 두는 중이에요…'), findsOneWidget);
     expect(find.byKey(const ValueKey('auto-action-undo')), findsNothing);
     await tester.tap(find.byKey(const ValueKey('auto-action-dismiss')));
     await tester.pump();
