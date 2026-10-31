@@ -9,6 +9,7 @@ import 'profile_picker.dart';
 import 'personal_settings.dart';
 import 'page_transition.dart';
 import 'pr56_workspace_view.dart';
+import 'live/auto_action_card.dart';
 import 'live/home_items.dart';
 import 'live/link_settings.dart';
 import 'live/live_link.dart';
@@ -327,6 +328,22 @@ class _DemoShellState extends State<DemoShell> {
                           onDismiss: live.dismissNotice)
                       : const SizedBox.shrink(),
                 )),
+          // hub 자동 실행 카드(무드등·선풍기·공기청정기) — 알림 배너가 떠 있으면 그 아래. 제안 카드가 오면 그 뒤에 가린다.
+          if (!_developerOpen && live != null)
+            if (live.autoActions.current(live.now) case final auto?)
+              Positioned(
+                top: screenNotice != null ? 146 : 76,
+                left: 40,
+                right: 40,
+                child: AutoActionCardView(
+                    key: ValueKey('auto-action-${auto.commandId}'),
+                    card: auto,
+                    now: live.now,
+                    onUndo: () => live.undoAutoAction(),
+                    onDismiss: live.autoActions.dismiss)),
+          if (live?.state?.demoFast == true)
+            const Positioned(
+                left: 16, bottom: 12, child: IgnorePointer(child: DemoFastBadge())),
           if (request != null && !_developerOpen)
             Positioned.fill(
                 child: KeyedSubtree(

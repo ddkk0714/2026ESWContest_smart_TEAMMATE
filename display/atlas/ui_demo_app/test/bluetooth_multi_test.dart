@@ -41,6 +41,7 @@ class LeaseService extends Fake implements AtlasBluetoothService {
 class GattClient extends Fake implements DBusClient {
   int active = 0, peak = 0, next = 0;
   final disconnected = <String>[];
+  final linked = <String>[];
   @override
   Future<DBusMethodSuccessResponse> callMethod(
       {String? destination,
@@ -57,7 +58,22 @@ class GattClient extends Fake implements DBusClient {
       if (active > peak) peak = active;
       final id = 'client-${++next}';
       await Future<void>.delayed(const Duration(milliseconds: 15));
+      linked.add(values.elementAt(1).asString());
       return DBusMethodSuccessResponse([DBusString(id)]);
+    }
+    if (name == 'GetStatus') {
+      return DBusMethodSuccessResponse([
+        DBusArray(DBusSignature('a{sv}'), [
+          for (final address in linked)
+            DBusDict(DBusSignature.string, DBusSignature.variant, {
+              const DBusString('adapterAddress'):
+                  const DBusVariant(DBusString('11:22:33:44:55:66')),
+              const DBusString('address'): DBusVariant(DBusString(address)),
+              const DBusString('status'):
+                  const DBusVariant(DBusString('connected')),
+            }),
+        ]),
+      ]);
     }
     if (name == 'DiscoverServices') {
       await Future<void>.delayed(const Duration(milliseconds: 15));

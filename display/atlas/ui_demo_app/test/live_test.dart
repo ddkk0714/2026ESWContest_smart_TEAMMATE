@@ -68,13 +68,14 @@ Map<String, Object?> phase(String fsm,
         double fatigue = .1,
         double focus = .1,
         String phaseName = 'focus',
-        List<String> envFlags = const []}) =>
+        List<String> envFlags = const [],
+        int seq = 1}) =>
     {
       'schema_version': '1.0',
       'ts': 1769000002.0,
       'node': 'hub',
       'boot_id': 'a8021bf0',
-      'seq': 1,
+      'seq': seq,
       'data': {
         'fsm_state': fsm,
         'phase': phaseName,
@@ -561,7 +562,9 @@ void main() {
       m.leaveLive();
       expect(m.liveDriven, isFalse);
       now = now.add(const Duration(seconds: 1));
-      transport.deliver(LiveLink.stateTopic, phase('IDLE', phaseName: 'idle'));
+      // 허브는 매 발행마다 seq 를 올린다. 같은 seq 는 새 상태로 치지 않는다(재연결 뒤 귀 먹음 수정).
+      transport.deliver(
+          LiveLink.stateTopic, phase('IDLE', phaseName: 'idle', seq: 2));
       expect(link.live, isTrue);
       transport.drop();
       expect(link.live, isFalse);
@@ -571,7 +574,10 @@ void main() {
     test('settings store round-trips only host and port', () {
       final dir = Directory.systemTemp.createTempSync('v18-link');
       addTearDown(() => dir.deleteSync(recursive: true));
-      final store = LinkSettingsStore(candidates: ['${dir.path}/c.json']);
+      final store = LinkSettingsStore(
+          candidates: ['${dir.path}/c.json'],
+          settingsCandidates: const [],
+          fallbackHost: '');
       expect(store.load().host, '');
       expect(
           store.save(LinkSettings(
@@ -582,6 +588,65 @@ void main() {
       expect(loaded.port, 1884);
       expect(File('${dir.path}/c.json').readAsStringSync(),
           '{"mqtt_host":"10.0.0.5","mqtt_port":1884}');
+    });
+
+    group('주소 대체 순서 (10-27 새 설치·핫스팟 변경)', () {
+      late Directory dir;
+      setUp(() => dir = Directory.systemTemp.createTempSync('v27-addr'));
+      tearDown(() => dir.deleteSync(recursive: true));
+      LinkSettingsStore store() => LinkSettingsStore(
+          candidates: ['${dir.path}/connection.json'],
+          settingsCandidates: ['${dir.path}/settings.json']);
+
+      test('아무 파일도 없으면 Pi 4 유선 주소로 붙는다', () {
+        final loaded = store().load();
+        expect(loaded.host, wiredPi4Host);
+        expect(loaded.host, '172.16.34.199');
+        expect(loaded.port, LinkSettings.defaultPort);
+        expect(loaded.source, LinkSource.wiredDefault);
+      });
+
+      test('connection.json 이 없으면 settings.json 의 mqtt_host 를 쓴다', () {
+        File('${dir.path}/settings.json').writeAsStringSync(
+            '{"schema_version":1,"mqtt_host":"172.20.10.6","mqtt_port":1884,"placement":"left"}');
+        final loaded = store().load();
+        expect(loaded.host, '172.20.10.6');
+        expect(loaded.port, 1884);
+        expect(loaded.source, LinkSource.settings);
+      });
+
+      test('connection.json 주소가 비어 있어도 settings.json 으로 넘어간다', () {
+        File('${dir.path}/connection.json')
+            .writeAsStringSync('{"mqtt_host":"","mqtt_port":1883}');
+        File('${dir.path}/settings.json')
+            .writeAsStringSync('{"mqtt_host":"172.16.34.199"}');
+        expect(store().load().source, LinkSource.settings);
+      });
+
+      test('connection.json 에 주소가 있으면 그것이 먼저다', () {
+        File('${dir.path}/connection.json')
+            .writeAsStringSync('{"mqtt_host":"10.0.0.9","mqtt_port":1883}');
+        File('${dir.path}/settings.json')
+            .writeAsStringSync('{"mqtt_host":"172.20.10.6"}');
+        final loaded = store().load();
+        expect(loaded.host, '10.0.0.9');
+        expect(loaded.source, LinkSource.saved);
+      });
+
+      test('"연결 끊기"로 비운 것은 지키고 대체 주소로 붙지 않는다', () {
+        final s = store();
+        expect(s.save(const LinkSettings()), isTrue);
+        File('${dir.path}/settings.json')
+            .writeAsStringSync('{"mqtt_host":"172.20.10.6"}');
+        final loaded = s.load();
+        expect(loaded.host, '');
+        expect(loaded.source, LinkSource.off);
+      });
+
+      test('깨진 파일은 건너뛴다', () {
+        File('${dir.path}/connection.json').writeAsStringSync('{not json');
+        expect(store().load().source, LinkSource.wiredDefault);
+      });
     });
   });
 

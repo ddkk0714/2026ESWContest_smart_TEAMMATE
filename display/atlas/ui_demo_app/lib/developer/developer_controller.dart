@@ -8,6 +8,7 @@ import '../live/payload.dart';
 import '../live/transport.dart';
 import 'pr74/bluetooth_link.dart';
 import 'pr74/bluetooth_service.dart';
+import 'control_progress.dart';
 import 'pr74/command_log.dart';
 import 'pr74/connection_page.dart';
 import 'pr74/developer_page.dart';
@@ -71,6 +72,9 @@ class DeveloperController extends ChangeNotifier {
   late final FeedbackCoordinator feedback;
   late final BluetoothLinkManager btLinks;
   final log = CommandLog();
+
+  /// '제어 진행' 탭(V30) — hub 제어 로그 또는 MQTT 추정. 폴링은 탭이 떠 있을 때만.
+  final progress = ControlProgress();
   final board = DeviceStateBoard();
   StreamSubscription<LiveMessage>? _messages;
   Timer? _timer;
@@ -133,6 +137,7 @@ class DeveloperController extends ChangeNotifier {
       final data = jsonMap(envelope['data']);
       if (!message.retained) {
         log.addMessage(message.topic, envelope);
+        progress.addMessage(message.topic, envelope);
         board.addMessage(message.topic, envelope);
       }
       switch (message.topic) {
@@ -278,6 +283,7 @@ class DeveloperController extends ChangeNotifier {
     btLinks.removeListener(_changed);
     btLinks.dispose();
     log.dispose();
+    progress.dispose();
     board.dispose();
     unawaited(_alerts.dispose());
     unawaited(_speech.dispose());

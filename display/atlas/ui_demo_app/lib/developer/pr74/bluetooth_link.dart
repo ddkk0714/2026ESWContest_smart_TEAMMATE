@@ -85,14 +85,46 @@ class BluetoothLinkManager extends ChangeNotifier {
   /// 앱 시작 때 부른다. 저장된 기기가 있으면 검색 없이 붙는다. 던지지 않는다.
   Future<void> restore() async {
     final saved = settings.load();
-    feedback.enabled = saved.feedbackEnabled ?? false;
+    // 저장값이 없으면 켠 채로 시작한다(ui_env_app 0.1.4~). 꺼진 채로 시작하면 hub 의 램프·선풍기·소리
+    // 명령이 사람이 스위치를 켤 때까지 전부 feedback_disabled 로 돌아온다(10-26 Pi 5).
+    feedback.enabled = saved.feedbackEnabled ?? true;
     _speaker = saved.speaker;
     _lamp = saved.lamp;
     _fan = saved.fan;
     _notify();
     if (_speaker != null) await reconnectSpeaker();
-    if (_lamp != null) await reconnectLamp();
-    if (_fan != null) await reconnectFan();
+    if (_lamp != null) await _restoreLamp();
+    if (_fan != null) await _restoreFan();
+  }
+
+  /// 시작 복원은 기기마다 한 번만, 검색 없이 붙어 본다. 실패하면 "연결 끊김" 으로 두고 조용히 있는다 —
+  /// 10-26 Pi 5: 실패한 연결마다 시스템 팝업이 떴고, 쌓이면서 화면이 멈췄다. 다시 붙는 길은
+  /// hub 명령과 블루투스 탭의 "다시 연결" 뿐이다(ui_env_app 0.1.12).
+  Future<void> _restoreLamp() async {
+    final lamp = _lamp;
+    if (lamp == null || lampBusy) return;
+    feedback.lamp.select(lamp.address);
+    _lampPhase = _Phase.connecting;
+    _lampError = null;
+    _notify();
+    final ok = await feedback.lamp.connectInBackground();
+    _lampPhase = ok ? _Phase.connected : _Phase.failed;
+    _lampError = ok ? null : '${feedback.lamp.lastError ?? '램프에 연결하지 못했습니다'}';
+    _notify();
+  }
+
+  Future<void> _restoreFan() async {
+    final saved = _fan;
+    final fan = feedback.fan;
+    if (saved == null || fan == null || fanBusy) return;
+    fan.select(saved.address);
+    _fanPhase = _Phase.connecting;
+    _fanError = null;
+    _notify();
+    final ok = await fan.connectOnce();
+    _fanPhase = ok ? _Phase.connected : _Phase.failed;
+    _fanError = ok ? null : '${fan.lastError ?? '선풍기에 연결하지 못했습니다'}';
+    _notify();
   }
 
   void setFeedbackEnabled(bool on) {
@@ -341,11 +373,13 @@ class BluetoothLinkManager extends ChangeNotifier {
 
   Timer? _lampKeeper;
 
-  /// 피드백이 켜져 있는 동안 [every] 마다 램프가 끊겨 있으면 다시 붙인다(못 찾으면 검색).
-  /// 10-26 Pi 5: 끊긴 채 30초가 지나면 BlueZ 가 램프를 잊어, 다음 hub 명령이 바로 실패했다.
+  /// 피드백이 켜져 있는 동안 [every] 마다, 끊긴 램프를 [IlinkLampFeedback.connectInBackground] 규칙으로만
+  /// 다시 붙인다: 이번 실행에서 붙어 있다가 끊긴 뒤 한 번. 연결이 실패한 램프는 건드리지 않는다.
+  /// 10-26 Pi 5: 45 s 마다 다시 붙이자 실패할 때마다 시스템 "Bluetooth device disconnected" 창이 떴고,
+  /// 창이 쌓이면서 화면이 ATLAS 로고에 멈췄다(ui_env_app 0.1.12).
   void keepLampConnected({Duration every = const Duration(seconds: 45)}) {
     _lampKeeper?.cancel();
-    _lampKeeper = Timer.periodic(every, (_) {
+    _lampKeeper = Timer.periodic(every, (_) async {
       if (_disposed ||
           !feedback.enabled ||
           _lamp == null ||
@@ -353,7 +387,11 @@ class BluetoothLinkManager extends ChangeNotifier {
           feedback.lamp.connected) {
         return;
       }
-      unawaited(reconnectLamp());
+      if (await feedback.lamp.connectInBackground() && !_disposed) {
+        _lampPhase = _Phase.connected;
+        _lampError = null;
+        _notify();
+      }
     });
   }
 
