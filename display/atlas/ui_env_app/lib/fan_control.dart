@@ -177,8 +177,9 @@ class BleFanControl {
     final generation = _selectionGeneration;
     try {
       final connection = await _bluetooth.connectLamp(address);
-      if (_selectionGeneration != generation || _address != address)
+      if (_selectionGeneration != generation || _address != address) {
         return false;
+      }
       _connection = connection;
       _lastError = null;
       return true;

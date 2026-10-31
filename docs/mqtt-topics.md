@@ -399,6 +399,8 @@ GATT로 쓴 뒤 유효한 선풍기 상태 특성을 읽고 요청과 일치할 
 
 앱의 자동 피드백 스위치가 꺼졌거나 램프가 미설정·실패·만료이면 `failed`와 `error_code`를
 응답한다. `requires_confirmation=true` 명령과 지원하지 않는 동작은 실행하지 않는다.
+자동 제어 승인과 대상 기기 선택은 앱의 설정 화면에서 관리한다. 조명을 대상에서 제외하면
+`lamp_automation_disabled`로 응답하며 BLE 쓰기를 하지 않는다. 직접 조절은 이 선택과 별개다.
 retain으로 들어온 명령은 무시한다. 최근 128개 `command_id`의 처리 결과(진행 중 포함)를
 메모리에 보관해 QoS 1 중복 수신 시 BLE를 다시 쓰지 않고 같은 결과를 재발행한다.
 `executing`+`confirmation=transport_only`는 GATT 전송 완료만 의미한다. 상태 확인이 없으므로

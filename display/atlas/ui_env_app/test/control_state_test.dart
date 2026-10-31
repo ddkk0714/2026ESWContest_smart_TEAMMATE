@@ -9,6 +9,72 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+      'relative lamp plans preserve binding across JSON key order and reject changed values',
+      () {
+    final now = DateTime.now();
+    final plan = controlPlan(target: 'desk_lamp', mode: 'live');
+    (plan['commands'][0] as Map).addAll(<String, dynamic>{
+      'op': 'adjust_brightness',
+      'value': {'percent': 60, 'min_raw': 153}
+    });
+    final proposal = ControlProposal.parse(requestEnvelope(plan, now: now));
+    expect(proposal, isNotNull);
+    final changed = jsonDecode(jsonEncode(plan)) as Map<String, dynamic>;
+    (changed['commands'][0] as Map)['value'] = {'min_raw': 153, 'percent': 60};
+    expect(
+        proposal!.matches(
+            current: ControlState.parse(changed),
+            hubBootId: 'mock-hub',
+            stateTime: now,
+            now: now),
+        isTrue);
+    for (final invalid in [
+      60,
+      {'percent': double.nan},
+      {'percent': 60, 'min_raw': 256},
+      {'percent': 60, 'raw': 153}
+    ]) {
+      (changed['commands'][0] as Map)['value'] = invalid;
+      expect(ControlProposal.parse(requestEnvelope(changed, now: now)), isNull);
+    }
+    (changed['commands'][0] as Map)['value'] = {'percent': 61, 'min_raw': 153};
+    expect(
+        proposal.matches(
+            current: ControlState.parse(changed),
+            hubBootId: 'mock-hub',
+            stateTime: now,
+            now: now),
+        isFalse);
+  });
+  testWidgets('relative brightness shows the bound plan before acceptance',
+      (tester) async {
+    tester.view.physicalSize = const Size(1024, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final now = DateTime.now();
+    final plan = controlPlan(target: 'desk_lamp', mode: 'live');
+    (plan['commands'][0] as Map).addAll(<String, dynamic>{
+      'op': 'adjust_brightness',
+      'value': {'percent': 30}
+    });
+    final state = DisplayState.fromEnvelope(controlEnvelope(plan, now: now));
+    String? response;
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: EnvironmentControlSuggestion(
+                state: state,
+                proposal:
+                    ControlProposal.parse(requestEnvelope(plan, now: now)),
+                connected: true,
+                onFeedback: (v) => response = v))));
+    expect(
+        find.textContaining('desk_lamp · adjust_brightness = {"percent":30}'),
+        findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('control-accept')));
+    expect(response, 'accept');
+    expect(tester.takeException(), isNull);
+  });
   test('transport-only fan result remains visibly unconfirmed', () {
     final plan = controlPlan(status: 'executing', target: 'vent_fan');
     final state = ControlState.parse(plan)!;

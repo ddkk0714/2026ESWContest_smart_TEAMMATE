@@ -42,6 +42,8 @@ import 'state_source.dart';
 import 'privacy_page.dart';
 import 'privacy_state.dart';
 import 'voice_alert.dart';
+import 'workspace_shell.dart';
+import 'environment_control_view.dart';
 
 const _hubUrl = String.fromEnvironment('DESKMATE_HUB_URL');
 const _mqttHost = String.fromEnvironment('DESKMATE_MQTT_HOST');
@@ -147,6 +149,7 @@ class _DashboardPageState extends State<DashboardPage> {
   bool _musicBusy = false;
   double _musicVolume = 1;
   bool _showFocusDetail = false;
+  String? _dismissedControlResult;
   late final AtlasBluetoothService _bluetooth;
   late final FeedbackCoordinator _feedbackController;
   late final SettingsStore _settingsStore;
@@ -464,7 +467,7 @@ class _DashboardPageState extends State<DashboardPage> {
     _notify('개발자 화면: $verdict${ms != null ? ' · $ms ms' : ''} (hub 로 보내지 않음)');
   }
 
-  Widget _buildDashboard(DisplayState state) {
+  Widget _buildDashboard(DisplayState state, {bool overlay = false}) {
     final proposal = _override == null && _source is MqttStateSource
         ? (_source as MqttStateSource).controlProposal
         : null;
@@ -491,7 +494,7 @@ class _DashboardPageState extends State<DashboardPage> {
           ? null
           : _correctState,
       focusSummary: _focusSummary(),
-      showDemoControl: true,
+      showDemoControl: !overlay,
       demoCyclingEnabled: _autoScreenCyclingEnabled,
       onToggleDemoCycling: _toggleAutoScreenCycling,
       phaseOverride: _source is! DemoStateSource && _autoScreenCyclingEnabled
@@ -499,7 +502,7 @@ class _DashboardPageState extends State<DashboardPage> {
           : null,
       // 테스트로 상태를 고정한 동안에는 그 국면 화면을 봐야 한다.
       pinAmbient: !_autoScreenCyclingEnabled && _override == null,
-      showFocusDetail: _showFocusDetail,
+      showFocusDetail: _showFocusDetail && !overlay,
       onShowFocusDetail: (value) => setState(() => _showFocusDetail = value),
     );
   }
@@ -950,12 +953,92 @@ class _DashboardPageState extends State<DashboardPage> {
     unawaited(_musicChanges.cancel());
     unawaited(_musicVolumeChanges.cancel());
     unawaited(_music.dispose());
+    unawaited(_feedbackController.dispose());
     unawaited(_bluetooth.close());
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final state = _override ?? _state;
+    final control = state?.control;
+    final resultKey = control == null
+        ? null
+        : '${state?.hubBootId}:${control.signature}:${control.outcome}:${control.commands.map((c) => '${c.status}:${c.stateConfirmed}:${c.error}').join(',')}';
+    return Stack(fit: StackFit.expand, children: [
+      DeskmateWorkspace(
+        state: state,
+        demo: _source is DemoStateSource,
+        music: _music,
+        feedback: _feedbackController,
+        developerBuilder: (context) => Theme(
+          data: buildDeskmateTheme(),
+          child: _buildDeveloperTools(context),
+        ),
+        startInDeveloper: _settings.devModeDefault,
+        controlResultView: state == null ||
+                control == null ||
+                !control.valid ||
+                control.awaitingUser ||
+                _hasPendingRequest ||
+                _intervention.autoNotice != null ||
+                resultKey == _dismissedControlResult
+            ? null
+            : Positioned(
+                left: 18,
+                right: 18,
+                bottom: 12,
+                child: Material(
+                    type: MaterialType.transparency,
+                    child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                              child: EnvironmentControlResult(
+                                  control: control,
+                                  onUndo: () => _undoEnvironment(state))),
+                          IconButton(
+                              key: const ValueKey(
+                                  'workspace-control-result-dismiss'),
+                              tooltip: '제어 결과 닫기',
+                              onPressed: () => setState(
+                                  () => _dismissedControlResult = resultKey),
+                              icon: const Icon(Icons.close)),
+                        ]))),
+        onConnections: () => setState(() => _view = _AppView.bluetooth),
+        pendingRequest: state != null &&
+            (_hasPendingRequest || _intervention.autoNotice != null),
+        pendingRequestView: state == null
+            ? null
+            : Positioned.fill(
+                child: Theme(
+                    data: buildDeskmateTheme(),
+                    child: Material(
+                        color: DeskmateColors.background,
+                        child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: _buildDashboard(state, overlay: true))))),
+        onAccept: () => unawaited(_feedback('accept')),
+        onReject: () => unawaited(_feedback('reject')),
+      ),
+      Positioned(
+          top: 16,
+          left: 24,
+          right: 24,
+          child: ListenableBuilder(
+            listenable: _notices,
+            builder: (context, _) {
+              final now = DateTime.now();
+              final notice = _notices.current(now);
+              if (notice == null) return const SizedBox.shrink();
+              return NoticeBanner(
+                  notice: notice, now: now, onDismiss: _dismissNotice);
+            },
+          )),
+    ]);
+  }
+
+  Widget _buildDeveloperTools(BuildContext context) {
     final state = _override ?? _state;
     return Scaffold(
       body: SafeArea(
@@ -1020,22 +1103,6 @@ class _DashboardPageState extends State<DashboardPage> {
                                 setState(() => _statusBar.dismiss(_links)),
                           ),
                         ],
-                        // 쉬기 알림·자동 정보 카드·TTS 대신 띄운 문구. 남은 시간은 1초 갱신을 따라 준다.
-                        ListenableBuilder(
-                          listenable: _notices,
-                          builder: (context, _) {
-                            final now = DateTime.now();
-                            final notice = _notices.current(now);
-                            if (notice == null) return const SizedBox.shrink();
-                            return Padding(
-                              padding: const EdgeInsets.only(top: 8),
-                              child: NoticeBanner(
-                                  notice: notice,
-                                  now: now,
-                                  onDismiss: _dismissNotice),
-                            );
-                          },
-                        ),
                         const SizedBox(height: 12),
                         Expanded(
                             child: switch (_view) {

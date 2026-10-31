@@ -1,3 +1,4 @@
+import 'workspace_test_helpers.dart';
 import 'support/control_fixtures.dart';
 import 'package:deskmate_display/control_state.dart';
 import 'package:deskmate_display/display_state.dart';
@@ -80,7 +81,7 @@ void main() {
       await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 40)));
       await tester.pump(const Duration(seconds: 1));
-      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 600));
       final plan = proposalCase['request']['data']['control_plan'];
       final target = plan['commands'][0]['target'];
       expect(
@@ -97,11 +98,17 @@ void main() {
       await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 40)));
       await tester.pump(const Duration(seconds: 1));
-      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 600));
       expect(find.byKey(const ValueKey('environment-control-result')),
           findsOneWidget);
       expect(find.textContaining('상태 확인 완료'), findsOneWidget);
       expect(find.textContaining('MOCK'), findsOneWidget);
+      await tester
+          .tap(find.byKey(const ValueKey('workspace-control-result-dismiss')));
+      await tester.pump();
+      expect(find.byKey(const ValueKey('environment-control-result')),
+          findsNothing);
+      expect(broker.feedbackEvents, hasLength(1));
       expect(tester.takeException(), isNull);
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
@@ -217,11 +224,13 @@ void main() {
     settings
         .save(DeskmateSettings(mqttHost: '127.0.0.1', mqttPort: broker!.port));
     try {
-      await tester.pumpWidget(DeskmateApp(
-        settings: settings,
-        prober: (host, port, {onStep}) async => const MqttProbeResult(
-            ok: true, cause: LinkCause.none, elapsed: Duration.zero),
-      ));
+      await pumpDeveloperApp(
+          tester,
+          DeskmateApp(
+            settings: settings,
+            prober: (host, port, {onStep}) async => const MqttProbeResult(
+                ok: true, cause: LinkCause.none, elapsed: Duration.zero),
+          ));
       for (var i = 0; i < 10; i++) {
         await tester.runAsync(
             () => Future<void>.delayed(const Duration(milliseconds: 50)));

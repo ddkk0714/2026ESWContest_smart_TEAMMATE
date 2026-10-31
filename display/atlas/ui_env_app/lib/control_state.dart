@@ -22,14 +22,37 @@ class ControlCommandState {
   final Object? value;
   final String? error;
   final bool stateConfirmed;
-  bool get valid =>
-      id.isNotEmpty &&
-      target.isNotEmpty &&
-      operation.isNotEmpty &&
-      (value is String ||
-          value is bool ||
-          (value is num && (value as num).isFinite));
-  List<Object?> get identity => [id, target, operation, value, reason];
+  bool get valid {
+    if (id.isEmpty || target.isEmpty || operation.isEmpty) return false;
+    if (target == 'desk_lamp' && operation == 'adjust_brightness') {
+      if (value is! Map) return false;
+      final adjustment = controlMap(value);
+      final percent = adjustment['percent'];
+      final minimum = adjustment['min_raw'];
+      return percent is num &&
+          percent.isFinite &&
+          adjustment.keys
+              .every((key) => key == 'percent' || key == 'min_raw') &&
+          (!adjustment.containsKey('min_raw') ||
+              minimum is int && minimum >= 0 && minimum <= 255);
+    }
+    return value is String ||
+        value is bool ||
+        value is num && (value as num).isFinite;
+  }
+
+  List<Object?> get identity => [
+        id,
+        target,
+        operation,
+        value is Map
+            ? {
+                for (final key in (controlMap(value).keys.toList()..sort()))
+                  key: controlMap(value)[key]
+              }
+            : value,
+        reason
+      ];
   String get description => '$target · $operation = ${jsonEncode(value)}';
   String get statusLabel => switch (status) {
         'accepted' => '요청 접수 · 동작 미확인',

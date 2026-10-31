@@ -434,8 +434,9 @@ class _FakeBluetooth implements AtlasBluetoothService {
     _inFlight++;
     if (_inFlight > maxInFlight) maxInFlight = _inFlight;
     try {
-      if (connectDelay > Duration.zero)
+      if (connectDelay > Duration.zero) {
         await Future<void>.delayed(connectDelay);
+      }
     } finally {
       _inFlight--;
     }

@@ -15,6 +15,36 @@ void main() {
   const secondAddress = 'AA:BB:CC:DD:EE:02';
 
   test(
+      'device exclusions block Hub commands and phase writes but permit manual control',
+      () async {
+    final bluetooth = _FakeBluetooth();
+    final lamp = IlinkLampFeedback(bluetooth)..select(firstAddress);
+    final music = _FakeMusic();
+    final coordinator =
+        FeedbackCoordinator(music: music, lamp: lamp, bluetooth: bluetooth)
+          ..enabled = true;
+    coordinator.configureTargets(lamp: false, speaker: false);
+    expect(
+        (await coordinator
+            .handleControlCommand(_command('disabled')))?['error_code'],
+        'lamp_automation_disabled');
+    expect(
+        (await coordinator.handleControlCommand({
+          ..._command('disabled-speaker'),
+          'target_id': 'speaker',
+          'operation': 'chime',
+          'value': 'soft'
+        }))?['error_code'],
+        'speaker_automation_disabled');
+    await coordinator.apply(_state('FOCUS_PC', phase: 'focus'));
+    expect(bluetooth.frames, isEmpty);
+    expect(music.isPlaying, isFalse);
+    expect(await lamp.setBrightness(99), isTrue);
+    expect(bluetooth.frames.last, ilinkFrame([1, 8, 1, 99]));
+    await coordinator.dispose();
+  });
+
+  test(
       'manual override wins against in-flight phase and delayed environment commands until explicit re-enable',
       () async {
     final bluetooth = _FakeBluetooth()
