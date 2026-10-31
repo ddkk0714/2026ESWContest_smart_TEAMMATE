@@ -1,5 +1,6 @@
 #include <sdbus-c++/sdbus-c++.h>
 
+#include "control_log.h"
 #include "mqtt_client.h"
 #include "tof_service_poll.h"
 #include "uart_relay.h"
@@ -52,6 +53,8 @@ struct BridgeState {
     std::string latest_state;
     std::unordered_map<std::string, int> acknowledgements;
     deskmate::MqttClient* mqtt = nullptr;
+    // 제어 진행 로그(CTLLOG 줄, 2026-10-31) — command_id 마다 최신 스냅샷, 최근 200건. GET /api/control-log
+    deskmate::ControlLogBuffer control_log{200};
 };
 
 struct NativeSensorState {
@@ -369,6 +372,11 @@ void processBridgeLine(const std::string& line, BridgeState& state)
             state.latest_state = line.substr(6);
         }
     }
+    if (line.rfind("CTLLOG\t", 0) == 0) {
+        // 제어 진행 로그는 MQTT 로 내지 않고 링버퍼에만 둔다(GET /api/control-log).
+        if (!state.control_log.add(line.substr(7))) std::cerr << "DESKMATE Hub: invalid CTLLOG line\n";
+        return;
+    }
     for (const OutgoingTopic& outgoing : kOutgoingTopics) {
         const std::size_t prefix_length = std::strlen(outgoing.prefix);
         if (line.rfind(outgoing.prefix, 0) != 0) continue;
@@ -485,11 +493,12 @@ const char* reasonPhrase(int status)
     }
 }
 
-void sendResponse(int client, int status, const std::string& body)
+void sendResponse(int client, int status, const std::string& body, bool allow_any_origin = false)
 {
     std::ostringstream response;
     response << "HTTP/1.1 " << status << ' ' << reasonPhrase(status) << "\r\n"
              << "Content-Type: application/json; charset=utf-8\r\n"
+             << (allow_any_origin ? "Access-Control-Allow-Origin: *\r\n" : "")
              << "Content-Length: " << body.size() << "\r\n"
              << "Cache-Control: no-store\r\n"
              << "Connection: close\r\n\r\n"
@@ -528,6 +537,22 @@ void handleClient(int client, int bridge_input, std::mutex& input_mutex, BridgeS
         }
         sendResponse(client, latest.empty() ? 503 : 200,
                      latest.empty() ? R"({"error":"state_not_ready"})" : latest);
+        return;
+    }
+
+    if (request.method == "GET" &&
+        (request.path == "/api/control-log" || request.path.rfind("/api/control-log?", 0) == 0)) {
+        // 제어 진행 로그 — 명령 하나당 한 객체(오래된 것 먼저). ?limit=N 이면 최근 N건. 노트북 브라우저에서 바로 읽게 CORS 허용.
+        std::size_t limit = 0;
+        const std::size_t at = request.path.find("limit=");
+        if (at != std::string::npos) {
+            try {
+                limit = static_cast<std::size_t>(std::stoul(request.path.substr(at + 6)));
+            } catch (const std::exception&) {
+                limit = 0;
+            }
+        }
+        sendResponse(client, 200, state.control_log.toJsonArray(limit), true);
         return;
     }
 

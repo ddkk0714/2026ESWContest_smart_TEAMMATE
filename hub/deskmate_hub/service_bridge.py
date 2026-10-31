@@ -4,6 +4,7 @@ stdin  ← C++ 서비스:  POST	<id>	/api/feedback|/api/test-frame	<json>   (HTT
                       UART	{"type","seq","ts_ms","payload_hex"}         (UART2 프레임, CRC 통과분)
                       TOFSVC	<deskmate_tofposture /api/state json>       (별도 자세 서비스 판정, C++ 가 1 s 폴링)
 stdout → C++ 서비스:  STATE	<envelope json> · ACK	<id>	<status>
+                      CTLLOG	<제어 진행 로그 레코드 json>  (control_log.py, C++ 가 최근 N건을 GET /api/control-log 로)
 
 모드 (환경변수 DESKMATE_HUB_MODE):
   demo (기본) — 합성 세션 순환 + 센서 테스트 API (기존 동작)
@@ -165,8 +166,13 @@ def _run_live_bridge() -> None:
         if mqtt_source is not None:
             mqtt_source.publish_control(command)
 
+    def publish_control_log(record: dict[str, Any]) -> None:
+        # 제어 진행 로그 — MQTT 로는 내지 않고 C++ 서비스의 링버퍼(GET /api/control-log)로만 간다.
+        store.write_message("CTLLOG\t" + json.dumps(record, ensure_ascii=False, separators=(",", ":"), default=str))
+
     hub = LiveHub(cache, profile=profile or "",
                   publish=publish, publish_request=publish_request, publish_control=publish_control,
+                  publish_control_log=publish_control_log,
                   out=sys.stderr)
     if os.environ.get("DESKMATE_PERSONALIZATION_SELF_CHECK") == "1":
         from .personalization.self_check import run_self_check

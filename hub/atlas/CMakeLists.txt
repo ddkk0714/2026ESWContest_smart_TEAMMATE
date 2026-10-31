@@ -9,7 +9,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(sdbus-c++ 2.0 REQUIRED)
 find_package(Threads REQUIRED)
 
-add_executable(${PROJECT_NAME} src/main.cpp src/uart_rx.cpp src/uart_relay.cpp src/tof_service_poll.cpp src/mqtt_client.cpp)
+add_executable(${PROJECT_NAME} src/main.cpp src/uart_rx.cpp src/uart_relay.cpp src/tof_service_poll.cpp src/mqtt_client.cpp
+    src/control_log.cpp)
 target_link_libraries(${PROJECT_NAME} PRIVATE SDBusCpp::sdbus-c++ Threads::Threads)
 
 include(CTest)
@@ -26,6 +27,9 @@ if(BUILD_TESTING)
     add_executable(deskmate_mqtt_host_test src/mqtt_client_host_test.cpp src/mqtt_client.cpp)
     target_link_libraries(deskmate_mqtt_host_test PRIVATE Threads::Threads)
     add_test(NAME deskmate_mqtt_host_test COMMAND deskmate_mqtt_host_test)
+    add_executable(deskmate_control_log_host_test src/control_log_host_test.cpp src/control_log.cpp)
+    target_link_libraries(deskmate_control_log_host_test PRIVATE Threads::Threads)
+    add_test(NAME deskmate_control_log_host_test COMMAND deskmate_control_log_host_test)
 endif()
 
 set(SERVICE_ID com.deskmate.hub1)

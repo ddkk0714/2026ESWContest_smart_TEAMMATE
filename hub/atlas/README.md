@@ -69,6 +69,16 @@ mutex). 브리지의 제한 Python 은 `_socket` 이 없어 직접 못 읽기 �
 `DESKMATE_TOF_SERVICE_TIMEOUT_MS`(500). 서비스가 없으면 첫 실패만 로그하고 주기마다 다시 붙어 본다 — 그동안 hub 는 MLP/0x03 규칙 판정으로 돈다.
 0x05 격자를 서비스로 넘기는 중계(`src/uart_relay.cpp`, tcp:9100)와 짝이다.
 
+## 제어 진행 로그 (2026-10-31)
+
+`control/cmd` 로 나간 명령 하나마다 "왜(state·cause·gate·arm) → 기기·동작·값 → 결과(성공·실패 error_code·시간 초과·쿨다운/비가역
+생략·제안 대기·거절·만료)·소요 ms·되돌림(undo_of·undone_by)" 을 한 레코드로 남긴다. Python(`deskmate_hub/control/control_log.py`,
+설정 `control.yaml control_log:`)이 단계가 바뀔 때마다 레코드 전체를 `logs/control-<boot_id>.jsonl` 에 한 줄 쓰고(같은 command_id 는
+마지막 줄이 최종) stdout `CTLLOG	<json>` 로도 낸다. 이 서비스(`src/control_log.cpp`)는 그 줄을 command_id 마다 한 건으로 최근 200건
+들고 있다가 `GET :8765/api/control-log`(`?limit=N`)로 JSON 배열(오래된 것 먼저)을 준다. MQTT 로는 내지 않는다. 노트북에서
+`curl http://<pi4>:8765/api/control-log` 또는 devview "제어 진행" 표로 본다. 디스패처를 거치지 않는 rest_notice·arm_notice 의
+speaker speak/chime 도 같은 표에 들어간다.
+
 호스트 테스트: `cmake -DBUILD_TESTING=ON` 후 `ctest` 로 `deskmate_uart_rx_host_test`(CRC check value·COBS·라인 형식),
 `deskmate_uart_relay_host_test`, `deskmate_tof_service_poll_host_test`(HTTP 파싱·mock 서비스 폴링·재시도), `deskmate_mqtt_host_test`.
 

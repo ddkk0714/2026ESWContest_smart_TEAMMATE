@@ -8,6 +8,7 @@ import os
 import pkgutil
 from typing import Any
 
+from .control_log import ControlLog
 from .dispatcher import ControlCommand, ControlDispatcher, Episode, MockPlugAdapter
 
 _CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config")
@@ -29,4 +30,4 @@ def load_control_config(path: str | None = None) -> dict[str, Any]:
         return yaml.safe_load(fh)
 
 
-__all__ = ["ControlCommand", "ControlDispatcher", "Episode", "MockPlugAdapter", "load_control_config", "DEFAULT_CONTROL_PATH"]
+__all__ = ["ControlCommand", "ControlDispatcher", "ControlLog", "Episode", "MockPlugAdapter", "load_control_config", "DEFAULT_CONTROL_PATH"]

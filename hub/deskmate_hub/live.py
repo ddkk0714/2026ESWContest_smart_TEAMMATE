@@ -16,7 +16,7 @@ from typing import Any, TextIO
 
 from .inference import (FSMEngine, GateMode, SensorFrame, SessionRecorder, State,
                         load_config, report_envelope)
-from .control import ControlDispatcher, MockPlugAdapter, load_control_config
+from .control import ControlDispatcher, ControlLog, MockPlugAdapter, load_control_config
 from .control.devices import DeviceRegistry
 from .control.environment_policy import EnvironmentControlPolicy, MockControlTransport, load_environment_control_config
 from .features import BaselineStore
@@ -68,6 +68,7 @@ class LiveHub:
         publish=None,
         publish_request=None,
         publish_control=None,
+        publish_control_log=None,
         control_cfg: dict[str, Any] | None = None,
         environment_control_cfg: dict[str, Any] | None = None,
         device_registry: DeviceRegistry | None = None,
@@ -126,6 +127,9 @@ class LiveHub:
         self._publish_control = publish_control
         self.control: ControlDispatcher | None = None
         self.mock_plug: MockPlugAdapter | None = None
+        self.control_log: ControlLog | None = None
+        # 명령 단계 변화 → 제어 진행 로그(control_log.py). 로그는 boot_id 를 알아야 해서 아래에서 만든다(기록은 tick 에서만).
+        record = lambda *a, **k: self.control_log.record_command(*a, **k) if self.control_log else None  # noqa: E731
         self.environment_policy = EnvironmentControlPolicy(
             environment_control_cfg if environment_control_cfg is not None else load_environment_control_config(),
             device_registry if device_registry is not None else DeviceRegistry(),
@@ -150,16 +154,27 @@ class LiveHub:
                 plan_advice=self.environment_policy.advice,
                 dispatch_guard=self.environment_policy.can_dispatch,
                 on_dispatched=self.environment_policy.dispatched,
+                on_record=record,
             )
         elif self.control_cfg.get("enabled"):
             log = lambda m: print(m, file=self.out, flush=True)  # noqa: E731
             if str(self.control_cfg.get("adapter", "mqtt")) == "mock" or publish_control is None:
                 self.mock_plug = MockPlugAdapter(self.cache.put_control_result)
-                self.control = ControlDispatcher(self.control_cfg, publish_cmd=self.mock_plug.handle_command, on_log=log)
+                self.control = ControlDispatcher(self.control_cfg, publish_cmd=self.mock_plug.handle_command, on_log=log,
+                                                 on_record=record)
             else:
-                self.control = ControlDispatcher(self.control_cfg, publish_cmd=publish_control, on_log=log)
+                self.control = ControlDispatcher(self.control_cfg, publish_cmd=publish_control, on_log=log,
+                                                 on_record=record)
         self.frame_log, self.state_log, self.out = frame_log, state_log, out
         self.boot_id = f"{time.time_ns() & 0xFFFFFFFF:08x}"
+        # 제어 진행 로그(control.yaml control_log:, 2026-10-31): 명령 하나마다 원인→기기·동작→결과·소요·되돌림을 JSONL 로,
+        # 보드에서는 publish_control_log(service_bridge 의 CTLLOG 줄)로 C++ 에 넘겨 GET /api/control-log 로 본다.
+        if self.control is not None:
+            self.control_log = ControlLog(
+                self.control_cfg.get("control_log"), boot_id=self.boot_id,
+                result_timeout_sec=float(self.control_cfg.get("result_timeout_sec", 15)), sink=publish_control_log,
+                on_log=lambda m: print(m, file=self.out, flush=True))
+        self._arm_context: str | None = None     # arm_notice 가 speak/chime 을 낼 때 그 arm(제어 로그용)
         self.privacy.boot_id = self.boot_id
         self.seq = 0
         self.period = float(self.ingest_cfg.get("frame_period_sec") or self.fsm_cfg["timers"]["score_period_sec"])
@@ -237,15 +252,27 @@ class LiveHub:
         # 음성은 제어 명령 경로(publish_control; mock 어댑터면 그쪽)로 — 사용자 sound_pref off 면 카드만. 문구 변형은 프로파일 이름(study)으로.
         speak_sink = self._publish_control if self._publish_control is not None else (
             self.mock_plug.handle_command if self.mock_plug is not None else None)
+        arm_sink, rest_sink = self._logged_sink(speak_sink, "arm_notice"), self._logged_sink(speak_sink, "rest_notice")
         # 밴딧이 고른 기기 없는 arm(카드·알림음·음성)의 전달(arm_notice.py, control.yaml arm_notice:) — AUTO 에서도 사람에게 닿게
         self.arm_deliverer = ArmDeliverer(self.control_cfg.get("arm_notice"), boot_id=self.boot_id,
-                                          publish_request=self.publish_request, publish_control=speak_sink,
+                                          publish_request=self.publish_request, publish_control=arm_sink,
                                           on_log=lambda m: print(m, file=self.out, flush=True))
         self.rest_notifier = RestNotifier(
             self.control_cfg.get("rest_notice"), fsm_cfg=self.fsm_cfg, boot_id=self.boot_id,
-            publish_request=self.publish_request, publish_control=speak_sink,
+            publish_request=self.publish_request, publish_control=rest_sink,
             variant="study" if "study" in str(self.profile or "") else "default",
             on_log=lambda m: print(m, file=self.out, flush=True))
+
+    def _logged_sink(self, sink, source: str):
+        """디스패처를 거치지 않는 control/cmd(rest_notice·arm_notice 의 speaker speak/chime)도 제어 진행 로그에 남긴다."""
+        if sink is None:
+            return None
+
+        def publish(command: dict[str, Any]) -> None:
+            sink(command)
+            if self.control_log is not None:
+                self.control_log.record_published(command, source, arm=self._arm_context if source == "arm_notice" else None)
+        return publish
 
     def tick_once(self, now: float | None = None) -> dict[str, Any]:
         now = time.time() if now is None else now
@@ -345,9 +372,13 @@ class LiveHub:
                 self.mock_plug.tick()
             for res, received in self.cache.pop_control_result_events():
                 self.control.on_result(res, now if received is None else min(now, received))
+                if self.control_log is not None:                  # 디스패처 밖 명령(speak·chime)의 결과
+                    self.control_log.on_result(res, now if received is None else min(now, received))
                 if self.personalize_recorder is not None:      # 무드등 결과의 previous·actual → 밝힘 여부
                     self.personalize_recorder.on_control_result(res, now if received is None else min(now, received))
             self.control.tick(now)
+            if self.control_log is not None:
+                self.control_log.tick(now)
 
         frame = build_frame(view, now, self.ingest_cfg, self.tracker, fsm_state=self.engine.state)
         self._last_present = bool(frame.present)            # 발행용: 자리 비움이면 점수 0.0·scores_valid false (_pub_scores)
@@ -376,6 +407,7 @@ class LiveHub:
         # 개인화: 결정 tick(route:<cause>)에 에피소드를 열고, 정책이 켜져 있으면 arm·전달 게이트를 고른다.
         # 정책은 FSM 게이트를 낮추기만 한다(auto → suggest). 제어·질문·발행보다 먼저 돌아야 그 결과가 반영된다.
         specs = None
+        specs_arm = None                                          # specs 를 낸 arm(제어 로그용)
         if self.personalize_recorder is not None:
             request_kind = self._REQUEST_STATES.get(result.state)
             self.personalize_recorder.on_tick(
@@ -388,6 +420,7 @@ class LiveHub:
                     result.gate = GateMode.SUGGEST
                     result.actions.append("personalize:ask")
                 specs = self.personalize_recorder.commands_for(decision)
+                specs_arm = getattr(decision, "arm", None) if specs else None
             if self.personalize_recorder.last_view is not None:
                 summary["personalize"] = self.personalize_recorder.last_view
         if self.control is not None:
@@ -400,7 +433,7 @@ class LiveHub:
                     and self.control.has_default_actions(result.state.value, result.cause)):
                 self.control.on_enter_action(result.state.value, result.cause, result.gate, now, specs=None)
             elif entered and (result.state is State.ACTION_ENV or specs):
-                self.control.on_enter_action(result.state.value, result.cause, result.gate, now, specs=specs)
+                self.control.on_enter_action(result.state.value, result.cause, result.gate, now, specs=specs, arm=specs_arm)
             elif (prev_state in self._REQUEST_STATES and result.state is not prev_state
                   and self.control.episode is not None):
                 self.control.close_episode()
@@ -546,11 +579,15 @@ class LiveHub:
         channel = str(getattr(spec, "channel", "display") or "display")
         kind, prompt = self._REQUEST_STATES[result.state]
         expires = float(self.fsm_cfg["timers"].get("focus_break_poll_sec", 180))
-        emitted = self.arm_deliverer.deliver(
-            state=result.state.value, kind=kind, prompt_code=prompt, gate=result.gate.value, arm=arm,
-            label=str(view.get("arm_label") or arm), channel=channel, explanation=view.get("explanation"),
-            cause=result.cause, now=now, seq=self.seq, sound_pref=sound_pref,
-            c_fatigue=self._pub_scores(result)[0], expires_in_s=expires)
+        self._arm_context = arm
+        try:
+            emitted = self.arm_deliverer.deliver(
+                state=result.state.value, kind=kind, prompt_code=prompt, gate=result.gate.value, arm=arm,
+                label=str(view.get("arm_label") or arm), channel=channel, explanation=view.get("explanation"),
+                cause=result.cause, now=now, seq=self.seq, sound_pref=sound_pref,
+                c_fatigue=self._pub_scores(result)[0], expires_in_s=expires)
+        finally:
+            self._arm_context = None
         for item in emitted:
             if item.get("data", {}).get("auto"):
                 self.seq += 1
