@@ -1,3 +1,4 @@
+import 'workspace_test_helpers.dart';
 import 'package:deskmate_display/main.dart';
 import 'package:deskmate_display/settings_store.dart';
 import 'package:flutter/material.dart';
@@ -18,14 +19,17 @@ const _tabs = [
 ];
 
 void main() {
-  testWidgets('header shows the preview and dev mode tabs instead of the camera tab',
+  testWidgets(
+      'header shows the preview and dev mode tabs instead of the camera tab',
       (tester) async {
     tester.view.physicalSize = const Size(1024, 600);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(DeskmateApp(
-        settings: SettingsStore(
-            candidates: const [], legacyPostureCandidates: const [])));
+    await pumpDeveloperApp(
+        tester,
+        DeskmateApp(
+            settings: SettingsStore(
+                candidates: const [], legacyPostureCandidates: const [])));
     await tester.pump();
 
     for (final t in _tabs) {
@@ -47,7 +51,8 @@ void main() {
     expect(find.byKey(const ValueKey('preview-host-input')), findsOneWidget);
     // 피드백 블록
     expect(find.byKey(const ValueKey('preview-send')), findsOneWidget);
-    expect(find.byKey(const ValueKey('preview-verdict-correct')), findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('preview-verdict-correct')), findsOneWidget);
 
     // 개발자 모드 탭: 열지도 두 장 + 판정 + 명령 로그, 기본 시작은 꺼져 있다.
     await tester.tap(find.byTooltip('개발자 모드'));
@@ -61,7 +66,8 @@ void main() {
     expect(find.byKey(const ValueKey('devmode-host-input')), findsOneWidget);
     expect(
         tester
-            .widget<Switch>(find.byKey(const ValueKey('devmode-default-switch')))
+            .widget<Switch>(
+                find.byKey(const ValueKey('devmode-default-switch')))
             .value,
         isFalse);
 

@@ -13,6 +13,7 @@ import 'connection_guide.dart';
 import 'connection_page.dart';
 import 'display_state.dart';
 import 'fan_control.dart';
+import 'control_state.dart';
 import 'feedback_policy.dart';
 import 'dashboard_view.dart';
 import 'deskmate_theme.dart';
@@ -41,6 +42,8 @@ import 'state_source.dart';
 import 'privacy_page.dart';
 import 'privacy_state.dart';
 import 'voice_alert.dart';
+import 'workspace_shell.dart';
+import 'environment_control_view.dart';
 
 const _hubUrl = String.fromEnvironment('DESKMATE_HUB_URL');
 const _mqttHost = String.fromEnvironment('DESKMATE_MQTT_HOST');
@@ -146,6 +149,7 @@ class _DashboardPageState extends State<DashboardPage> {
   bool _musicBusy = false;
   double _musicVolume = 1;
   bool _showFocusDetail = false;
+  String? _dismissedControlResult;
   late final AtlasBluetoothService _bluetooth;
   late final FeedbackCoordinator _feedbackController;
   late final SettingsStore _settingsStore;
@@ -280,6 +284,9 @@ class _DashboardPageState extends State<DashboardPage> {
       if (_override == null) {
         _intervention.update(next,
             hasPendingRequest: _source.hasPendingRequest,
+            requestKey: _source is MqttStateSource
+                ? (_source as MqttStateSource).pendingRequestId
+                : null,
             expiresInS: _source.pendingRequestExpiresInS,
             now: DateTime.now());
       }
@@ -309,12 +316,20 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
-  Future<void> _feedback(String verdict) async {
+  Future<void> _feedback(String verdict, {ControlProposal? proposal}) async {
     if (_override != null) return _devAnswer(verdict);
     final acceptedState = _state;
     try {
-      await _source.feedback(verdict,
-          responseMs: _intervention.responseMs(DateTime.now()));
+      if (proposal != null && _source is MqttStateSource) {
+        await (_source as MqttStateSource).feedbackControl(proposal, verdict,
+            responseMs: _intervention.responseMs(DateTime.now()));
+      } else {
+        if (verdict == 'accept' && acceptedState?.fsmState == 'ACTION_ENV') {
+          throw StateError('서버 제어 계획과 request_id 확인이 필요합니다.');
+        }
+        await _source.feedback(verdict,
+            responseMs: _intervention.responseMs(DateTime.now()));
+      }
       if (verdict == 'accept' && acceptedState != null) {
         await _feedbackController.accept(acceptedState);
       }
@@ -337,6 +352,12 @@ class _DashboardPageState extends State<DashboardPage> {
   /// 라벨이다 — 사람이 못 봤거나 무시한 것과 거절한 것은 다르다.
   void _checkSuggestionTimeout() {
     final now = DateTime.now();
+    if (_source is MqttStateSource &&
+        _override == null &&
+        (_source as MqttStateSource).pendingRequestId !=
+            _intervention.requestKey) {
+      return;
+    }
     if (!_intervention.takeTimeout(now)) return;
     if (_override != null) return _devAnswer('timeout');
     final ms = _intervention.responseMs(now);
@@ -344,6 +365,16 @@ class _DashboardPageState extends State<DashboardPage> {
     unawaited(_source
         .feedback('timeout', responseMs: ms)
         .catchError((Object error) => diag.write('timeout 전송 실패: $error')));
+  }
+
+  Future<void> _undoEnvironment(DisplayState shown) async {
+    try {
+      if (_source is! MqttStateSource || _override != null) return;
+      await (_source as MqttStateSource).feedbackUndo(shown);
+      _notify('표시된 제어의 되돌리기를 요청했습니다. 완료는 결과에서 확인하세요.');
+    } catch (error) {
+      _notify('되돌리기 전송 실패: $error');
+    }
   }
 
   /// 자동 실행을 되돌린다: hub 에 reject 를 보내면 제어 디스패처가 undo 명령을 낸다.
@@ -416,6 +447,9 @@ class _DashboardPageState extends State<DashboardPage> {
     if (live != null) {
       _intervention.update(live,
           hasPendingRequest: _source.hasPendingRequest,
+          requestKey: _source is MqttStateSource
+              ? (_source as MqttStateSource).pendingRequestId
+              : null,
           expiresInS: _source.pendingRequestExpiresInS,
           now: DateTime.now());
     }
@@ -433,37 +467,45 @@ class _DashboardPageState extends State<DashboardPage> {
     _notify('개발자 화면: $verdict${ms != null ? ' · $ms ms' : ''} (hub 로 보내지 않음)');
   }
 
-  Widget _buildDashboard(DisplayState state) => DashboardView(
-        state: state,
-        displayMessage: _source.displayMessage,
-        hasPendingRequest: _hasPendingRequest,
-        pendingRequest: _override != null ? null : _source.pendingRequest,
-        keystroke: _localKeystroke ?? state.keystroke,
-        keystrokeReference:
-            _localKeystroke != null ? DateTime.now() : state.timestamp,
-        liveKeys: _localKeystroke != null ? _liveKeys : null,
-        onFeedback: _feedback,
-        autoNotice: _intervention.autoNotice,
-        onUndoAuto: _undoAuto,
-        onDismissAuto: _dismissAuto,
-        suggestionRemaining:
-            _hasPendingRequest ? _intervention.remaining(DateTime.now()) : null,
-        // 데모에는 보낼 곳이 없으니 정정 버튼을 그리지 않는다(개발자 화면 고정 중에는 보여 준다).
-        onCorrect: _source is DemoStateSource && _override == null
-            ? null
-            : _correctState,
-        focusSummary: _focusSummary(),
-        showDemoControl: true,
-        demoCyclingEnabled: _autoScreenCyclingEnabled,
-        onToggleDemoCycling: _toggleAutoScreenCycling,
-        phaseOverride: _source is! DemoStateSource && _autoScreenCyclingEnabled
-            ? _autoScreenPhases[_autoScreenPhaseIndex]
-            : null,
-        // 테스트로 상태를 고정한 동안에는 그 국면 화면을 봐야 한다.
-        pinAmbient: !_autoScreenCyclingEnabled && _override == null,
-        showFocusDetail: _showFocusDetail,
-        onShowFocusDetail: (value) => setState(() => _showFocusDetail = value),
-      );
+  Widget _buildDashboard(DisplayState state, {bool overlay = false}) {
+    final proposal = _override == null && _source is MqttStateSource
+        ? (_source as MqttStateSource).controlProposal
+        : null;
+    return DashboardView(
+      state: state,
+      displayMessage: _source.displayMessage,
+      hasPendingRequest: _hasPendingRequest,
+      pendingRequest: _override != null ? null : _source.pendingRequest,
+      keystroke: _localKeystroke ?? state.keystroke,
+      keystrokeReference:
+          _localKeystroke != null ? DateTime.now() : state.timestamp,
+      liveKeys: _localKeystroke != null ? _liveKeys : null,
+      controlProposal: proposal,
+      controlConnected: _source.isConnected,
+      onFeedback: (verdict) => _feedback(verdict, proposal: proposal),
+      autoNotice: _intervention.autoNotice,
+      onUndoAuto: _undoAuto,
+      onUndoEnvironment: () => _undoEnvironment(state),
+      onDismissAuto: _dismissAuto,
+      suggestionRemaining:
+          _hasPendingRequest ? _intervention.remaining(DateTime.now()) : null,
+      // 데모에는 보낼 곳이 없으니 정정 버튼을 그리지 않는다(개발자 화면 고정 중에는 보여 준다).
+      onCorrect: _source is DemoStateSource && _override == null
+          ? null
+          : _correctState,
+      focusSummary: _focusSummary(),
+      showDemoControl: !overlay,
+      demoCyclingEnabled: _autoScreenCyclingEnabled,
+      onToggleDemoCycling: _toggleAutoScreenCycling,
+      phaseOverride: _source is! DemoStateSource && _autoScreenCyclingEnabled
+          ? _autoScreenPhases[_autoScreenPhaseIndex]
+          : null,
+      // 테스트로 상태를 고정한 동안에는 그 국면 화면을 봐야 한다.
+      pinAmbient: !_autoScreenCyclingEnabled && _override == null,
+      showFocusDetail: _showFocusDetail && !overlay,
+      onShowFocusDetail: (value) => setState(() => _showFocusDetail = value),
+    );
+  }
 
   /// 대기 화면의 오늘 집중 요약. 리포트가 없거나 아직 0분이면 null(기본 인사말).
   String? _focusSummary() {
@@ -547,7 +589,8 @@ class _DashboardPageState extends State<DashboardPage> {
     final host = _previewHost;
     unawaited(_placement.connect(host).then((_) {
       if (!mounted) return;
-      diag.write('placement: host=${host ?? '-'} supported=${_placement.supported} '
+      diag.write(
+          'placement: host=${host ?? '-'} supported=${_placement.supported} '
           'remote=${_placement.remote?.summary ?? '-'} saved=${_settings.placement ?? '-'}'
           '${_placement.lastError == null ? '' : ' err=${_placement.lastError}'}');
       _maybeAskPlacement();
@@ -910,12 +953,92 @@ class _DashboardPageState extends State<DashboardPage> {
     unawaited(_musicChanges.cancel());
     unawaited(_musicVolumeChanges.cancel());
     unawaited(_music.dispose());
+    unawaited(_feedbackController.dispose());
     unawaited(_bluetooth.close());
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final state = _override ?? _state;
+    final control = state?.control;
+    final resultKey = control == null
+        ? null
+        : '${state?.hubBootId}:${control.signature}:${control.outcome}:${control.commands.map((c) => '${c.status}:${c.stateConfirmed}:${c.error}').join(',')}';
+    return Stack(fit: StackFit.expand, children: [
+      DeskmateWorkspace(
+        state: state,
+        demo: _source is DemoStateSource,
+        music: _music,
+        feedback: _feedbackController,
+        developerBuilder: (context) => Theme(
+          data: buildDeskmateTheme(),
+          child: _buildDeveloperTools(context),
+        ),
+        startInDeveloper: _settings.devModeDefault,
+        controlResultView: state == null ||
+                control == null ||
+                !control.valid ||
+                control.awaitingUser ||
+                _hasPendingRequest ||
+                _intervention.autoNotice != null ||
+                resultKey == _dismissedControlResult
+            ? null
+            : Positioned(
+                left: 18,
+                right: 18,
+                bottom: 12,
+                child: Material(
+                    type: MaterialType.transparency,
+                    child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                              child: EnvironmentControlResult(
+                                  control: control,
+                                  onUndo: () => _undoEnvironment(state))),
+                          IconButton(
+                              key: const ValueKey(
+                                  'workspace-control-result-dismiss'),
+                              tooltip: '제어 결과 닫기',
+                              onPressed: () => setState(
+                                  () => _dismissedControlResult = resultKey),
+                              icon: const Icon(Icons.close)),
+                        ]))),
+        onConnections: () => setState(() => _view = _AppView.bluetooth),
+        pendingRequest: state != null &&
+            (_hasPendingRequest || _intervention.autoNotice != null),
+        pendingRequestView: state == null
+            ? null
+            : Positioned.fill(
+                child: Theme(
+                    data: buildDeskmateTheme(),
+                    child: Material(
+                        color: DeskmateColors.background,
+                        child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: _buildDashboard(state, overlay: true))))),
+        onAccept: () => unawaited(_feedback('accept')),
+        onReject: () => unawaited(_feedback('reject')),
+      ),
+      Positioned(
+          top: 16,
+          left: 24,
+          right: 24,
+          child: ListenableBuilder(
+            listenable: _notices,
+            builder: (context, _) {
+              final now = DateTime.now();
+              final notice = _notices.current(now);
+              if (notice == null) return const SizedBox.shrink();
+              return NoticeBanner(
+                  notice: notice, now: now, onDismiss: _dismissNotice);
+            },
+          )),
+    ]);
+  }
+
+  Widget _buildDeveloperTools(BuildContext context) {
     final state = _override ?? _state;
     return Scaffold(
       body: SafeArea(
@@ -925,143 +1048,130 @@ class _DashboardPageState extends State<DashboardPage> {
               // 개발자 모드는 hub 상태가 아직 없어도 뜬다 — ToF 중계기·로그는 hub 와 따로 볼 수 있다.
               ? _devModeWithoutState()
               : state == null
-              ? (_source is MqttStateSource
-                  // MQTT 는 시작 점검 결과를 보여 준다. 실패해도 앱은 막지 않고,
-                  // 상태가 오면 곧바로 평소 화면으로 넘어간다.
-                  ? Center(
-                      child: SingleChildScrollView(
-                        child: ConnectionGuidePanel(
-                          check: _startupCheck,
-                          onRetry: _retryMqtt,
-                          onChangeAddress: _changeMqttAddress,
-                          onDemo: _continueWithDemo,
-                        ),
-                      ),
-                    )
-                  : _Loading(
-                      error: _error,
-                      source: _source.label,
-                      connectionLabel: _source.connectionLabel,
-                      connected: _source.isConnected,
-                    ))
-              : Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _Header(
-                        links: _links,
-                        onProblems: () =>
-                            setState(() => _view = _AppView.connection),
-                        source: _source.label,
-                        connectionLabel: _override != null
-                            ? '테스트 상태 고정'
-                            : (_showLinkLabel ? _source.connectionLabel : ''),
-                        online: _source.isConnected,
-                        sequence: state.sequence,
-                        view: _view,
-                        onViewChanged: (view) => setState(() => _view = view),
-                        musicOn: _musicOn,
-                        musicBusy: _musicBusy,
-                        onMusic: _toggleMusic,
-                        selectedTrack: _music.selectedTrack,
-                        onSelectMusic: _selectMusic,
-                        musicVolume: _musicVolume,
-                        onVolume: _showVolumeControl,
-                        onExit: _confirmExit),
-                    // 누르면 사라지고, 새 문제가 생기면 다시 뜬다. 연결 탭에서는 겹쳐서 숨긴다.
-                    if (_view != _AppView.connection &&
-                        _statusBar.shouldShow(_links)) ...[
-                      const SizedBox(height: 8),
-                      LinkStatusBar(
-                        snapshot: _links,
-                        onDismiss: () =>
-                            setState(() => _statusBar.dismiss(_links)),
-                      ),
-                    ],
-                    // 쉬기 알림·자동 정보 카드·TTS 대신 띄운 문구. 남은 시간은 1초 갱신을 따라 준다.
-                    ListenableBuilder(
-                      listenable: _notices,
-                      builder: (context, _) {
-                        final now = DateTime.now();
-                        final notice = _notices.current(now);
-                        if (notice == null) return const SizedBox.shrink();
-                        return Padding(
-                          padding: const EdgeInsets.only(top: 8),
-                          child: NoticeBanner(
-                              notice: notice,
-                              now: now,
-                              onDismiss: _dismissNotice),
-                        );
-                      },
+                  ? (_source is MqttStateSource
+                      // MQTT 는 시작 점검 결과를 보여 준다. 실패해도 앱은 막지 않고,
+                      // 상태가 오면 곧바로 평소 화면으로 넘어간다.
+                      ? Center(
+                          child: SingleChildScrollView(
+                            child: ConnectionGuidePanel(
+                              check: _startupCheck,
+                              onRetry: _retryMqtt,
+                              onChangeAddress: _changeMqttAddress,
+                              onDemo: _continueWithDemo,
+                            ),
+                          ),
+                        )
+                      : _Loading(
+                          error: _error,
+                          source: _source.label,
+                          connectionLabel: _source.connectionLabel,
+                          connected: _source.isConnected,
+                        ))
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _Header(
+                            links: _links,
+                            onProblems: () =>
+                                setState(() => _view = _AppView.connection),
+                            source: _source.label,
+                            connectionLabel: _override != null
+                                ? '테스트 상태 고정'
+                                : (_showLinkLabel
+                                    ? _source.connectionLabel
+                                    : ''),
+                            online: _source.isConnected,
+                            sequence: state.sequence,
+                            view: _view,
+                            onViewChanged: (view) =>
+                                setState(() => _view = view),
+                            musicOn: _musicOn,
+                            musicBusy: _musicBusy,
+                            onMusic: _toggleMusic,
+                            selectedTrack: _music.selectedTrack,
+                            onSelectMusic: _selectMusic,
+                            musicVolume: _musicVolume,
+                            onVolume: _showVolumeControl,
+                            onExit: _confirmExit),
+                        // 누르면 사라지고, 새 문제가 생기면 다시 뜬다. 연결 탭에서는 겹쳐서 숨긴다.
+                        if (_view != _AppView.connection &&
+                            _statusBar.shouldShow(_links)) ...[
+                          const SizedBox(height: 8),
+                          LinkStatusBar(
+                            snapshot: _links,
+                            onDismiss: () =>
+                                setState(() => _statusBar.dismiss(_links)),
+                          ),
+                        ],
+                        const SizedBox(height: 12),
+                        Expanded(
+                            child: switch (_view) {
+                          _AppView.dashboard => _buildDashboard(state),
+                          _AppView.sensorOverview =>
+                            SensorOverviewPage(state: state),
+                          _AppView.keystroke => KeystrokePage(
+                              metrics: _source is MqttStateSource
+                                  ? (_source as MqttStateSource).pcKeystroke
+                                  : _state?.keystroke,
+                              now: DateTime.now(),
+                              demo: _source is DemoStateSource,
+                              sourceLabel: _source.label,
+                              onConnection: () =>
+                                  setState(() => _view = _AppView.connection),
+                            ),
+                          _AppView.sensorTest => DeveloperPage(
+                              state: state,
+                              overridden: _override != null,
+                              activePreset: _devLast?.key,
+                              envFlags: _devFlags,
+                              onPreset: _applyDevPreset,
+                              onEnvFlags: _applyDevFlags,
+                              onClear: _clearDev,
+                              preview: _buildDashboard(state),
+                            ),
+                          // 카메라 자세 탭(ESP32-CAM/camsvc)은 개발용. 탭은 숨겨 두고(kShowCameraPostureTab)
+                          // 그 자리에 ToF 프리뷰가 온다 — 카메라 미사용 원칙(열린 결정 I7). 코드는 남긴다.
+                          _AppView.posture => PostureScreen(
+                              // 전체 리로드·연결 탭의 '다시 찾기' 가 이 값을 올린다.
+                              reconnectSignal: _postureReloadToken,
+                              onLinkStatus: (status) {
+                                if (mounted) {
+                                  setState(() => _postureStatus = status);
+                                }
+                              },
+                            ),
+                          _AppView.preview => _buildPreview(state),
+                          _AppView.devMode => _buildDevMode(state),
+                          _AppView.fsmGraph =>
+                            FsmGraphPage(currentState: state.fsmState),
+                          _AppView.bluetooth => BluetoothControlPage(
+                              bluetooth: _bluetooth,
+                              feedback: _feedbackController,
+                              music: _music,
+                              links: _btLinks,
+                              onManualAdjust: _reportManualAdjust,
+                            ),
+                          _AppView.sessionReport =>
+                            SessionReportCard(report: _source.sessionReport),
+                          _AppView.privacy => PrivacyPage(
+                              source: _source is PrivacySource
+                                  ? _source as PrivacySource
+                                  : null),
+                          _AppView.connection => ConnectionPage(
+                              snapshot: _links,
+                              now: DateTime.now(),
+                              sourceLabel: _source.label,
+                              onAction: _linkAction,
+                              onReloadAll: _reloadAll,
+                              onChangeAddress: _changeMqttAddress,
+                              placementLabel: placementKo(_settings.placement),
+                              placementApplied: _placement.appliedLabel,
+                              onChangePlacement: () => unawaited(
+                                  showPlacementDialog(context, _placement)),
+                            ),
+                        }),
+                      ],
                     ),
-                    const SizedBox(height: 12),
-                    Expanded(
-                        child: switch (_view) {
-                      _AppView.dashboard => _buildDashboard(state),
-                      _AppView.sensorOverview =>
-                        SensorOverviewPage(state: state),
-                      _AppView.keystroke => KeystrokePage(
-                          metrics: _source is MqttStateSource
-                              ? (_source as MqttStateSource).pcKeystroke
-                              : _state?.keystroke,
-                          now: DateTime.now(),
-                          demo: _source is DemoStateSource,
-                          sourceLabel: _source.label,
-                          onConnection: () =>
-                              setState(() => _view = _AppView.connection),
-                        ),
-                      _AppView.sensorTest => DeveloperPage(
-                          state: state,
-                          overridden: _override != null,
-                          activePreset: _devLast?.key,
-                          envFlags: _devFlags,
-                          onPreset: _applyDevPreset,
-                          onEnvFlags: _applyDevFlags,
-                          onClear: _clearDev,
-                          preview: _buildDashboard(state),
-                        ),
-                      // 카메라 자세 탭(ESP32-CAM/camsvc)은 개발용. 탭은 숨겨 두고(kShowCameraPostureTab)
-                      // 그 자리에 ToF 프리뷰가 온다 — 카메라 미사용 원칙(열린 결정 I7). 코드는 남긴다.
-                      _AppView.posture => PostureScreen(
-                          // 전체 리로드·연결 탭의 '다시 찾기' 가 이 값을 올린다.
-                          reconnectSignal: _postureReloadToken,
-                          onLinkStatus: (status) {
-                            if (mounted) {
-                              setState(() => _postureStatus = status);
-                            }
-                          },
-                        ),
-                      _AppView.preview => _buildPreview(state),
-                      _AppView.devMode => _buildDevMode(state),
-                      _AppView.fsmGraph =>
-                        FsmGraphPage(currentState: state.fsmState),
-                      _AppView.bluetooth => BluetoothControlPage(
-                          bluetooth: _bluetooth,
-                          feedback: _feedbackController,
-                          music: _music,
-                          links: _btLinks,
-                          onManualAdjust: _reportManualAdjust,
-                        ),
-                      _AppView.sessionReport =>
-                        SessionReportCard(report: _source.sessionReport),
-                      _AppView.privacy => PrivacyPage(
-                          source: _source is PrivacySource
-                              ? _source as PrivacySource
-                              : null),
-                      _AppView.connection => ConnectionPage(
-                          snapshot: _links,
-                          now: DateTime.now(),
-                          sourceLabel: _source.label,
-                          onAction: _linkAction,
-                          onReloadAll: _reloadAll,
-                          onChangeAddress: _changeMqttAddress,
-                          placementLabel: placementKo(_settings.placement),
-                          placementApplied: _placement.appliedLabel,
-                          onChangePlacement: () =>
-                              unawaited(showPlacementDialog(context, _placement)),
-                        ),
-                    }),
-                  ],
-                ),
         ),
       ),
     );
@@ -1184,13 +1294,13 @@ class _MusicVolumeDialogState extends State<_MusicVolumeDialog> {
             key: const ValueKey('music-volume-slider'),
             value: _value,
             divisions: 20,
-            label: (_value * 100).round().toString() + '%',
+            label: '${(_value * 100).round()}%',
             onChanged: (value) {
               setState(() => _value = value);
               widget.onChanged(value);
             }),
         actions: [
-          Text((_value * 100).round().toString() + '%'),
+          Text('${(_value * 100).round()}%'),
           TextButton(
               onPressed: () => Navigator.pop(context),
               child: const Text('\uB2EB\uAE30'))
@@ -1262,7 +1372,7 @@ class _Header extends StatelessWidget {
                   Text(connectionLabel),
                   const SizedBox(width: 4),
                 ],
-                Text('#' + sequence.toString())
+                Text('#$sequence')
               ])),
           PopupMenuButton<int>(
               key: const ValueKey('music-select'),
@@ -1273,7 +1383,7 @@ class _Header extends StatelessWidget {
               itemBuilder: (context) => [
                     for (var i = 0; i < classicalTrackTitles.length; i++)
                       CheckedPopupMenuItem<int>(
-                          key: ValueKey('music-track-' + i.toString()),
+                          key: ValueKey('music-track-$i'),
                           value: i,
                           checked: i == selectedTrack,
                           child: Text(classicalTrackTitles[i]))

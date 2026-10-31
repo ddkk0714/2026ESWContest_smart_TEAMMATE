@@ -2,7 +2,7 @@
 ///
 /// 램프(IlinkLampFeedback)와 같은 Atlas GATT 경로를 쓴다: Connect → DiscoverServices →
 /// WriteCharacteristicValue(write_type 1, 램프로 실기 확인한 방식). 쓴 뒤 상태 특성을 읽어
-/// 실제 값을 돌려주는데, 이 읽기는 아직 Pi 5 에서 확인하지 않아 실패해도 명령을 실패로 만들지 않는다.
+/// 기기 보고 상태를 돌려준다. 읽기 실패는 전송 완료와 상태 미확인으로 구분한다.
 library;
 
 import 'bluetooth_service.dart';
@@ -49,7 +49,17 @@ class FanState {
 
   /// 펌웨어 상태 8바이트 `[버전 1, 전원, 속도 %, 단계, 모드, 방향, 남은 타이머 초 LE]`.
   static FanState? decode(List<int>? bytes) {
-    if (bytes == null || bytes.length < 8 || bytes[0] != 1) return null;
+    if (bytes == null ||
+        bytes.length < 8 ||
+        bytes[0] != 1 ||
+        bytes.take(8).any((b) => b < 0 || b > 255) ||
+        bytes[1] > 1 ||
+        bytes[2] > 100 ||
+        bytes[3] > 3 ||
+        bytes[4] > 1 ||
+        bytes[5] > 1) {
+      return null;
+    }
     return FanState(
       power: bytes[1] == 1,
       speed: bytes[2],
@@ -80,7 +90,8 @@ class FanState {
 
   String get summary {
     if (!power) return '꺼짐';
-    final timer = timerSeconds > 0 ? ' · ${(timerSeconds / 60).ceil()}분 뒤 꺼짐' : '';
+    final timer =
+        timerSeconds > 0 ? ' · ${(timerSeconds / 60).ceil()}분 뒤 꺼짐' : '';
     return '$level단${natural ? ' 자연풍' : ''}$timer'; // 세기 값은 듀티가 아니라 단계로 보인다
   }
 }
@@ -100,6 +111,10 @@ class BleFanControl {
   final int connectAttempts;
   final Duration retryDelay;
   final Duration rescanFor;
+  int _selectionGeneration = 0;
+  int _connectionGeneration = 0;
+  int get selectionGeneration => _selectionGeneration;
+  int get connectionGeneration => _connectionGeneration;
   String? _address;
   GattConnection? _connection;
   Future<bool>? _connecting;
@@ -121,6 +136,7 @@ class BleFanControl {
 
   void select(String address) {
     if (_address == address) return;
+    _selectionGeneration++;
     _address = address;
     _connection = null;
     _lastOkAt = null;
@@ -128,25 +144,48 @@ class BleFanControl {
     _lastState = null;
   }
 
-  /// 잊은 뒤에는 vent_fan 명령에 대답하지 않는다(다른 어댑터가 맡을 수 있게).
-  void forget() {
-    _address = null;
+  /// Invalidate pending commands and undo without duplicating a GATT connect.
+  void invalidateUndo() {
+    _selectionGeneration++;
+  }
+
+  void disconnect() {
+    invalidateUndo();
+    _connectionGeneration++;
     _connection = null;
+    _lastState = null;
+  }
+
+  /// Normal vent_fan commands are left to other adapters after forgetting.
+  void forget() {
+    disconnect();
+    _address = null;
     _lastState = null;
   }
 
   /// 시작 복원용: 한 번만 붙어 본다(검색·재시도 없음). 실패한 연결마다 시스템 팝업이 뜬다(10-26).
   /// 다시 붙는 길은 hub 명령([send])과 블루투스 탭의 "다시 연결"([connect])뿐이다.
-  Future<bool> connectOnce() async {
-    if (!configured) return false;
-    if (_connection != null) return true;
-    final pending = _connecting;
-    if (pending != null) return pending;
+  Future<bool> connectOnce() {
+    if (!configured) return Future.value(false);
+    if (_connection != null) return Future.value(true);
+    return _connecting ??=
+        _connectOnce().whenComplete(() => _connecting = null);
+  }
+
+  Future<bool> _connectOnce() async {
+    final address = _address!;
+    final generation = _selectionGeneration;
     try {
-      _connection = await _bluetooth.connectLamp(_address!);
+      final connection = await _bluetooth.connectLamp(address);
+      if (_selectionGeneration != generation || _address != address) {
+        return false;
+      }
+      _connection = connection;
       _lastError = null;
       return true;
     } catch (error) {
+      if (_selectionGeneration != generation) return false;
+      _connectionGeneration++;
       _connection = null;
       _lastError = error;
       return false;
@@ -161,21 +200,31 @@ class BleFanControl {
   }
 
   Future<bool> _connect() async {
+    final generation = _selectionGeneration;
+    final address = _address!;
     for (var attempt = 1;; attempt++) {
       try {
-        _connection = await _bluetooth.connectLamp(_address!); // 이름과 달리 일반 GATT 연결이다
+        final connection = await _bluetooth.connectLamp(address); // 일반 GATT 연결
+        if (_selectionGeneration != generation || _address != address) {
+          return false;
+        }
+        _connection = connection;
         _lastError = null;
         return true;
       } catch (error) {
+        if (_selectionGeneration != generation) return false;
+        _connectionGeneration++;
         _connection = null;
         _lastError = error;
         if (attempt >= connectAttempts) return false;
       }
+      if (_selectionGeneration != generation) return false;
       await Future<void>.delayed(retryDelay);
       if (attempt.isEven) {
         final found = await _rediscover();
         _lastRediscovered = (_lastRediscovered ?? false) || found;
       }
+      if (_selectionGeneration != generation) return false;
     }
   }
 
@@ -192,16 +241,27 @@ class BleFanControl {
   }
 
   /// 명령 하나를 쓰고 상태를 읽는다. 쓰기는 순서대로, 끊긴 연결은 한 번만 다시 붙는다.
-  /// [written] 이 false 면 선풍기에 닿지 않은 것, [state] 가 null 이면 상태를 못 읽은 것.
+  /// [written]은 GATT 쓰기 반환 여부다. 실패·타임아웃은 기기 미수신의 증거가 아니다.
+  /// [state]가 null이면 상태를 못 읽었으며 요청값을 실제값으로 대체하지 않는다.
   Future<({bool written, FanState? state})> send(List<int> frame,
-      {num? expiresTsMs}) {
-    final next = _writes.then((_) => _send(frame, expiresTsMs));
+      {num? expiresTsMs,
+      bool control = false,
+      bool Function()? stillAuthorized}) {
+    // Direct UI writes supersede pending automation and its undo eligibility.
+    if (!control) invalidateUndo();
+    final generation = _selectionGeneration;
+    final next = _writes.then((_) => _send(
+        frame,
+        expiresTsMs,
+        () =>
+            _selectionGeneration == generation &&
+            (stillAuthorized?.call() ?? true)));
     _writes = next.then<void>((_) {});
     return next;
   }
 
   Future<({bool written, FanState? state})> _send(
-      List<int> frame, num? expiresTsMs) async {
+      List<int> frame, num? expiresTsMs, bool Function() authorized) async {
     const notSent = (written: false, state: null);
     _lastRediscovered = null;
     if (!configured) return notSent;
@@ -209,14 +269,16 @@ class BleFanControl {
         expiresTsMs != null &&
         DateTime.now().millisecondsSinceEpoch >= expiresTsMs;
     for (var attempt = 0; attempt < 2; attempt++) {
-      if (expired()) return notSent;
+      if (expired() || !authorized()) return notSent;
       if (!await connect()) continue;
+      if (expired() || !authorized()) return notSent;
       try {
         await _bluetooth.writeCharacteristic(_connection!,
             serviceId: fanServiceUuid,
             characteristicId: fanCommandUuid,
             value: frame);
       } catch (error) {
+        _connectionGeneration++;
         _connection = null;
         _lastError = error;
         continue;
@@ -230,12 +292,16 @@ class BleFanControl {
 
   Future<FanState?> _readState() async {
     final connection = _connection;
+    final generation = _selectionGeneration;
     if (connection == null) return null;
     try {
       final state = FanState.decode(await _bluetooth.readCharacteristic(
           connection,
           serviceId: fanServiceUuid,
           characteristicId: fanStateUuid));
+      if (generation != _selectionGeneration || connection != _connection) {
+        return null;
+      }
       if (state != null) _lastState = state;
       return state;
     } catch (_) {

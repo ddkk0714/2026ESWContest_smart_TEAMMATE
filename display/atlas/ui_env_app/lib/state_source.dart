@@ -6,6 +6,7 @@ import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 
 import 'display_state.dart';
+import 'control_state.dart';
 import 'voice_alert.dart' show ScreenNotice;
 import 'session_report.dart';
 import 'privacy_state.dart';
@@ -13,7 +14,8 @@ import 'privacy_state.dart';
 /// MQTT payload 바이트 → 문자열. hub 는 UTF-8 JSON 을 보낸다.
 /// `MqttPublishPayload.bytesToStringAsString` 은 바이트 하나를 글자 하나로 읽어(Latin-1)
 /// 한글이 `ì¡°ëª…` 처럼 깨진다(10-24 실기). 깨진 바이트가 섞여 있어도 화면은 멈추지 않게 대체 문자로 둔다.
-String mqttPayloadText(List<int> bytes) => utf8.decode(bytes, allowMalformed: true);
+String mqttPayloadText(List<int> bytes) =>
+    utf8.decode(bytes, allowMalformed: true);
 
 /// hub 가 보낸 질문(`deskmate/interaction/request`)의 화면용 상세. kind 로 카드 문구가 갈린다.
 class PendingRequest {
@@ -289,6 +291,7 @@ class MqttStateSource implements StateSource, PrivacySource {
           'deskmate-display-${DateTime.now().microsecondsSinceEpoch}',
           port,
         ) {
+    _client.setProtocolV311();
     _client.logging(on: false);
     _client.keepAlivePeriod = 30;
     _client.autoReconnect = true;
@@ -387,6 +390,10 @@ class MqttStateSource implements StateSource, PrivacySource {
     }
   }
 
+  ControlProposal? _controlProposal;
+  DateTime? _pendingDeadline;
+  ControlProposal? get controlProposal => _controlProposal;
+  String? get pendingRequestId => _pendingRequestId;
   String? _pendingRequestId;
   int? _pendingExpiresInS;
   PendingRequest? _pendingRequest;
@@ -432,12 +439,17 @@ class MqttStateSource implements StateSource, PrivacySource {
   bool get hasPendingRequest => _pendingRequestId != null;
 
   @override
-  PendingRequest? get pendingRequest =>
-      _pendingRequestId == null ? null : _pendingRequest;
+  int? get pendingRequestExpiresInS => _pendingRequestId == null
+      ? null
+      : (_pendingDeadline == null
+          ? _pendingExpiresInS
+          : (_pendingDeadline!.difference(DateTime.now()).inMilliseconds / 1000)
+              .ceil()
+              .clamp(0, 3600));
 
   @override
-  int? get pendingRequestExpiresInS =>
-      _pendingRequestId == null ? null : _pendingExpiresInS;
+  PendingRequest? get pendingRequest =>
+      _pendingRequestId == null ? null : _pendingRequest;
 
   @override
   Future<void> publishFeedbackData(Map<String, Object?> data) async {
@@ -451,7 +463,8 @@ class MqttStateSource implements StateSource, PrivacySource {
       'data': data,
     });
     final builder = MqttClientPayloadBuilder()..addUTF8String(payload);
-    _client.publishMessage(_feedbackTopic, MqttQos.atLeastOnce, builder.payload!);
+    _client.publishMessage(
+        _feedbackTopic, MqttQos.atLeastOnce, builder.payload!);
   }
 
   @override
@@ -540,6 +553,8 @@ class MqttStateSource implements StateSource, PrivacySource {
           if (!_latest!.fsmState.startsWith('ACTION_') &&
               !keepsPendingAcrossStates(_pendingRequest?.kind)) {
             _pendingRequestId = null;
+            _controlProposal = null;
+            _pendingDeadline = null;
             _pendingExpiresInS = null;
             _pendingRequest = null;
           }
@@ -567,8 +582,13 @@ class MqttStateSource implements StateSource, PrivacySource {
             unawaited(_handleControl(data));
           }
         } else if (received.topic == _requestTopic) {
+          if (publish.header?.retain == true ||
+              envelope['schema_version'] != '1.0') {
+            continue;
+          }
           final data = envelope['data'];
-          if (data is Map<String, dynamic> && ScreenNotice.isNoticeRequest(data)) {
+          if (data is Map<String, dynamic> &&
+              ScreenNotice.isNoticeRequest(data)) {
             // 시작할 때 retain 으로 다시 오는 지난 알림은 띄우지 않는다.
             if (publish.header?.retain != true) onNotice?.call(data);
           } else if (data is Map<String, dynamic>) {
@@ -576,7 +596,15 @@ class MqttStateSource implements StateSource, PrivacySource {
             if (requestId is String && requestId.isNotEmpty) {
               _pendingRequestId = requestId;
               final expires = data['expires_in_s'];
-              _pendingExpiresInS = expires is num ? expires.round() : null;
+              _pendingExpiresInS =
+                  expires is num && expires.isFinite ? expires.round() : null;
+              final ts = envelope['ts'];
+              _pendingDeadline =
+                  ts is num && ts.isFinite && expires is num && expires.isFinite
+                      ? DateTime.fromMillisecondsSinceEpoch(
+                          ((ts + expires) * 1000).round())
+                      : null;
+              _controlProposal = ControlProposal.parse(envelope);
               _pendingRequest = PendingRequest.fromData(data);
             }
           }
@@ -634,20 +662,85 @@ class MqttStateSource implements StateSource, PrivacySource {
   @override
   Future<void> feedback(String verdict,
       {String? correctedState, int? responseMs, String? note}) async {
+    return _sendFeedback(verdict,
+        correctedState: correctedState, responseMs: responseMs, note: note);
+  }
+
+  Future<void> feedbackControl(ControlProposal shown, String verdict,
+          {int? responseMs}) =>
+      _sendFeedback(verdict, responseMs: responseMs, shown: shown);
+
+  Future<void> feedbackUndo(DisplayState shown) =>
+      _sendFeedback('reject', undo: shown);
+
+  Future<void> _sendFeedback(String verdict,
+      {String? correctedState,
+      int? responseMs,
+      String? note,
+      ControlProposal? shown,
+      DisplayState? undo}) async {
+    // Capture before reconnect: a tap on an old card must never accept a newer card.
+    final requestId = _pendingRequestId;
     await _ensureConnected();
+    if (requestId != _pendingRequestId) throw StateError('제안이 변경되었습니다.');
+    final state = _latest;
+    if (undo != null &&
+        (requestId != null ||
+            state == null ||
+            undo.control == null ||
+            state.hubBootId != undo.hubBootId ||
+            state.control?.signature != undo.control!.signature ||
+            DateTime.now().difference(state.timestamp) >
+                const Duration(seconds: 30))) {
+      throw StateError('되돌릴 제어 계획이 변경되었거나 만료되었습니다.');
+    }
+    if (verdict == 'accept' &&
+        (requestId == null ||
+            (_pendingDeadline != null &&
+                !DateTime.now().isBefore(_pendingDeadline!)))) {
+      throw StateError('활성 제안이 없거나 만료되었습니다.');
+    }
+    if (shown != null &&
+        (shown.requestId != requestId ||
+            _controlProposal?.plan.signature != shown.plan.signature)) {
+      throw StateError('현재 제안과 표시된 계획이 다릅니다.');
+    }
+    if (verdict == 'accept' &&
+        (shown != null || state?.fsmState == 'ACTION_ENV')) {
+      if (shown == null ||
+          state == null ||
+          state.fsmState != 'ACTION_ENV' ||
+          state.gate != 'suggest' ||
+          !shown.matches(
+              current: state.control,
+              hubBootId: state.hubBootId,
+              stateTime: state.timestamp,
+              now: DateTime.now())) {
+        throw StateError('제안이 만료되었거나 서버 계획을 확인할 수 없습니다.');
+      }
+    }
     final payload = jsonEncode({
       'schema_version': '1.0',
       'ts': DateTime.now().millisecondsSinceEpoch / 1000,
       'node': 'display',
       'boot_id': _bootId,
       'seq': ++_sequence,
-      'data': buildFeedbackData(
-        requestId: _pendingRequestId ?? 'atlas-display',
-        verdict: verdict,
-        correctedState: correctedState,
-        responseMs: responseMs,
-        note: note,
-      ),
+      'data': {
+        'request_id': requestId ?? 'atlas-display',
+        if (undo != null)
+          'undo_command_ids': [
+            for (final command in undo.control!.commands) command.id
+          ],
+        'verdict': verdict,
+        if (correctedState != null) 'corrected_state': correctedState,
+        'response_ms': responseMs ?? 0,
+        ...buildFeedbackData(
+            requestId: requestId ?? 'atlas-display',
+            verdict: verdict,
+            correctedState: correctedState,
+            responseMs: responseMs,
+            note: note),
+      },
     });
     final builder = MqttClientPayloadBuilder()..addUTF8String(payload);
     _client.publishMessage(
@@ -655,9 +748,12 @@ class MqttStateSource implements StateSource, PrivacySource {
       MqttQos.atLeastOnce,
       builder.payload!,
     );
-    _pendingRequestId = null;
-    _pendingExpiresInS = null;
-    _pendingRequest = null;
+    if (verdict != 'correct') {
+      _pendingRequestId = null;
+      _pendingExpiresInS = null;
+      _pendingDeadline = null;
+      _controlProposal = null;
+    }
   }
 
   /// 이 종류의 질문은 FSM 이 ACTION_* 가 아닐 때(FOCUS_* 등)도 오고, 상태 전이로 지우지 않는다 — 응답·만료까지.
