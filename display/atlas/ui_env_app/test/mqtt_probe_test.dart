@@ -1,3 +1,7 @@
+import 'workspace_test_helpers.dart';
+import 'support/control_fixtures.dart';
+import 'package:deskmate_display/control_state.dart';
+import 'package:deskmate_display/display_state.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -30,6 +34,176 @@ Future<MqttProbeResult> _probe(_FakeBroker broker,
 
 void main() {
   testWidgets(
+      'full 1024x600 app consumes real Hub Mock fixture and returns bound feedback',
+      (tester) async {
+    tester.view.physicalSize = const Size(1024, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final fixture = jsonDecode(File(const String.fromEnvironment(
+            'DESKMATE_CONTROL_FIXTURE',
+            defaultValue: 'test/fixtures/control_e2e.json'))
+        .readAsStringSync());
+    final cases = fixture['cases'] as List;
+    final proposalCase =
+        cases.firstWhere((item) => item['name'] == 'low_light_suggestion');
+    final completedCase = cases
+        .firstWhere((item) => item['name'] == 'accepted_mock_success_monitor');
+    Map<String, dynamic> fresh(Object value) {
+      final envelope = jsonDecode(jsonEncode(value)) as Map<String, dynamic>;
+      envelope['ts'] = DateTime.now().millisecondsSinceEpoch / 1000;
+      return envelope;
+    }
+
+    final state = fresh(proposalCase['state']);
+    final broker = await tester
+        .runAsync(() => _FakeBroker.start(statePayload: jsonEncode(state)));
+    final directory = Directory.systemTemp.createTempSync('mock-control-ui-');
+    final settings = SettingsStore(
+        candidates: ['${directory.path}/settings.json'],
+        legacyPostureCandidates: const []);
+    settings
+        .save(DeskmateSettings(mqttHost: '127.0.0.1', mqttPort: broker!.port));
+    try {
+      await tester.pumpWidget(DeskmateApp(
+          settings: settings,
+          prober: (host, port, {onStep}) async => const MqttProbeResult(
+              ok: true, cause: LinkCause.none, elapsed: Duration.zero)));
+      for (var i = 0; i < 12; i++) {
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 30)));
+        await tester.pump(const Duration(seconds: 1));
+        if (broker.subscriptions.contains('deskmate/interaction/request')) {
+          break;
+        }
+      }
+      broker.publishEnvelope(
+          'deskmate/interaction/request', fresh(proposalCase['request']));
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 40)));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(milliseconds: 600));
+      final plan = proposalCase['request']['data']['control_plan'];
+      final target = plan['commands'][0]['target'];
+      expect(
+          find.textContaining('$target · set_brightness = 70'), findsOneWidget);
+      expect(find.textContaining('MOCK'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('control-accept')));
+      await tester
+          .runAsync(() => _waitUntil(() => broker.feedbackEvents.isNotEmpty));
+      await tester.pump();
+      expect(broker.feedbackEvents.single['data']['request_id'],
+          proposalCase['request']['data']['request_id']);
+      broker.publishEnvelope(
+          'deskmate/state/phase', fresh(completedCase['state']));
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 40)));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.byKey(const ValueKey('environment-control-result')),
+          findsOneWidget);
+      expect(find.textContaining('상태 확인 완료'), findsOneWidget);
+      expect(find.textContaining('MOCK'), findsOneWidget);
+      await tester
+          .tap(find.byKey(const ValueKey('workspace-control-result-dismiss')));
+      await tester.pump();
+      expect(find.byKey(const ValueKey('environment-control-result')),
+          findsNothing);
+      expect(broker.feedbackEvents, hasLength(1));
+      expect(tester.takeException(), isNull);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.runAsync(broker.close);
+      directory.deleteSync(recursive: true);
+    }
+  });
+
+  test(
+      'MQTT binds displayed plan/request, blocks mismatch/duplicate/stale accept and preserves correction',
+      () async {
+    final plan = controlPlan();
+    final broker = await _FakeBroker.start(
+        statePayload: jsonEncode(controlEnvelope(plan)));
+    final source = MqttStateSource('127.0.0.1', port: broker.port);
+    try {
+      try {
+        await source.fetch();
+      } on StateError {/* first state arrives asynchronously */}
+      await _waitUntil(
+          () => broker.subscriptions.contains('deskmate/interaction/request'));
+      broker.publishEnvelope(
+          'deskmate/interaction/request', requestEnvelope(plan));
+      await _waitUntil(() => source.controlProposal != null);
+      final shown = source.controlProposal!;
+      await expectLater(source.feedback('accept'), throwsStateError);
+      expect(broker.feedbackEvents, isEmpty);
+      broker.publishEnvelope('deskmate/state/phase',
+          controlEnvelope(controlPlan(target: 'different')));
+      await _waitForState(source,
+          (state) => state.control?.commands.single.target == 'different');
+      await expectLater(
+          source.feedbackControl(shown, 'accept'), throwsStateError);
+      expect(broker.feedbackEvents, isEmpty);
+      broker.publishEnvelope('deskmate/state/phase', controlEnvelope(plan));
+      await _waitForState(source,
+          (state) => state.control?.commands.single.target == 'mock_ac');
+      await source.feedback('correct', correctedState: 'REST');
+      expect(source.hasPendingRequest, isTrue);
+      await source.feedbackControl(shown, 'accept');
+      await _waitUntil(() => broker.feedbackEvents.length == 2);
+      expect(broker.feedbackEvents.last['data']['request_id'], shown.requestId);
+      expect(broker.feedbackEvents.last['data']['verdict'], 'accept');
+      expect(broker.protocols, contains('MQTT:4'));
+      await expectLater(
+          source.feedbackControl(shown, 'accept'), throwsStateError);
+      expect(source.hasPendingRequest, isFalse);
+      broker.publishEnvelope('deskmate/interaction/request',
+          requestEnvelope(plan, id: 'new-request'));
+      await _waitUntil(
+          () => source.controlProposal?.requestId == 'new-request');
+      await expectLater(
+          source.feedbackControl(shown, 'reject'), throwsStateError);
+      final expired = ControlProposal.parse(requestEnvelope(plan,
+          now: DateTime.now().subtract(const Duration(minutes: 2))))!;
+      await expectLater(
+          source.feedbackControl(expired, 'accept'), throwsStateError);
+      await source.feedbackControl(source.controlProposal!, 'reject');
+      await _waitUntil(() => broker.feedbackEvents.length == 3);
+      expect(broker.feedbackEvents.last['data']['verdict'], 'reject');
+      broker.publishEnvelope(
+          'deskmate/interaction/request', requestEnvelope(plan, id: 'retained'),
+          retain: true);
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(source.hasPendingRequest, isFalse);
+      final completedPlan = {
+        ...controlPlan(status: 'succeeded'),
+        'awaiting_user': false
+      };
+      Map<String, dynamic> completed(Map<String, dynamic> plan) {
+        final envelope = controlEnvelope(
+            {'active': false, 'execution_mode': 'mock', 'last_episode': plan});
+        envelope['data']['fsm_state'] = 'MONITOR';
+        return envelope;
+      }
+
+      broker.publishEnvelope('deskmate/state/phase', completed(completedPlan));
+      final shownResult =
+          await _waitForState(source, (state) => state.fsmState == 'MONITOR');
+      await source.feedbackUndo(shownResult);
+      await _waitUntil(() => broker.feedbackEvents.length == 4);
+      expect(broker.feedbackEvents.last['data']['undo_command_ids'],
+          ['mock-command-1']);
+      broker.publishEnvelope(
+          'deskmate/state/phase', completed(controlPlan(target: 'changed')));
+      await _waitForState(source,
+          (state) => state.control?.commands.single.target == 'changed');
+      await expectLater(source.feedbackUndo(shownResult), throwsStateError);
+    } finally {
+      source.close();
+      await broker.close();
+    }
+  });
+
+  testWidgets(
       'connection status follows PC topic without hub keystroke summary',
       (tester) async {
     tester.view.physicalSize = const Size(1024, 600);
@@ -50,11 +224,13 @@ void main() {
     settings
         .save(DeskmateSettings(mqttHost: '127.0.0.1', mqttPort: broker!.port));
     try {
-      await tester.pumpWidget(DeskmateApp(
-        settings: settings,
-        prober: (host, port, {onStep}) async => const MqttProbeResult(
-            ok: true, cause: LinkCause.none, elapsed: Duration.zero),
-      ));
+      await pumpDeveloperApp(
+          tester,
+          DeskmateApp(
+            settings: settings,
+            prober: (host, port, {onStep}) async => const MqttProbeResult(
+                ok: true, cause: LinkCause.none, elapsed: Duration.zero),
+          ));
       for (var i = 0; i < 10; i++) {
         await tester.runAsync(
             () => Future<void>.delayed(const Duration(milliseconds: 50)));
@@ -80,10 +256,18 @@ void main() {
                 .millisecondsSinceEpoch /
             1000,
       }));
-      await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 50)));
-      await tester.pump(const Duration(seconds: 1));
-      final stale = tester.widget<ConnectionPage>(find.byType(ConnectionPage));
+      // MQTT delivery and the 1 Hz UI snapshot are separate asynchronous steps.
+      // Keep the stale timestamp/assertion; wait for the observed state instead
+      // of assuming that one fixed 50 ms delay processes both steps.
+      final deadline = Stopwatch()..start();
+      ConnectionPage stale;
+      do {
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 20)));
+        await tester.pump(const Duration(seconds: 1));
+        stale = tester.widget<ConnectionPage>(find.byType(ConnectionPage));
+      } while (stale.snapshot[LinkId.keystroke]?.cause != LinkCause.stale &&
+          deadline.elapsed < const Duration(seconds: 3));
       expect(stale.snapshot[LinkId.keystroke]?.cause, LinkCause.stale);
       expect(tester.takeException(), isNull);
     } finally {
@@ -139,7 +323,9 @@ void main() {
     }
     expect(broker.controlResults, hasLength(2));
     expect(broker.controlResults.first['data']['command_id'], 'lamp-1');
-    expect(broker.controlResults.first['data']['status'], 'succeeded');
+    expect(broker.controlResults.first['data']['status'], 'executing');
+    expect(broker.controlResults.first['data'].containsKey('actual_value'),
+        isFalse);
     expect(bluetooth.frames, [
       ilinkFrame([1, 8, 5, 1]),
       ilinkFrame([1, 8, 1, 70])
@@ -325,7 +511,9 @@ class _FakeBroker {
   final String? keystrokePayload;
   final Set<Socket> _sockets = {};
   final subscriptions = <String>{};
+  final protocols = <String>[];
   final controlResults = <Map<String, dynamic>>[];
+  final feedbackEvents = <Map<String, dynamic>>[];
 
   int get port => _server.port;
 
@@ -367,6 +555,9 @@ class _FakeBroker {
         final packet = await _readPacketBody(input);
         switch (header >> 4) {
           case 1: // CONNECT
+            final protocolSize = packet[0] * 256 + packet[1];
+            protocols.add(
+                '${utf8.decode(packet.sublist(2, 2 + protocolSize))}:${packet[2 + protocolSize]}');
             if (!respondToConnect) {
               await socket.done;
               return;
@@ -415,6 +606,10 @@ class _FakeBroker {
             if ((header >> 1) & 3 == 1) {
               socket.add([0x40, 2, packet[offset], packet[offset + 1]]);
               offset += 2;
+            }
+            if (topic == 'deskmate/feedback/user') {
+              feedbackEvents.add(jsonDecode(utf8.decode(packet.sublist(offset)))
+                  as Map<String, dynamic>);
             }
             if (topic == 'deskmate/control/result') {
               expect((header >> 1) & 3, 1);
@@ -480,6 +675,13 @@ class _FakeBroker {
     socket.add([retain ? 0x31 : 0x30, ...encodedLength, ...body]); // QoS 0
   }
 
+  void publishEnvelope(String topic, Map<String, dynamic> envelope,
+      {bool retain = false}) {
+    for (final socket in _sockets) {
+      _publish(socket, topic, jsonEncode(envelope), retain: retain);
+    }
+  }
+
   void publishKeystroke(String payload) {
     for (final socket in _sockets) {
       _publish(socket, 'deskmate/sensor/keystroke', payload);
@@ -538,3 +740,21 @@ const _stateEnvelope = {
     'reasons': <String>[],
   },
 };
+
+Future<void> _waitUntil(bool Function() check) async {
+  for (var i = 0; i < 100; i++) {
+    if (check()) return;
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+  throw StateError('MQTT test did not reach expected state');
+}
+
+Future<DisplayState> _waitForState(
+    MqttStateSource source, bool Function(DisplayState) condition) async {
+  for (var i = 0; i < 200; i++) {
+    final state = await source.fetch();
+    if (condition(state)) return state;
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+  throw StateError('MQTT state condition was not observed');
+}

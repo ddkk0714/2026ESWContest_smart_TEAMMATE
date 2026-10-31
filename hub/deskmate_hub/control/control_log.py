@@ -77,6 +77,9 @@ class ControlLog:
             operation=cmd.operation, value=cmd.value, status=cmd.status, sent_ts=cmd.sent_ts,
             completed_ts=cmd.completed_ts, undo=cmd.gate == "undo",
         )
+        if cmd.status == "accepted" and cmd.sent_ts is not None:
+            # 보낸 뒤 기기가 accepted 를 알린 명령 — 디스패처는 그 이름을 그대로 두지만 이 로그의 accepted 는 "제안 대기"다
+            rec["status"] = "executing"
         if getattr(cmd, "arm", None) is not None:
             rec["arm"] = cmd.arm
         if undone_by is not None:
@@ -86,6 +89,9 @@ class ControlLog:
         if reason is not None:
             rec["reason"] = reason
         self._merge_result(rec, cmd.result)
+        if getattr(cmd, "error_code", None) and cmd.error_code not in ("result_timeout", "result_expired"):
+            # 디스패처가 정한 코드(device_state_unconfirmed·actual_value_unconfirmed 등). 시간 초과는 reason 이 말한다
+            rec["error_code"] = cmd.error_code
         return self._emit(rec, event, now)
 
     # ---------------------------------------------------------------- 디스패처 밖 명령

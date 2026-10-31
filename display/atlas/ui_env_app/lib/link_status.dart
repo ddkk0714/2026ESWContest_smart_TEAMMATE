@@ -20,6 +20,7 @@ enum LinkId {
   posture,
   speaker,
   lamp,
+  fan,
 }
 
 /// 상태. [unconfigured] 는 문제가 아니다 — 스피커를 안 쓰는 설치에서 배지가
@@ -94,6 +95,7 @@ String linkLabel(LinkId id) => switch (id) {
       LinkId.posture => '자세(카메라)',
       LinkId.speaker => '스피커',
       LinkId.lamp => '램프',
+      LinkId.fan => '선풍기',
     };
 
 /// 원인별 권장 조치. 문구는 현장에서 바로 할 수 있는 일 하나로 끝낸다 —
@@ -105,7 +107,7 @@ String linkGuidance(LinkId id, LinkCause cause) {
     case LinkCause.notConfigured:
       return switch (id) {
         LinkId.mqtt => '브로커 주소가 없습니다. 연결 탭에서 Pi 4 IP 를 입력하세요.',
-        LinkId.speaker || LinkId.lamp => '연결 탭에서 기기를 검색해 선택하세요.',
+        LinkId.speaker || LinkId.lamp || LinkId.fan => '연결 탭에서 기기를 검색해 선택하세요.',
         _ => '설정이 없습니다.',
       };
     case LinkCause.demo:
@@ -127,7 +129,7 @@ String linkGuidance(LinkId id, LinkCause cause) {
         LinkId.keystroke =>
           'PC 수집기 값이 끊겼습니다. PC 에서 python -m collector 가 돌고 있는지 확인하세요.',
         LinkId.posture => '자세 판정이 멈췄습니다. 카메라와 판정 서비스를 확인하세요.',
-        LinkId.speaker || LinkId.lamp => '기기 응답이 없습니다. 전원을 확인하세요.',
+        LinkId.speaker || LinkId.lamp || LinkId.fan => '기기 응답이 없습니다. 전원을 확인하세요.',
       };
     case LinkCause.parseError:
       return '받은 메시지를 해석하지 못했습니다. 앱과 hub 버전이 맞는지 확인하세요.';

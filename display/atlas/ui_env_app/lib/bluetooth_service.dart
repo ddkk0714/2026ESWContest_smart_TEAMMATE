@@ -309,12 +309,26 @@ class AtlasBluetoothService {
       if (id.contains('bt') ||
           id.contains('bluetooth') ||
           id.contains('a2dp')) {
+        // 10-24 Pi 5: SetActiveOutputDevice is only allowed for perm_audioroute
+        // (privileged.audioroute in appinfo.json). Without it every reconnect of
+        // an already-routed speaker was rejected and reported as a failed link.
+        if (await _activeOutputDevice() == entry.$1) return true;
         await _audio.callMethod(
             _audioManagerInterface, 'SetActiveOutputDevice', [entry.$1]);
         return true;
       }
     }
     return false;
+  }
+
+  Future<DBusObjectPath?> _activeOutputDevice() async {
+    try {
+      final value = await _audio.getProperty(
+          _audioManagerInterface, 'ActiveOutputDevice');
+      return value is DBusObjectPath ? value : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// AudioManager1.OutputDevices is a(oss): (object path, id, name).
@@ -405,6 +419,24 @@ class AtlasBluetoothService {
     ]);
   }
 
+  /// ReadCharacteristicValues reads the remote device, not a local cache.
+  /// Not yet exercised on a Pi 5; callers treat a failure as "unknown".
+  Future<List<int>?> readCharacteristic(
+    GattConnection connection, {
+    required String serviceId,
+    required String characteristicId,
+  }) async {
+    final result =
+        await _bluetooth.callMethod(_gattInterface, 'ReadCharacteristicValues', [
+      DBusString(connection.adapter),
+      DBusString(serviceId),
+      DBusArray.string([characteristicId]),
+      const DBusString(''),
+      DBusString(connection.clientId),
+    ]);
+    return gattReadBytes(result.returnValues, characteristicId);
+  }
+
   Future<void> close() => _client.close();
 
   static String _string(DBusDict dict, String key) {
@@ -452,6 +484,39 @@ DBusDict gattWritePayload(List<int> frame) =>
       const DBusString('bytes'): DBusVariant(DBusArray(DBusSignature.byte,
           frame.map((byte) => DBusByte(byte)).toList(growable: false))),
     });
+
+/// Bytes of [characteristicId] in a ReadCharacteristicValues reply, or null.
+/// The value dict mirrors writes ({"bytes": [...]}); items may be bytes or ints.
+List<int>? gattReadBytes(List<DBusValue> reply, String characteristicId) {
+  if (reply.isEmpty || reply.first is! DBusArray) return null;
+  final wanted = characteristicId.toLowerCase();
+  DBusValue? unwrap(DBusValue? value) =>
+      value is DBusVariant ? value.value : value;
+  int? asInt(DBusValue value) => switch (value) {
+        DBusByte(:final value) => value,
+        DBusInt16(:final value) => value,
+        DBusUint16(:final value) => value,
+        DBusInt32(:final value) => value,
+        DBusUint32(:final value) => value,
+        _ => null,
+      };
+  for (final entry in (reply.first as DBusArray).children.whereType<DBusDict>()) {
+    final uuid =
+        AtlasBluetoothService._string(entry, 'characteristic').toLowerCase();
+    if (uuid.isNotEmpty && uuid != wanted) continue;
+    final value = unwrap(entry.children[const DBusString('value')]);
+    final bytes = value is DBusDict
+        ? unwrap(value.children[const DBusString('bytes')])
+        : value;
+    if (bytes is! DBusArray) continue;
+    return bytes.children
+        .map(asInt)
+        .whereType<int>()
+        .map((v) => v & 0xff)
+        .toList();
+  }
+  return null;
+}
 
 /// Adapter of [address] in a Gatt.GetStatus reply, or '' when not connected.
 String gattAdapterFor(DBusArray status, String address) {

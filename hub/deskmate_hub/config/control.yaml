@@ -65,6 +65,9 @@ rest_notice:
 # `undo: previous` 는 앱 결과의 previous(바꾸기 전 원시 밝기)로 set_brightness 되돌림 — adjust_brightness 전용.
 actions:
   environment:
+    # vent_fan 실물 = Pico 2 W 블루투스 선풍기(firmware/pico2w_ble_fan). Pi 5 앱이 블루투스 탭에서 고른 선풍기에 실행한다.
+    # 받는 operation: set_power on|off · set_level 0~3(풍량) · set_speed 0~100 · set_mode normal|natural · set_timer 초.
+    # 풍량으로 켜려면 예: {target_id: vent_fan, operation: set_level, value: 3, undo_value: 0}
     - {target_id: vent_fan, operation: set_power, value: "on", undo_value: "off"}
     - {target_id: desk_lamp, operation: adjust_brightness, value: {percent: 30}, undo: previous}   # 10-25: 절대값 70/undo 40 대체
   # ACTION_POSTURE(졸음 drowsy·face_down → 자세성 라우팅) 진입 시 깨우기 (2026-10-24). PC life_sim(devices.yaml) 의

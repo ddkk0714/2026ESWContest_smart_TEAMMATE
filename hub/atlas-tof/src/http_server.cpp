@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 
 namespace tof {
@@ -19,6 +20,18 @@ void sendAll(int fd, const std::string& data) {
         const ssize_t n = ::send(fd, data.data() + off, data.size() - off, MSG_NOSIGNAL);
         if (n <= 0) return;
         off += static_cast<size_t>(n);
+    }
+}
+
+const char* reasonFor(int code) {
+    switch (code) {
+        case 200: return "OK";
+        case 202: return "Accepted";
+        case 400: return "Bad Request";
+        case 409: return "Conflict";
+        case 404: return "Not Found";
+        case 500: return "Internal Server Error";
+        default: return "Error";
     }
 }
 
@@ -84,6 +97,23 @@ void HttpServer::handle(int client) {
         req.append(buf, static_cast<size_t>(n));
     }
     ++requests_;
+    // 본문: Content-Length 만큼 더 읽는다 (POST /api/placement 의 작은 JSON). 64 KB 상한.
+    std::string body;
+    const size_t hdr_end = req.find("\r\n\r\n");
+    if (hdr_end != std::string::npos) {
+        body = req.substr(hdr_end + 4);
+        size_t want = 0;
+        std::string lower;
+        for (char c : req.substr(0, hdr_end)) lower += static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c);
+        const size_t cl = lower.find("content-length:");
+        if (cl != std::string::npos) want = static_cast<size_t>(std::strtoul(lower.c_str() + cl + 15, nullptr, 10));
+        if (want > 65536) want = 65536;
+        while (body.size() < want) {
+            const ssize_t n = ::recv(client, buf, sizeof buf, 0);
+            if (n <= 0) break;
+            body.append(buf, static_cast<size_t>(n));
+        }
+    }
     const size_t sp1 = req.find(' ');
     const size_t sp2 = sp1 == std::string::npos ? sp1 : req.find(' ', sp1 + 1);
     if (sp1 == std::string::npos || sp2 == std::string::npos) {
@@ -95,15 +125,34 @@ void HttpServer::handle(int client) {
     const size_t q = path.find('?');
     if (q != std::string::npos) path.erase(q);
 
-    if (method == "GET" && path == "/health") {
-        sendAll(client, response(200, "OK", handlers_.health ? handlers_.health() : "{}"));
-    } else if (method == "GET" && path == "/api/state") {
-        sendAll(client, response(200, "OK", handlers_.state ? handlers_.state() : "{}"));
-    } else if ((method == "POST" || method == "GET") && path == "/api/reset") {
-        if (handlers_.reset) handlers_.reset();
+    if (method == "OPTIONS") {
+        sendAll(client, response(200, "OK", "", "text/plain"));                 // CORS preflight (앱 WebView)
+    } else if (method == "GET" && path == "/raw" && handlers_.raw) {
+        sendAll(client, response(200, "OK", handlers_.raw()));
+    } else if (method == "GET" && path == "/" && handlers_.raw && !handlers_.state) {
+        sendAll(client, response(200, "OK", handlers_.raw()));                  // raw 전용 리스너: 중계기처럼 / 도 raw
+    } else if (method == "GET" && path == "/api/placement" && handlers_.placement_get) {
+        sendAll(client, response(200, "OK", handlers_.placement_get()));
+    } else if (method == "POST" && path == "/api/placement" && handlers_.placement_post) {
+        std::string out;
+        const int code = handlers_.placement_post(body, out);
+        sendAll(client, response(code, reasonFor(code), out));
+    } else if (method == "GET" && path == "/health" && handlers_.health) {
+        sendAll(client, response(200, "OK", handlers_.health()));
+    } else if (method == "GET" && path == "/api/state" && handlers_.state) {
+        sendAll(client, response(200, "OK", handlers_.state()));
+    } else if ((method == "POST" || method == "GET") && path == "/api/reset" && handlers_.reset) {
+        handlers_.reset();
         sendAll(client, response(200, "OK", "{\"ok\":true}"));
-    } else if (method == "GET" && path == "/") {
-        sendAll(client, response(200, "OK", "deskmate tof posture: GET /health, GET /api/state, POST /api/reset\n", "text/plain"));
+    } else if (handlers_.extra && [&] {
+                   std::string out;
+                   const int code = handlers_.extra(method, path, body, out);
+                   if (code) sendAll(client, response(code, reasonFor(code), out));
+                   return code != 0;
+               }()) {
+        // extra 가 처리했다
+    } else if (method == "GET" && path == "/" && handlers_.state) {
+        sendAll(client, response(200, "OK", "deskmate tof posture: GET /health, GET /api/state, POST /api/reset, GET /raw, GET/POST /api/placement\n", "text/plain"));
     } else {
         sendAll(client, response(404, "Not Found", "{\"error\":\"not found\"}"));
     }

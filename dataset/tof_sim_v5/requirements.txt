@@ -1,0 +1,7 @@
+numpy>=1.26,<2.0
+mujoco>=3.2
+onnx            # export.py 의 ONNX 내보내기
+onnxruntime     # 내보낸 ONNX 확인용 (선택)
+# CPU 판 torch 로 충분하다(모델 약 7만 파라미터):
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.2

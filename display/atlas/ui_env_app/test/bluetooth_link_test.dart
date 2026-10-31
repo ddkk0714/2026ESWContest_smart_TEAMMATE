@@ -55,22 +55,35 @@ class _FakeBluetooth implements AtlasBluetoothService {
 
 /// 램프 재시도 규칙은 Codex 쪽(IlinkLampFeedback) 테스트가 지킨다. 여기서는 결과만 흉내 낸다.
 class _FakeLamp extends IlinkLampFeedback {
-  _FakeLamp(super.bluetooth);
+  _FakeLamp(super.bluetooth) : super(settleDelay: Duration.zero);
   bool connectOk = true;
   String? selected;
   int connects = 0;
 
+  /// 붙어 있다가 끊겨, 백그라운드로 한 번 다시 붙어도 되는 상태(실제 규칙은 feedback_policy_test).
+  bool backgroundRetry = false;
+
+  @override
+  Future<bool> connectInBackground() async {
+    if (connects > 0 && !backgroundRetry) return false;
+    backgroundRetry = false;
+    return connect();
+  }
+
   @override
   void select(String address) => selected = address;
+
+  bool _linked = false;
 
   @override
   Future<bool> connect() async {
     connects++;
+    _linked = connectOk;
     return connectOk;
   }
 
   @override
-  bool get connected => connectOk && connects > 0;
+  bool get connected => _linked;
 
   @override
   Object? get lastError => connectOk ? null : 'GATT 연결 실패';
@@ -138,6 +151,88 @@ void main() {
     expect(lamp.connects, 0);
     expect(links.speakerStatus.health, LinkHealth.unconfigured);
     expect(links.lampStatus.needsAttention, isFalse);
+  });
+
+  test('feedback switch starts on when nothing was saved', () async {
+    // 10-26 Pi 5: the switch started off on every app start, so every hub
+    // lamp/fan command came back feedback_disabled.
+    expect(feedback.enabled, isFalse);
+    await manager().restore();
+    expect(feedback.enabled, isTrue);
+  });
+
+  test('feedback switch is remembered across app starts', () async {
+    final links = manager();
+    await links.restore();
+    links.setFeedbackEnabled(false);
+    expect(feedback.enabled, isFalse);
+    expect(store.load().feedbackEnabled, isFalse);
+
+    feedback.enabled = true;
+    await manager().restore();
+    expect(feedback.enabled, isFalse);
+
+    manager().setFeedbackEnabled(true);
+    expect(store.load().feedbackEnabled, isTrue);
+  });
+
+  test('a lamp that failed at start is left alone in the background',
+      () async {
+    // 10-26 Pi 5: every failed lamp link raised a system popup; they piled up
+    // and the screen froze on the ATLAS logo.
+    store.save(const DeskmateSettings(
+      lamp: SavedBluetoothDevice(
+          address: 'AA:BB:CC:00:00:02', name: 'KLZS-L1 app'),
+    ));
+    lamp.connectOk = false;
+    final links = manager();
+    addTearDown(links.dispose);
+    await links.restore();
+    expect(lamp.connects, 1); // 시작 복원은 한 번
+    links.keepLampConnected(every: const Duration(milliseconds: 10));
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    expect(lamp.connects, 1);
+    expect(links.lampStatus.health, LinkHealth.down);
+  });
+
+  test('a lamp that dropped gets one background retry, only while feedback is on',
+      () async {
+    store.save(const DeskmateSettings(
+      lamp: SavedBluetoothDevice(
+          address: 'AA:BB:CC:00:00:02', name: 'KLZS-L1 app'),
+    ));
+    lamp.connectOk = false;
+    final links = manager();
+    addTearDown(links.dispose);
+    await links.restore();
+    lamp
+      ..backgroundRetry = true // 붙어 있다가 끊긴 상태
+      ..connectOk = true;
+    links.keepLampConnected(every: const Duration(milliseconds: 10));
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    expect(lamp.connects, 2);
+    expect(links.lampStatus.health, LinkHealth.ok);
+
+    lamp
+      ..backgroundRetry = true
+      ..connectOk = false;
+    links.setFeedbackEnabled(false);
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    expect(lamp.connects, 2);
+  });
+
+  test('the lamp keeper leaves a connected lamp alone', () async {
+    store.save(const DeskmateSettings(
+      lamp: SavedBluetoothDevice(
+          address: 'AA:BB:CC:00:00:02', name: 'KLZS-L1 app'),
+    ));
+    final links = manager();
+    addTearDown(links.dispose);
+    await links.restore();
+    expect(lamp.connects, 1);
+    links.keepLampConnected(every: const Duration(milliseconds: 10));
+    await Future<void>.delayed(const Duration(milliseconds: 70));
+    expect(lamp.connects, 1);
   });
 
   test('restore reconnects saved speaker and lamp without scanning', () async {

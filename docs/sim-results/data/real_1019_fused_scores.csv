@@ -1,0 +1,18 @@
+model,acc,macro_f1,note
+base_v4_l8_c256_best (= opt_l8_c256 best),0.365,0.456,1022 번들 후보 `models/opt_l8_c256`
+v5_ft_last,0.279,0.374,
+dz_v5_weak_last,0.258,0.348,약한 끄덕임 보강 중 최고
+dz_v5_weak_best,0.257,0.364,
+rb_ftv4_best,0.238,0.391,
+rb_ft_mis07_best,0.220,0.278,
+rb_ft_best,0.215,0.265,
+rb_ft_last,0.206,0.310,
+rb_ftv4_last,0.198,0.358,
+rb_ft_mis07_last,0.194,0.249,시뮬 자세 한 바퀴 1위(0.846)
+dz_v4_weak_aim_last,0.185,0.278,
+v5_ft_best,0.157,0.249,
+dz_v5_weak_aim_best,0.147,0.230,
+base_v7b_l8v5_c256_best (opt_l8v5_c256),0.147,0.219,
+dz_v4_weak_aim_best,0.134,0.231,
+dz_v5_weak_aim_last,0.100,0.150,
+"(r9_lowlr, 1022 번들 기본)",0.140,0.227,노트북 채점기와 일치 확인됨

@@ -156,6 +156,46 @@ void main() {
       expect(actions, ['mqtt', 'speaker', 'reload', 'address']);
     });
 
+    testWidgets('placement row shows saved and applied values and opens change',
+        (tester) async {
+      var opened = 0;
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: ConnectionPage(
+            snapshot: problem,
+            now: _at(12),
+            sourceLabel: 'MQTT 192.0.2.10:1883',
+            onAction: (_) {},
+            onReloadAll: () {},
+            onChangeAddress: () {},
+            placementLabel: '왼쪽',
+            placementApplied: '왼쪽 · opt_l8_c256_left.json',
+            onChangePlacement: () => opened++,
+          ),
+        ),
+      ));
+      expect(find.byKey(const ValueKey('placement-row')), findsOneWidget);
+      expect(find.text('왼쪽'), findsOneWidget);
+      expect(find.text('Pi 4 자세 서비스: 왼쪽 · opt_l8_c256_left.json'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('placement-change')));
+      expect(opened, 1);
+
+      // 콜백이 없으면 항목 자체가 없다(예전 호출 모양 유지).
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: ConnectionPage(
+            snapshot: problem,
+            now: _at(12),
+            sourceLabel: 'x',
+            onAction: (_) {},
+            onReloadAll: () {},
+            onChangeAddress: () {},
+          ),
+        ),
+      ));
+      expect(find.byKey(const ValueKey('placement-row')), findsNothing);
+    });
+
     testWidgets('badge and status bar appear only with a problem',
         (tester) async {
       var taps = 0;
