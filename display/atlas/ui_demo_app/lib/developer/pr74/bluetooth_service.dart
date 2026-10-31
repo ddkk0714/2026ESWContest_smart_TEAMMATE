@@ -435,13 +435,15 @@ class AtlasBluetoothService {
       } catch (_) {}
       rethrow;
     }
+    var discovered = const <DBusValue>[];
     try {
       await discoverWithRetry(
-          () => _bluetooth.callMethod(
+          () async => discovered = (await _bluetooth.callMethod(
                 _gattInterface,
                 'DiscoverServices',
                 [DBusString(adapter), DBusString(address)],
-              ),
+              ))
+                  .returnValues,
           onError: (error, attempt) => diag
               .write('램프 서비스 검색 실패 $attempt ($address, $clientId): $error'));
     } catch (_) {
@@ -453,7 +455,10 @@ class AtlasBluetoothService {
       } catch (_) {}
       rethrow;
     }
-    final connection = GattConnection(adapter: adapter, clientId: clientId);
+    final services = gattServiceUuids(discovered);
+    diag.write('GATT 서비스 $address: ${services.isEmpty ? '응답에 UUID 없음' : services.join(', ')}');
+    final connection =
+        GattConnection(adapter: adapter, clientId: clientId, services: services);
     _gattConnections[address] = connection;
     return connection;
   }
@@ -557,9 +562,47 @@ class AtlasBluetoothService {
 }
 
 class GattConnection {
-  const GattConnection({required this.adapter, required this.clientId});
+  const GattConnection(
+      {required this.adapter, required this.clientId, this.services = const {}});
   final String adapter;
   final String clientId;
+
+  /// DiscoverServices 응답에서 찾은 128-bit UUID(소문자). ATLAS 응답 형식이 기록돼 있지 않아 비어 있을 수 있다 —
+  /// 쓰는 쪽(선풍기 펌웨어 구분)은 비어 있으면 특성을 읽어 보고 정한다.
+  final Set<String> services;
+}
+
+final _uuidPattern = RegExp(
+    r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
+    caseSensitive: false);
+
+/// D-Bus 응답 어디에 있든 128-bit UUID 문자열을 모은다(서비스·특성 구분 없이).
+Set<String> gattServiceUuids(List<DBusValue> reply) {
+  final found = <String>{};
+  void walk(DBusValue value) {
+    switch (value) {
+      case DBusString(:final value):
+        for (final m in _uuidPattern.allMatches(value)) {
+          found.add(m.group(0)!.toLowerCase());
+        }
+      case DBusVariant(:final value):
+        walk(value);
+      case DBusArray(:final children):
+        children.forEach(walk);
+      case DBusStruct(:final children):
+        children.forEach(walk);
+      case DBusDict(:final children):
+        for (final entry in children.entries) {
+          walk(entry.key);
+          walk(entry.value);
+        }
+      default:
+        break;
+    }
+  }
+
+  reply.forEach(walk);
+  return found;
 }
 
 /// Atlas WriteCharacteristicValue wraps this dict as "value" itself, so the
