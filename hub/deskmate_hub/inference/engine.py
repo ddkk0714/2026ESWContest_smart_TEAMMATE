@@ -86,6 +86,8 @@ class FSMEngine:
     def _hold_ok(self, name: str, now: float, key: str) -> bool:
         """이 단계에 hold 초 이상 머물렀고, 지난 hold 초 tick 중 fatigue_hold_min_frac 이상이 임계 위."""
         w, hold = self._hold_win[name], float(self.tm[key])
+        if hold <= 0:                                    # 0 = 이번 tick 이 임계 위면 바로(_held 의 0 과 같은 뜻, 빠른 시연 demo_mode.py)
+            return bool(w["hist"]) and w["hist"][-1] == (now, True)
         w["hist"] = [(t, a) for t, a in w["hist"] if t > now - hold]
         return (w["t0"] is not None and now - w["t0"] >= hold and bool(w["hist"])
                 and sum(1 for _, a in w["hist"] if a) / len(w["hist"]) >= self._hold_frac)

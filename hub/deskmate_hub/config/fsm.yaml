@@ -50,6 +50,15 @@ timers:
   monitor_window_sec: 0          # MONITOR 판정 전 대기(0 = 다음 tick 에 바로 = 지금 동작). life_sim 10-23: 120 이면 격상·강제 휴식 반복이 준다
   fatigue_hold_min_frac: 1.0     # 위 두 피로 유지(elevated·confirm): 지난 hold 초 tick 중 이 비율 이상이 임계 위면 성립(1.0 = 한 tick 도 안 빠지고 연속 = 지금 동작)
 
+# 빠른 시연(demo_mode.py, 2026-10-31): 화면 버튼 → MQTT deskmate/demo/mode {"speed":"fast"|"normal"} 로 아래 timers 를
+# 실행 중에 덮었다 되돌린다. 판정 경로는 그대로, "얼마나 오래 이어져야 확정하나"만 줄인다. 운영 기본은 꺼 둔다(시연 프로파일이 켠다).
+demo_fast:
+  enabled: false
+  max_on_sec: 1800                 # 켜 둔 채 잊어도 30 분 뒤 normal 로
+  timers:
+    fatigue_elevated_hold_sec: 0   # 0 = 이번 tick 이 임계 위면 바로 의심(엔진 _hold_ok·_held 가 같은 뜻으로 본다)
+    fatigue_confirm_hold_sec: 0    # 0 = 의심 다음 tick 에 임계 위면 바로 확정
+
 # 개입 라우팅 그룹 (dominant = argmax(wᵢ·δᵢ))
 routing:
   environment: [environment]          # 환경성 → ACTION_ENV
