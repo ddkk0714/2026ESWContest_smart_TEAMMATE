@@ -1533,3 +1533,18 @@ def test_progress_prefers_fresh_hub_log():
         st.set_control_log({"error": "not_found"})
     snap = st.snapshot()
     assert "progress" in snap and snap["progress"]["hub_link"]["ok"] is False
+
+
+def test_demo_mode_button_publishes_and_phase_shows_speed():
+    """빠른 시연(hub demo_mode.py, 10-31): 버튼 → deskmate/demo/mode {"speed"}, 지금 모드는 state/phase sensor_summary.demo_mode."""
+    st = dv.Store()
+    st.publisher = FakePub()
+    assert st.send_demo_mode("turbo")["ok"] is False
+    assert st.send_demo_mode("fast")["ok"] is True
+    assert st.publisher.sent[-1] == (dv.TOPIC_DEMO_MODE, {"speed": "fast"})
+    assert dv.PUBLISH_TOPICS[dv.TOPIC_DEMO_MODE] is False           # retain 안 함 — 재시작한 hub 가 옛 요청을 받지 않게
+    env = {"schema_version": "1.0", "data": {"fsm_state": "FOCUS_PC", "sensor_summary": {"demo_mode": {"speed": "fast"}}}}
+    assert dv.phase_view(env)["demo_speed"] == "fast"
+    assert dv.phase_view({"data": {"fsm_state": "FOCUS_PC"}})["demo_speed"] == ""   # 옛 hub
+    st.publisher = None
+    assert st.send_demo_mode("normal")["ok"] is False                 # --read-only

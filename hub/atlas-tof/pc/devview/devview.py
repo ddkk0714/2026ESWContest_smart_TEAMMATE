@@ -51,6 +51,7 @@ TOPIC_REQUEST = "deskmate/interaction/request"
 TOPIC_FEEDBACK = "deskmate/feedback/user"
 TOPIC_HEALTH_HUB = "deskmate/health/hub"
 TOPIC_PROFILE = "deskmate/profile/user"
+TOPIC_DEMO_MODE = "deskmate/demo/mode"   # 빠른 시연 버튼 → hub demo_mode.py {"speed": "fast"|"normal"} (보내기만, 지금 모드는 state/phase)
 
 DASH = "-"
 
@@ -184,6 +185,8 @@ def phase_view(envelope: Any) -> dict[str, Any]:
         "learning": learn,
         "stage2": stage2_text,
         "prior": prior or DASH,
+        # hub 빠른 시연 모드(demo_mode.py): fast·normal, 옛 hub 면 ""
+        "demo_speed": str(_map(ss.get("demo_mode")).get("speed") or ""),
     }
 
 
@@ -2556,6 +2559,12 @@ class Store:
                 self.profile_sent = {"profile_id": prof["profile_id"], "label": label, "at": time.time(), "data": prof}
         return res
 
+    def send_demo_mode(self, speed: Any) -> dict[str, Any]:
+        """빠른 시연 켜기·끄기 — Pi 5 앱 개발자 모드 스위치와 같은 data {"speed"}. hub 가 시연 프로파일이 아니면 무시한다."""
+        if speed not in ("fast", "normal"):
+            return {"ok": False, "error": "speed 는 fast|normal"}
+        return self._send(TOPIC_DEMO_MODE, {"speed": speed}, f"빠른 시연 {'켜기' if speed == 'fast' else '끄기'}")
+
     def send_feedback(self, request_id: Any, verdict: Any) -> dict[str, Any]:
         """Pi 5 앱과 같은 data: {request_id, verdict, response_ms(, kind)}. 되돌리기 = 자동 실행 뒤 reject.
         dismiss = 휴식 알림·자동 안내 닫기(hub 는 counts.dismissed 만 센다 — FSM·제어·ESM 에 안 들어감)."""
@@ -2758,7 +2767,7 @@ def mqtt_loop(host: str, port: int, store: Store, stop: threading.Event, topic: 
 
 PUBLISH_NODE = "laptop-devview"
 # 화면에서 보낼 수 있는 토픽은 이 둘뿐이다(사용자 요청 10-26: 프로필 고르기·카드 응답). 나머지는 계속 읽기만.
-PUBLISH_TOPICS = {TOPIC_PROFILE: True, TOPIC_FEEDBACK: False}   # topic → retain
+PUBLISH_TOPICS = {TOPIC_PROFILE: True, TOPIC_FEEDBACK: False, TOPIC_DEMO_MODE: False}   # topic → retain
 
 
 class Publisher:
@@ -3298,6 +3307,8 @@ def make_handler(store: Store) -> type[BaseHTTPRequestHandler]:
                 res = store.send_profile(_map(body).get("data"), str(_map(body).get("label") or "")[:20])
             elif path == "/api/feedback":
                 res = store.send_feedback(_map(body).get("request_id"), _map(body).get("verdict"))
+            elif path == "/api/demo-mode":
+                res = store.send_demo_mode(_map(body).get("speed"))
             else:
                 self._send(404, b"not found", "text/plain")
                 return

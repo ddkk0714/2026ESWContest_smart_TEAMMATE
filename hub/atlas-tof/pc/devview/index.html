@@ -409,7 +409,8 @@ body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
 <section id="row2">
   <div class="panel">
     <div class="ptitle"><span><b>판정</b> · Pi 4 hub FSM (state/phase)</span><span class="mono" id="seq">-</span></div>
-    <div id="fsmWrap"><span id="fsm">-</span><span id="fsmMeta">-</span></div>
+    <div id="fsmWrap"><span id="fsm">-</span><span id="fsmMeta">-</span>
+      <button class="btn" id="demoFast" title="hub 피로 유지 시간을 줄인다(시연 프로파일에서만) — deskmate/demo/mode">빠른 시연</button></div>
     <div class="meters">
       <div class="meter"><div class="lab"><span>피로도 C_fatigue</span><span class="num" id="fatT">-</span></div><div class="track"><i id="fatB"></i></div></div>
       <div class="meter"><div class="lab"><span>집중 저하 C_focus</span><span class="num" id="focT">-</span></div><div class="track"><i id="focB"></i></div></div>
@@ -626,6 +627,10 @@ function renderJudge(ph, p, profile) {
   $("fsm").style.color = PHASE_COLOR[ph.phase] || "var(--fg)";
   $("fsmMeta").textContent = `단계 ${ph.phase} · 맥락 ${ph.context}`;
   $("seq").textContent = ph.seq == null ? "-" : `seq ${ph.seq}`;
+  const fast = ph.demo_speed === "fast";
+  $("demoFast").textContent = fast ? "빠른 시연 켜짐 · 끄기" : ph.demo_speed ? "빠른 시연 켜기" : "빠른 시연(hub 미지원)";
+  $("demoFast").classList.toggle("warn", fast);
+  $("demoFast").dataset.next = fast ? "normal" : "fast";
   const meter = (v, t, b, color) => { $(t).textContent = f2(v); $(b).style.width = v == null ? "0" : (v * 100).toFixed(1) + "%"; $(b).style.background = color; };
   meter(ph.fatigue, "fatT", "fatB", ph.fatigue >= 0.7 ? "var(--bad)" : ph.fatigue >= 0.45 ? "var(--warn)" : "var(--ok)");
   meter(ph.focus, "focT", "focB", "var(--accent)");
@@ -853,6 +858,11 @@ function showToasts(notices) {
   lastToast = Math.max(lastToast, newest);
 }
 const VLABEL = {accept: "수락", reject: "거절", undo: "되돌리기"};
+// 빠른 시연은 학습 라벨이 아니라 한 번에 보낸다. 지금 모드는 다음 state/phase(10 s 안)에 버튼 글자로 돌아온다
+$("demoFast").onclick = async () => {
+  const r = await post("/api/demo-mode", {speed: $("demoFast").dataset.next || "fast"}).catch(e => ({ok: false, error: e.message}));
+  cardMsg = r.ok ? "빠른 시연 요청 보냄 — 다음 판정(10 s 안)에 반영" : `빠른 시연 보내기 실패: ${r.error}`;
+};
 // 한 번 누르면 '한 번 더 눌러 보내기'(4 s), 두 번째에 보낸다 — 실수로 hub 에 라벨을 보내지 않게
 async function answer(rid, verdict) {
   const now = Date.now();
