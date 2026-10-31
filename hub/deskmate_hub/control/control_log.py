@@ -7,6 +7,8 @@
 - 디스패처(ControlDispatcher.on_record): 계획(제안 대기·쿨다운/비가역/게이트 none 생략) → 발행 → 결과·시간 초과 → 거절·만료·되돌림.
 - 디스패처를 거치지 않는 명령(rest_notice·arm_notice 의 speaker speak/chime): live.py 가 publish 를 감싸 record_published,
   결과는 on_result, 시간 초과는 tick 이 맡는다.
+- 결과의 accepted·executing 은 중간 상태다(event=progress, status 는 executing 그대로, completed_ts 없음).
+  레코드의 status=accepted 는 "제안 대기"(디스패처가 아직 안 보낸 명령) 뜻이라 기기의 accepted 를 그 이름으로 싣지 않는다.
 
 출력(레코드가 바뀔 때마다 그 레코드 전체 스냅샷)
 - JSONL 파일(control.yaml `control_log.path`, 없으면 logs/control-<boot_id>.jsonl). 같은 command_id 가 여러 줄 — 마지막 줄이 최종.
@@ -25,6 +27,8 @@ import os
 import time
 from collections import OrderedDict
 from typing import Any, Callable
+
+from .dispatcher import IN_PROGRESS
 
 Sink = Callable[[dict[str, Any]], None]
 
@@ -62,7 +66,7 @@ class ControlLog:
                        undone_by: str | None = None, now: float | None = None) -> dict[str, Any] | None:
         """ControlDispatcher 의 ControlCommand 스냅샷(ControlDispatcher on_record 훅).
 
-        event: awaiting_user|sent|result|late_result|timeout|skipped|undone. undone_by = 이 명령을 되돌린 명령 id.
+        event: awaiting_user|sent|progress|result|late_result|timeout|skipped|undone. undone_by = 이 명령을 되돌린 명령 id.
         """
         if not self.enabled:
             return None
@@ -113,10 +117,13 @@ class ControlLog:
         if rec.get("status") in TERMINAL:
             self._merge_result(rec, payload)
             return self._emit(rec, "late_result", now)
-        rec["status"] = status if status in ("executing",) + TERMINAL else "failed"
-        if rec["status"] in TERMINAL:
-            rec["completed_ts"] = now
         self._merge_result(rec, payload)
+        if status in IN_PROGRESS:
+            # 기기가 받았다·하는 중 — 끝이 아니다(completed_ts 없음). 최종 결과나 tick 의 시간 초과가 닫는다
+            return self._emit(rec, "progress", now)
+        rec["status"], rec["completed_ts"] = (status if status in TERMINAL else "failed"), now
+        if status not in TERMINAL:
+            rec["reason"] = f"unknown_status:{status}"
         return self._emit(rec, "result", now)
 
     def tick(self, now: float | None = None) -> None:
