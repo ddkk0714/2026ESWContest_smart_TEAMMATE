@@ -44,6 +44,7 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 | `deskmate/feedback/user` | display | hub | 이벤트 | 사용자 수락 · 정정 · 조명 직접 조절 보고(`kind: manual_adjust`) |
 | `deskmate/profile/user` | Pi 5 앱 | hub(personalize) | 온보딩·설정 변경 시(retain, QoS 1) | 첫 설정 프로필. FSM 입력이 아니라 개입 선택의 기준(prior)·취침 시각에만 쓴다 |
 | `deskmate/fatigue/label` | Pi 5 피로 기록 앱(`display/atlas/fatigue_app`) | PC `tools/fatigue_logger.py`, hub | 이벤트, QoS 1 | 피로 데이터 수집: 작업 시작·끝, 15분 KSS 응답. hub 는 피로 점수 문맥·프로필 보정에만 씀, FSM 입력 아님 ([fatigue-dataset.md](fatigue-dataset.md)) |
+| `deskmate/demo/mode` | Pi 5 앱 개발자 화면·devview | hub | 버튼을 누를 때(QoS 1, **retain 없음**) | 빠른 시연 켜기·끄기 `{"speed": "fast"\|"normal"}`. `demo_fast.enabled` 가 true 인 설정에서만 반영(기본값상 demo-* 프로파일) |
 | `deskmate/health/<node>` | 전 장치 | hub | LWT/retain | `{ts,node,status:online|offline,reconnects}`. hub 는 `deskmate/health/hub` |
 
 ## 페이로드 예시
@@ -220,6 +221,11 @@ Pi 5의 **PC 키스트로크** 탭은 앱에 설정된 동일 MQTT 브로커에�
       "flight_mean_ms": 148.2, "flight_std_ms": 63.5,
       "idle_ratio": 0.18, "correction_rate": 0.07,
       "valid": true
+    },
+    "demo_mode": {              // 빠른 시연 상태(2026-10-31). 아래 deskmate/demo/mode 참고
+      "speed": "fast", "enabled": true,
+      "since": 1769000000.0, "remaining_s": 1790,
+      "timers": {"fatigue_elevated_hold_sec": 0.0, "fatigue_confirm_hold_sec": 0.0}
     }
   }
   }
@@ -252,6 +258,29 @@ envelope를 사용하므로 최종 전송 어댑터를 바꿔도 display 모델�
 
 collector 규약 추가분(`typing_active` · `flight_cv` · `mouse_event_rate`)은 오면 쓰고 없으면
 비운다. `flight_cv`가 없으면 display가 `flight_std_ms / flight_mean_ms`로 만들어 쓴다.
+
+`sensor_summary.demo_mode` 는 빠른 시연 상태다(hub `demo_mode.py`, 2026-10-31). 항상 `speed`(`normal`|`fast`)와
+`enabled`(이 hub 설정에서 fast 를 받아 주는지 = `demo_fast.enabled`)를 싣는다. `fast` 일 때만 `since`(켠 시각, hub 시계),
+`timers`(지금 덮어쓴 FSM 타이머 값), `remaining_s`(자동 해제까지 남은 초, `max_on_sec` 이 0 이면 생략)를 더한다.
+화면은 `speed` 가 `fast` 면 "빠른 시연" 배지를 띄운다.
+
+### `deskmate/demo/mode`
+
+```json
+{ "schema_version": "1.0", "ts": 1769000000.0, "node": "atlas-display", "data": { "speed": "fast" } }
+```
+
+빠른 시연 켜기·끄기(2026-10-31). 판정 경로는 그대로 두고 `fsm.yaml demo_fast.timers` 에 적은 FSM 유지 타이머만
+실행 중에 바꾼다(기본: `fatigue_elevated_hold_sec`·`fatigue_confirm_hold_sec` 를 0 으로 → 엎드림부터 무드등 명령까지 약 60 s → 약 30 s).
+
+- **payload**: `{"speed": "fast"|"normal"}`. 공통 envelope 이든 `data` 만이든 받는다. 다른 값은 로그만 남기고 무시한다.
+- **기본값·재시작**: hub 는 항상 `normal` 로 시작한다. 재시작하면 `fast` 였어도 `normal` 이다.
+- **적용 범위**: 허용 여부는 프로파일 이름이 아니라 최종 설정의 `demo_fast.enabled` 로 정한다. `fsm.yaml` 기본은 `false`(운영),
+  저장소 기본 설정에서는 demo-a·demo-b·demo-b-study 프로파일의 `fsm:` 절이 `true` 로 덮는다. `false` 면 `fast` 를 받아도 무시한다.
+- **자동 복원**: `fast` 로 둔 채 잊어도 `demo_fast.max_on_sec`(기본 1800 s = 30 분) 뒤 `normal` 로 돌아간다. `normal` 로 돌아가면
+  켜기 전 타이머 값으로 되돌린다.
+- **retain 없음**: 버튼 한 번이 한 번의 전환이다. retain 하면 hub 재시작 뒤 지난 `fast` 가 되살아나므로 발행 측은 retain 을 켜지 않는다.
+- 지금 상태는 이 토픽이 아니라 `state/phase` 의 `sensor_summary.demo_mode` 로 읽는다.
 
 ### `deskmate/display/message`
 
@@ -419,6 +448,7 @@ ESM·제어 승인에 쓰지 않고, 허브가 밝힌 뒤 `implicit.dim_window_m
 - `sensor/weather` 는 QoS 0 + retain (주기가 길어 재시작 시 마지막 값을 바로 받는다. stale 판정은 hub 가 `fetched_at` 으로)
 - `state/phase` · `display/message` · `session/report` · `interaction/request` · `control/cmd` · `feedback/user`: QoS 1
 - `state/phase` 는 retain 을 켜서 디스플레이 재시작 시 즉시 현재 상태를 받는다
+- `demo/mode` 는 QoS 1, retain 을 끈다(재시작하면 normal 로 시작해야 한다).
 - `display/message` 는 retain 을 끈다. 이전 문구가 재시작 뒤 다시 표시되거나 broker에 남지 않게 한다.
 - 노드는 재연결 시 지수 백오프(1s → 최대 30s)
 
