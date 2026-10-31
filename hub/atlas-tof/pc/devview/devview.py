@@ -2351,6 +2351,7 @@ class TriggerTracker:
 
 CONTROL_RESULT_TIMEOUT_S = 15.0     # hub control.yaml result_timeout_sec — MQTT 로 추정할 때만 쓴다
 TERMINAL_STATUSES = ("succeeded", "failed", "timeout", "cancelled", "skipped")
+IN_PROGRESS_STATUSES = ("accepted", "executing")   # control/result 중간 상태 — 명령을 닫지 않는다(data-spec control_result)
 
 
 def _clock_text(ts: Any) -> str:
@@ -2440,6 +2441,14 @@ def progress_words(r: dict[str, Any], latency: Any) -> dict[str, Any]:
             "latency_ko": "" if r.get("status") == "timeout" else _latency_ko(latency)}
 
 
+def _row_latency(r: dict[str, Any]) -> Any:
+    """명령→최종 결과(ms). 끝나지 않았으면(accepted·executing·추정 시간 초과) None."""
+    if r.get("latency_ms") is not None:
+        return r["latency_ms"]
+    sent, done = _num(r.get("sent_ts")), _num(r.get("completed_ts"))
+    return int(round((done - sent) * 1000)) if sent is not None and done is not None else None
+
+
 def progress_summary(rows: list[dict[str, Any]], ok_latencies: list[Any]) -> dict[str, Any]:
     """표 위 요약: 전체·성공·실패(응답 없음 포함)·생략·진행 중, 성공률(끝난 것 중), 성공한 명령의 평균 응답."""
     c: dict[str, int] = {}
@@ -2491,10 +2500,12 @@ class ControlProgress:
             if row is None:
                 return                      # 이 화면이 명령을 못 본 결과(켜기 전 명령)는 줄을 만들지 않는다
             status = str(data.get("status") or "").lower()
-            if row.get("status") not in TERMINAL_STATUSES or status in TERMINAL_STATUSES:
-                row["status"] = status if status in ("executing",) + TERMINAL_STATUSES else "failed"
-            if row["status"] in TERMINAL_STATUSES and row.get("completed_ts") is None:
-                row["completed_ts"] = at
+            # 이미 끝난 명령은 상태·완료 시각을 그대로 두고 값만 보충한다(hub control_log 와 같게). accepted·executing 은
+            # 기기가 받았다·하는 중이라 끝이 아니다 — status 는 executing 그대로, completed_ts 없음. 최종 결과에서만 닫는다
+            if row.get("status") not in TERMINAL_STATUSES and status not in IN_PROGRESS_STATUSES:
+                row["status"], row["completed_ts"] = (status if status in TERMINAL_STATUSES else "failed"), at
+                if status not in TERMINAL_STATUSES:
+                    row["reason"] = f"unknown_status:{status}"
             for k in ("error_code", "previous", "actual", "recovery"):
                 if k in data:
                     row[k] = data[k]
@@ -2518,10 +2529,7 @@ class ControlProgress:
         rows.sort(key=lambda r: _num(r.get("created_ts")) or 0.0, reverse=True)
         out = []
         for r in rows[:limit]:
-            sent, done = _num(r.get("sent_ts")), _num(r.get("completed_ts"))
-            latency = r.get("latency_ms")
-            if latency is None and sent is not None and done is not None:
-                latency = int(round((done - sent) * 1000))
+            latency = _row_latency(r)
             op = str(r.get("operation") or "?")
             value = _value_text(op, r.get("value")).strip()
             if op == "speak" and isinstance(r.get("value"), dict) and r["value"].get("text"):
@@ -2540,7 +2548,7 @@ class ControlProgress:
         for r in rows:
             counts[r.get("status") or "?"] = counts.get(r.get("status") or "?", 0) + 1
         return {"source": source, "rows": out, "total": len(rows), "counts": counts,
-                "summary": progress_summary(rows, [o["latency_ms"] for o in out if o["status"] == "succeeded"])}
+                "summary": progress_summary(rows, [_row_latency(r) for r in rows if r.get("status") == "succeeded"])}
 
 
 class Store:
