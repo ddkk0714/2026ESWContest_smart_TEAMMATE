@@ -11,7 +11,8 @@ Map<String, Object?> cmd(String target, String operation, Object? value,
         {String gate = 'auto',
         String origin = 'ACTION_POSTURE',
         String cause = 'posture',
-        String id = 'c1'}) =>
+        String id = 'c1',
+        String? undoOf}) =>
     {
       'schema_version': '1.0',
       'ts': 1769000010.0,
@@ -25,6 +26,7 @@ Map<String, Object?> cmd(String target, String operation, Object? value,
         'cause': cause,
         'gate': gate,
         'requires_confirmation': false,
+        if (undoOf != null) 'undo_of': undoOf,
       },
     };
 
@@ -103,6 +105,11 @@ void main() {
       transport.deliver(LiveLink.commandTopic,
           cmd('desk_lamp', 'set_brightness', 120, gate: 'undo', id: 'u1'));
       card = link.autoActions.current(now)!;
+      expect(card.undoCommandId, 'u1');
+      expect(card.status, AutoActionStatus.undoing); // 명령만으론 아직 — 결과를 본다
+      expect(card.statusTextAt(now), '원래대로 돌려 두는 중이에요…');
+      transport.deliver(LiveLink.resultTopic, result('u1', 'succeeded'));
+      card = link.autoActions.current(now)!;
       expect(card.status, AutoActionStatus.undone);
       expect(card.statusTextAt(now), '원래대로 돌려 뒀어요. 다음엔 다른 방법을 찾아볼게요');
       link.dispose();
@@ -179,6 +186,101 @@ void main() {
     expect(link.autoActions.current(now)!.statusTextAt(now),
         '알겠어요. 다음엔 다른 방법으로 다가갈게요');
     link.dispose();
+  });
+
+  group('되돌리기 명령의 결과로만 되돌림(PR #90 리뷰)', () {
+    const failedText = '원래대로 돌리지 못했어요. 그래도 다음엔 다른 방법을 찾아볼게요';
+
+    Future<(LiveLink, FakeTransport, DateTime Function(), void Function(Duration))>
+        undoRequested() async {
+      var now = DateTime(2026, 11, 6, 14);
+      final (link, transport) = await connected(clock: () => now);
+      transport.deliver(LiveLink.commandTopic,
+          cmd('desk_lamp', 'adjust_brightness', {'percent': 60, 'min_raw': 153}));
+      transport.deliver(LiveLink.resultTopic, result('c1', 'succeeded'));
+      now = now.add(const Duration(seconds: 20));
+      expect(link.undoAutoAction(), isTrue);
+      return (link, transport, () => now, (Duration d) => now = now.add(d));
+    }
+
+    test('리뷰 재현: u1 이 ble_not_connected 로 실패하면 되돌렸다고 하지 않는다', () async {
+      final (link, transport, now, _) = await undoRequested();
+      transport.deliver(LiveLink.commandTopic,
+          cmd('desk_lamp', 'set_brightness', 96, gate: 'undo', id: 'u1'));
+      transport.deliver(LiveLink.resultTopic,
+          result('u1', 'failed', error: 'ble_not_connected'));
+      final card = link.autoActions.current(now())!;
+      expect(card.status, isNot(AutoActionStatus.undone));
+      expect(card.status, AutoActionStatus.undoFailed);
+      expect(card.failure, 'ble_not_connected');
+      expect(card.statusTextAt(now()), failedText); // 오류 코드는 제품 화면에 안 낸다
+      expect(card.canUndo(now()), isFalse);
+      link.dispose();
+    });
+
+    test('u1 결과가 timeout 이거나 15 s 안 오면 되돌리지 못한 것', () async {
+      final (link, transport, now, advance) = await undoRequested();
+      transport.deliver(LiveLink.commandTopic,
+          cmd('desk_lamp', 'set_brightness', 96, gate: 'undo', id: 'u1'));
+      advance(const Duration(seconds: 14));
+      expect(link.autoActions.current(now())!.statusTextAt(now()),
+          '원래대로 돌려 두는 중이에요…'); // 되돌리기 명령이 왔으니 "학습만" 문구가 아니다
+      advance(const Duration(seconds: 1));
+      final waited = link.autoActions.current(now())!;
+      expect(waited.status, AutoActionStatus.undoing);
+      expect(waited.statusTextAt(now()), failedText);
+      transport.deliver(LiveLink.resultTopic, result('u1', 'timeout'));
+      final card = link.autoActions.current(now())!;
+      expect(card.status, AutoActionStatus.undoFailed);
+      expect(card.failure, 'timeout');
+      link.dispose();
+    });
+
+    test('다른 기기의 되돌리기·늦은 성공 결과는 묶지 않는다', () async {
+      final (link, transport, now, _) = await undoRequested();
+      transport.deliver(LiveLink.commandTopic,
+          cmd('vent_fan', 'set_power', 'off', gate: 'undo', id: 'u9'));
+      transport.deliver(LiveLink.resultTopic, result('u9', 'succeeded'));
+      var card = link.autoActions.current(now())!;
+      expect(card.undoCommandId, isNull);
+      expect(card.status, AutoActionStatus.undoing);
+      // 같은 기기의 첫 되돌리기만 — 두 번째는 묶지 않는다
+      transport.deliver(LiveLink.commandTopic,
+          cmd('desk_lamp', 'set_brightness', 96, gate: 'undo', id: 'u1'));
+      transport.deliver(LiveLink.commandTopic,
+          cmd('desk_lamp', 'set_brightness', 96, gate: 'undo', id: 'u2'));
+      transport.deliver(LiveLink.resultTopic, result('u2', 'succeeded'));
+      card = link.autoActions.current(now())!;
+      expect(card.undoCommandId, 'u1');
+      expect(card.status, AutoActionStatus.undoing);
+      link.dispose();
+    });
+
+    test('undo_of 가 있으면 그 id 로만 — 다른 카드의 되돌리기는 묶지 않는다', () async {
+      final (link, transport, now, _) = await undoRequested();
+      transport.deliver(LiveLink.commandTopic,
+          cmd('desk_lamp', 'set_brightness', 96, gate: 'undo', id: 'u0', undoOf: 'c0'));
+      expect(link.autoActions.current(now())!.undoCommandId, isNull);
+      transport.deliver(LiveLink.commandTopic,
+          cmd('desk_lamp', 'set_brightness', 96, gate: 'undo', id: 'u1', undoOf: 'c1'));
+      transport.deliver(LiveLink.resultTopic, result('u1', 'succeeded'));
+      expect(link.autoActions.current(now())!.status, AutoActionStatus.undone);
+      link.dispose();
+    });
+
+    test('이 카드가 되돌리기를 보내지 않았으면 같은 기기 되돌리기도 묶지 않는다', () async {
+      final now = DateTime(2026, 11, 6, 14);
+      final (link, transport) = await connected(clock: () => now);
+      transport.deliver(LiveLink.commandTopic,
+          cmd('desk_lamp', 'adjust_brightness', {'percent': 60}, id: 'c2'));
+      transport.deliver(LiveLink.commandTopic,
+          cmd('desk_lamp', 'set_brightness', 96, gate: 'undo', id: 'u1'));
+      transport.deliver(LiveLink.resultTopic, result('u1', 'succeeded'));
+      final card = link.autoActions.current(now)!;
+      expect(card.status, AutoActionStatus.sent);
+      expect(card.canUndo(now), isTrue);
+      link.dispose();
+    });
   });
 
   group('빠른 시연', () {

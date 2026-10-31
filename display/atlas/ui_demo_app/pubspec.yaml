@@ -1,5 +1,5 @@
 name: deskmate_ui_demo
-description: DESKMATE V30 display UI for Atlas Pi 5 — follows the board over MQTT, in-memory when unreachable.
+description: DESKMATE V31 display UI for Atlas Pi 5 — follows the board over MQTT, in-memory when unreachable.
 publish_to: none
 version: 0.27.0+27
 environment:

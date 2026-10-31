@@ -32,7 +32,15 @@ const autoCardShowFor = Duration(seconds: 90);
 /// (hub 가 이전 밝기를 모르거나 되돌리기 창을 넘겼을 때 — dispatcher 는 명령 없이 정책에만 undo 를 준다).
 const autoUndoWait = Duration(seconds: 10);
 
-enum AutoActionStatus { sent, done, failed, undoing, undone }
+/// 되돌리기 명령(gate undo)이 온 뒤 그 명령의 결과를 기다리는 시간. 안 오면 되돌리지 못한 것으로 본다
+/// (제어 진행 탭의 시간 초과와 같은 15 s).
+const autoUndoResultWait = Duration(seconds: 15);
+
+/// 이 카드가 되돌리기를 보낸 뒤, undo_of 없는 되돌리기 명령을 이 카드 것으로 받아 주는 시간(hub undo_window_sec 와 같다).
+const autoUndoLinkWindow = Duration(seconds: 60);
+
+/// [undone] 은 되돌리기 명령의 결과가 succeeded 일 때만. 실패·시간 초과면 [undoFailed].
+enum AutoActionStatus { sent, done, failed, undoing, undone, undoFailed }
 
 @immutable
 class AutoActionCard {
@@ -46,6 +54,8 @@ class AutoActionCard {
     this.status = AutoActionStatus.sent,
     this.failure,
     this.undoSentAt,
+    this.undoCommandId,
+    this.undoCommandAt,
   });
 
   final String commandId;
@@ -64,6 +74,10 @@ class AutoActionCard {
   /// 되돌리기를 보낸 시각. 보내지 않았으면 null.
   final DateTime? undoSentAt;
 
+  /// 이 카드에 묶은 hub 되돌리기 명령(gate undo)의 command_id 와 받은 시각. 그 id 의 결과로만 되돌림을 판정한다.
+  final String? undoCommandId;
+  final DateTime? undoCommandAt;
+
   DateTime get undoUntil => executedAt.add(autoUndoWindow);
 
   bool canUndo(DateTime now) =>
@@ -79,21 +93,34 @@ class AutoActionCard {
   }
 
   /// 제목 아래 상태 한 줄. 실행 중·성공이면 null(제목이 이미 말한다).
-  /// 되돌리기는 두 갈래: hub 가 기기를 되돌렸으면(gate undo 명령) "되돌렸어요", [autoUndoWait] 안에 그 명령이 없으면
-  /// 기기는 그대로이고 학습(다음엔 덜 고름)만 남았다.
+  /// 되돌리기는 세 갈래: hub 되돌리기 명령의 결과가 succeeded 면 "돌려 뒀어요", 실패·시간 초과([autoUndoResultWait])면
+  /// "돌리지 못했어요", [autoUndoWait] 안에 되돌리기 명령 자체가 없으면 기기는 그대로. 어느 쪽이든 reject 는 hub 에 갔으니
+  /// 학습(다음엔 덜 고름)은 남는다.
   String? statusTextAt(DateTime now) => switch (status) {
         AutoActionStatus.failed => '잠시 기기에 닿지 못했어요',
         AutoActionStatus.undoing
-            when undoSentAt != null &&
+            when undoCommandAt != null &&
+                !now.isBefore(undoCommandAt!.add(autoUndoResultWait)) =>
+          _undoFailedText,
+        AutoActionStatus.undoing
+            when undoCommandId == null &&
+                undoSentAt != null &&
                 !now.isBefore(undoSentAt!.add(autoUndoWait)) =>
           '알겠어요. 다음엔 다른 방법으로 다가갈게요',
         AutoActionStatus.undoing => '원래대로 돌려 두는 중이에요…',
         AutoActionStatus.undone => '원래대로 돌려 뒀어요. 다음엔 다른 방법을 찾아볼게요',
+        AutoActionStatus.undoFailed => _undoFailedText,
         _ => null,
       };
 
+  static const _undoFailedText = '원래대로 돌리지 못했어요. 그래도 다음엔 다른 방법을 찾아볼게요';
+
   AutoActionCard copyWith(
-          {AutoActionStatus? status, String? failure, DateTime? undoSentAt}) =>
+          {AutoActionStatus? status,
+          String? failure,
+          DateTime? undoSentAt,
+          String? undoCommandId,
+          DateTime? undoCommandAt}) =>
       AutoActionCard(
         commandId: commandId,
         targetId: targetId,
@@ -104,6 +131,8 @@ class AutoActionCard {
         status: status ?? this.status,
         failure: failure ?? this.failure,
         undoSentAt: undoSentAt ?? this.undoSentAt,
+        undoCommandId: undoCommandId ?? this.undoCommandId,
+        undoCommandAt: undoCommandAt ?? this.undoCommandAt,
       );
 }
 
@@ -206,15 +235,20 @@ class AutoActionBoard extends ChangeNotifier {
     return card == null || card.expired(now) ? null : card;
   }
 
-  /// `control/cmd` data. 자동(gate auto) 기기 명령이면 카드를 띄우고, 되돌리기 명령(gate undo)이면 되돌림으로 표시한다.
+  /// `control/cmd` data. 자동(gate auto) 기기 명령이면 카드를 띄우고, 되돌리기 명령(gate undo)이면 이 카드에 묶어
+  /// 그 command_id 의 결과를 기다린다(되돌림 판정은 [onResult]).
   void onCommand(Map<String, dynamic> data, DisplayState? state, DateTime now) {
     final target = data['target_id']?.toString() ?? '';
     final operation = data['operation']?.toString() ?? '';
     final gate = data['gate']?.toString();
     final card = _current;
     if (gate == 'undo') {
-      if (card != null && card.targetId == target) {
-        _current = card.copyWith(status: AutoActionStatus.undone);
+      final id = data['command_id']?.toString() ?? '';
+      if (card != null && id.isNotEmpty && _undoBelongsTo(card, data, target, now)) {
+        _current = card.copyWith(
+            status: AutoActionStatus.undoing,
+            undoCommandId: id,
+            undoCommandAt: now);
         notifyListeners();
       }
       return;
@@ -237,14 +271,45 @@ class AutoActionBoard extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// `control/result` data — 같은 command_id 면 성공·실패를 붙인다.
+  /// 되돌리기 명령이 이 카드 것인가. undo_of 가 있으면 그것만 본다. 없으면 이 카드가 되돌리기를 보낸 뒤
+  /// [autoUndoLinkWindow] 안에 온 같은 기기의 첫 되돌리기만 — 다른 카드(같은 기기라도)의 되돌리기는 묶지 않는다.
+  static bool _undoBelongsTo(AutoActionCard card, Map<String, dynamic> data,
+      String target, DateTime now) {
+    final undoOf = data['undo_of']?.toString();
+    if (undoOf != null && undoOf.isNotEmpty) return undoOf == card.commandId;
+    final sentAt = card.undoSentAt;
+    return card.undoCommandId == null &&
+        card.status == AutoActionStatus.undoing &&
+        sentAt != null &&
+        card.targetId == target &&
+        now.isBefore(sentAt.add(autoUndoLinkWindow));
+  }
+
+  /// `control/result` data — 원 명령이면 성공·실패를, 묶인 되돌리기 명령이면 되돌림 성공·실패를 붙인다.
   void onResult(Map<String, dynamic> data) {
     final card = _current;
-    if (card == null || data['command_id']?.toString() != card.commandId) {
+    if (card == null) return;
+    final id = data['command_id']?.toString();
+    if (id != null && id == card.undoCommandId) {
+      if (card.status != AutoActionStatus.undoing) return;
+      final status = data['status']?.toString();
+      if (status == 'succeeded') {
+        _current = card.copyWith(status: AutoActionStatus.undone);
+      } else if (status == 'failed' || status == 'timeout') {
+        final code = data['error_code']?.toString();
+        _current = card.copyWith(
+            status: AutoActionStatus.undoFailed,
+            failure: code == null || code.isEmpty ? status : code);
+      } else {
+        return;
+      }
+      notifyListeners();
       return;
     }
+    if (id != card.commandId) return;
     if (card.status == AutoActionStatus.undoing ||
-        card.status == AutoActionStatus.undone) {
+        card.status == AutoActionStatus.undone ||
+        card.status == AutoActionStatus.undoFailed) {
       return;
     }
     final status = data['status']?.toString();
@@ -261,7 +326,7 @@ class AutoActionBoard extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 되돌리기를 보냈다 — hub 의 되돌리기 명령(gate undo)이 오면 [AutoActionStatus.undone].
+  /// 되돌리기를 보냈다 — hub 의 되돌리기 명령(gate undo)이 오면 묶고, 그 결과가 succeeded 면 [AutoActionStatus.undone].
   void markUndoing(DateTime now) {
     final card = _current;
     if (card == null) return;
