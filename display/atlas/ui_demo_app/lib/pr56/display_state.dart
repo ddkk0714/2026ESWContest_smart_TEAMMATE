@@ -36,6 +36,11 @@ class DisplayState {
     this.personalizationStatus,
     this.personalizationLabel,
     this.personalizationConfidence,
+    this.interventionArm,
+    this.interventionArmLabel,
+    this.interventionSource,
+    this.interventionPersonalCount,
+    this.demoSpeed,
   });
 
   final String fsmState;
@@ -92,6 +97,18 @@ class DisplayState {
   final String? personalizationLabel;
   final double? personalizationConfidence;
 
+  /// 개입 선택 정책이 고른 arm·이름·출처(`sensor_summary.personalize` arm·arm_label·source(bandit·fallback·fsm_fixed)·
+  /// n_personal). 자동 실행 카드가 "처음 설정한 취향으로 골랐어요" 를 붙일지 정한다. 없으면 null.
+  final String? interventionArm;
+  final String? interventionArmLabel;
+  final String? interventionSource;
+  final int? interventionPersonalCount;
+
+  /// hub 빠른 시연 모드(`sensor_summary.demo_mode.speed`): fast · normal. 옛 hub 면 null.
+  final String? demoSpeed;
+
+  bool get demoFast => demoSpeed == 'fast';
+
   factory DisplayState.fromEnvelope(Map<String, dynamic> envelope) {
     if (envelope['schema_version'] != '1.0') {
       throw const FormatException('unsupported schema_version');
@@ -103,6 +120,9 @@ class DisplayState {
     final explanation = personalize['explanation'];
     final tof = _map(sensors['tof']);
     final observation = _map(sensors['personalization']);
+    final demo = _map(sensors['demo_mode']);
+    String? text(Object? v) =>
+        v is String && v.trim().isNotEmpty ? v.trim() : null;
     return DisplayState(
       fsmState: _requiredString(data, 'fsm_state'),
       phase: _requiredString(data, 'phase'),
@@ -151,6 +171,11 @@ class DisplayState {
       personalizationStatus: observation['status']?.toString(),
       personalizationLabel: observation['label']?.toString(),
       personalizationConfidence: _nullableDouble(observation['confidence']),
+      interventionArm: text(personalize['arm']),
+      interventionArmLabel: text(personalize['arm_label']),
+      interventionSource: text(personalize['source']),
+      interventionPersonalCount: _nullableInt(personalize['n_personal']),
+      demoSpeed: text(demo['speed']),
     );
   }
 

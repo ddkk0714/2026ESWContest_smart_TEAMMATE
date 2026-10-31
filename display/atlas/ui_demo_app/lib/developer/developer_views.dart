@@ -134,7 +134,10 @@ class _DeveloperScreenState extends State<DeveloperScreen> {
                                     placement: c.settings.load().placement,
                                     defaultOnStart: c.defaultOnStart,
                                     onDefaultOnStartChanged: c.setDefault,
-                                    connectionLabel: c.live.status.name),
+                                    connectionLabel: c.live.status.name,
+                                    demoFast: c.live.state?.demoFast,
+                                    onDemoFastChanged: (fast) =>
+                                        c.live.setDemoSpeed(fast)),
                                 DeveloperTab.connection => ConnectionPage(
                                     snapshot: c.snapshot,
                                     now: DateTime.now(),

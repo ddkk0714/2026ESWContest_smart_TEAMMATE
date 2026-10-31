@@ -16,6 +16,7 @@ import 'package:flutter/foundation.dart';
 import '../demo_model.dart';
 import '../pr56/display_state.dart';
 import '../developer/pr74/voice_alert.dart';
+import 'auto_action.dart';
 import 'device_board.dart';
 import 'link_settings.dart';
 import 'live_request.dart';
@@ -82,6 +83,7 @@ class LiveLink extends ChangeNotifier {
     // node 는 개발자 앱(ui_env_app, `display`)과 hub 로그에서 구분되게 `pi5-ui`.
     // hub(mqtt_lines.route_mqtt_message → live.tick_once)·보드 C++ 브리지는 feedback 의 node 로 거르지 않는다(10-25 확인).
     notices.addListener(_notify);
+    autoActions.addListener(_notify);
     _feedbackWriter = EnvelopeWriter(node: nodeName, clock: _clock);
     _profileWriter = EnvelopeWriter(node: nodeName, clock: _clock);
   }
@@ -96,6 +98,9 @@ class LiveLink extends ChangeNotifier {
   static const weatherTopic = 'deskmate/sensor/weather';
   static const keystrokeTopic = 'deskmate/sensor/keystroke';
   static const feedbackTopic = 'deskmate/feedback/user';
+
+  /// 빠른 시연 버튼 → hub demo_mode.py {"speed": "fast"|"normal"}. 보내기만 한다(지금 모드는 state/phase 로 받는다).
+  static const demoModeTopic = 'deskmate/demo/mode';
   static const subscriptions = [
     stateTopic,
     requestTopic,
@@ -133,6 +138,9 @@ class LiveLink extends ChangeNotifier {
   DateTime? stateAt;
   LiveRequest? request;
   final devices = DeviceBoard();
+
+  /// hub 자동 실행(무드등·선풍기·공기청정기) 카드 — 무엇을 왜 했는지 + 되돌리기(auto_action.dart).
+  final autoActions = AutoActionBoard();
   LiveWeather? weather;
   LiveReport? report;
 
@@ -164,6 +172,9 @@ class LiveLink extends ChangeNotifier {
   }
 
   bool get configured => host.isNotEmpty;
+
+  /// 이 연결의 시계(자동 실행 카드의 되돌리기 남은 시간을 같은 시계로 잰다).
+  DateTime get now => _clock();
 
   /// 저장된 주소를 읽고, 있으면 연결을 시작한다.
   void start() {
@@ -300,9 +311,11 @@ class LiveLink extends ChangeNotifier {
         case commandTopic:
           if (message.retained) return;
           devices.onCommand(data);
+          autoActions.onCommand(data, state, _clock());
         case resultTopic:
           if (message.retained) return;
           devices.onResult(data);
+          autoActions.onResult(data);
         case healthTopic:
           final health = data['status'] ?? envelope['status'];
           if (health is String && health.isNotEmpty) hubHealth = health;
@@ -344,6 +357,26 @@ class LiveLink extends ChangeNotifier {
     _notify();
     return sent;
   }
+
+  /// 자동 실행 카드의 되돌리기. hub 는 질문 없는 reject(request_id atlas-display)를 직전 자동 실행의 되돌리기로 받는다 —
+  /// 디스패처가 undo_window_sec(60 s) 안이면 이전 밝기로 되돌리고, 개인화 정책은 그 방법에 undo 보상을 준다. 보냈으면 true.
+  bool undoAutoAction() {
+    final card = autoActions.current(_clock());
+    if (card == null || !card.canUndo(_clock())) return false;
+    final ms = _clock().difference(card.executedAt).inMilliseconds;
+    final sent = publishData(
+        feedbackTopic,
+        buildFeedbackData(
+            requestId: 'atlas-display',
+            verdict: 'reject',
+            responseMs: ms < 0 ? 0 : ms));
+    if (sent) autoActions.markUndoing();
+    return sent;
+  }
+
+  /// 빠른 시연 켜기·끄기. hub 가 시연 프로파일이 아니면 받아도 무시한다(fsm.yaml demo_fast.enabled). 보냈으면 true.
+  bool setDemoSpeed(bool fast) =>
+      publishData(demoModeTopic, {'speed': fast ? 'fast' : 'normal'});
 
   void dismissNotice() {
     final now = _clock();
@@ -407,6 +440,8 @@ class LiveLink extends ChangeNotifier {
     _teardown();
     notices.removeListener(_notify);
     notices.dispose();
+    autoActions.removeListener(_notify);
+    autoActions.dispose();
     _events.close();
     super.dispose();
   }
