@@ -163,6 +163,91 @@ def test_published_speak_result_and_timeout(tmp_path):
     assert log.snapshot()["by_status"] == {"failed": 1, "timeout": 1}
 
 
+def _speak_log(tmp_path):
+    t = {"now": 100.0}
+    log = ControlLog({"path": str(tmp_path / "control.jsonl")}, boot_id="b", result_timeout_sec=15, clock=lambda: t["now"])
+    log.record_published({"command_id": "review-speaker", "target_id": "speaker", "operation": "speak"}, "rest_notice")
+    return log, t
+
+
+def test_published_accepted_is_not_terminal_then_succeeded_or_failed(tmp_path):
+    # PR #86 리뷰 재현: accepted 를 미지 상태로 보고 failed 로 닫아 뒤의 succeeded 가 late_result 로 버려졌다
+    log, t = _speak_log(tmp_path)
+    t["now"] = 101
+    log.on_result({"command_id": "review-speaker", "status": "accepted"})
+    [rec] = log.recent()
+    assert (rec["status"], rec["event"], rec.get("completed_ts"), rec["latency_ms"]) == ("executing", "progress", None, None)
+    t["now"] = 102
+    log.on_result({"command_id": "review-speaker", "status": "succeeded"})
+    [rec] = log.recent()
+    assert (rec["status"], rec["event"], rec["completed_ts"], rec["latency_ms"]) == ("succeeded", "result", 102, 2000)
+    assert [r["event"] for r in lines(tmp_path)] == ["sent", "progress", "result"]
+
+    log, t = _speak_log(tmp_path / "f")
+    t["now"] = 101
+    log.on_result({"command_id": "review-speaker", "status": "accepted"})
+    t["now"] = 103
+    log.on_result({"command_id": "review-speaker", "status": "executing"})
+    t["now"] = 104
+    log.on_result({"command_id": "review-speaker", "status": "failed", "error_code": "speaker_unavailable"})
+    [rec] = log.recent()
+    assert (rec["status"], rec["error_code"], rec["latency_ms"]) == ("failed", "speaker_unavailable", 4000)
+    assert "reason" not in rec and log.snapshot()["by_status"] == {"failed": 1}
+
+
+def test_published_accepted_only_then_timeout(tmp_path):
+    log, t = _speak_log(tmp_path)
+    t["now"] = 101
+    log.on_result({"command_id": "review-speaker", "status": "accepted"})
+    t["now"] = 114.9
+    log.tick()
+    assert log.recent()[0]["status"] == "executing"
+    t["now"] = 115
+    log.tick()
+    [rec] = log.recent()
+    assert (rec["status"], rec["reason"], rec["latency_ms"]) == ("timeout", "no_result", 15000)
+
+
+def test_published_unknown_status_fails_with_reason(tmp_path):
+    log, t = _speak_log(tmp_path)
+    log.on_result({"command_id": "review-speaker", "status": "weird"})
+    [rec] = log.recent()
+    assert (rec["status"], rec["reason"]) == ("failed", "unknown_status:weird")
+
+
+def test_dispatcher_accepted_is_not_terminal(tmp_path):
+    # 디스패처 경로도 같다 — accepted·executing 은 progress, 최종 결과·시간 초과로만 닫힌다
+    d, log, sent, _, t = make(tmp_path, actions={"environment": [FAN]})
+    d.on_enter_action("ACTION_ENV", "environment", GateMode.AUTO)
+    cid = sent[0]["command_id"]
+    t["now"] += 1
+    assert d.on_result({"command_id": cid, "status": "accepted"}) is True
+    [rec] = log.recent()
+    assert (rec["status"], rec["event"], rec["completed_ts"]) == ("executing", "progress", None)
+    t["now"] += 2
+    d.on_result({"command_id": cid, "status": "succeeded", "actual_value": "on"})
+    [rec] = log.recent()
+    assert (rec["status"], rec["latency_ms"]) == ("succeeded", 3000) and d.episode.commands[0].status == "succeeded"
+
+    d.close_episode()
+    d.on_enter_action("ACTION_ENV", "environment", GateMode.AUTO)
+    cid = sent[-1]["command_id"]
+    t["now"] += 1
+    d.on_result({"command_id": cid, "status": "accepted"})
+    t["now"] += 1
+    d.on_result({"command_id": cid, "status": "failed", "error_code": "ble_not_connected"})
+    assert (log.recent()[-1]["status"], log.recent()[-1]["latency_ms"]) == ("failed", 2000)
+
+    d.close_episode()
+    d.on_enter_action("ACTION_ENV", "environment", GateMode.AUTO)
+    cid = sent[-1]["command_id"]
+    d.on_result({"command_id": cid, "status": "accepted"})
+    t["now"] += 15
+    d.tick()
+    rec = log.recent()[-1]
+    assert (rec["command_id"], rec["status"], rec["reason"], rec["latency_ms"]) == (cid, "timeout", "no_result", 15000)
+
+
 def test_max_records_and_unwritable_path_do_not_break(tmp_path):
     blocker = tmp_path / "file"
     blocker.write_text("x")

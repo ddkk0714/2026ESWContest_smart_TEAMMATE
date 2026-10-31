@@ -33,6 +33,9 @@ from ..inference import GateMode
 Publish = Callable[[dict[str, Any]], None]
 Record = Callable[..., Any]
 
+# control/result 의 중간 상태(data-spec control_result) — 명령을 닫지 않는다
+IN_PROGRESS = ("accepted", "executing")
+
 
 @dataclass
 class ControlCommand:
@@ -195,6 +198,11 @@ class ControlDispatcher:
                         return False
                     status = reported = str(payload.get("status", "")).lower()
                     c.result = dict(payload)
+                    if status in IN_PROGRESS:
+                        # 앱이 받았다(accepted)·하는 중(executing) — 아직 끝이 아니다. 실패로 닫으면 뒤의 succeeded 가
+                        # 늦은 결과로 버려진다. 상태는 보낸 뒤 그대로(executing), 최종 결과나 시간 초과(tick)가 닫는다
+                        self._record(c, "progress", now)
+                        return True
                     if status == "succeeded" and "actual_value" in payload:
                         av = payload["actual_value"]
                         if isinstance(c.value, dict):
