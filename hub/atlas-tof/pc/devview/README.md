@@ -52,6 +52,7 @@ python hub/atlas-tof/pc/devview/devview.py --fake
 | MQTT `deskmate/interaction/request`·`feedback/user` | 이벤트 | 명령 로그(REQUEST·FEEDBACK) |
 | MQTT `deskmate/health/hub`·`deskmate/profile/user` | retain | 프로필 줄(hub 시연 프로파일 demo-a/b 가 실려 있으면 · 개인화 `active_profile_id` · 첫 설정 `profile_id`) |
 | MQTT `deskmate/#` 전부 | — | MQTT 토픽 목록(토픽별 개수·마지막 수신) — 실시간으로 들어오는지 확인 |
+| `GET :8765/api/control-log` | 1 s | **제어 진행** 표(10-31): 명령 하나당 한 줄 — 시각 · 왜(상태·원인·게이트·arm) → 기기·동작·값(+비고: 실패 error_code·쿨다운 생략·밝기 previous→actual·되돌리기 연결·노드) · 결과 배지 · 소요. 10-31 hub(feat/control-log) 부터. 응답이 없으면(옛 hub·가짜 각본) MQTT cmd·result 로 같은 표를 만든다(생략·되돌림 연결 없음, 결과 없는 명령은 15 s 뒤 '응답 없음(추정)'). 배너에는 안 띄우고 표 제목에 출처를 쓴다 |
 | `GET :8771/api/state` | 0.3 s | 자세 서비스 라벨·신뢰도·9 클래스 확률·장치 위치(`placement`, 없으면 '-'), 엎드림 추적 |
 | `GET :8772/raw` (없으면 `:8771/raw`) | 0.2 s | ToF 8×8 열지도 — **화면 왼쪽 B·오른쪽, 오른쪽 A·왼쪽**(격자가 센서가 보는 사진 방향이라 사용자 왼쪽 센서 A 가 화면 오른쪽, Pi 5 앱 PR #83 과 같음. 이름표는 사용자 기준)(칸 숫자 cm, 회색 = 무효 상태값), 유효 칸 수·최소 거리, `other` 블록 |
 
