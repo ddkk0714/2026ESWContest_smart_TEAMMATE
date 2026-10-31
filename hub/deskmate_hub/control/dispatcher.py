@@ -17,6 +17,8 @@
   value 에 선택 키 `min_raw` 가 있으면 앱은 결과를 max(계산값, min_raw) 로 한다(깨우기 묶음만 — 꺼진 램프도 켜지게).
   되돌리기(spec `undo: previous`)는 그 결과의 previous 로 `set_brightness <previous>` 를 보낸다 — 결과가 없거나 previous 가 없으면
   되돌리기 생략(로그만). 그 밖(set_brightness·set_power·set_mode)은 지금처럼 undo_value.
+- 명령 하나의 단계가 바뀔 때마다 on_record(cmd, event, now=…, reason=…, undo_of=…, undone_by=…) 를 부른다(2026-10-31, 제어 진행
+  로그 control_log.py). 쿨다운·비가역으로 계획에서 빠진 spec 도 status skipped 레코드로 알린다 — "왜 안 켜졌나" 를 남기려고.
 표준 라이브러리만 사용한다.
 """
 from __future__ import annotations
@@ -29,6 +31,7 @@ from typing import Any, Callable
 from ..inference import GateMode
 
 Publish = Callable[[dict[str, Any]], None]
+Record = Callable[..., Any]
 
 
 @dataclass
@@ -48,6 +51,7 @@ class ControlCommand:
     status: str = "accepted"          # accepted | executing | succeeded | failed | timeout | cancelled | skipped
     sent_ts: float | None = None
     completed_ts: float | None = None
+    arm: str | None = None            # 개인화 정책이 고른 arm(그 arm 의 spec 으로 만든 명령일 때) — 로그용, payload 에는 안 싣는다
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -83,10 +87,11 @@ class Episode:
 
 class ControlDispatcher:
     def __init__(self, cfg: dict[str, Any], *, publish_cmd: Publish, on_log: Callable[[str], None] | None = None,
-                 clock: Callable[[], float] = time.time) -> None:
+                 on_record: Record | None = None, clock: Callable[[], float] = time.time) -> None:
         self.cfg = cfg
         self.publish_cmd = publish_cmd
         self._log = on_log or (lambda m: None)
+        self._on_record = on_record
         self._clock = clock
         self.timeout = float(cfg.get("result_timeout_sec", 15))
         self.suggest_timeout = float(cfg.get("suggest_timeout_sec", 180))
@@ -107,14 +112,15 @@ class ControlDispatcher:
         return state in self.default_action_states and bool(self.actions.get(cause or ""))
 
     def on_enter_action(self, state: str, cause: str | None, gate: GateMode, now: float | None = None,
-                        *, specs: list[dict[str, Any]] | None = None) -> Episode:
+                        *, specs: list[dict[str, Any]] | None = None, arm: str | None = None) -> Episode:
         """ACTION_ENV·ACTION_POSTURE 진입. 게이트에 따라 즉시 실행 / 사용자 대기 / 건너뜀.
 
         specs 를 주면 control.yaml `actions[cause]` 대신 그 명령 spec 목록을 쓴다(개인화 정책이 고른 arm 의 기기 값).
+        arm 은 그 arm 이름 — 제어 로그에만 싣는다.
         """
         now = self._clock() if now is None else now
         ep = Episode(state=state, cause=cause, gate=gate, started_ts=now)
-        ep.commands = self._plan(state, cause, gate, now, specs=specs)
+        ep.commands = self._plan(state, cause, gate, now, specs=specs, arm=arm)
         self.episode = ep
         if not ep.commands:
             ep.outcome = "skipped"
@@ -124,9 +130,12 @@ class ControlDispatcher:
         elif gate is GateMode.SUGGEST:
             ep.awaiting_user = True
             self._log(f"[control] {state}/{cause}: 제안 대기 ({len(ep.commands)}건)")
+            for c in ep.commands:
+                self._record(c, "awaiting_user", now)
         else:
             for c in ep.commands:
                 c.status = "skipped"
+                self._record(c, "skipped", now, reason="gate_none")
             ep.outcome = "skipped"
         return ep
 
@@ -149,6 +158,7 @@ class ControlDispatcher:
             elif verdict == "reject":
                 for c in ep.commands:
                     c.status = "skipped"
+                    self._record(c, "skipped", now, reason="user_rejected")
                 ep.outcome = "rejected"
                 self._log(f"[control] 사용자 거절 → {ep.state} 명령 취소")
             return
@@ -176,12 +186,14 @@ class ControlDispatcher:
                     if late:
                         c.result = dict(c.result or {}, **late)
                         self._log(f"[control] {c.target_id}.{c.operation} 늦은 결과로 previous/actual 보충 {late}")
+                        self._record(c, "late_result", now)
                     continue
                 if c.command_id == cid and not c.terminal:
                     if c.sent_ts is not None and now >= c.expires_ts:
                         c.status, c.completed_ts = "timeout", now
+                        self._record(c, "timeout", now, reason="result_after_deadline")
                         return False
-                    status = str(payload.get("status", "")).lower()
+                    status = reported = str(payload.get("status", "")).lower()
                     c.result = dict(payload)
                     if status == "succeeded" and "actual_value" in payload:
                         av = payload["actual_value"]
@@ -196,6 +208,12 @@ class ControlDispatcher:
                     if c.terminal:
                         c.completed_ts = now
                     self._log(f"[control] {c.target_id}.{c.operation}={c.value!r} → {c.status}")
+                    reason = None
+                    if c.status == "failed" and reported == "succeeded":
+                        reason = "actual_value_mismatch"
+                    elif c.status == "failed" and reported != "failed":
+                        reason = f"unknown_status:{reported}"
+                    self._record(c, "result", now, reason=reason)
                     return True
         return False
 
@@ -212,12 +230,15 @@ class ControlDispatcher:
                 if not c.terminal and c.sent_ts is not None and now >= c.expires_ts:
                     c.status, c.completed_ts = "timeout", now
                     self._log(f"[control] {c.target_id}.{c.operation} result timeout")
+                    self._record(c, "timeout", now, reason="no_result")
 
     def _expire(self, ep: Episode, why: str) -> None:
         # 제안에 응답이 없으면 만료 — 실행하지 않고 넘어간다(무응답도 하나의 신호로 기록)
         ep.awaiting_user = False
+        now = self._clock()
         for c in ep.commands:
             c.status = "skipped"
+            self._record(c, "skipped", now, reason=f"expired: {why}")
         ep.outcome = "expired"
         self._log(f"[control] {why} → expired")
 
@@ -241,26 +262,31 @@ class ControlDispatcher:
 
     # ---------------------------------------------------------------- 내부
     def _plan(self, state: str, cause: str | None, gate: GateMode, now: float,
-              *, specs: list[dict[str, Any]] | None = None) -> list[ControlCommand]:
+              *, specs: list[dict[str, Any]] | None = None, arm: str | None = None) -> list[ControlCommand]:
         if specs is None:
             specs = self.actions.get(cause or "", []) if state in self.default_action_states else []
         cmds: list[ControlCommand] = []
         for spec in specs:
             key = (spec["target_id"], spec["operation"])
-            last = self._last_sent.get(key)
-            if last is not None and now - last < self.cooldown:
-                self._log(f"[control] {key[0]}.{key[1]} 쿨다운 중({now - last:.0f}s) → 생략")
-                continue
             irreversible = spec["operation"] in self.irreversible
-            if irreversible and gate is GateMode.AUTO:
-                self._log(f"[control] {key[0]}.{key[1]} 비가역 → 자동 실행 금지, 생략")
-                continue
-            cmds.append(ControlCommand(
+            cmd = ControlCommand(
                 command_id=uuid.uuid4().hex[:12], target_id=spec["target_id"], operation=spec["operation"],
                 value=spec.get("value"), undo_value=spec.get("undo_value"), undo_mode=spec.get("undo"),
                 origin_state=state, cause=cause,
-                gate=gate.value, requires_confirmation=irreversible, expires_ts=now + self.timeout,
-            ))
+                gate=gate.value, requires_confirmation=irreversible, expires_ts=now + self.timeout, arm=arm,
+            )
+            last = self._last_sent.get(key)
+            if last is not None and now - last < self.cooldown:
+                self._log(f"[control] {key[0]}.{key[1]} 쿨다운 중({now - last:.0f}s) → 생략")
+                cmd.status = "skipped"
+                self._record(cmd, "skipped", now, reason=f"cooldown {now - last:.0f}s/{self.cooldown:.0f}s")
+                continue
+            if irreversible and gate is GateMode.AUTO:
+                self._log(f"[control] {key[0]}.{key[1]} 비가역 → 자동 실행 금지, 생략")
+                cmd.status = "skipped"
+                self._record(cmd, "skipped", now, reason="irreversible_auto")
+                continue
+            cmds.append(cmd)
         return cmds
 
     def _dispatch(self, ep: Episode, now: float) -> None:
@@ -271,6 +297,7 @@ class ControlDispatcher:
             c.expires_ts = now + self.timeout
             self._last_sent[(c.target_id, c.operation)] = now
             self.publish_cmd(c.to_payload())
+            self._record(c, "sent", now)
         ep.executed = True
         ep.executed_ts = now
         ep.outcome = "executed"
@@ -304,16 +331,26 @@ class ControlDispatcher:
             undo = ControlCommand(
                 command_id=uuid.uuid4().hex[:12], target_id=c.target_id, operation=undo_op, value=undo_value,
                 origin_state=ep.state, cause=ep.cause, gate="undo", requires_confirmation=False,
-                expires_ts=now + self.timeout, sent_ts=now, status="executing",
+                expires_ts=now + self.timeout, sent_ts=now, status="executing", arm=c.arm,
             )
             ep.commands.append(undo)
             self.publish_cmd(undo.to_payload())
+            self._record(undo, "sent", now, undo_of=c.command_id)
+            self._record(c, "undone", now, undone_by=undo.command_id)
             sent = True
         if not sent:
             self._log("[control] no eligible command to undo")
             return
         ep.outcome = "undone"
         self._log(f"[control] 사용자 거절 → 자동 실행 되돌림")
+
+    def _record(self, c: ControlCommand, event: str, now: float, **extra: Any) -> None:
+        if self._on_record is None:
+            return
+        try:
+            self._on_record(c, event, now=now, **extra)
+        except Exception as exc:  # noqa: BLE001 — 로그 때문에 제어가 멈추면 안 된다
+            self._log(f"[control] 제어 로그 기록 실패: {exc}")
 
 
 class MockPlugAdapter:

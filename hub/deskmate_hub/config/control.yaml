@@ -11,6 +11,14 @@ undo_window_sec: 60      # 자동 실행 뒤 한 tick 이 지나도 이 시간 �
 cooldown_sec: 300        # 같은 target 에 같은 operation 을 다시 보내기까지 최소 간격 (fsm timers.cmd_cooldown_sec 와 맞춤)
 irreversible_operations: [set_power_off, power_cycle]   # 사용자 확인 없이는 실행하지 않는 동작
 
+# 제어 진행 로그(deskmate_hub/control/control_log.py, 2026-10-31) — control/cmd 로 나간 명령 하나마다 원인(state·cause·gate·arm)
+# → 기기·동작·값 → 결과(성공·실패 이유·시간 초과·쿨다운 생략)·소요 ms·되돌림을 한 레코드로. 바뀔 때마다 JSONL 한 줄(같은 command_id 는
+# 마지막 줄이 최종), 보드에서는 C++ 서비스가 최근 200건을 GET /api/control-log 로 내준다(devview "제어 진행" 표).
+control_log:
+  enabled: true
+  path: null                # null = logs/control-<boot_id>.jsonl (esm 로그와 같은 폴더)
+  max_records: 200          # hub 메모리에 둘 최근 명령 수
+
 # REST 진입 알림(deskmate_hub/rest_notice.py, 2026-10-26) — FSM 이 어떤 길(휴식 제안 수락·개입 실패 뒤 강제·졸음 재시도)로든 REST 에
 # 들어가면 interaction/request kind rest_notice(닫기만 있는 안내 카드) + control/cmd target speaker operation speak {text, lang}.
 # 10-26 실기: 다시 엎드려 강제 휴식이 됐는데 허브가 아무 말도 안 했다. 사용자 첫 설정 sound_pref 가 off 면 카드만.
