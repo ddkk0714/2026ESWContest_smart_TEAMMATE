@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../page_transition.dart';
 import '../live/connection_panel.dart';
+import 'control_progress_page.dart';
 import 'developer_controller.dart';
 import 'pr74/bluetooth_control_page.dart';
 import 'pr74/connection_page.dart';
@@ -14,7 +15,15 @@ import 'pr74/link_status.dart';
 import 'pr74/preview_page.dart';
 import 'pr74/sensor_overview_page.dart';
 
-enum DeveloperTab { sensors, keystroke, developer, preview, mode, connection }
+enum DeveloperTab {
+  sensors,
+  keystroke,
+  developer,
+  preview,
+  mode,
+  progress,
+  connection
+}
 
 class DeveloperScreen extends StatefulWidget {
   const DeveloperScreen(
@@ -35,7 +44,15 @@ class _DeveloperScreenState extends State<DeveloperScreen> {
   late DeveloperTab tab = widget.controller.defaultOnStart
       ? DeveloperTab.mode
       : DeveloperTab.sensors;
-  static const labels = ['센서 전체', '키스트로크', '개발자', '프리뷰', '개발자 모드', '연결 상태'];
+  static const labels = [
+    '센서 전체',
+    '키스트로크',
+    '개발자',
+    '프리뷰',
+    '개발자 모드',
+    '제어 진행',
+    '연결 상태'
+  ];
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -134,7 +151,13 @@ class _DeveloperScreenState extends State<DeveloperScreen> {
                                     placement: c.settings.load().placement,
                                     defaultOnStart: c.defaultOnStart,
                                     onDefaultOnStartChanged: c.setDefault,
-                                    connectionLabel: c.live.status.name),
+                                    connectionLabel: c.live.status.name,
+                                    demoFast: c.live.state?.demoFast,
+                                    onDemoFastChanged: (fast) =>
+                                        c.live.setDemoSpeed(fast)),
+                                // 제어 진행(V30): hub :8765/api/control-log, 없으면 MQTT 추정
+                                DeveloperTab.progress => ControlProgressPage(
+                                    progress: c.progress, host: c.host),
                                 DeveloperTab.connection => ConnectionPage(
                                     snapshot: c.snapshot,
                                     now: DateTime.now(),

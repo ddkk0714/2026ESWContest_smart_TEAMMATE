@@ -63,8 +63,7 @@ class IlinkLampFeedback {
   IlinkLampFeedback(this._bluetooth,
       {this.rescanFor = const Duration(seconds: 6),
       this.settleDelay = const Duration(seconds: 3),
-      this.rescanEvery = const Duration(seconds: 30),
-      this.connectRetryAfter = const Duration(seconds: 30)});
+      this.rescanEvery = const Duration(seconds: 30)});
   final AtlasBluetoothService _bluetooth;
 
   /// 연결 실패 뒤 검색 전에 기다리는 시간. Atlas 가 실패를 먼저 돌려준 뒤에도 BlueZ 가 링크를 맺고
@@ -75,10 +74,12 @@ class IlinkLampFeedback {
   /// 되풀이했고, 시스템 "Bluetooth device disconnected" 창이 96번 뜬 뒤 앱이 죽었다(SEGV).
   final Duration rescanEvery;
 
-  /// 국면 조명 쓰기는 연결이 막 실패했으면 이 시간 동안 BlueZ 를 건드리지 않는다(명령·버튼은 예외).
-  final Duration connectRetryAfter;
-  DateTime? _connectFailedAt;
   DateTime? _lastRescanAt;
+
+  // 백그라운드 연결 규칙([connectInBackground])에 쓰는 이번 실행의 기록.
+  bool _everTried = false;
+  bool _everConnected = false;
+  bool _dropRetryUsed = false;
 
   /// 램프를 다시 찾는 검색 시간(찾으면 바로 멈춘다). 10-26 Pi 5: 페어링하지 않은 BLE 램프는
   /// 끊긴 지 30초 뒤 BlueZ 가 잊고, 그 뒤 Gatt.Connect 는 BlueZ 를 부르지도 않고 바로 실패했다
@@ -109,6 +110,7 @@ class IlinkLampFeedback {
     _connecting = null;
     _lastBrightness = null;
     _poweredOn = null;
+    _everTried = _everConnected = _dropRetryUsed = false;
     unawaited(_release(old));
   }
 
@@ -138,8 +140,8 @@ class IlinkLampFeedback {
     _lastError = null;
     _lastBrightness = null;
     _poweredOn = null;
-    _connectFailedAt = null;
     _lastRescanAt = null;
+    _everTried = _everConnected = _dropRetryUsed = false;
     unawaited(_release(old));
   }
 
@@ -171,6 +173,7 @@ class IlinkLampFeedback {
   Future<bool> _connect() async {
     final generation = _generation;
     final address = _address!;
+    _everTried = true;
     try {
       final connection = await _bluetooth.connectLamp(address);
       if (generation != _generation) {
@@ -179,15 +182,30 @@ class IlinkLampFeedback {
       }
       _connection = connection;
       _lastError = null;
-      _connectFailedAt = null;
+      _everConnected = true;
+      _dropRetryUsed = false;
       return true;
     } catch (error) {
       if (generation != _generation) return false;
       _connection = null;
       _lastError = error;
-      _connectFailedAt = DateTime.now();
       return false;
     }
+  }
+
+  /// 사람이 시키지 않은 연결(국면 조명·시작 복원·유지). 이번 실행에서 아직 한 번도 시도하지 않았거나,
+  /// 붙어 있다가 끊긴 뒤 첫 재시도일 때만 실제로 붙는다. 그 밖엔(연결이 실패한 뒤) BlueZ 를 건드리지 않는다.
+  /// 10-26 Pi 5: 실패한 램프 연결마다 시스템 "Bluetooth device disconnected" 창이 떴고, 그 창이
+  /// 쌓이면서 화면이 ATLAS 로고에 멈췄다(vc4_plane 경고 36 → 72). 다시 붙는 길은 hub 명령과 사람이
+  /// 누르는 버튼뿐이다(ui_env_app 0.1.12, 6b8d4ac).
+  Future<bool> connectInBackground() {
+    if (_connection != null) return Future.value(true);
+    if (!configured) return Future.value(false);
+    final firstTry = !_everTried;
+    final dropRetry = _everConnected && !_dropRetryUsed;
+    if (!firstTry && !dropRetry) return Future.value(false);
+    if (!firstTry) _dropRetryUsed = true;
+    return connect();
   }
 
   /// 붙어 있지 않으면 붙고, 실패하면 주소를 한 번 검색해 다시 보이게 한 뒤 한 번 더 붙는다.
@@ -196,8 +214,9 @@ class IlinkLampFeedback {
   Future<({bool ok, bool? rediscovered})> ensureConnected(
       {num? expiresTsMs}) async {
     final generation = _generation;
-    if (await connect())
+    if (await connect()) {
       return (ok: generation == _generation, rediscovered: null);
+    }
     if (generation != _generation) return (ok: false, rediscovered: null);
     final last = _lastRescanAt;
     if (last != null && DateTime.now().difference(last) < rescanEvery) {
@@ -263,7 +282,8 @@ class IlinkLampFeedback {
       ], rediscover: true);
 
   /// Phase feedback and explicit commands must not interleave BLE frames.
-  /// [rediscover] 는 hub 명령·사람이 누른 버튼만 켠다 — 국면 조명은 1초마다 다시 부르므로 검색하지 않는다.
+  /// [rediscover] 는 hub 명령·사람이 누른 버튼만 켠다. 국면 조명은 검색하지 않고, 연결도
+  /// [connectInBackground] 규칙을 따른다.
   Future<bool> writeFrames(List<List<int>> frames,
           {num? expiresTsMs, bool rediscover = false}) =>
       writeFramesReport(frames,
@@ -287,13 +307,7 @@ class IlinkLampFeedback {
     bool? rediscovered;
     ({bool ok, bool? rediscovered}) failed() =>
         (ok: false, rediscovered: rediscovered);
-    if (!configured || frames.isEmpty || generation != _generation)
-      return failed();
-    final failedAt = _connectFailedAt;
-    if (!rediscover &&
-        _connection == null &&
-        failedAt != null &&
-        DateTime.now().difference(failedAt) < connectRetryAfter) {
+    if (!configured || frames.isEmpty || generation != _generation) {
       return failed();
     }
     bool expired() =>
@@ -306,7 +320,8 @@ class IlinkLampFeedback {
         final link = await ensureConnected(expiresTsMs: expiresTsMs);
         rediscovered = link.rediscovered;
         if (!link.ok) return failed();
-      } else if (!await connect()) {
+      } else if (!await (rediscover ? connect() : connectInBackground())) {
+        if (!rediscover) return failed();
         continue;
       }
       if (generation != _generation) return failed();

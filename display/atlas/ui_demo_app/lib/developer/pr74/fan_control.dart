@@ -1,4 +1,9 @@
-/// DESKMATE 블루투스 선풍기(firmware/pico2w_ble_fan)를 Pi 4 허브의 `vent_fan` 명령으로 움직인다.
+/// DESKMATE 블루투스 선풍기를 Pi 4 허브의 `vent_fan` 명령으로 움직인다. 펌웨어가 두 벌이라 연결할 때 구분한다(V28).
+///   - C 펌웨어(`firmware/pico2w_ble_fan`, 서비스 f1970001…): 명령 프레임 [opcode, 값…], 상태 8바이트.
+///   - MicroPython(`firmware/pico_fan/main.py`, feat/pico-fan, 서비스 d35e0001…): 명령 1바이트 속도 %(0 = 끄기),
+///     상태 1바이트 %. 멈춘 상태에서 켤 때의 출발 킥(100 % 250 ms → 60 % 1 s → 목표)은 펌웨어가 한다 — remote.html 과 같다.
+///   구분: DiscoverServices 응답의 서비스 UUID → 없으면 C 상태 특성을 읽어 8바이트 기록이면 C, 아니면 MicroPython 상태
+///   특성을 읽어 1바이트면 MicroPython. 둘 다 못 읽으면 C 로 본다(V27 동작).
 ///
 /// 램프(IlinkLampFeedback)와 같은 Atlas GATT 경로를 쓴다: Connect → DiscoverServices →
 /// WriteCharacteristicValue(write_type 1, 램프로 실기 확인한 방식). 쓴 뒤 상태 특성을 읽어
@@ -13,6 +18,50 @@ const fanDeviceName = 'DESKMATE-FAN';
 const fanServiceUuid = 'f1970001-51e1-4b0e-a7f1-8d27d8e34683';
 const fanCommandUuid = 'f1970002-51e1-4b0e-a7f1-8d27d8e34683';
 const fanStateUuid = 'f1970003-51e1-4b0e-a7f1-8d27d8e34683';
+
+const fanMicroServiceUuid = 'd35e0001-5f4a-4b2c-9c1e-0f6a7b8c9d01';
+const fanMicroCommandUuid = 'd35e0002-5f4a-4b2c-9c1e-0f6a7b8c9d01';
+const fanMicroStatusUuid = 'd35e0003-5f4a-4b2c-9c1e-0f6a7b8c9d01';
+
+enum FanFirmware {
+  c('C'),
+  micropython('MicroPython');
+
+  const FanFirmware(this.label);
+  final String label;
+}
+
+/// 서비스 검색 결과로 펌웨어를 정한다. 어느 쪽 서비스도 없으면 null(특성을 읽어 정한다).
+FanFirmware? fanFirmwareFromServices(Set<String> services) {
+  if (services.contains(fanMicroServiceUuid)) return FanFirmware.micropython;
+  if (services.contains(fanServiceUuid)) return FanFirmware.c;
+  return null;
+}
+
+/// MicroPython 판의 단계 → 속도 %. remote.html 프리셋(30·45·60·100)과 같은 결: 1단 45 · 2단 70 · 3단 100.
+const microLevelSpeed = [0, 45, 70, 100];
+
+/// 속도 % → 단계(상태를 단계로 보일 때). [microLevelSpeed] 와 왕복이 맞는다.
+int microLevelFor(int speed) => speed <= 0
+    ? 0
+    : speed <= microLevelSpeed[1]
+        ? 1
+        : speed <= microLevelSpeed[2]
+            ? 2
+            : 3;
+
+/// C 펌웨어 프레임([fanFrame]) → MicroPython 명령 1바이트. 받을 수 없는 명령(자연풍·타이머)은 null.
+/// 켜기는 마지막으로 돌던 속도(없으면 1단)로.
+List<int>? microFanCommand(List<int> frame, {int? lastOnSpeed}) {
+  if (frame.length < 2) return null;
+  final value = frame[1];
+  return switch (frame[0]) {
+    0x01 => [value == 1 ? (lastOnSpeed ?? microLevelSpeed[1]) : 0],
+    0x02 when value <= 100 => [value],
+    0x03 when value <= 3 => [microLevelSpeed[value]],
+    _ => null,
+  };
+}
 
 bool isFanDevice(BluetoothDeviceInfo device) =>
     device.name.trim().toUpperCase() == fanDeviceName;
@@ -48,6 +97,19 @@ class FanState {
   final bool natural;
   final bool reverse;
   final int timerSeconds;
+
+  /// MicroPython 판 상태 1바이트(속도 %) → 같은 모양의 상태. 단계는 [microLevelFor].
+  static FanState? decodeMicro(List<int>? bytes) {
+    if (bytes == null || bytes.isEmpty || bytes[0] > 100) return null;
+    final speed = bytes[0];
+    return FanState(
+        power: speed > 0,
+        speed: speed,
+        level: microLevelFor(speed),
+        natural: false,
+        reverse: false,
+        timerSeconds: 0);
+  }
 
   /// 펌웨어 상태 8바이트 `[버전 1, 전원, 속도 %, 단계, 모드, 방향, 남은 타이머 초 LE]`.
   static FanState? decode(List<int>? bytes) {
@@ -90,7 +152,7 @@ class FanState {
 
 class BleFanControl {
   BleFanControl(this._bluetooth,
-      {this.connectAttempts = 8,
+      {this.connectAttempts = 3,
       this.retryDelay = const Duration(seconds: 3),
       this.rescanFor = const Duration(seconds: 6)});
   final AtlasBluetoothService _bluetooth;
@@ -108,6 +170,8 @@ class BleFanControl {
   DateTime? _lastOkAt;
   Object? _lastError;
   FanState? _lastState;
+  FanFirmware? _firmware;
+  int? _lastOnSpeed;
   int _generation = 0;
   bool? _lastRediscovered;
   bool? get lastRediscovered => _lastRediscovered;
@@ -126,6 +190,9 @@ class BleFanControl {
   Object? get lastError => _lastError;
   FanState? get lastState => _lastState;
 
+  /// 연결한 선풍기의 펌웨어. 아직 모르면 null.
+  FanFirmware? get firmware => _firmware;
+
   void select(String address) {
     if (_address == address) return;
     final old = _connection;
@@ -136,6 +203,8 @@ class BleFanControl {
     _lastOkAt = null;
     _lastError = null;
     _lastState = null;
+    _firmware = null;
+    _lastOnSpeed = null;
     unawaited(_release(old));
   }
 
@@ -147,7 +216,34 @@ class BleFanControl {
     _address = null;
     _connection = null;
     _lastState = null;
+    _firmware = null;
+    _lastOnSpeed = null;
     unawaited(_release(old));
+  }
+
+  /// 시작 복원용: 한 번만 붙어 본다(검색·재시도 없음). 실패한 연결마다 시스템 팝업이 뜬다(10-26).
+  /// 다시 붙는 길은 hub 명령([send])과 블루투스 탭의 "다시 연결"([connect])뿐이다.
+  Future<bool> connectOnce() async {
+    if (!configured) return false;
+    if (_connection != null) return true;
+    final pending = _connecting;
+    if (pending != null) return pending;
+    final generation = _generation;
+    try {
+      final connection = await _bluetooth.connectLamp(_address!);
+      if (generation != _generation) {
+        await _release(connection);
+        return false;
+      }
+      _connection = connection;
+      _lastError = null;
+      return true;
+    } catch (error) {
+      if (generation != _generation) return false;
+      _connection = null;
+      _lastError = error;
+      return false;
+    }
   }
 
   /// 동시에 불러도 GATT Connect 는 한 번 — 두 번째는 "Already Connected" 로 실패한다.
@@ -225,11 +321,21 @@ class BleFanControl {
       if (expired() || generation != _generation) return notSent;
       if (!await connect()) continue;
       if (expired() || generation != _generation) return notSent;
+      final firmware = _firmware ??= await _detectFirmware(_connection!);
+      if (generation != _generation) return notSent;
+      final micro = firmware == FanFirmware.micropython;
+      final payload =
+          micro ? microFanCommand(frame, lastOnSpeed: _lastOnSpeed) : frame;
+      if (payload == null) {
+        _lastError = UnsupportedError(
+            'MicroPython 선풍기는 이 명령(${frame.first})을 받지 않습니다 — 켜기·끄기·단계·속도만');
+        return notSent;
+      }
       try {
         await _bluetooth.writeCharacteristic(_connection!,
-            serviceId: fanServiceUuid,
-            characteristicId: fanCommandUuid,
-            value: frame);
+            serviceId: micro ? fanMicroServiceUuid : fanServiceUuid,
+            characteristicId: micro ? fanMicroCommandUuid : fanCommandUuid,
+            value: payload);
       } catch (error) {
         if (generation != _generation) return notSent;
         final old = _connection;
@@ -250,16 +356,45 @@ class BleFanControl {
     final connection = _connection;
     final generation = _generation;
     if (connection == null) return null;
+    final micro = _firmware == FanFirmware.micropython;
     try {
-      final state = FanState.decode(await _bluetooth.readCharacteristic(
-          connection,
-          serviceId: fanServiceUuid,
-          characteristicId: fanStateUuid));
+      final bytes = await _bluetooth.readCharacteristic(connection,
+          serviceId: micro ? fanMicroServiceUuid : fanServiceUuid,
+          characteristicId: micro ? fanMicroStatusUuid : fanStateUuid);
+      final state =
+          micro ? FanState.decodeMicro(bytes) : FanState.decode(bytes);
       if (generation != _generation) return null;
-      if (state != null) _lastState = state;
+      if (state != null) {
+        _lastState = state;
+        if (state.power && state.speed > 0) _lastOnSpeed = state.speed;
+      }
       return state;
     } catch (_) {
       return null;
     }
+  }
+
+  /// 서비스 검색 결과 → 없으면 C 상태(8바이트) → MicroPython 상태(1바이트) 순서로 읽어 본다. 다 못 읽으면 C.
+  Future<FanFirmware> _detectFirmware(GattConnection connection) async {
+    final byService = fanFirmwareFromServices(connection.services);
+    if (byService != null) return byService;
+    Future<List<int>?> read(String service, String characteristic) async {
+      try {
+        return await _bluetooth.readCharacteristic(connection,
+            serviceId: service, characteristicId: characteristic);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    if (FanState.decode(await read(fanServiceUuid, fanStateUuid)) != null) {
+      return FanFirmware.c;
+    }
+    if (FanState.decodeMicro(
+            await read(fanMicroServiceUuid, fanMicroStatusUuid)) !=
+        null) {
+      return FanFirmware.micropython;
+    }
+    return FanFirmware.c;
   }
 }
