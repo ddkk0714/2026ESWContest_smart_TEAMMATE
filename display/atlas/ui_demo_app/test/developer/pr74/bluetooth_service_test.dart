@@ -60,4 +60,68 @@ void main() {
     );
     expect(calls, greaterThan(1));
   });
+
+  group('discoverUntilServices (V36)', () {
+    List<DBusValue> reply(String? uuid) => [
+          DBusArray(DBusSignature('a{sv}'), [
+            if (uuid != null)
+              DBusDict(DBusSignature.string, DBusSignature.variant, {
+                const DBusString('uuid'): DBusVariant(DBusString(uuid)),
+              }),
+          ])
+        ];
+    const fan = 'f1970001-51e1-4b0e-a7f1-8d27d8e34683';
+
+    test('an empty service list is retried until the services show up',
+        () async {
+      final replies = [reply(null), reply(null), reply(fan)];
+      final empties = <int>[];
+      var calls = 0;
+      final got = await discoverUntilServices(() async => replies[calls++],
+          emptyDelay: Duration.zero, onEmpty: empties.add);
+      expect(gattServiceUuids(got), {fan});
+      expect(calls, 3);
+      expect(empties, [1, 2]);
+    });
+
+    test('services on the first answer are taken at once', () async {
+      var calls = 0;
+      final got = await discoverUntilServices(() async {
+        calls++;
+        return reply(fan);
+      }, emptyDelay: Duration.zero);
+      expect(gattServiceUuids(got), {fan});
+      expect(calls, 1);
+    });
+
+    test('still empty after the retries returns the empty list as before',
+        () async {
+      var calls = 0;
+      final got = await discoverUntilServices(() async {
+        calls++;
+        return reply(null);
+      }, emptyRetries: 3, emptyDelay: Duration.zero);
+      expect(gattServiceUuids(got), isEmpty);
+      expect(calls, 4); // 처음 1 + 다시 3
+    });
+
+    test('errors keep the existing error retry and still rethrow at the end',
+        () async {
+      var calls = 0;
+      final errors = <int>[];
+      final got = await discoverUntilServices(() async {
+        if (++calls == 1) throw StateError('GATT service discovery failed');
+        return reply(fan);
+      },
+          delay: Duration.zero,
+          emptyDelay: Duration.zero,
+          onError: (_, attempt) => errors.add(attempt));
+      expect(gattServiceUuids(got), {fan});
+      expect(errors, [1]);
+      await expectLater(
+          discoverUntilServices(() async => throw StateError('x'),
+              attempts: 2, delay: Duration.zero),
+          throwsStateError);
+    });
+  });
 }

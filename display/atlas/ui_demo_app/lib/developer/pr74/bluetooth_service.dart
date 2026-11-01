@@ -460,15 +460,17 @@ class AtlasBluetoothService {
     }
     var discovered = const <DBusValue>[];
     try {
-      await discoverWithRetry(
-          () async => discovered = (await _bluetooth.callMethod(
+      discovered = await discoverUntilServices(
+          () async => (await _bluetooth.callMethod(
                 _gattInterface,
                 'DiscoverServices',
                 [DBusString(adapter), DBusString(address)],
               ))
                   .returnValues,
           onError: (error, attempt) => diag
-              .write('램프 서비스 검색 실패 $attempt ($address, $clientId): $error'));
+              .write('램프 서비스 검색 실패 $attempt ($address, $clientId): $error'),
+          onEmpty: (retry) => diag
+              .write('GATT 서비스 $address: 빈 목록 — 다시 검색 $retry'));
     } catch (_) {
       // Release by client id (not address), or every later Connect fails
       // with "Already Connected".
@@ -725,6 +727,29 @@ Future<({String adapter, String state})> waitForGattLink(
 }
 
 /// Retries DiscoverServices; the first call after Connect can fail.
+/// V36: [discoverWithRetry] 가 성공했는데 서비스 UUID 가 하나도 없으면 [emptyDelay] 기다려 다시 검색한다(최대
+/// [emptyRetries] 번). 11-01 Pi 5 실기: 선풍기 링크가 맺어진 직후 DiscoverServices 가 빈 목록으로 성공해, 앱이 그대로
+/// 쓰기를 해 실패했다(램프는 쓸 즈음 BlueZ 가 서비스를 다 읽어 와 성공). 끝까지 비면 예전처럼 빈 목록으로 넘긴다.
+Future<List<DBusValue>> discoverUntilServices(
+    Future<List<DBusValue>> Function() discover,
+    {int attempts = 4,
+    Duration delay = const Duration(seconds: 2),
+    int emptyRetries = 3,
+    Duration emptyDelay = const Duration(seconds: 1),
+    void Function(Object error, int attempt)? onError,
+    void Function(int retry)? onEmpty}) async {
+  var reply = const <DBusValue>[];
+  for (var retry = 0;; retry++) {
+    await discoverWithRetry(() async => reply = await discover(),
+        attempts: attempts, delay: delay, onError: onError);
+    if (gattServiceUuids(reply).isNotEmpty || retry >= emptyRetries) {
+      return reply;
+    }
+    onEmpty?.call(retry + 1);
+    await Future<void>.delayed(emptyDelay);
+  }
+}
+
 Future<void> discoverWithRetry(Future<void> Function() discover,
     {int attempts = 4,
     Duration delay = const Duration(seconds: 2),
