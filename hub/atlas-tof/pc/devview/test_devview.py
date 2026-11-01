@@ -1310,6 +1310,24 @@ def test_send_profile_and_hub_ack():
     assert st.send_profile({"profile_id": "pabc"})["ok"] is False
 
 
+def test_persona_view_current_person_follows_hub():
+    """지금 사람 = 브로커에 남은 profile/user 중 hub 가 쓰는 id 와 같은 것(11-01). 화면은 이 id 로 고쳐 보낸다."""
+    st = dv.Store()
+    assert st.persona_view()["current"] is None                       # 아무것도 안 받음
+    soyeon = {"profile_id": "p266eb9c0c514d18c", "age_band": "10s", "light_pref": "mid", "sound_pref": "low",
+              "wind_pref": "off", "focus_help": ["sound", "light", "wind"], "placement": "left", "name": "소연"}
+    st.on_mqtt(dv.TOPIC_PROFILE, payload(soyeon, node="pi5-ui"))
+    cur = st.persona_view()["current"]                                 # hub id 를 아직 모르면 받은 것을 지금 사람으로
+    assert cur["profile_id"] == "p266eb9c0c514d18c" and cur["node"] == "pi5-ui"
+    assert "name" not in cur["data"] and cur["data"]["focus_help"] == ["sound", "light", "wind"]
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "FOCUS_PC", "sensor_summary": {
+        "personalize": {"active_profile_id": "p266eb9c0c514d18c"}}}))
+    assert st.persona_view()["current"]["profile_id"] == "p266eb9c0c514d18c"
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "FOCUS_PC", "sensor_summary": {     # hub 가 다른 사람으로 바뀜
+        "personalize": {"active_profile_id": "pother"}}}))
+    assert st.persona_view()["current"] is None                        # 남은 첫 설정이 다른 사람 것이면 지금 사람 아님
+
+
 def test_send_feedback_card_and_undo():
     st = dv.Store()
     st.publisher = FakePub()

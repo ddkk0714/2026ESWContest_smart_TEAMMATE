@@ -2720,7 +2720,15 @@ class Store:
         pers = _map(_map(data.get("sensor_summary")).get("personalize"))
         hub_id = pers.get("active_profile_id")
         sent = self.profile_sent
-        return {"enabled": self.publisher is not None, "presets": PERSONAS,
+        # 지금 사람(11-01): 브로커에 남은 마지막 profile/user(retain — Pi 5 앱이든 이 화면이든). hub 가 쓰는 id 와 같을 때만
+        # "지금 사람"이다. 화면은 이 값을 불러와 같은 profile_id 로 고쳐 보낸다 — 새 id 로 보내면 hub 학습이 사람별로 갈린다.
+        env = _map(self.profile_user)
+        cur, _ = validate_profile(env.get("data"))
+        current = None
+        if cur is not None and (not hub_id or hub_id == cur["profile_id"]):
+            current = {"profile_id": cur["profile_id"], "data": cur, "node": env.get("node") or DASH,
+                       "t": time.strftime("%H:%M:%S", time.localtime(float(env["ts"]))) if isinstance(env.get("ts"), (int, float)) else DASH}
+        return {"enabled": self.publisher is not None, "presets": PERSONAS, "current": current,
                 "sent": None if sent is None else {k: sent[k] for k in ("profile_id", "label", "data")} |
                 {"t": time.strftime("%H:%M:%S", time.localtime(sent["at"]))},
                 "hub_active": hub_id or DASH,

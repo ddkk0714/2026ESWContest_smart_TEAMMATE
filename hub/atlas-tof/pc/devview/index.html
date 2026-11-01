@@ -500,7 +500,9 @@ body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
       <div class="ptitle"><span><b>나는 누구?</b> · 첫 설정 프로필 → hub 개인화 기준(prior)</span><span class="mono" id="pNode">node laptop-devview</span></div>
       <div class="pbtns" id="pbtns"></div>
       <div id="pform"></div>
-      <div class="prow2"><button class="btn warn" id="pSend">이 프로필로 보내기…</button><span id="pHint" class="empty"></span></div>
+      <div class="prow2"><button class="btn warn" id="pSend">이 프로필로 보내기…</button>
+        <label class="empty" title="끄면 지금 사람(hub 가 쓰는 profile_id)의 값을 고친다 — 켜면 새 사람이라 hub 학습이 따로 쌓인다"><input type="checkbox" id="pNew"> 새 사람으로</label>
+        <span id="pHint" class="empty"></span></div>
       <div id="pconfirm"><div>deskmate/profile/user (retain, QoS 1) 로 보냅니다 — 이름·직업은 싣지 않음:</div><pre id="pPreview"></pre>
         <button class="btn go" id="pYes">확인하고 보내기</button> <button class="btn" id="pNo">취소</button></div>
       <div id="pstatus">-</div>
@@ -812,7 +814,12 @@ const LAB = {age_band: "연령대", sleep_hours: "수면 h", bedtime: "잠드는
   wind_pref: "바람", placement: "장치 위치", focus_help: "도움 순서"};
 const HELP = [["light", "조명"], ["wind", "선풍기"], ["sound", "알림음"], ["voice", "음성 안내"], ["break", "휴식"]];
 let persona = null, presets = null, custom = null, pending = null;
-function personaKeys() { return [["student_exam", "수험생"], ["student_univ", "대학생"], ["custom", "직접 설정"]]; }
+// 지금 사람(11-01): hub 가 쓰는 profile_id 와 그 첫 설정(브로커 retain). 있으면 보내기는 기본으로 이 id 를 그대로 쓴다
+let current = null, currentSig = "", autoPicked = false;
+function personaKeys() {
+  return (current ? [["current", "지금 사람"]] : []).concat([["student_exam", "수험생"], ["student_univ", "대학생"], ["custom", "직접 설정"]]);
+}
+function sendId() { return persona === "current" ? current.profile_id : (current && !$("pNew").checked ? current.profile_id : pid(persona)); }
 function formData() {
   const f = $("pform"), d = {};
   for (const k of Object.keys(OPT)) d[k] = f.querySelector(`[name=${k}]`).value;
@@ -822,20 +829,27 @@ function formData() {
   d.focus_help = Array.from(f.querySelectorAll("[name=help]:checked"), x => x.value);
   return d;
 }
+// 도움 순서는 순위가 hub 첫 기준을 바꾼다(11-01 hub focus_help_rank_weights) — 받은 순서대로 먼저 그리고 나머지를 뒤에.
+// formData 는 화면 순서로 읽으므로 고쳐 보내도 순위가 그대로 간다
+function helpOrder(order) {
+  return order.map(k => HELP.find(h => h[0] === k)).filter(Boolean).concat(HELP.filter(h => !order.includes(h[0])));
+}
 function buildForm(data, editable) {
   const sel = k => `<label>${LAB[k]}</label><select name="${k}">${OPT[k].map(o => `<option ${o === data[k] ? "selected" : ""}>${o}</option>`).join("")}</select>`;
   $("pform").innerHTML = sel("age_band") + `<label>${LAB.sleep_hours}</label><input name="sleep_hours" type="number" min="3" max="12" step="0.5" value="${data.sleep_hours}">` +
     `<label>${LAB.bedtime}</label><input name="bedtime" type="time" value="${data.bedtime}">` + `<label>${LAB.wake_time}</label><input name="wake_time" type="time" value="${data.wake_time}">` +
     sel("light_pref") + sel("sound_pref") + sel("wind_pref") + sel("placement") +
-    `<label>${LAB.focus_help}</label><div class="helps">${HELP.map(([k, n]) => `<label><input type="checkbox" name="help" value="${k}" ${(data.focus_help || []).includes(k) ? "checked" : ""}> ${n}</label>`).join("")}</div>`;
+    `<label>${LAB.focus_help}</label><div class="helps">${helpOrder(data.focus_help || []).map(([k, n], i) => `<label><input type="checkbox" name="help" value="${k}" ${(data.focus_help || []).includes(k) ? "checked" : ""}> ${(data.focus_help || []).includes(k) ? (i + 1) + ". " : ""}${n}</label>`).join("")}</div>`;
   $("pform").setAttribute("aria-disabled", editable ? "false" : "true");
 }
 function pickPersona(key) {
   persona = key;
   pending = null; $("pconfirm").style.display = "none";
-  const data = key === "custom" ? (custom || presets.student_univ.data) : presets[key].data;
-  buildForm(data, key === "custom");
-  $("pHint").textContent = key === "custom" ? "값을 고친 뒤 보내기" : "V18 기본 페르소나 값(바꾸려면 직접 설정)";
+  const data = key === "current" ? current.data : key === "custom" ? (custom || (current && current.data) || presets.student_univ.data) : presets[key].data;
+  buildForm(data, key === "current" || key === "custom");
+  $("pHint").textContent = key === "current" ? "지금 사람의 첫 설정 — 고쳐 보내면 같은 사람으로 이어 배운다"
+    : key === "custom" ? "값을 고친 뒤 보내기" : "V18 기본 페르소나 값(바꾸려면 직접 설정)";
+  $("pNew").disabled = key === "current" || !current;
   renderPersonaButtons();
 }
 function renderPersonaButtons() {
@@ -844,9 +858,12 @@ function renderPersonaButtons() {
 }
 $("pSend").onclick = () => {
   if (!persona) return;
-  const data = Object.assign({profile_id: pid(persona)}, persona === "custom" ? formData() : presets[persona].data);
+  const editable = persona === "custom" || persona === "current";
+  const data = Object.assign({profile_id: sendId()}, editable ? formData() : presets[persona].data);
   if (persona === "custom") custom = formData();
-  pending = {data, label: personaKeys().find(x => x[0] === persona)[1]};
+  const name = personaKeys().find(x => x[0] === persona)[1];
+  const same = current && data.profile_id === current.profile_id;
+  pending = {data, label: persona === "current" ? name : same ? `${name} 값 → 지금 사람` : `${name}(새 사람)`};
   $("pPreview").textContent = JSON.stringify(data, null, 1);
   $("pconfirm").style.display = "block";
 };
@@ -1041,10 +1058,19 @@ function renderVirtual(d) {
   $("pPrior").textContent = P.prior ? `hub 가 반영한 첫 설정(개입 선택 개인화 기준): ${P.prior}` : "";
   $("vFake2").style.display = d.mode === "fake" ? "inline" : "none";
   $("vdMqtt").className = "dot" + (d.links.mqtt.ok ? " on" : "");
-  if (!presets) { presets = P.presets; pickPersona("student_exam"); }
+  current = P.current || null;
+  const sig = current ? JSON.stringify(current.data) : "";
+  if (!presets) { presets = P.presets; autoPicked = true; pickPersona(current ? "current" : "student_exam"); currentSig = sig; }
+  else if (sig !== currentSig) {
+    currentSig = sig;
+    // 지금 사람이 새로 생기거나(처음엔 retain 이 늦게 옴) Pi 5 앱이 값을 바꾸면 폼을 다시 채운다 — 보내기 확인 중이면 그대로
+    if (!pending && ((autoPicked && current) || persona === "current")) { autoPicked = false; pickPersona(current ? "current" : "student_exam"); }
+    else renderPersonaButtons();
+  }
   $("pSend").disabled = !P.enabled;
   const sent = P.sent;
   $("pstatus").innerHTML =
+    `지금 사람: ${current ? `<span class="mono">${esc(current.profile_id)}</span> · 마지막 첫 설정 ${esc(current.node)} ${esc(current.t)}` : `<span class="empty">모름 — 브로커에 profile/user 가 없음(Pi 5 앱에서 프로필을 고르면 생김)</span>`}<br>` +
     `보낸 프로필: ${sent ? `<b>${esc(sent.label || "-")}</b> <span class="mono">${esc(sent.profile_id)}</span> · ${sent.t}` : "아직 없음"}<br>` +
     `hub 가 쓰는 프로필: <span class="mono">${esc(P.hub_active)}</span> ` +
     (sent ? (P.ack ? `<span class="ok">✓ hub 적용 확인</span>` : `<span class="pend">… 확인 대기</span>`) : "") +
