@@ -51,6 +51,8 @@
 #define CONN_INTERVAL_MIN 24         /* x1.25 ms */
 #define CONN_INTERVAL_MAX 40
 #define CONN_SUPERVISION_TIMEOUT 400 /* x10 ms */
+#define ADV_INTERVAL_MIN 32 /* x0.625 ms = 20 ms */
+#define ADV_INTERVAL_MAX 48 /* 30 ms */
 #define PWM_WRAP 999 /* level = duty permille */
 
 #define COMMAND_VALUE_HANDLE ATT_CHARACTERISTIC_f1970002_51e1_4b0e_a7f1_8d27d8e34683_01_VALUE_HANDLE
@@ -274,7 +276,10 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
         addr[0] |= 0xc0;
         printf("[fan] BLE up as DESKMATE-FAN %s (random static)\n", bd_addr_to_str(addr));
         memset(null_addr, 0, sizeof(null_addr));
-        gap_advertisements_set_params(160, 320, 0, 0, null_addr, 0x07, 0x00); /* 100-200 ms, connectable */
+        /* 20-30 ms, connectable. 11-01: was 100-200 ms; Pi 5 shares its radio with the Wi-Fi hotspot and A2DP, so
+         * its initiator scans in short windows and often gave up (le-connection-abort-by-local) before catching
+         * an advertisement. USB powered, so the extra radio time costs nothing that matters. */
+        gap_advertisements_set_params(ADV_INTERVAL_MIN, ADV_INTERVAL_MAX, 0, 0, null_addr, 0x07, 0x00);
         gap_advertisements_set_data(sizeof(adv_data), (uint8_t *)adv_data);
         gap_scan_response_set_data(sizeof(scan_resp_data), (uint8_t *)scan_resp_data);
         gap_advertisements_enable(1);
