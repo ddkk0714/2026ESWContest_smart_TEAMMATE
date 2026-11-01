@@ -63,9 +63,13 @@ List<List<int>> ilinkFramesForPhase(String phase) {
 class IlinkLampFeedback {
   IlinkLampFeedback(this._bluetooth,
       {this.rescanFor = const Duration(seconds: 6),
+      this.rescanAtLeast = const Duration(seconds: 3),
       this.settleDelay = const Duration(seconds: 3),
       this.rescanEvery = const Duration(seconds: 30)});
   final AtlasBluetoothService _bluetooth;
+
+  /// 다시 찾을 때 주소가 보여도 이만큼은 검색한다([rediscoverDevice], V35).
+  final Duration rescanAtLeast;
 
   /// 연결 실패 뒤 검색 전에 기다리는 시간. Atlas 가 실패를 먼저 돌려준 뒤에도 BlueZ 가 링크를 맺고
   /// 있을 수 있어, 곧바로 검색하면 그 링크가 끊긴다(선풍기 10-24 확인).
@@ -261,15 +265,8 @@ class IlinkLampFeedback {
       if (left < limit) limit = left;
     }
     if (limit <= Duration.zero) return false;
-    final wanted = _address!.toLowerCase();
-    try {
-      await for (final devices in _bluetooth.scanProgressive(duration: limit)) {
-        if (devices.any((d) => d.address.toLowerCase() == wanted)) return true;
-      }
-    } catch (_) {
-      // 검색이 안 되면 못 찾은 것으로 본다.
-    }
-    return false;
+    return rediscoverDevice(_bluetooth, _address!,
+        limit: limit, atLeast: rescanAtLeast);
   }
 
   Future<void> apply(String phase) async {

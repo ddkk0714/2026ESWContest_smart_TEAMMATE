@@ -1,4 +1,11 @@
-# DESKMATE V34
+# DESKMATE V35
+
+> **V35(0.35.0, 2026-11-01)** = V34 + **한 가지**: 램프·선풍기 "다시 찾기" 가 실제로 검색한 뒤에 연결한다(화면·문구 변경 없음).
+> Atlas `GetDiscoverableDevices` 는 검색 시작 직후 예전에 알던 기기도 돌려줘서, 첫 결과에 주소가 있다고 바로 끝내면 BlueZ 는 30 초 전에
+> 잊은 기기를 그대로 잊은 채라 `Gatt.Connect` 가 곧바로 취소됐다(11-01 Pi 5 실기, 램프 명령 bluetooth_write_failed). 이제 주소를 봤어도
+> 최소 3 초(`rescanAtLeast`)는 검색을 이어 BlueZ 가 광고를 다시 받게 한다. 명령 만료가 가까우면 그때까지 본 결과로. `bluetooth_service.dart`
+> `rediscoverDevice` 를 램프(`IlinkLampFeedback`)·선풍기(`BleFanControl`)가 같이 쓴다. ATLAS 설정 앱에서 램프·선풍기를 연결해 두면
+> 시스템이 링크를 잡아 앱 연결이 거절되므로 설정 앱에서는 연결하지 않는다.
 
 > **V34(0.34.0, 2026-11-01)** = V33 + **한 가지**: 다른 화면(devview)이 같은 사람 프로필을 고치면 여기에도 남긴다(화면·문구 변경 없음).
 > 앱이 `deskmate/profile/user` 를 구독해, 내가 보낸 게 아니고(`node` ≠ pi5-ui) `profile_id` 가 저장된 프로필이면 그 값을 거꾸로 옮겨

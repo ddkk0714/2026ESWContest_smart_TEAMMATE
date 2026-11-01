@@ -70,6 +70,29 @@ class BluetoothDeviceInfo {
       );
 }
 
+/// V35: 저장된 BLE 기기(램프·선풍기)를 다시 찾는다. 주소가 보였어도 [atLeast] 동안은 검색을 이어 간다.
+///
+/// Atlas `GetDiscoverableDevices` 는 검색을 시작하자마자 예전에 알던 기기도 돌려준다. 11-01 Pi 5 실기: 첫 결과에
+/// 램프 주소가 있다고 바로 끝내 검색이 같은 초에 멈췄고, BlueZ 는 30 초 전에 잊은 램프를 그대로 잊은 채라
+/// `Gatt.Connect` 가 BlueZ 를 부르기도 전에 취소됐다(명령 bluetooth_write_failed). 몇 초 검색을 이어 가면 BlueZ 가
+/// 광고를 다시 받아 기기를 되살린다. [limit] 가 [atLeast] 보다 짧으면(명령 만료가 가까우면) 끝까지 본 결과를 돌려준다.
+Future<bool> rediscoverDevice(AtlasBluetoothService bluetooth, String address,
+    {required Duration limit,
+    Duration atLeast = const Duration(seconds: 3)}) async {
+  final wanted = address.toLowerCase();
+  final clock = Stopwatch()..start();
+  var found = false;
+  try {
+    await for (final devices in bluetooth.scanProgressive(duration: limit)) {
+      found = found || devices.any((d) => d.address.toLowerCase() == wanted);
+      if (found && clock.elapsed >= atLeast) return true;
+    }
+  } catch (_) {
+    // 검색이 안 되면 지금까지 본 것으로 판정한다.
+  }
+  return found;
+}
+
 /// Atlas Bluetooth1 wrapper. Pairing and connection require user-consent
 /// permissions declared in atlas/meta/appinfo.json; no system setting is
 /// changed silently by this app.

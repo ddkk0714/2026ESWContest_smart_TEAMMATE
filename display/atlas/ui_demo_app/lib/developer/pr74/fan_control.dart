@@ -154,8 +154,12 @@ class BleFanControl {
   BleFanControl(this._bluetooth,
       {this.connectAttempts = 3,
       this.retryDelay = const Duration(seconds: 3),
-      this.rescanFor = const Duration(seconds: 6)});
+      this.rescanFor = const Duration(seconds: 6),
+      this.rescanAtLeast = const Duration(seconds: 3)});
   final AtlasBluetoothService _bluetooth;
+
+  /// 다시 찾을 때 주소가 보여도 이만큼은 검색한다([rediscoverDevice], V35).
+  final Duration rescanAtLeast;
 
   /// 10-24 Pi 5 실기: Pi 5 → Pico 2 W 링크는 두세 번에 한 번만 맺어지고
   /// (`le-connection-abort-by-local`, 노트북은 매번 성공), 페어링하지 않은 기기는 BlueZ 가 곧 잊어서
@@ -287,16 +291,8 @@ class BleFanControl {
   }
 
   /// 선풍기가 다시 보일 때까지(최대 [rescanFor]) 검색한다. 검색 실패는 다음 연결 시도가 판정한다.
-  Future<bool> _rediscover() async {
-    final wanted = _address!.toLowerCase();
-    try {
-      await for (final devices
-          in _bluetooth.scanProgressive(duration: rescanFor)) {
-        if (devices.any((d) => d.address.toLowerCase() == wanted)) return true;
-      }
-    } catch (_) {}
-    return false;
-  }
+  Future<bool> _rediscover() => rediscoverDevice(_bluetooth, _address!,
+      limit: rescanFor, atLeast: rescanAtLeast);
 
   /// 명령 하나를 쓰고 상태를 읽는다. 쓰기는 순서대로, 끊긴 연결은 한 번만 다시 붙는다.
   /// [written] 이 false 면 선풍기에 닿지 않은 것, [state] 가 null 이면 상태를 못 읽은 것.
