@@ -147,6 +147,8 @@ onboarding:                     # 첫 설정 → 기준(prior). 입력 = deskmat
   quiet_from_sleep: true        # bedtime~wake_time 을 소리·음성 제외 시간으로 (bandit.quiet_hours 23~7 대신)
   wake_sets_night_end: true     # wake_time 전 새벽은 전날 밤의 연장 (profile.night_end_hour 6 대신)
   sleep_short_hours: 6.0        # sleep_hours 가 이보다 적으면 mapping.sleep_short 표를 더한다
+  focus_help_rank_weights: [2.5, 1.0, 0.0]   # focus_help 순위별 배율(1·2·3순위, 뒤는 마지막 값) → +0.2 항목이 +0.5·+0.2·0.
+                                # 2026-11-01: 앱이 "먼저 받고 싶은 도움을 위로" 묻는데 셋 다 +0.2 라 순서가 결과를 못 바꿨다. 없으면 전부 1.0
   mapping:                      # 프로필 값 → {prior: {arm: {축: {특징: 가산}}}, disable: [arm], note_ko: 화면 문구}. 전역 prior 에 더한다
     light_pref:
       low:  {note_ko: "어두운 조명 선호 → 밝은 조명 덜 고름",
@@ -167,12 +169,12 @@ onboarding:                     # 첫 설정 → 기준(prior). 입력 = deskmat
       low:  {prior: {fan_on: {accept: {bias: -0.4}}}}
       mid:  {}
       high: {prior: {fan_on: {accept: {bias: 0.2}}}}
-    focus_help:                 # "집중에 도움 되는 것"(복수 선택) — 고른 항목마다 더한다
-      light: {prior: {light_cool_bright: {accept: {bias: 0.2}}, wake_light: {accept: {bias: 0.2}}}}
-      sound: {prior: {sound_cue: {accept: {bias: 0.2}}}}
-      wind:  {prior: {fan_on: {accept: {bias: 0.2}}}}
-      break: {prior: {break_short: {accept: {bias: 0.2}}, break_long: {accept: {bias: 0.1}}}}
-      voice: {prior: {posture_voice: {accept: {bias: 0.2}}}}
+    focus_help:                 # "먼저 받고 싶은 도움"(앱 순서) — 고른 항목마다 더하되 위 focus_help_rank_weights 배율, note_ko 는 1순위만
+      light: {note_ko: "도움 1순위 조명 → 무드등 먼저", prior: {light_cool_bright: {accept: {bias: 0.2}}, wake_light: {accept: {bias: 0.2}}}}
+      sound: {note_ko: "도움 1순위 알림 → 알림음 먼저", prior: {sound_cue: {accept: {bias: 0.2}}}}
+      wind:  {prior: {fan_on: {accept: {bias: 0.2}}}}   # 문구 없음 — fan_on 은 환경 원인 전용이고 policy.causes 에 환경이 없어 지금은 고르지 않는다
+      break: {note_ko: "도움 1순위 휴식 → 휴식 먼저", prior: {break_short: {accept: {bias: 0.2}}, break_long: {accept: {bias: 0.1}}}}
+      voice: {note_ko: "도움 1순위 음성 → 음성 안내 먼저", prior: {posture_voice: {accept: {bias: 0.2}}}}
     sleep_short: {note_ko: "수면 부족 → 휴식 먼저",
                   prior: {break_short: {accept: {bias: 0.2}}, break_long: {accept: {bias: 0.2}}}}
 

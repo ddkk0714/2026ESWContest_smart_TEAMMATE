@@ -588,7 +588,8 @@ def test_profile_mapping_moves_wake_light():
     p.apply_user_profile({"light_pref": "low"})
     assert _mean(p, "wake_light") == pytest.approx(base - 0.3)
     p.apply_user_profile({"light_pref": "high", "focus_help": ["light"]})
-    assert _mean(p, "wake_light") == pytest.approx(base + 0.4)
+    rank1 = p.cfg["onboarding"]["focus_help_rank_weights"][0]       # 도움 1순위 배율(11-01)
+    assert _mean(p, "wake_light") == pytest.approx(base + 0.2 + rank1 * 0.2)
 
 
 def _drive_drowsy(hub, cache, *, until):

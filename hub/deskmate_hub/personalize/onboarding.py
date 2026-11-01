@@ -83,25 +83,31 @@ def kept(profile: dict[str, Any], keep_fields: list[str] | tuple[str, ...] | Non
     return {k: v for k, v in profile.items() if k in keep_fields}
 
 
-def _mapping_entries(profile: dict[str, Any], ocfg: dict[str, Any]) -> list[dict[str, Any]]:
-    """프로필 값에 해당하는 mapping 표의 항목들(적용 순서대로)."""
+def _mapping_entries(profile: dict[str, Any], ocfg: dict[str, Any]) -> list[tuple[dict[str, Any], float, bool]]:
+    """프로필 값에 해당하는 mapping 표의 항목들(적용 순서대로) — (항목, prior 배율, 설명 문구를 쓸지).
+
+    focus_help 는 앱이 고른 순위대로 `focus_help_rank_weights` 배율을 곱한다(2026-11-01: 화면은 "먼저 받고 싶은 도움을 위로"
+    라고 묻는데 순위 없이 똑같이 더해 순서가 결과를 못 바꿨다). 표가 없으면 전부 1.0(옛 동작), 표보다 뒤 순위는 마지막 값.
+    설명 문구는 1순위 항목만."""
     mapping = ocfg.get("mapping") or {}
-    entries: list[dict[str, Any]] = []
+    entries: list[tuple[dict[str, Any], float, bool]] = []
     for key in ("light_pref", "sound_pref", "wind_pref"):
         value = profile.get(key)
         if value is not None:
             entry = (mapping.get(key) or {}).get(value)
             if entry:
-                entries.append(entry)
-    for item in profile.get("focus_help") or ():
+                entries.append((entry, 1.0, True))
+    weights = [float(w) for w in (ocfg.get("focus_help_rank_weights") or ())]
+    for rank, item in enumerate(profile.get("focus_help") or ()):
         entry = (mapping.get("focus_help") or {}).get(item)
         if entry:
-            entries.append(entry)
+            scale = (weights[rank] if rank < len(weights) else weights[-1]) if weights else 1.0
+            entries.append((entry, scale, rank == 0 and scale > 0.0))
     short = ocfg.get("sleep_short_hours")
     if profile.get("sleep_hours") is not None and short is not None and float(profile["sleep_hours"]) < float(short):
         entry = mapping.get("sleep_short")
         if entry:
-            entries.append(entry)
+            entries.append((entry, 1.0, True))
     return entries
 
 
@@ -111,14 +117,14 @@ def profile_adjustments(profile: dict[str, Any], ocfg: dict[str, Any]
     deltas: dict[str, dict[str, dict[str, float]]] = {}
     disabled: set[str] = set()
     notes: list[str] = []
-    for entry in _mapping_entries(profile, ocfg):
+    for entry, scale, with_note in _mapping_entries(profile, ocfg):
         for arm, axes in (entry.get("prior") or {}).items():
             for axis, feats in (axes or {}).items():
                 acc = deltas.setdefault(arm, {}).setdefault(axis, {})
                 for feat, delta in (feats or {}).items():
-                    acc[feat] = acc.get(feat, 0.0) + float(delta)
+                    acc[feat] = acc.get(feat, 0.0) + scale * float(delta)
         disabled.update(entry.get("disable") or ())
-        if entry.get("note_ko"):
+        if with_note and entry.get("note_ko"):
             notes.append(str(entry["note_ko"]))
     return deltas, disabled, notes
 
