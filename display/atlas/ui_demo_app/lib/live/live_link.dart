@@ -115,7 +115,12 @@ class LiveLink extends ChangeNotifier {
     weatherTopic,
     feedbackTopic,
     keystrokeTopic,
+    // V34: 다른 화면(devview)이 같은 profile_id 로 고친 첫 설정을 받는다. 내가 보낸 것(node pi5-ui)은 무시.
+    profileTopic,
   ];
+
+  /// V34: 다른 노드가 보낸 `deskmate/profile/user` data. 반영·재발행은 [syncRemoteProfile] 이 한다.
+  void Function(Map<String, dynamic> data)? onRemoteProfile;
 
   final _events = StreamController<LiveMessage>.broadcast(sync: true);
   Stream<LiveMessage> get messages => _events.stream;
@@ -336,6 +341,9 @@ class LiveLink extends ChangeNotifier {
           weather = LiveWeather(
               temperatureC: temp is num ? temp.toDouble() : null,
               condition: data['condition']?.toString());
+        case profileTopic:
+          // retain 으로 온 것도 받는다(devview 가 고쳐 둔 값이 연결 직후 들어온다). 내가 보낸 것은 무시.
+          if (envelope['node'] != nodeName) onRemoteProfile?.call(data);
       }
       _notify();
     } on Object catch (error) {

@@ -1,4 +1,10 @@
-# DESKMATE V33
+# DESKMATE V34
+
+> **V34(0.34.0, 2026-11-01)** = V33 + **한 가지**: 다른 화면(devview)이 같은 사람 프로필을 고치면 여기에도 남긴다(화면·문구 변경 없음).
+> 앱이 `deskmate/profile/user` 를 구독해, 내가 보낸 게 아니고(`node` ≠ pi5-ui) `profile_id` 가 저장된 프로필이면 그 값을 거꾸로 옮겨
+> `profiles.json` 에 저장한다. 모르는 id 는 무시. 받은 대역이 지금 대역과 같으면 값을 지킨다. 고친 결과가 받은 값과 같으면 다시 안 보내고,
+> 다르면 지금 고른 사람일 때만 한 번 다시 보낸다. `lib/live/profile_payload.dart`(applyProfileData·profileMatches),
+> `lib/live/profile_sync.dart`, `demo_model.dart`(applyRemoteProfile). 계약은 `docs/mqtt-topics.md` "profile/user 주고받기 (V34)".
 
 > **V33(0.33.0, 2026-11-01)** = V32 + **한 가지**: 음악 6곡을 앱에 넣었다(코드·화면 변경 없음).
 > V27~V32 는 재생 목록(`classicalPlaylist`)·`assets/audio/CREDITS.md` 가 6곡을 가리켰지만 mp3 는 알림음 3개만 들어 있어

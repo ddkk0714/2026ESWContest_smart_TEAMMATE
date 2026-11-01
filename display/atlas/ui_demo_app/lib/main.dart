@@ -14,6 +14,7 @@ import 'live/home_items.dart';
 import 'live/link_settings.dart';
 import 'live/live_link.dart';
 import 'live/live_request.dart';
+import 'live/profile_sync.dart';
 import 'pr56/co2_grade.dart';
 import 'pr56/display_state.dart';
 import 'profile_store.dart';
@@ -188,6 +189,9 @@ class _DemoAppState extends State<DemoApp> {
         widget.tools?.setPlacement(persona.placement);
       };
       model.onPlacement = live.sendPlacement;
+      // V34: devview 가 같은 사람 프로필을 고치면 여기에도 남긴다.
+      live.onRemoteProfile = (data) => syncRemoteProfile(model, live, data,
+          onPlacement: widget.tools?.setPlacement);
       live.publishProfile(model.persona);
       widget.tools?.setPlacement(model.persona.placement);
     }

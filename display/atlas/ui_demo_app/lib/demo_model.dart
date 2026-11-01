@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'live/payload.dart' show newProfileId;
+import 'live/profile_payload.dart' show applyProfileData;
 import 'pr56/display_state.dart';
 import 'profile_store.dart';
 
@@ -449,6 +450,22 @@ class DemoModel extends ChangeNotifier {
     onProfileChanged?.call(draft);
     touch();
     notifyListeners();
+  }
+
+  /// V34: 다른 화면이 같은 profile_id 로 바꾼 첫 설정을 저장된 프로필에 반영한다. 모르는 id 는 무시한다
+  /// (새 프로필을 만들지 않는다). 보드로 다시 보내지 않는다 — 다시 보낼지는 부르는 쪽([syncRemoteProfile])이 정한다.
+  /// 반영한 프로필을 돌려준다(없거나 바뀐 게 없으면 null).
+  Persona? applyRemoteProfile(Map<String, dynamic> data) {
+    final id = data['profile_id'];
+    if (id is! String) return null;
+    final index = profiles.indexWhere((p) => p.profileId == id);
+    if (index < 0) return null;
+    final target = profiles[index];
+    if (!applyProfileData(target, data)) return null;
+    if (index == profileIndex) _applyPreferences();
+    _persist();
+    notifyListeners();
+    return target;
   }
 
   void saveProfile(Persona draft) {
