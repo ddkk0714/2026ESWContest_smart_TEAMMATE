@@ -20,6 +20,7 @@ target_link_libraries(deskmate_ble_fan
     hardware_watchdog
     pico_btstack_ble
     pico_btstack_cyw43
+    pico_btstack_flash_bank # keeps bonds across reboots, so Pi 5 only ever pairs once
     pico_cyw43_arch_poll
 )
 pico_btstack_make_gatt_header(deskmate_ble_fan PRIVATE "${CMAKE_CURRENT_LIST_DIR}/src/deskmate_fan.gatt")
