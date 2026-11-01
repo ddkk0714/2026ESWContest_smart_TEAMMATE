@@ -1,4 +1,11 @@
-# DESKMATE V31
+# DESKMATE V32
+
+> **V32(0.32.0, 2026-11-01)** = V31 + **한 가지**: 음악 상태를 hub 와 주고받는다(제품 화면·문구는 그대로).
+> 앱 → hub: 지금 음악 상태를 `deskmate/display/audio`(retain)로 — 켜짐·볼륨·곡·지금 프로필 id, 바뀔 때마다·연결 직후·사람이 바뀔 때.
+> hub → 앱: `control/cmd` target `music` · operation `set_music` {on, volume?, track?} 를 실행하고 `control/result` 에
+> previous·actual 을 싣는다. 되돌리기는 previous 를 그대로 보내면 된다(gate undo). hub 의 "집중이 잘 된 환경 기억" 이 쓸 계약.
+> `lib/developer/pr74/music_state.dart`, `feedback_policy.dart`(_executeMusicCommand), `lib/live/live_link.dart`(publishAudio).
+> 계약은 `docs/mqtt-topics.md` `deskmate/display/audio` 절.
 
 > **V31(0.31.0, 2026-10-31)** = V30 + **한 가지**: 자동 실행 카드의 되돌림 판정을 고쳤다(PR #90 리뷰).
 > 전에는 같은 기기의 되돌리기 명령(gate undo)이 오기만 하면 "원래대로 돌려 뒀어요" 로 바꿔, 그 명령이 실패해도(예: ble_not_connected)

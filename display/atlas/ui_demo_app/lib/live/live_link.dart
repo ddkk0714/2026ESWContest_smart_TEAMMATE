@@ -86,6 +86,7 @@ class LiveLink extends ChangeNotifier {
     autoActions.addListener(_notify);
     _feedbackWriter = EnvelopeWriter(node: nodeName, clock: _clock);
     _profileWriter = EnvelopeWriter(node: nodeName, clock: _clock);
+    _audioWriter = EnvelopeWriter(node: nodeName, clock: _clock);
   }
 
   static const nodeName = 'pi5-ui';
@@ -101,6 +102,9 @@ class LiveLink extends ChangeNotifier {
 
   /// 빠른 시연 버튼 → hub demo_mode.py {"speed": "fast"|"normal"}. 보내기만 한다(지금 모드는 state/phase 로 받는다).
   static const demoModeTopic = 'deskmate/demo/mode';
+
+  /// V32: 지금 음악 상태(retain) → hub. {on, volume, track, track_id, profile_id, last_command_id}. 보내기만 한다.
+  static const audioTopic = 'deskmate/display/audio';
   static const subscriptions = [
     stateTopic,
     requestTopic,
@@ -126,6 +130,8 @@ class LiveLink extends ChangeNotifier {
   final Duration staleAfter;
   late final EnvelopeWriter _feedbackWriter;
   late final EnvelopeWriter _profileWriter;
+  late final EnvelopeWriter _audioWriter;
+  Map<String, Object?>? _audio;
 
   String host = '';
   int port = LinkSettings.defaultPort;
@@ -213,7 +219,10 @@ class LiveLink extends ChangeNotifier {
     _connectionSub = transport.connection.listen((up) {
       if (generation != _generation) return;
       status = up ? LinkStatus.connected : LinkStatus.connecting;
-      if (up) _publishProfile();
+      if (up) {
+        _publishProfile();
+        _publishAudio();
+      }
       _notify();
     });
     _watchTimer = Timer.periodic(const Duration(seconds: 5), (_) {
@@ -239,6 +248,7 @@ class LiveLink extends ChangeNotifier {
     }
     status = LinkStatus.connected;
     _publishProfile();
+    _publishAudio();
     _notify();
   }
 
@@ -400,8 +410,29 @@ class LiveLink extends ChangeNotifier {
 
   /// 프로필이 만들어지거나 바뀌거나 골라질 때. 연결 전이면 기억했다가 연결되면 보낸다.
   void publishProfile(Persona persona) {
+    final changed = _profile?.profileId != persona.profileId;
     _profile = persona;
     _publishProfile();
+    // 음악 상태의 profile_id 도 지금 사람으로 — hub 가 사람별로 기억한다.
+    if (changed) _publishAudio();
+  }
+
+  /// V32: 음악 상태가 바뀔 때. 연결 전이면 기억했다가 연결되면 보낸다(retain).
+  void publishAudio(Map<String, Object?> state) {
+    _audio = state;
+    _publishAudio();
+  }
+
+  void _publishAudio() {
+    final state = _audio;
+    final transport = _transport;
+    if (state == null || transport == null || !transport.isConnected) return;
+    final profileId = _profile?.profileId;
+    transport.publish(
+        audioTopic,
+        _audioWriter
+            .encode({...state, if (profileId != null) 'profile_id': profileId}),
+        retain: true);
   }
 
   void _publishProfile() {

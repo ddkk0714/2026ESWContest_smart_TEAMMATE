@@ -6,6 +6,7 @@ import 'display_state.dart';
 import 'fan_control.dart';
 import 'lamp_defaults.dart';
 import 'music_playback.dart';
+import 'music_state.dart';
 import 'voice_alert.dart';
 
 const ilinkServiceUuid = '0000a032-0000-1000-8000-00805f9b34fb';
@@ -517,16 +518,21 @@ class FeedbackCoordinator {
     final target = command['target_id'];
     final isFan = target == 'vent_fan' && (fan?.configured ?? false);
     final isSpeaker = target == 'speaker';
-    if (target != 'desk_lamp' && !isFan && !isSpeaker) return null;
+    final isMusic = target == 'music';
+    if (target != 'desk_lamp' && !isFan && !isSpeaker && !isMusic) {
+      return null;
+    }
     final id = command['command_id'];
     if (id is! String || id.isEmpty) return null;
     final cached = _commandResults[id];
     if (cached != null) return cached;
     final result = isSpeaker
         ? _executeSpeakerCommand(command)
-        : isFan
-            ? _executeFanCommand(command)
-            : _executeLampCommand(command);
+        : isMusic
+            ? _executeMusicCommand(command)
+            : isFan
+                ? _executeFanCommand(command)
+                : _executeLampCommand(command);
     _commandResults[id] = result;
     if (_commandResults.length > 128) {
       _commandResults.remove(_commandResults.keys.first);
@@ -683,6 +689,66 @@ class FeedbackCoordinator {
     }
     return _result(command, 'succeeded',
         actual: state.actualFor(operation), extra: recovery);
+  }
+
+  /// 마지막으로 실행한 hub 음악 명령(V32). `display/audio` 에 실어 hub 가 그 뒤의 변화를 사용자 조작으로 가린다.
+  String? lastMusicCommandId;
+
+  /// V32 target `music` · operation `set_music` {on, volume?, track?}. 결과 actual_value·actual = 실행 뒤 상태,
+  /// previous = 실행 전 상태({on, volume, track, track_id}) — hub 는 되돌리기 때 previous 를 그대로 value 로 보낸다(gate undo).
+  /// 스피커를 골랐는데 A2DP 가 끊겼으면 켜지 않고 speaker_not_connected. 실행 뒤 이 국면 동안은 앱 자체 음악
+  /// 켜기·끄기(_applyOutputs)가 hub 의 결정을 덮지 않는다.
+  Future<Map<String, dynamic>> _executeMusicCommand(
+      Map<String, dynamic> command) async {
+    final rejected = _rejection(command);
+    if (rejected != null) return _result(command, 'failed', error: rejected);
+    final value = command['value'];
+    final on = value is Map ? value['on'] : null;
+    final volume = value is Map ? value['volume'] : null;
+    final track = value is Map ? value['track'] : null;
+    if (command['operation'] != 'set_music' ||
+        on is! bool ||
+        (volume != null &&
+            (volume is! num ||
+                !volume.isFinite ||
+                volume < 0 ||
+                volume > 1)) ||
+        (track != null &&
+            (track is! int || track < 0 || track >= classicalPlaylist.length))) {
+      return _result(command, 'failed',
+          error: 'unsupported_operation_or_value');
+    }
+    final previous = musicStateOf(music);
+    final address = _speakerAddress;
+    if (on && address != null && !await bluetooth.isA2dpConnected(address)) {
+      return _result(command, 'failed',
+          error: 'speaker_not_connected', extra: {'previous': previous});
+    }
+    try {
+      if (volume != null) await music.setVolume(volume.toDouble());
+      if (track != null && track != music.selectedTrack) {
+        await music.selectTrack(track);
+      }
+      if (on != music.isPlaying) await music.toggle();
+    } on Object catch (error) {
+      lastAudioError = error;
+      return _result(command, 'failed',
+          actual: musicStateOf(music),
+          error: 'audio_failed',
+          extra: {'previous': previous});
+    }
+    lastMusicCommandId = command['command_id'] as String;
+    _lastMusicKey = _latest?.phase;
+    final actual = musicStateOf(music);
+    if (actual['on'] != on) {
+      return _result(command, 'failed',
+          actual: actual,
+          error: 'state_mismatch',
+          extra: {'previous': previous, 'actual': actual});
+    }
+    lastAudioError = null;
+    return _result(command, 'succeeded',
+        actual: actual, extra: {'previous': previous, 'actual': actual});
   }
 
   /// speak: TTS 로 읽고, 안 되면 알림음 + 화면 문구로 대신한 뒤 failed·tts_unavailable 과 함께

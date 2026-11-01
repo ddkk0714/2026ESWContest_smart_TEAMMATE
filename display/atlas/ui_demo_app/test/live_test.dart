@@ -280,6 +280,48 @@ void main() {
     });
   });
 
+  group('음악 상태 → deskmate/display/audio (V32)', () {
+    test('kept until connected, retained, re-sent with the new profile id',
+        () async {
+      late FakeTransport transport;
+      final link = LiveLink(
+          transportFactory: (h, p) => transport = FakeTransport(),
+          retryDelay: const Duration(hours: 1));
+      final first = Persona(name: '꽃님', job: '수험생', rounds: 0);
+      link.publishProfile(first);
+      link.publishAudio(
+          {'on': true, 'volume': .5, 'track': 1, 'track_id': 'chopin'});
+      expect(link.status, isNot(LinkStatus.connected)); // 연결 전: 기억만
+      link.configure('10.0.0.2', 1883);
+      await Future<void>.delayed(Duration.zero);
+      var sent = transport.published
+          .where((p) => p.topic == LiveLink.audioTopic)
+          .toList();
+      expect(sent, hasLength(1));
+      expect(sent.single.retain, isTrue);
+      expect(sent.single.text, isNot(contains('꽃님')));
+      final envelope = jsonDecode(sent.single.text) as Map<String, dynamic>;
+      expect(envelope['node'], 'pi5-ui');
+      expect(envelope['data'], {
+        'on': true,
+        'volume': .5,
+        'track': 1,
+        'track_id': 'chopin',
+        'profile_id': first.profileId,
+      });
+      final second = Persona(name: '다른 사람', job: '수험생', rounds: 0);
+      link.publishProfile(second); // 사람이 바뀌면 음악 상태도 그 사람 id 로 다시
+      link.publishProfile(second); // 같은 사람이면 다시 보내지 않는다
+      sent = transport.published
+          .where((p) => p.topic == LiveLink.audioTopic)
+          .toList();
+      expect(sent, hasLength(2));
+      expect((jsonDecode(sent.last.text)['data'] as Map)['profile_id'],
+          second.profileId);
+      link.dispose();
+    });
+  });
+
   group('프로필 → deskmate/profile/user', () {
     test('retained envelope with the agreed schema and no name', () async {
       final persona = Persona(
