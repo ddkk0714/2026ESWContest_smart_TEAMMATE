@@ -1328,6 +1328,30 @@ def test_persona_view_current_person_follows_hub():
     assert st.persona_view()["current"] is None                        # 남은 첫 설정이 다른 사람 것이면 지금 사람 아님
 
 
+def test_profile_names_are_local_and_shown(tmp_path):
+    """profile_id → 부르는 이름(11-01). 노트북 파일에만 남고, 보내는 프로필에는 실리지 않는다."""
+    path = tmp_path / "names.json"
+    st = dv.Store()
+    st.names = dv.ProfileNames(str(path))
+    st.publisher = FakePub()
+    sid = "p266eb9c0c514d18c"
+    st.on_mqtt(dv.TOPIC_PROFILE, payload({"profile_id": sid, "light_pref": "mid"}, node="pi5-ui"))
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "FOCUS_PC", "sensor_summary": {
+        "personalize": {"active_profile_id": sid}}}))
+    assert st.persona_view()["current"]["name"] is None and st.persona_view()["hub_active_name"] is None
+    assert st.names.set(sid, "  소연  ") == {"ok": True, "error": None}
+    pv = st.persona_view()
+    assert pv["current"]["name"] == "소연" and pv["hub_active_name"] == "소연"
+    assert dv.ProfileNames(str(path)).get(sid) == "소연"                    # 다시 켜도 남는다
+    assert st.send_profile({"profile_id": sid, "light_pref": "high"})["ok"]
+    assert st.publisher.sent[-1] == (dv.TOPIC_PROFILE, {"profile_id": sid, "light_pref": "high"})   # 이름은 안 실린다
+    assert st.persona_view()["sent"]["name"] == "소연" and st.profile_sent["label"] == "소연"
+    assert st.names.set(sid, "") == {"ok": True, "error": None}             # 비우면 지운다
+    assert dv.ProfileNames(str(path)).get(sid) is None
+    assert st.names.set("bad id/../x", "누구")["ok"] is False
+    assert dv.ProfileNames(str(tmp_path / "none.json")).names == {}
+
+
 def test_send_feedback_card_and_undo():
     st = dv.Store()
     st.publisher = FakePub()
@@ -1403,6 +1427,9 @@ def test_http_post_requires_header_and_routes():
         assert post("/api/profile", {"data": {"profile_id": "p1", "age_band": "20s"}, "label": "대학생"}) == \
             (200, {"ok": True, "error": None})
         assert post("/api/feedback", {"request_id": "nope", "verdict": "accept"})[0] == 409
+        assert post("/api/name", {"profile_id": "p1", "name": "소연"}) == (200, {"ok": True, "error": None})
+        assert st.names.get("p1") == "소연"
+        assert post("/api/name", {"profile_id": "p1", "name": "x"}, header=False)[0] == 403
     finally:
         server.shutdown()
         server.server_close()

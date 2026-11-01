@@ -1681,6 +1681,47 @@ def validate_profile(data: Any) -> tuple[dict[str, Any] | None, str]:
     return out, ""
 
 
+class ProfileNames:
+    """profile_id → 부르는 이름(11-01). 프로필 메시지에는 이름이 없어(난수 id 만) 화면이 사람을 id 로만 보였다.
+    이 노트북에만 적어 두고 MQTT 로는 보내지 않는다. path 가 None 이면 메모리에만(시험·--fake)."""
+
+    MAX_LEN = 20
+
+    def __init__(self, path: str | None) -> None:
+        self.path = path
+        self.names: dict[str, str] = {}
+        if path and os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    raw = json.load(fh)
+                self.names = {k: v for k, v in _map(raw).items() if isinstance(k, str) and _PID.match(k)
+                              and isinstance(v, str) and v.strip()}
+            except (OSError, ValueError):
+                self.names = {}
+
+    def get(self, pid: Any) -> str | None:
+        return self.names.get(pid) if isinstance(pid, str) else None
+
+    def set(self, pid: Any, name: Any) -> dict[str, Any]:
+        if not isinstance(pid, str) or not _PID.match(pid):
+            return {"ok": False, "error": "profile_id 형식 오류"}
+        text = " ".join(str(name or "").split())[: self.MAX_LEN]
+        if text:
+            self.names[pid] = text
+        else:
+            self.names.pop(pid, None)    # 빈 이름 = 지우기
+        if self.path:
+            try:
+                os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+                tmp = self.path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump(self.names, fh, ensure_ascii=False)
+                os.replace(tmp, self.path)
+            except OSError as e:
+                return {"ok": False, "error": f"이름 저장 실패: {e}"}
+        return {"ok": True, "error": None}
+
+
 def new_profile_id() -> str:
     """V18 newProfileId 와 같은 모양: 'p' + 16 hex (이름과 무관한 난수)."""
     return "p" + os.urandom(8).hex()
@@ -2580,6 +2621,8 @@ class Store:
         self.publisher: Publisher | None = None
         self.sent: deque[dict[str, Any]] = deque(maxlen=20)
         self.profile_sent: dict[str, Any] | None = None
+        # profile_id → 부르는 이름(이 노트북에만, main 이 파일 경로를 준다)
+        self.names = ProfileNames(None)
         # 연결별 상태: ok, reason, last(마지막 수신 epoch)
         self.links: dict[str, dict[str, Any]] = {
             k: {"ok": False, "reason": "아직 연결 시도 전", "last": None} for k in ("mqtt", "posture", "raw", "control_log")}
@@ -2659,6 +2702,7 @@ class Store:
         prof, err = validate_profile(data)
         if prof is None:
             return {"ok": False, "error": err}
+        label = label or self.names.get(prof["profile_id"]) or ""
         res = self._send(TOPIC_PROFILE, prof, f"프로필 {label or prof['profile_id']}")
         if res["ok"]:
             with self.lock:
@@ -2726,12 +2770,14 @@ class Store:
         cur, _ = validate_profile(env.get("data"))
         current = None
         if cur is not None and (not hub_id or hub_id == cur["profile_id"]):
-            current = {"profile_id": cur["profile_id"], "data": cur, "node": env.get("node") or DASH,
+            current = {"profile_id": cur["profile_id"], "name": self.names.get(cur["profile_id"]),
+                       "data": cur, "node": env.get("node") or DASH,
                        "t": time.strftime("%H:%M:%S", time.localtime(float(env["ts"]))) if isinstance(env.get("ts"), (int, float)) else DASH}
         return {"enabled": self.publisher is not None, "presets": PERSONAS, "current": current,
                 "sent": None if sent is None else {k: sent[k] for k in ("profile_id", "label", "data")} |
-                {"t": time.strftime("%H:%M:%S", time.localtime(sent["at"]))},
+                {"t": time.strftime("%H:%M:%S", time.localtime(sent["at"])), "name": self.names.get(sent["profile_id"])},
                 "hub_active": hub_id or DASH,
+                "hub_active_name": self.names.get(hub_id),
                 "hub_fields": {k: pers[k] for k in ("active_profile_id", "arm", "source", "delivered_gate") if pers.get(k)},
                 "prior": prior_text(pers),
                 "ack": bool(sent and hub_id == sent["profile_id"]),
@@ -3423,6 +3469,10 @@ def make_handler(store: Store) -> type[BaseHTTPRequestHandler]:
                 res = store.send_feedback(_map(body).get("request_id"), _map(body).get("verdict"))
             elif path == "/api/demo-mode":
                 res = store.send_demo_mode(_map(body).get("speed"))
+            elif path == "/api/name":
+                # 이 노트북에만 적는 이름 — MQTT 로는 보내지 않는다
+                with store.lock:
+                    res = store.names.set(_map(body).get("profile_id"), _map(body).get("name"))
             else:
                 self._send(404, b"not found", "text/plain")
                 return
@@ -3460,9 +3510,12 @@ def main(argv: list[str] | None = None) -> None:
                     help="cycle = 40 s 각본 · facedown = 15 s 부터 90 s 엎드림(hub 규칙대로 → 무드등) · recline = 계속 젖힘(의심까지만)")
     ap.add_argument("--fake-start", type=float, default=0.0, metavar="S",
                     help=f"가짜 각본을 S 초부터(0–{FAKE_PERIOD:.0f}, 예: 26 = 졸음→무드등 직전)")
+    ap.add_argument("--names-file", default=os.path.join(os.environ.get("LOCALAPPDATA", HERE), "deskmate-devview", "profile_names.json"),
+                    metavar="PATH", help="profile_id → 부르는 이름(이 노트북에만, MQTT 로 안 보냄)")
     args = ap.parse_args(argv)
 
     store = Store()
+    store.names = ProfileNames(args.names_file)
     store.hub_floors = parse_floors(args.hub_floor)
     rules = load_hub_rules(args.hub_config, args.hub_profile or ("demo-b" if args.fake else ""))
     store.trigger = TriggerTracker(rules)

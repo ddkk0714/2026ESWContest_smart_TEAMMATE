@@ -815,9 +815,9 @@ const LAB = {age_band: "연령대", sleep_hours: "수면 h", bedtime: "잠드는
 const HELP = [["light", "조명"], ["wind", "선풍기"], ["sound", "알림음"], ["voice", "음성 안내"], ["break", "휴식"]];
 let persona = null, presets = null, custom = null, pending = null;
 // 지금 사람(11-01): hub 가 쓰는 profile_id 와 그 첫 설정(브로커 retain). 있으면 보내기는 기본으로 이 id 를 그대로 쓴다
-let current = null, currentSig = "", autoPicked = false;
+let current = null, currentSig = "", autoPicked = false, currentName = "";
 function personaKeys() {
-  return (current ? [["current", "지금 사람"]] : []).concat([["student_exam", "수험생"], ["student_univ", "대학생"], ["custom", "직접 설정"]]);
+  return (current ? [["current", current.name ? `지금 사람 · ${current.name}` : "지금 사람"]] : []).concat([["student_exam", "수험생"], ["student_univ", "대학생"], ["custom", "직접 설정"]]);
 }
 function sendId() { return persona === "current" ? current.profile_id : (current && !$("pNew").checked ? current.profile_id : pid(persona)); }
 function formData() {
@@ -863,7 +863,7 @@ $("pSend").onclick = () => {
   if (persona === "custom") custom = formData();
   const name = personaKeys().find(x => x[0] === persona)[1];
   const same = current && data.profile_id === current.profile_id;
-  pending = {data, label: persona === "current" ? name : same ? `${name} 값 → 지금 사람` : `${name}(새 사람)`};
+  pending = {data, label: persona === "current" ? (current.name || name) : same ? `${name} 값 → 지금 사람` : `${name}(새 사람)`};
   $("pPreview").textContent = JSON.stringify(data, null, 1);
   $("pconfirm").style.display = "block";
 };
@@ -1069,14 +1069,25 @@ function renderVirtual(d) {
   }
   $("pSend").disabled = !P.enabled;
   const sent = P.sent;
+  // 이름은 이 노트북에만 적어 둔 것(프로필 메시지에는 이름이 없다) — 이름 붙이기 버튼으로 정한다
+  const who = (name, pid) => `${name ? `<b>${esc(name)}</b> ` : ""}<span class="mono">${esc(pid)}</span>`;
   $("pstatus").innerHTML =
-    `지금 사람: ${current ? `<span class="mono">${esc(current.profile_id)}</span> · 마지막 첫 설정 ${esc(current.node)} ${esc(current.t)}` : `<span class="empty">모름 — 브로커에 profile/user 가 없음(Pi 5 앱에서 프로필을 고르면 생김)</span>`}<br>` +
-    `보낸 프로필: ${sent ? `<b>${esc(sent.label || "-")}</b> <span class="mono">${esc(sent.profile_id)}</span> · ${sent.t}` : "아직 없음"}<br>` +
-    `hub 가 쓰는 프로필: <span class="mono">${esc(P.hub_active)}</span> ` +
+    `지금 사람: ${current ? `${who(current.name, current.profile_id)} <button class="tg" id="pName" title="이 노트북에만 적어 두는 이름 — MQTT 로는 보내지 않음">${current.name ? "이름 바꾸기" : "이름 붙이기"}</button> · 마지막 첫 설정 ${esc(current.node)} ${esc(current.t)}` : `<span class="empty">모름 — 브로커에 profile/user 가 없음(Pi 5 앱에서 프로필을 고르면 생김)</span>`}<br>` +
+    `보낸 프로필: ${sent ? `${who(sent.name || sent.label || "-", sent.profile_id)} · ${sent.t}` : "아직 없음"}<br>` +
+    `hub 가 쓰는 프로필: ${who(P.hub_active_name, P.hub_active)} ` +
     (sent ? (P.ack ? `<span class="ok">✓ hub 적용 확인</span>` : `<span class="pend">… 확인 대기</span>`) : "") +
     (Object.keys(P.hub_fields).length ? `<br><span class="empty">hub 개인화: ${esc(Object.entries(P.hub_fields).map(([k, x]) => k + " " + x).join(" · "))}</span>` : "") +
     `<br>hub 시연 프로파일(DESKMATE_PROFILE): <b>${esc(P.hub_profile)}</b> <span class="empty">— demo-b ↔ demo-b-study 는 hub 재시작이 필요해 여기서 바꾸지 않음(hub.env)</span>` +
     (P.enabled ? "" : `<br><span class="bad">보내기 꺼짐(--read-only)</span>`);
+  if ($("pName")) $("pName").onclick = async () => {
+    const name = prompt("이 사람을 뭐라고 부를까요? 이 노트북에만 저장해요(비우면 지움).", current.name || "");
+    if (name === null) return;
+    const r = await post("/api/name", {profile_id: current.profile_id, name}).catch(e => ({ok: false, error: e.message}));
+    $("pHint").textContent = r.ok ? "이름을 적어 두었어요" : `이름 저장 실패: ${r.error}`;
+  };
+  // 이름이 바뀌면 "지금 사람" 버튼 글자도 — 폼은 다시 채우지 않는다(고치던 값을 지킨다)
+  const nameNow = current ? current.name || "" : "";
+  if (nameNow !== currentName) { currentName = nameNow; renderPersonaButtons(); }
   // hub 지금
   $("vnowState").textContent = `${FSM_KO_JS[ph.fsm_state] || ph.fsm_state}`;
   $("vnowState").style.color = PHASE_COLOR[ph.phase] || "var(--fg)";
