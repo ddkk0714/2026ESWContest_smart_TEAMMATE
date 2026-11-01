@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:deskmate_ui_demo/developer/pr74/bluetooth_service.dart';
 import 'package:deskmate_ui_demo/developer/pr74/bluetooth_control_page.dart';
 import 'package:deskmate_ui_demo/developer/pr74/bluetooth_link.dart';
@@ -606,8 +608,33 @@ void main() {
         await lamp.apply('focus');
       }
       expect(bluetooth.scans, 0);
-      expect(bluetooth.connectedAddresses,
-          hasLength(2)); // one write, then 30 s back-off
+      expect(bluetooth.connectedAddresses, hasLength(1)); // 첫 시도 한 번, 그 뒤 조용히
+    });
+
+    test('background connects: first try, quiet after a failure, one retry after a drop',
+        () async {
+      final bluetooth = _FakeBluetooth()..connectFailuresRemaining = 1;
+      final lamp = IlinkLampFeedback(bluetooth, settleDelay: Duration.zero)
+        ..select(firstAddress);
+      expect(await lamp.connectInBackground(), isFalse); // 첫 시도 — 실패
+      expect(await lamp.connectInBackground(), isFalse); // 실패 뒤엔 BlueZ 를 안 건드림
+      expect(bluetooth.connectedAddresses, hasLength(1));
+
+      expect(await lamp.connect(), isTrue); // 사람이 누른 "다시 연결"
+      bluetooth.writeFailuresRemaining = 1; // 링크가 끊겨 있었다
+      await lamp.apply('focus'); // 끊긴 뒤 한 번 다시 붙어 쓴다
+      expect(bluetooth.connectedAddresses, hasLength(3));
+      expect(lamp.connected, isTrue);
+
+      bluetooth
+        ..writeFailuresRemaining = 1
+        ..connectFailuresRemaining = 5;
+      await lamp.apply('idle'); // 또 끊김 → 한 번 다시 붙어 보고 실패
+      expect(bluetooth.connectedAddresses, hasLength(4));
+      await lamp.apply('focus'); // 그 뒤엔 조용히
+      await lamp.apply('idle');
+      expect(bluetooth.connectedAddresses, hasLength(4));
+      expect(lamp.connected, isFalse);
     });
 
     test('a lamp that connects first time is not scanned', () async {
@@ -617,6 +644,140 @@ void main() {
       expect(result?['status'], 'succeeded');
       expect(result?.containsKey('recovery'), isFalse);
       expect(bluetooth.scans, 0);
+    });
+  });
+
+  group('music commands (V32)', () {
+    Map<String, dynamic> musicCommand(String id, Object? value,
+            {String gate = 'auto', String operation = 'set_music'}) =>
+        {
+          'command_id': id,
+          'target_id': 'music',
+          'operation': operation,
+          'value': value,
+          'origin_state': 'ACTION_POSTURE',
+          'gate': gate,
+          'requires_confirmation': false,
+          'expires_ts_ms': DateTime.now().millisecondsSinceEpoch + 15000,
+        };
+    FeedbackCoordinator coordinator(_StateMusic music,
+            {_FakeBluetooth? bluetooth}) =>
+        FeedbackCoordinator(
+            music: music,
+            lamp: IlinkLampFeedback(bluetooth ?? _FakeBluetooth()),
+            bluetooth: bluetooth ?? _FakeBluetooth())
+          ..enabled = true;
+
+    test('set_music plays the requested track at the requested volume',
+        () async {
+      final music = _StateMusic(volume: .3);
+      final c = coordinator(music);
+      final result = await c.handleControlCommand(
+          musicCommand('m1', {'on': true, 'volume': .8, 'track': 2}));
+      expect(result?['status'], 'succeeded');
+      expect(music.isPlaying, isTrue);
+      expect(music.volume, .8);
+      expect(music.selectedTrack, 2);
+      expect(result?['previous'], {
+        'on': false,
+        'volume': .3,
+        'track': 0,
+        'track_id': 'deskmate_test_music'
+      });
+      expect(result?['actual'], {
+        'on': true,
+        'volume': .8,
+        'track': 2,
+        'track_id': 'satie_gymnopedie_no1'
+      });
+      expect(result?['actual_value'], result?['actual']);
+      expect(c.lastMusicCommandId, 'm1');
+    });
+
+    test('undo sends previous back and restores the earlier music', () async {
+      final music = _StateMusic(volume: .3);
+      final c = coordinator(music);
+      final first = await c.handleControlCommand(
+          musicCommand('m1', {'on': true, 'volume': .8, 'track': 2}));
+      final undo = await c.handleControlCommand(
+          musicCommand('m1-undo', first?['previous'], gate: 'undo'));
+      expect(undo?['status'], 'succeeded');
+      expect(music.isPlaying, isFalse);
+      expect(music.volume, .3);
+      expect(music.selectedTrack, 0);
+    });
+
+    test('a duplicate command id does not toggle twice', () async {
+      final music = _StateMusic();
+      final c = coordinator(music);
+      await c.handleControlCommand(musicCommand('dup', {'on': true}));
+      await c.handleControlCommand(musicCommand('dup', {'on': true}));
+      expect(music.toggles, 1);
+      expect(music.isPlaying, isTrue);
+    });
+
+    test('bad values and operations are refused without touching music',
+        () async {
+      final music = _StateMusic();
+      final c = coordinator(music);
+      for (final (id, value, op) in [
+        ('b1', {'volume': .5}, 'set_music'),
+        ('b2', {'on': true, 'volume': 1.5}, 'set_music'),
+        ('b3', {'on': true, 'track': 99}, 'set_music'),
+        ('b4', {'on': true}, 'play'),
+      ]) {
+        final r =
+            await c.handleControlCommand(musicCommand(id, value, operation: op));
+        expect(r?['error_code'], 'unsupported_operation_or_value', reason: id);
+      }
+      expect(music.toggles, 0);
+      expect(music.isPlaying, isFalse);
+    });
+
+    test('a selected speaker that is not connected is not played', () async {
+      final bluetooth = _FakeBluetooth()..a2dpConnected = false;
+      final music = _StateMusic();
+      final c = coordinator(music, bluetooth: bluetooth)
+        ..selectSpeaker(secondAddress);
+      final r = await c.handleControlCommand(musicCommand('s1', {'on': true}));
+      expect(r?['status'], 'failed');
+      expect(r?['error_code'], 'speaker_not_connected');
+      expect(music.isPlaying, isFalse);
+    });
+
+    test('automatic feedback off refuses music commands', () async {
+      final music = _StateMusic();
+      final c = coordinator(music)..enabled = false;
+      final r = await c.handleControlCommand(musicCommand('o1', {'on': true}));
+      expect(r?['error_code'], 'feedback_disabled');
+      expect(music.isPlaying, isFalse);
+    });
+
+    test('playback failure reports audio_failed with previous', () async {
+      final music = _StateMusic()..failToggle = true;
+      final c = coordinator(music);
+      final r = await c.handleControlCommand(musicCommand('f1', {'on': true}));
+      expect(r?['status'], 'failed');
+      expect(r?['error_code'], 'audio_failed');
+      expect((r?['previous'] as Map)['on'], isFalse);
+    });
+
+    test('hub turning music off during fatigue is not overridden by the phase',
+        () async {
+      final bluetooth = _FakeBluetooth();
+      final music = _StateMusic();
+      final c = FeedbackCoordinator(
+          music: music,
+          lamp: IlinkLampFeedback(bluetooth)..select(firstAddress),
+          bluetooth: bluetooth)
+        ..enabled = true;
+      final suggestion = _state('ACTION_POSTURE', gate: 'suggest');
+      await c.apply(suggestion); // 제안만 — 아직 아무것도 안 켠다
+      await c.handleControlCommand(musicCommand('off', {'on': false}));
+      // 수락하면 앱이 졸음 음악을 켜던 자리(기존 동작)지만, 이 국면엔 hub 가 끄라고 했다
+      await c.accept(suggestion);
+      expect(music.isPlaying, isFalse);
+      expect(bluetooth.writeCount, greaterThan(0)); // 램프는 그대로 실행
     });
   });
 
@@ -740,6 +901,12 @@ class _FakeBluetooth implements AtlasBluetoothService {
   final List<String> connectedAddresses = [];
   final List<List<int>> frames = [];
 
+  /// 고른 스피커의 A2DP 연결 여부(V32 음악 명령).
+  bool a2dpConnected = true;
+
+  @override
+  Future<bool> isA2dpConnected(String address) async => a2dpConnected;
+
   @override
   Future<GattConnection> connectLamp(String address) async {
     if (connectDelay > Duration.zero) await Future<void>.delayed(connectDelay);
@@ -821,6 +988,51 @@ class _FakeMusic implements MusicPlayback {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnimplementedError('${invocation.memberName} was not expected');
+}
+
+/// V32 음악 명령용 — 곡·볼륨·재생 상태를 기억하고 스트림으로 알린다.
+class _StateMusic implements MusicPlayback {
+  _StateMusic({double volume = 1}) : _volume = volume;
+  bool _playing = false;
+  double _volume;
+  int _track = 0;
+  int toggles = 0;
+  bool failToggle = false;
+  final _playingCtl = StreamController<bool>.broadcast();
+  final _volumeCtl = StreamController<double>.broadcast();
+
+  @override
+  bool get isPlaying => _playing;
+  @override
+  double get volume => _volume;
+  @override
+  int get selectedTrack => _track;
+  @override
+  Stream<bool> get playingChanges => _playingCtl.stream;
+  @override
+  Stream<double> get volumeChanges => _volumeCtl.stream;
+  @override
+  Future<bool> toggle() async {
+    if (failToggle) throw StateError('audio playback failed');
+    toggles++;
+    _playing = !_playing;
+    _playingCtl.add(_playing);
+    return _playing;
+  }
+
+  @override
+  Future<void> selectTrack(int index) async => _track = index;
+  @override
+  Future<void> setVolume(double value) async {
+    _volume = value;
+    _volumeCtl.add(value);
+  }
+
+  @override
+  Future<void> dispose() async {
+    await _playingCtl.close();
+    await _volumeCtl.close();
+  }
 }
 
 DisplayState _state(String fsm,

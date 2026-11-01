@@ -36,6 +36,8 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 | `deskmate/sensor/keystroke` | PC 수집기 | hub, display/PC 키스트로크 탭 | 1Hz | 키 입력 타이밍 특징 |
 | `deskmate/state/phase` | hub | display, control | 10 s 주기(retain) | 추론 결과 + 신뢰도. `python -m deskmate_hub run` 이 발행 |
 | `deskmate/display/message` | Node-RED/debug | display | 이벤트 | Pi 5 화면에 일회성 텍스트 표시 |
+| `deskmate/display/audio` | Pi 5 앱(V32) | hub | 바뀔 때·연결 직후(retain, QoS 1) | 지금 음악 상태 `{on, volume, track, track_id, profile_id, last_command_id}`. 이름 없음 |
+| `deskmate/profile/user` | Pi 5 앱 · devview | hub, Pi 5 앱(V34) | 바뀔 때·연결 직후(retain, QoS 1) | 첫 설정(이름 없음, `profile_id` 난수). V34 부터 앱도 다른 노드가 보낸 같은 id 를 받아 저장 |
 | `deskmate/session/report` | hub | display | 10 s 주기 스냅샷(retain) + 세션 종료 시 | 화면용 세션 요약. 개별 행동 로그 없음 |
 | `deskmate/interaction/request` | hub | display | 이벤트 | 불확실한 판정의 사용자 확인 질문 |
 | `deskmate/control/cmd` | hub | control 어댑터, Pi 5 앱(조명) | 이벤트, QoS 1, retain 없음 | 기기 제어 명령 (`control_command`, data-spec §10) |
@@ -207,6 +209,61 @@ Node-RED에서 Pi 5 화면을 확인할 때 쓰는 일회성 안내 문구다. �
   "data": { "text": "잠시 스트레칭해 볼까요?" }
 }
 ```
+
+### `deskmate/display/audio`
+
+V32(0.32.0, 2026-11-01). Pi 5 앱이 지금 음악 상태를 hub 에 알린다 — hub 의 "집중이 잘 된 환경 기억"(사람별)이 쓴다.
+
+```json
+{
+  "schema_version": "1.0", "ts": 1793530000.0, "node": "pi5-ui", "seq": 4,
+  "data": {
+    "on": true,                      // 재생 중
+    "volume": 0.45,                  // 출력 장치 볼륨 0~1, 소수 둘째 자리
+    "track": 2,                      // 앱 재생 목록 순번(0~5)
+    "track_id": "satie_gymnopedie_no1",   // 앱에 든 음원 파일 이름(곡 제목 아님)
+    "profile_id": "p266eb9c0c514d18c",    // 지금 프로필(profile/user 와 같은 난수). 없으면 생략
+    "last_command_id": "296582093851"     // 마지막으로 실행한 hub 음악 명령. 없으면 생략
+  }
+}
+```
+
+- **retain**, QoS 1. 바뀔 때마다(볼륨 슬라이더처럼 잇따르면 0.4 s 모아 마지막 값 한 번), MQTT 연결 직후, 프로필이 바뀔 때 보낸다.
+  곡만 바꾼 것은 1 s 안에 따라간다. 직전과 같은 상태는 다시 보내지 않는다.
+- 이름·곡 제목·스피커 주소는 싣지 않는다. hub 는 `last_command_id` 이후의 변화를 사용자가 직접 바꾼 것으로 볼 수 있다.
+
+**hub → 앱 음악 명령** (`control/cmd`, V32): `target_id: "music"`, `operation: "set_music"`,
+`value: {"on": true|false, "volume": 0~1(선택), "track": 0~5(선택)}`. 다른 대상과 같은 문을 거친다(자동 피드백 스위치 · gate
+auto|suggest|undo|notice · `requires_confirmation` false · 만료 · retain 무시 · `command_id` 중복 무시). 결과(`control/result`):
+
+```json
+{ "command_id": "296582093851", "status": "succeeded",
+  "actual_value": {"on": true, "volume": 0.8, "track": 2, "track_id": "satie_gymnopedie_no1"},
+  "previous":     {"on": false, "volume": 0.3, "track": 0, "track_id": "deskmate_test_music"},
+  "actual":       {"on": true, "volume": 0.8, "track": 2, "track_id": "satie_gymnopedie_no1"},
+  "completed_ts_ms": 1793530001200 }
+```
+
+- **되돌리기**: hub 는 결과의 `previous` 를 그대로 `value` 로 실어 `gate: "undo"` 의 `set_music` 을 보낸다(램프 `undo: previous` 와 같은 뜻).
+- 실패 `error_code`: `unsupported_operation_or_value`(on 없음·볼륨 0~1 밖·없는 곡·다른 operation) · `speaker_not_connected`
+  (블루투스 스피커를 골랐는데 A2DP 가 끊김 — 켜지 않는다) · `audio_failed`(재생기 오류, `previous`·현재 `actual_value` 동봉) ·
+  `state_mismatch` · `feedback_disabled` · `invalid_command` · `expired`.
+- 명령을 실행한 국면(phase) 동안은 앱 자체의 졸음 음악 켜기·회복 때 끄기가 hub 의 결정을 덮지 않는다. 국면이 바뀌면 원래대로.
+
+### `deskmate/profile/user` 주고받기 (V34)
+
+V34(0.34.0, 2026-11-01). 첫 설정 프로필은 Pi 5 앱(`node: pi5-ui`)과 devview(`node: laptop-devview`)가 **같은 사람이면 같은
+`profile_id`** 로 보낸다(devview 는 hub 의 `active_profile_id` 와 같은 retain 프로필을 "지금 사람"으로 불러와 고친다).
+Pi 5 앱은 이 토픽을 구독해, `node` 가 자기가 아니고 `profile_id` 가 저장된 프로필 중 하나면 그 프로필을 고쳐 `profiles.json` 에 남긴다.
+
+- 모르는 `profile_id` 는 무시한다(새 프로필을 만들지 않는다). retain 으로 온 것도 받는다.
+- 거꾸로 옮기기: `light_pref` low·mid·high → 밝기 0.3·0.55·0.85(조명 켬), `sound_pref` off → 음악 끔 · low·mid·high → 볼륨
+  0.2·0.5·0.85(소리 종류가 "무음"이면 기본 "백색 소음"으로), `wind_pref` off → 선풍기 끔 · low·mid·high → 켬 + 1·2·3단,
+  `sleep_hours`·`bedtime`·`placement` 그대로, `focus_help` 순서 → 도움 순서(light 조명 · wind 선풍기 · sound 알림, voice·break 는
+  앱 항목이 없어 버리고 빠진 항목은 원래 순서로 뒤에), `age_band` 는 지금 나이가 그 대역이면 그대로 아니면 대역 가운데(15·25·35·45·55).
+  **받은 대역이 지금 값의 대역과 같으면 값을 바꾸지 않는다**(사람이 맞춘 밝기·볼륨을 지킨다).
+- 고친 뒤 앱이 보낼 값이 받은 값과 같으면 다시 보내지 않는다. 다르면(앱에 없는 항목을 버린 경우 등) **지금 고른 사람일 때만**
+  앱의 값으로 한 번 다시 보낸다 — 다른 사람 프로필을 보내면 hub 의 지금 사람이 바뀌기 때문이다.
 
 ### `deskmate/session/report`
 

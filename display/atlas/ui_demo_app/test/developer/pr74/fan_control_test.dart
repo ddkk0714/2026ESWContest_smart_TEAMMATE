@@ -152,7 +152,7 @@ void main() {
       expect(bluetooth.connects, 2);
     });
 
-    test('a link that fails to come up is retried after a short scan',
+    test('a link that fails to come up is retried, rescanning every other try',
         () async {
       // 10-24 Pi 5: about half the GATT connects to the Pico 2 W fail at once.
       fan.select(_fanAddress);
@@ -162,7 +162,8 @@ void main() {
       final result = await coordinator.handleControlCommand(_command('c6'));
       expect(result?['status'], 'succeeded');
       expect(bluetooth.connects, 4);
-      expect(bluetooth.scans, 3);
+      // 실패 직후 곧바로 검색하면 BlueZ 가 맺던 링크가 끊겨, 검색은 두 번에 한 번만(ui_env_app 0.1.4~).
+      expect(bluetooth.scans, 1);
     });
 
     test('gives up after the configured attempts', () async {
@@ -203,6 +204,110 @@ void main() {
       expect(results[1], results[0]);
       expect(bluetooth.frames.length, 1);
     });
+  });
+
+  group('MicroPython 펌웨어(feat/pico-fan, V28)', () {
+    late _FakeBluetooth bluetooth;
+    late BleFanControl fan;
+    late FeedbackCoordinator coordinator;
+
+    setUp(() {
+      bluetooth = _FakeBluetooth();
+      fan = BleFanControl(bluetooth, retryDelay: Duration.zero);
+      coordinator = FeedbackCoordinator(
+          music: _NoMusic(),
+          lamp: IlinkLampFeedback(bluetooth),
+          bluetooth: bluetooth,
+          fan: fan)
+        ..enabled = true;
+    });
+
+    test('명령 프레임 → 1바이트 속도 %', () {
+      expect(microFanCommand([3, 0]), [0]);
+      expect(microFanCommand([3, 1]), [45]);
+      expect(microFanCommand([3, 2]), [70]);
+      expect(microFanCommand([3, 3]), [100]);
+      expect(microFanCommand([2, 30]), [30]);
+      expect(microFanCommand([1, 0]), [0]);
+      expect(microFanCommand([1, 1]), [45]);
+      expect(microFanCommand([1, 1], lastOnSpeed: 70), [70]);
+      expect(microFanCommand([4, 1]), isNull); // 자연풍 없음
+      expect(microFanCommand([6, 8, 7]), isNull); // 타이머 없음
+      for (var level = 0; level <= 3; level++) {
+        expect(microLevelFor(microLevelSpeed[level]), level);
+      }
+      final state = FanState.decodeMicro([70])!;
+      expect((state.power, state.level, state.actualFor('set_level')),
+          (true, 2, 2));
+      expect(FanState.decodeMicro([0])!.actualFor('set_power'), 'off');
+      expect(FanState.decodeMicro([101]), isNull);
+      expect(FanState.decodeMicro(const []), isNull);
+    });
+
+    test('서비스 UUID 로 구분해 3단을 100 % 로 쓰고 상태로 확인', () async {
+      fan.select(_fanAddress);
+      bluetooth.services = {fanMicroServiceUuid, fanMicroCommandUuid};
+      bluetooth.microState = [100];
+      final result = await coordinator.handleControlCommand(
+          {..._command('m1'), 'operation': 'set_level', 'value': 3});
+      expect(fan.firmware, FanFirmware.micropython);
+      expect(bluetooth.frames.single, [100]);
+      expect(bluetooth.serviceIds.single, fanMicroServiceUuid);
+      expect(bluetooth.characteristicIds.single, fanMicroCommandUuid);
+      expect(result?['status'], 'succeeded');
+      expect(result?['actual_value'], 3);
+    });
+
+    test('서비스 목록이 비어도 상태 특성을 읽어 구분한다(C 8바이트 실패 → 1바이트)', () async {
+      fan.select(_fanAddress);
+      bluetooth.microState = [0];
+      final off = await coordinator.handleControlCommand(
+          {..._command('m2'), 'operation': 'set_power', 'value': 'off'});
+      expect(fan.firmware, FanFirmware.micropython);
+      expect(bluetooth.frames.single, [0]);
+      expect(off?['status'], 'succeeded');
+      expect(off?['actual_value'], 'off');
+      bluetooth.microState = [45];
+      final on = await coordinator.handleControlCommand(_command('m3'));
+      expect(bluetooth.frames.last, [45]); // 켜기 = 1단 속도(펌웨어가 출발 킥을 한다)
+      expect(on?['actual_value'], 'on');
+    });
+
+    test('받지 않는 명령(자연풍)은 쓰지 않고 실패', () async {
+      fan.select(_fanAddress);
+      bluetooth.services = {fanMicroServiceUuid};
+      bluetooth.microState = [45];
+      final result = await coordinator.handleControlCommand(
+          {..._command('m4'), 'operation': 'set_mode', 'value': 'natural'});
+      expect(bluetooth.frames, isEmpty);
+      expect(result?['status'], 'failed');
+    });
+
+    test('C 펌웨어 서비스가 보이면 예전처럼 프레임을 쓴다', () async {
+      fan.select(_fanAddress);
+      bluetooth.services = {fanServiceUuid};
+      bluetooth.state = _state(speed: 100, level: 3);
+      await coordinator.handleControlCommand(
+          {..._command('m5'), 'operation': 'set_level', 'value': 3});
+      expect(fan.firmware, FanFirmware.c);
+      expect(bluetooth.frames.single, [3, 3]);
+      expect(bluetooth.serviceIds.single, fanServiceUuid);
+    });
+  });
+
+  test('gattServiceUuids 는 응답 어디에 있든 UUID 를 모은다', () {
+    final reply = [
+      DBusArray(DBusSignature('a{sv}'), [
+        DBusDict(DBusSignature.string, DBusSignature.variant, {
+          const DBusString('uuid'):
+              DBusVariant(DBusString(fanMicroServiceUuid.toUpperCase())),
+          const DBusString('characteristics'): DBusVariant(DBusArray.string(
+              [fanMicroCommandUuid, 'not-a-uuid'])),
+        }),
+      ])
+    ];
+    expect(gattServiceUuids(reply), {fanMicroServiceUuid, fanMicroCommandUuid});
+    expect(gattServiceUuids(const []), isEmpty);
   });
 
   group('fan link', () {
@@ -283,8 +388,13 @@ class _FakeBluetooth implements AtlasBluetoothService {
   int scans = 0;
   int writeFailuresRemaining = 0;
   List<int>? state;
+
+  /// MicroPython 판 상태(1바이트 %). null 이면 그 특성 읽기가 실패한다.
+  List<int>? microState;
+  Set<String> services = const {};
   final List<List<int>> frames = [];
   final List<String> serviceIds = [];
+  final List<String> characteristicIds = [];
 
   @override
   Future<GattConnection> connectLamp(String address) async {
@@ -293,7 +403,8 @@ class _FakeBluetooth implements AtlasBluetoothService {
       connectFailuresRemaining--;
       throw StateError('Failed to connect with remote device');
     }
-    return GattConnection(adapter: 'test-adapter', clientId: 'client-$connects');
+    return GattConnection(
+        adapter: 'test-adapter', clientId: 'client-$connects', services: services);
   }
 
   @override
@@ -309,6 +420,7 @@ class _FakeBluetooth implements AtlasBluetoothService {
     }
     frames.add(List.of(value));
     serviceIds.add(serviceId);
+    characteristicIds.add(characteristicId);
   }
 
   @override
@@ -325,7 +437,8 @@ class _FakeBluetooth implements AtlasBluetoothService {
     required String serviceId,
     required String characteristicId,
   }) async {
-    final value = state;
+    final value =
+        characteristicId == fanMicroStatusUuid ? microState : state;
     if (value == null) throw StateError('read not supported');
     return value;
   }

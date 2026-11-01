@@ -1,4 +1,60 @@
-# DESKMATE V27
+# DESKMATE V35
+
+> **V35(0.35.0, 2026-11-01)** = V34 + **한 가지**: 램프·선풍기 "다시 찾기" 가 실제로 검색한 뒤에 연결한다(화면·문구 변경 없음).
+> Atlas `GetDiscoverableDevices` 는 검색 시작 직후 예전에 알던 기기도 돌려줘서, 첫 결과에 주소가 있다고 바로 끝내면 BlueZ 는 30 초 전에
+> 잊은 기기를 그대로 잊은 채라 `Gatt.Connect` 가 곧바로 취소됐다(11-01 Pi 5 실기, 램프 명령 bluetooth_write_failed). 이제 주소를 봤어도
+> 최소 3 초(`rescanAtLeast`)는 검색을 이어 BlueZ 가 광고를 다시 받게 한다. 명령 만료가 가까우면 그때까지 본 결과로. `bluetooth_service.dart`
+> `rediscoverDevice` 를 램프(`IlinkLampFeedback`)·선풍기(`BleFanControl`)가 같이 쓴다. ATLAS 설정 앱에서 램프·선풍기를 연결해 두면
+> 시스템이 링크를 잡아 앱 연결이 거절되므로 설정 앱에서는 연결하지 않는다.
+
+> **V34(0.34.0, 2026-11-01)** = V33 + **한 가지**: 다른 화면(devview)이 같은 사람 프로필을 고치면 여기에도 남긴다(화면·문구 변경 없음).
+> 앱이 `deskmate/profile/user` 를 구독해, 내가 보낸 게 아니고(`node` ≠ pi5-ui) `profile_id` 가 저장된 프로필이면 그 값을 거꾸로 옮겨
+> `profiles.json` 에 저장한다. 모르는 id 는 무시. 받은 대역이 지금 대역과 같으면 값을 지킨다. 고친 결과가 받은 값과 같으면 다시 안 보내고,
+> 다르면 지금 고른 사람일 때만 한 번 다시 보낸다. `lib/live/profile_payload.dart`(applyProfileData·profileMatches),
+> `lib/live/profile_sync.dart`, `demo_model.dart`(applyRemoteProfile). 계약은 `docs/mqtt-topics.md` "profile/user 주고받기 (V34)".
+
+> **V33(0.33.0, 2026-11-01)** = V32 + **한 가지**: 음악 6곡을 앱에 넣었다(코드·화면 변경 없음).
+> V27~V32 는 재생 목록(`classicalPlaylist`)·`assets/audio/CREDITS.md` 가 6곡을 가리켰지만 mp3 는 알림음 3개만 들어 있어
+> 음악 켜기·졸음 음악·V32 hub `set_music` 이 재생할 파일이 없었다. 개발자 앱(`ui_env_app/assets/audio/`)과 같은 파일(sha256 동일)을
+> `assets/audio/` 에 복사 — 드뷔시·쇼팽·사티·베토벤·모차르트·바흐, 합계 약 22 MB(IPK 약 15 → 37 MB). 출처·라이선스는 CREDITS.md 그대로.
+> 긴 음악을 더 넣을 땐 앱에 묶지 말고 Pi 5 폴더에서 읽는 방식(다음 판)으로.
+
+> **V32(0.32.0, 2026-11-01)** = V31 + **한 가지**: 음악 상태를 hub 와 주고받는다(제품 화면·문구는 그대로).
+> 앱 → hub: 지금 음악 상태를 `deskmate/display/audio`(retain)로 — 켜짐·볼륨·곡·지금 프로필 id, 바뀔 때마다·연결 직후·사람이 바뀔 때.
+> hub → 앱: `control/cmd` target `music` · operation `set_music` {on, volume?, track?} 를 실행하고 `control/result` 에
+> previous·actual 을 싣는다. 되돌리기는 previous 를 그대로 보내면 된다(gate undo). hub 의 "집중이 잘 된 환경 기억" 이 쓸 계약.
+> `lib/developer/pr74/music_state.dart`, `feedback_policy.dart`(_executeMusicCommand), `lib/live/live_link.dart`(publishAudio).
+> 계약은 `docs/mqtt-topics.md` `deskmate/display/audio` 절.
+
+> **V31(0.31.0, 2026-10-31)** = V30 + **한 가지**: 자동 실행 카드의 되돌림 판정을 고쳤다(PR #90 리뷰).
+> 전에는 같은 기기의 되돌리기 명령(gate undo)이 오기만 하면 "원래대로 돌려 뒀어요" 로 바꿔, 그 명령이 실패해도(예: ble_not_connected)
+> 성공으로 보였다. 이제 되돌리기 명령의 command_id 를 카드에 묶고(`undo_of` 가 있으면 그것, 없으면 이 카드가 되돌리기를 보낸 뒤
+> 60 s 안 같은 기기의 첫 되돌리기만) **그 id 의 결과가 succeeded 일 때만** 되돌림으로 표시한다. failed·timeout 이나 15 s 안에 결과가
+> 없으면 "원래대로 돌리지 못했어요. 그래도 다음엔 다른 방법을 찾아볼게요"(reject 는 hub 에 갔으니 학습은 남는다).
+> 다른 기기나 다른 카드의 되돌리기는 묶지 않는다. `lib/live/auto_action.dart`.
+
+> **V30(0.30.0, 2026-10-31)** = V29 + **한 가지**: 개발자 화면에 **'제어 진행'** 탭(제품 화면은 그대로).
+> 명령 하나당 한 줄 — 시각 · 왜(state·cause·gate·arm) · 기기·동작·값 · 결과(성공/실패 이유/시간 초과/생략)·소요 ms · 되돌림.
+> 최신이 위 50건, 줄을 누르면 레코드 전체 필드. 출처는 배지로: **hub 기록** = Pi 4 `GET :8765/api/control-log?limit=50`
+> (hub `feat/control-log`, 탭이 떠 있을 때만 4 s 마다), 그 엔드포인트가 404·연결 실패면 상단에 "hub 에 제어 로그 없음(IPK 갱신 필요)"
+> 을 띄우고 **MQTT 추정** = 이 앱이 받은 `control/cmd`·`control/result`(+state/phase 의 개인화 arm)로 같은 표를 메모리에서 만든다
+> (결과 15 s 없으면 시간 초과, 60 s 안 같은 기기 되돌리기는 서로 묶음). `lib/developer/control_progress*.dart`.
+
+> **V29(0.29.0, 2026-10-31)** = V28 + **한 가지**: 자동 실행 카드 문구를 감성 말투로(기계 보고 → 곁에서 챙기는 말).
+> 제품 화면에서 숫자(피로 %)·오류 코드를 뺐다(개발자 화면·제어 로그엔 그대로). 되돌리기 단추는 '원래대로 N초'.
+> 앞으로 판 하나(0.x.0)에는 수정 하나만 넣는다.
+
+> **V28(0.28.0, 2026-10-31)** = V27 0.27.4 + 아래 셋. 앱 ID(`com.atlas.app.deskmate_ui_v27`)·실행 파일·설정 파일 경로는
+> V27 그대로다 — 재설치(Remove → Install)하면 settings.json 이 지워지고 블루투스 동의를 다시 묻기 때문에 버전만 올려 덮어 깐다.
+>
+> 1. **자동 실행 카드·되돌리기·빠른 시연**(0.27.5): hub 자동 기기 명령마다 "무엇을 왜 했는지" 카드(기기 × 원인 문구표,
+>    `lib/live/auto_action.dart`), 60 s 되돌리기(`feedback/user` reject), 개발자 모드 '빠른 시연' 스위치(`deskmate/demo/mode`)·배지.
+> 2. **BLE 직접 연결**: Gatt.Connect auto_connect=1, GetStatus 가 connected 가 될 때까지 최대 15 s 기다린 뒤 서비스 검색,
+>    실패하면 정리하고 마지막 상태를 오류에 싣는다. 링크 상태 변화는 diag 에 ms 로. 램프·선풍기 같은 경로.
+> 3. **선풍기 펌웨어 두 벌 자동 구분**(`lib/developer/pr74/fan_control.dart`): C 판(f1970001…, 프레임·상태 8바이트)과
+>    MicroPython 판(feat/pico-fan, d35e0001…, 1바이트 속도 %·상태 1바이트). 서비스 검색 UUID → 없으면 상태 특성을 읽어 정한다.
+>    MicroPython 판: 1단 45 % · 2단 70 % · 3단 100 % · 끄기 0, 켜기 = 마지막 속도(없으면 1단). 자연풍·타이머는 받지 않는다(실패로 돌려줌).
+>    출발 킥은 펌웨어가 한다. 주소 종류(공용·랜덤 정적)와 무관하게 같은 경로로 붙는다.
 
 PR83 앱 0.1.10(e00a6f2)의 음성/알림음 명령, 닫기 전용 휴식·자동 정보 배너, 기기 재검색과 복구 결과를 V26 UI에 통합했다. 자동 피드백 최초 기본값은 OFF를 유지한다. 현재 Pi5 설치본은 V26이며 이번 변경은 PR 소스와 빌드에 반영한다.
 

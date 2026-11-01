@@ -35,6 +35,8 @@ class DevModePage extends StatefulWidget {
     required this.defaultOnStart,
     required this.onDefaultOnStartChanged,
     this.connectionLabel,
+    this.demoFast,
+    this.onDemoFastChanged,
     this.sourceFactory = HttpPreviewTofSource.new,
     this.pollInterval = const Duration(milliseconds: 500),
   });
@@ -64,6 +66,12 @@ class DevModePage extends StatefulWidget {
 
   /// 상단에 보일 MQTT 연결 상태 글.
   final String? connectionLabel;
+
+  /// hub 빠른 시연 모드(state/phase `sensor_summary.demo_mode`). null 이면 hub 가 알려 주지 않는다(옛 hub·연결 전).
+  final bool? demoFast;
+
+  /// 빠른 시연 스위치 — `deskmate/demo/mode` 로 보낸다. null 이면 스위치를 그리지 않는다.
+  final ValueChanged<bool>? onDemoFastChanged;
   final TofSourceFactory sourceFactory;
   final Duration pollInterval;
 
@@ -148,6 +156,14 @@ class _DevModePageState extends State<DevModePage> {
           ),
           _hostControl(host),
           const SizedBox(width: 8),
+          if (widget.onDemoFastChanged != null) ...[
+            const Text('빠른 시연', style: _mono),
+            Switch(
+              key: const ValueKey('devmode-demo-fast-switch'),
+              value: widget.demoFast ?? false,
+              onChanged: widget.onDemoFastChanged,
+            ),
+          ],
           const Text('시작 시 이 화면', style: _mono),
           Switch(
             key: const ValueKey('devmode-default-switch'),

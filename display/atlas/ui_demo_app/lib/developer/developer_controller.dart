@@ -8,6 +8,7 @@ import '../live/payload.dart';
 import '../live/transport.dart';
 import 'pr74/bluetooth_link.dart';
 import 'pr74/bluetooth_service.dart';
+import 'control_progress.dart';
 import 'pr74/command_log.dart';
 import 'pr74/connection_page.dart';
 import 'pr74/developer_page.dart';
@@ -18,6 +19,7 @@ import 'pr74/feedback_policy.dart';
 import 'pr74/lamp_defaults.dart';
 import 'pr74/link_status.dart' as links;
 import 'pr74/music_playback.dart';
+import 'pr74/music_state.dart';
 import 'pr74/voice_alert.dart';
 import 'pr74/preview_page.dart';
 import 'pr74/settings_store.dart';
@@ -49,8 +51,11 @@ class DeveloperController extends ChangeNotifier {
     btLinks.addListener(_changed);
     live.addListener(_linkChanged);
     _messages = live.messages.listen(receive);
+    // V32: 음악 상태 → hub `deskmate/display/audio`(retain). 곡만 바꾸면 스트림이 없어 1초 타이머가 챙긴다.
+    musicReporter = MusicStateReporter(this.music, _publishMusic);
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       _changed();
+      musicReporter.report();
       if (startHardware) unawaited(feedback.reconcileAudioOutput());
     });
     if (startHardware) unawaited(_restoreHardware());
@@ -70,7 +75,16 @@ class DeveloperController extends ChangeNotifier {
   final MusicPlayback music;
   late final FeedbackCoordinator feedback;
   late final BluetoothLinkManager btLinks;
+  late final MusicStateReporter musicReporter;
+
+  void _publishMusic(Map<String, Object?> state) {
+    final id = feedback.lastMusicCommandId;
+    live.publishAudio({...state, if (id != null) 'last_command_id': id});
+  }
   final log = CommandLog();
+
+  /// '제어 진행' 탭(V30) — hub 제어 로그 또는 MQTT 추정. 폴링은 탭이 떠 있을 때만.
+  final progress = ControlProgress();
   final board = DeviceStateBoard();
   StreamSubscription<LiveMessage>? _messages;
   Timer? _timer;
@@ -133,6 +147,7 @@ class DeveloperController extends ChangeNotifier {
       final data = jsonMap(envelope['data']);
       if (!message.retained) {
         log.addMessage(message.topic, envelope);
+        progress.addMessage(message.topic, envelope);
         board.addMessage(message.topic, envelope);
       }
       switch (message.topic) {
@@ -165,6 +180,7 @@ class DeveloperController extends ChangeNotifier {
         address == '${live.host}:${live.port}' &&
         result != null) {
       live.publishData(LiveLink.resultTopic, result);
+      if (data['target_id'] == 'music') musicReporter.report();
     }
   }
 
@@ -277,7 +293,9 @@ class DeveloperController extends ChangeNotifier {
     live.removeListener(_linkChanged);
     btLinks.removeListener(_changed);
     btLinks.dispose();
+    musicReporter.dispose();
     log.dispose();
+    progress.dispose();
     board.dispose();
     unawaited(_alerts.dispose());
     unawaited(_speech.dispose());

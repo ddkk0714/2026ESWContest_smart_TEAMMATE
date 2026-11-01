@@ -6,6 +6,7 @@ import 'display_state.dart';
 import 'fan_control.dart';
 import 'lamp_defaults.dart';
 import 'music_playback.dart';
+import 'music_state.dart';
 import 'voice_alert.dart';
 
 const ilinkServiceUuid = '0000a032-0000-1000-8000-00805f9b34fb';
@@ -62,10 +63,13 @@ List<List<int>> ilinkFramesForPhase(String phase) {
 class IlinkLampFeedback {
   IlinkLampFeedback(this._bluetooth,
       {this.rescanFor = const Duration(seconds: 6),
+      this.rescanAtLeast = const Duration(seconds: 3),
       this.settleDelay = const Duration(seconds: 3),
-      this.rescanEvery = const Duration(seconds: 30),
-      this.connectRetryAfter = const Duration(seconds: 30)});
+      this.rescanEvery = const Duration(seconds: 30)});
   final AtlasBluetoothService _bluetooth;
+
+  /// 다시 찾을 때 주소가 보여도 이만큼은 검색한다([rediscoverDevice], V35).
+  final Duration rescanAtLeast;
 
   /// 연결 실패 뒤 검색 전에 기다리는 시간. Atlas 가 실패를 먼저 돌려준 뒤에도 BlueZ 가 링크를 맺고
   /// 있을 수 있어, 곧바로 검색하면 그 링크가 끊긴다(선풍기 10-24 확인).
@@ -75,10 +79,12 @@ class IlinkLampFeedback {
   /// 되풀이했고, 시스템 "Bluetooth device disconnected" 창이 96번 뜬 뒤 앱이 죽었다(SEGV).
   final Duration rescanEvery;
 
-  /// 국면 조명 쓰기는 연결이 막 실패했으면 이 시간 동안 BlueZ 를 건드리지 않는다(명령·버튼은 예외).
-  final Duration connectRetryAfter;
-  DateTime? _connectFailedAt;
   DateTime? _lastRescanAt;
+
+  // 백그라운드 연결 규칙([connectInBackground])에 쓰는 이번 실행의 기록.
+  bool _everTried = false;
+  bool _everConnected = false;
+  bool _dropRetryUsed = false;
 
   /// 램프를 다시 찾는 검색 시간(찾으면 바로 멈춘다). 10-26 Pi 5: 페어링하지 않은 BLE 램프는
   /// 끊긴 지 30초 뒤 BlueZ 가 잊고, 그 뒤 Gatt.Connect 는 BlueZ 를 부르지도 않고 바로 실패했다
@@ -109,6 +115,7 @@ class IlinkLampFeedback {
     _connecting = null;
     _lastBrightness = null;
     _poweredOn = null;
+    _everTried = _everConnected = _dropRetryUsed = false;
     unawaited(_release(old));
   }
 
@@ -138,8 +145,8 @@ class IlinkLampFeedback {
     _lastError = null;
     _lastBrightness = null;
     _poweredOn = null;
-    _connectFailedAt = null;
     _lastRescanAt = null;
+    _everTried = _everConnected = _dropRetryUsed = false;
     unawaited(_release(old));
   }
 
@@ -171,6 +178,7 @@ class IlinkLampFeedback {
   Future<bool> _connect() async {
     final generation = _generation;
     final address = _address!;
+    _everTried = true;
     try {
       final connection = await _bluetooth.connectLamp(address);
       if (generation != _generation) {
@@ -179,15 +187,30 @@ class IlinkLampFeedback {
       }
       _connection = connection;
       _lastError = null;
-      _connectFailedAt = null;
+      _everConnected = true;
+      _dropRetryUsed = false;
       return true;
     } catch (error) {
       if (generation != _generation) return false;
       _connection = null;
       _lastError = error;
-      _connectFailedAt = DateTime.now();
       return false;
     }
+  }
+
+  /// 사람이 시키지 않은 연결(국면 조명·시작 복원·유지). 이번 실행에서 아직 한 번도 시도하지 않았거나,
+  /// 붙어 있다가 끊긴 뒤 첫 재시도일 때만 실제로 붙는다. 그 밖엔(연결이 실패한 뒤) BlueZ 를 건드리지 않는다.
+  /// 10-26 Pi 5: 실패한 램프 연결마다 시스템 "Bluetooth device disconnected" 창이 떴고, 그 창이
+  /// 쌓이면서 화면이 ATLAS 로고에 멈췄다(vc4_plane 경고 36 → 72). 다시 붙는 길은 hub 명령과 사람이
+  /// 누르는 버튼뿐이다(ui_env_app 0.1.12, 6b8d4ac).
+  Future<bool> connectInBackground() {
+    if (_connection != null) return Future.value(true);
+    if (!configured) return Future.value(false);
+    final firstTry = !_everTried;
+    final dropRetry = _everConnected && !_dropRetryUsed;
+    if (!firstTry && !dropRetry) return Future.value(false);
+    if (!firstTry) _dropRetryUsed = true;
+    return connect();
   }
 
   /// 붙어 있지 않으면 붙고, 실패하면 주소를 한 번 검색해 다시 보이게 한 뒤 한 번 더 붙는다.
@@ -196,8 +219,9 @@ class IlinkLampFeedback {
   Future<({bool ok, bool? rediscovered})> ensureConnected(
       {num? expiresTsMs}) async {
     final generation = _generation;
-    if (await connect())
+    if (await connect()) {
       return (ok: generation == _generation, rediscovered: null);
+    }
     if (generation != _generation) return (ok: false, rediscovered: null);
     final last = _lastRescanAt;
     if (last != null && DateTime.now().difference(last) < rescanEvery) {
@@ -241,15 +265,8 @@ class IlinkLampFeedback {
       if (left < limit) limit = left;
     }
     if (limit <= Duration.zero) return false;
-    final wanted = _address!.toLowerCase();
-    try {
-      await for (final devices in _bluetooth.scanProgressive(duration: limit)) {
-        if (devices.any((d) => d.address.toLowerCase() == wanted)) return true;
-      }
-    } catch (_) {
-      // 검색이 안 되면 못 찾은 것으로 본다.
-    }
-    return false;
+    return rediscoverDevice(_bluetooth, _address!,
+        limit: limit, atLeast: rescanAtLeast);
   }
 
   Future<void> apply(String phase) async {
@@ -263,7 +280,8 @@ class IlinkLampFeedback {
       ], rediscover: true);
 
   /// Phase feedback and explicit commands must not interleave BLE frames.
-  /// [rediscover] 는 hub 명령·사람이 누른 버튼만 켠다 — 국면 조명은 1초마다 다시 부르므로 검색하지 않는다.
+  /// [rediscover] 는 hub 명령·사람이 누른 버튼만 켠다. 국면 조명은 검색하지 않고, 연결도
+  /// [connectInBackground] 규칙을 따른다.
   Future<bool> writeFrames(List<List<int>> frames,
           {num? expiresTsMs, bool rediscover = false}) =>
       writeFramesReport(frames,
@@ -287,13 +305,7 @@ class IlinkLampFeedback {
     bool? rediscovered;
     ({bool ok, bool? rediscovered}) failed() =>
         (ok: false, rediscovered: rediscovered);
-    if (!configured || frames.isEmpty || generation != _generation)
-      return failed();
-    final failedAt = _connectFailedAt;
-    if (!rediscover &&
-        _connection == null &&
-        failedAt != null &&
-        DateTime.now().difference(failedAt) < connectRetryAfter) {
+    if (!configured || frames.isEmpty || generation != _generation) {
       return failed();
     }
     bool expired() =>
@@ -306,7 +318,8 @@ class IlinkLampFeedback {
         final link = await ensureConnected(expiresTsMs: expiresTsMs);
         rediscovered = link.rediscovered;
         if (!link.ok) return failed();
-      } else if (!await connect()) {
+      } else if (!await (rediscover ? connect() : connectInBackground())) {
+        if (!rediscover) return failed();
         continue;
       }
       if (generation != _generation) return failed();
@@ -502,16 +515,21 @@ class FeedbackCoordinator {
     final target = command['target_id'];
     final isFan = target == 'vent_fan' && (fan?.configured ?? false);
     final isSpeaker = target == 'speaker';
-    if (target != 'desk_lamp' && !isFan && !isSpeaker) return null;
+    final isMusic = target == 'music';
+    if (target != 'desk_lamp' && !isFan && !isSpeaker && !isMusic) {
+      return null;
+    }
     final id = command['command_id'];
     if (id is! String || id.isEmpty) return null;
     final cached = _commandResults[id];
     if (cached != null) return cached;
     final result = isSpeaker
         ? _executeSpeakerCommand(command)
-        : isFan
-            ? _executeFanCommand(command)
-            : _executeLampCommand(command);
+        : isMusic
+            ? _executeMusicCommand(command)
+            : isFan
+                ? _executeFanCommand(command)
+                : _executeLampCommand(command);
     _commandResults[id] = result;
     if (_commandResults.length > 128) {
       _commandResults.remove(_commandResults.keys.first);
@@ -668,6 +686,66 @@ class FeedbackCoordinator {
     }
     return _result(command, 'succeeded',
         actual: state.actualFor(operation), extra: recovery);
+  }
+
+  /// 마지막으로 실행한 hub 음악 명령(V32). `display/audio` 에 실어 hub 가 그 뒤의 변화를 사용자 조작으로 가린다.
+  String? lastMusicCommandId;
+
+  /// V32 target `music` · operation `set_music` {on, volume?, track?}. 결과 actual_value·actual = 실행 뒤 상태,
+  /// previous = 실행 전 상태({on, volume, track, track_id}) — hub 는 되돌리기 때 previous 를 그대로 value 로 보낸다(gate undo).
+  /// 스피커를 골랐는데 A2DP 가 끊겼으면 켜지 않고 speaker_not_connected. 실행 뒤 이 국면 동안은 앱 자체 음악
+  /// 켜기·끄기(_applyOutputs)가 hub 의 결정을 덮지 않는다.
+  Future<Map<String, dynamic>> _executeMusicCommand(
+      Map<String, dynamic> command) async {
+    final rejected = _rejection(command);
+    if (rejected != null) return _result(command, 'failed', error: rejected);
+    final value = command['value'];
+    final on = value is Map ? value['on'] : null;
+    final volume = value is Map ? value['volume'] : null;
+    final track = value is Map ? value['track'] : null;
+    if (command['operation'] != 'set_music' ||
+        on is! bool ||
+        (volume != null &&
+            (volume is! num ||
+                !volume.isFinite ||
+                volume < 0 ||
+                volume > 1)) ||
+        (track != null &&
+            (track is! int || track < 0 || track >= classicalPlaylist.length))) {
+      return _result(command, 'failed',
+          error: 'unsupported_operation_or_value');
+    }
+    final previous = musicStateOf(music);
+    final address = _speakerAddress;
+    if (on && address != null && !await bluetooth.isA2dpConnected(address)) {
+      return _result(command, 'failed',
+          error: 'speaker_not_connected', extra: {'previous': previous});
+    }
+    try {
+      if (volume != null) await music.setVolume(volume.toDouble());
+      if (track != null && track != music.selectedTrack) {
+        await music.selectTrack(track);
+      }
+      if (on != music.isPlaying) await music.toggle();
+    } on Object catch (error) {
+      lastAudioError = error;
+      return _result(command, 'failed',
+          actual: musicStateOf(music),
+          error: 'audio_failed',
+          extra: {'previous': previous});
+    }
+    lastMusicCommandId = command['command_id'] as String;
+    _lastMusicKey = _latest?.phase;
+    final actual = musicStateOf(music);
+    if (actual['on'] != on) {
+      return _result(command, 'failed',
+          actual: actual,
+          error: 'state_mismatch',
+          extra: {'previous': previous, 'actual': actual});
+    }
+    lastAudioError = null;
+    return _result(command, 'succeeded',
+        actual: actual, extra: {'previous': previous, 'actual': actual});
   }
 
   /// speak: TTS 로 읽고, 안 되면 알림음 + 화면 문구로 대신한 뒤 failed·tts_unavailable 과 함께

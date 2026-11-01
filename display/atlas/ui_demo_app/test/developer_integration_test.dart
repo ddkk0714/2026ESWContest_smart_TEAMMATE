@@ -37,6 +37,12 @@ class NoMusic implements MusicPlayback {
   @override
   bool get isPlaying => false;
   @override
+  int get selectedTrack => 0;
+  @override
+  Stream<bool> get playingChanges => const Stream.empty();
+  @override
+  Stream<double> get volumeChanges => const Stream.empty();
+  @override
   Future<void> dispose() async {}
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
