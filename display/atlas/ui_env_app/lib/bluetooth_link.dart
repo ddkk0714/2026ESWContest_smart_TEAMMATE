@@ -1,4 +1,4 @@
-/// 블루투스 스피커·램프를 기억하고, 앱을 켤 때 검색 없이 다시 붙인다.
+/// 블루투스 스피커·램프·선풍기를 기억하고, 앱을 켤 때 검색 없이 다시 붙인다.
 ///
 /// 지금까지는 켤 때마다 검색(8초) → 스피커 선택 → 램프 선택을 다시 해야 했다.
 /// 시연 중 앱을 다시 켜야 하는 일이 생기면 그 절차가 통째로 반복된다. 여기서
@@ -65,28 +65,75 @@ class BluetoothLinkManager extends ChangeNotifier {
 
   SavedBluetoothDevice? _speaker;
   SavedBluetoothDevice? _lamp;
+  SavedBluetoothDevice? _fan;
   _Phase _speakerPhase = _Phase.idle;
   _Phase _lampPhase = _Phase.idle;
+  _Phase _fanPhase = _Phase.idle;
   DateTime? _speakerOkAt;
   String? _speakerError;
   String? _lampError;
+  String? _fanError;
   bool _disposed = false;
 
   SavedBluetoothDevice? get savedSpeaker => _speaker;
   SavedBluetoothDevice? get savedLamp => _lamp;
+  SavedBluetoothDevice? get savedFan => _fan;
   bool get speakerBusy => _speakerPhase == _Phase.connecting;
   bool get lampBusy => _lampPhase == _Phase.connecting;
+  bool get fanBusy => _fanPhase == _Phase.connecting;
 
   /// 앱 시작 때 부른다. 저장된 기기가 있으면 검색 없이 붙는다. 던지지 않는다.
+  ///
+  /// 하나씩 차례로 붙인다. 10-24 Pi 5: 스피커·램프·선풍기를 동시에 붙이면 스피커만 붙고 BLE 둘은
+  /// 실패했는데, 같은 기기를 하나씩 다시 연결하면 셋 다 붙었다.
   Future<void> restore() async {
     final saved = settings.load();
+    feedback.enabled = saved.feedbackEnabled ?? true;
     _speaker = saved.speaker;
     _lamp = saved.lamp;
+    _fan = saved.fan;
     _notify();
-    await Future.wait([
-      if (_speaker != null) reconnectSpeaker(),
-      if (_lamp != null) reconnectLamp(),
-    ]);
+    if (_speaker != null) await reconnectSpeaker();
+    if (_lamp != null) await _restoreLamp();
+    if (_fan != null) await _restoreFan();
+  }
+
+  /// 시작 복원은 기기마다 한 번만, 검색 없이 붙어 본다. 실패하면 "연결 끊김" 으로 두고 조용히 있는다 —
+  /// 10-26 Pi 5: 실패한 연결마다 시스템 팝업이 떴고, 쌓이면서 화면이 멈췄다. 다시 붙는 길은
+  /// hub 명령과 블루투스 탭의 "다시 연결" 뿐이다.
+  Future<void> _restoreLamp() async {
+    final lamp = _lamp;
+    if (lamp == null || lampBusy) return;
+    feedback.lamp.select(lamp.address);
+    _lampPhase = _Phase.connecting;
+    _lampError = null;
+    _notify();
+    final ok = await feedback.lamp.connectInBackground();
+    _lampPhase = ok ? _Phase.connected : _Phase.failed;
+    _lampError = ok ? null : '${feedback.lamp.lastError ?? '램프에 연결하지 못했습니다'}';
+    _notify();
+  }
+
+  Future<void> _restoreFan() async {
+    final saved = _fan;
+    final fan = feedback.fan;
+    if (saved == null || fan == null || fanBusy) return;
+    fan.select(saved.address);
+    _fanPhase = _Phase.connecting;
+    _fanError = null;
+    _notify();
+    final ok = await fan.connectOnce();
+    _fanPhase = ok ? _Phase.connected : _Phase.failed;
+    _fanError = ok ? null : '${fan.lastError ?? '선풍기에 연결하지 못했습니다'}';
+    _notify();
+  }
+
+  /// 상태 기반 피드백 스위치를 바꾸고 설정 파일에 기억한다. 10-26 Pi 5: 앱이 켜질 때마다
+  /// 꺼진 채로 시작해 허브의 램프·선풍기 명령이 전부 feedback_disabled 로 돌아왔다.
+  void setFeedbackEnabled(bool on) {
+    feedback.enabled = on;
+    settings.save(settings.load().copyWith(feedbackEnabled: on));
+    _notify();
   }
 
   /// 저장된 스피커에 다시 붙는다(검색 없이).
@@ -116,12 +163,32 @@ class BluetoothLinkManager extends ChangeNotifier {
     final lamp = _lamp;
     if (lamp == null || lampBusy) return false;
     feedback.lamp.select(lamp.address);
+    feedback.lamp.invalidateUndo();
     _lampPhase = _Phase.connecting;
     _lampError = null;
     _notify();
-    final ok = await feedback.lamp.connect();
+    // 붙지 않으면 주소를 검색해 다시 보이게 한 뒤 붙는다 — "기기 검색" 을 먼저 누르지 않아도 된다.
+    final ok = (await feedback.lamp.ensureConnected()).ok;
     _lampPhase = ok ? _Phase.connected : _Phase.failed;
     _lampError = ok ? null : '${feedback.lamp.lastError ?? '램프에 연결하지 못했습니다'}';
+    _notify();
+    return ok;
+  }
+
+  /// 저장된 선풍기에 GATT 연결을 맺는다(블루투스 탭 "다시 연결"·선택). 고른 순간부터 앱이 vent_fan
+  /// 명령을 맡는다 — 연결이 실패해도 명령이 오면 그때 다시 붙는다.
+  Future<bool> reconnectFan() async {
+    final saved = _fan;
+    final fan = feedback.fan;
+    if (saved == null || fan == null || fanBusy) return false;
+    fan.select(saved.address);
+    fan.invalidateUndo();
+    _fanPhase = _Phase.connecting;
+    _fanError = null;
+    _notify();
+    final ok = await fan.connect();
+    _fanPhase = ok ? _Phase.connected : _Phase.failed;
+    _fanError = ok ? null : '${fan.lastError ?? '선풍기에 연결하지 못했습니다'}';
     _notify();
     return ok;
   }
@@ -150,8 +217,17 @@ class BluetoothLinkManager extends ChangeNotifier {
   /// 검색 결과의 BLE 램프를 고르고 저장한 뒤 연결을 미리 맺는다.
   Future<bool> selectLamp(BluetoothDeviceInfo device) async {
     _lamp = _saved(device);
+    feedback.lamp.select(_lamp!.address);
     _persist();
     return reconnectLamp();
+  }
+
+  /// 검색 결과의 DESKMATE-FAN 을 선풍기로 고르고 저장한 뒤 연결을 미리 맺는다.
+  Future<bool> selectFan(BluetoothDeviceInfo device) async {
+    _fan = _saved(device);
+    feedback.fan?.select(_fan!.address);
+    _persist();
+    return reconnectFan();
   }
 
   /// 일체형의 스피커와 램프를 한 번에. 스피커가 실패하면 램프는 시도하지 않는다 —
@@ -169,9 +245,15 @@ class BluetoothLinkManager extends ChangeNotifier {
       _speakerPhase = _Phase.idle;
       _speakerError = null;
     } else if (id == LinkId.lamp) {
+      feedback.lamp.forget();
       _lamp = null;
       _lampPhase = _Phase.idle;
       _lampError = null;
+    } else if (id == LinkId.fan) {
+      _fan = null;
+      _fanPhase = _Phase.idle;
+      _fanError = null;
+      feedback.fan?.forget();
     }
     _persist();
     _notify();
@@ -239,6 +321,40 @@ class BluetoothLinkManager extends ChangeNotifier {
         id: LinkId.lamp, health: LinkHealth.checking, detail: lamp.name);
   }
 
+  /// 램프와 같다: 연결 뒤에는 마지막 명령의 결과(lastError·lastOkAt)를 본다.
+  LinkStatus get fanStatus {
+    final saved = _fan;
+    final fan = feedback.fan;
+    if (saved == null || fan == null) {
+      return const LinkStatus(
+          id: LinkId.fan,
+          health: LinkHealth.unconfigured,
+          cause: LinkCause.notConfigured);
+    }
+    if (_fanPhase == _Phase.connecting) {
+      return LinkStatus(
+          id: LinkId.fan, health: LinkHealth.checking, detail: saved.name);
+    }
+    final error = fan.lastError;
+    if (error != null || (_fanPhase == _Phase.failed && !fan.connected)) {
+      return LinkStatus(
+          id: LinkId.fan,
+          health: LinkHealth.down,
+          cause: LinkCause.disconnected,
+          lastSeen: fan.lastOkAt,
+          detail: '${error ?? _fanError}');
+    }
+    if (fan.connected || fan.lastOkAt != null) {
+      return LinkStatus(
+          id: LinkId.fan,
+          health: LinkHealth.ok,
+          lastSeen: fan.lastOkAt,
+          detail: fan.lastState?.summary ?? saved.name);
+    }
+    return LinkStatus(
+        id: LinkId.fan, health: LinkHealth.checking, detail: saved.name);
+  }
+
   SavedBluetoothDevice _saved(BluetoothDeviceInfo device) =>
       SavedBluetoothDevice(
           address: normalizeBluetoothAddress(device.address) ?? device.address,
@@ -254,6 +370,8 @@ class BluetoothLinkManager extends ChangeNotifier {
     next = _lamp == null
         ? next.copyWith(clearLamp: true)
         : next.copyWith(lamp: _lamp);
+    next =
+        _fan == null ? next.copyWith(clearFan: true) : next.copyWith(fan: _fan);
     settings.save(next);
   }
 
@@ -264,6 +382,31 @@ class BluetoothLinkManager extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _lampKeeper?.cancel();
     super.dispose();
+  }
+
+  Timer? _lampKeeper;
+
+  /// 피드백이 켜져 있는 동안 [every] 마다, 끊긴 램프를 [IlinkLampFeedback.connectInBackground] 규칙으로만
+  /// 다시 붙인다: 이번 실행에서 붙어 있다가 끊긴 뒤 한 번. 연결이 실패한 램프는 건드리지 않는다.
+  /// 10-26 Pi 5: 45 s 마다 다시 붙이자 실패할 때마다 시스템 "Bluetooth device disconnected" 창이 떴고,
+  /// 창이 쌓이면서 화면이 ATLAS 로고에 멈췄다.
+  void keepLampConnected({Duration every = const Duration(seconds: 45)}) {
+    _lampKeeper?.cancel();
+    _lampKeeper = Timer.periodic(every, (_) async {
+      if (_disposed ||
+          !feedback.enabled ||
+          _lamp == null ||
+          lampBusy ||
+          feedback.lamp.connected) {
+        return;
+      }
+      if (await feedback.lamp.connectInBackground() && !_disposed) {
+        _lampPhase = _Phase.connected;
+        _lampError = null;
+        _notify();
+      }
+    });
   }
 }

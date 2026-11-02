@@ -1,0 +1,16 @@
+{
+  "workCueSeconds": 10,
+  "focusNoticeSeconds": 5,
+  "detailSeconds": 10,
+  "widgetIdleSeconds": 30,
+  "absenceGraceSeconds": 5,
+  "simulatedSecondsPerTick": 60,
+  "feedbackRounds": 4,
+  "autoConfidence": 0.7,
+  "trainedConfidence": 0.82,
+  "newConfidence": 0.56,
+  "temperature": 24.2,
+  "humidity": 46,
+  "co2": 720,
+  "lux": 510
+}

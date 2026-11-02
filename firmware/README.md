@@ -1,5 +1,7 @@
 # firmware — ESP32 센서 말단 노드
 
+> 같은 폴더의 [`pico2w_ble_fan/`](pico2w_ble_fan/README.md) 은 센서 노드가 아니라 제어 대상 `vent_fan` 블루투스 선풍기(Pico 2 W + L9110) 펌웨어다.
+
 담당: 이민혁 (펌웨어 · MQTT) · 김태환 (센서 인터페이싱 · ToF 전처리)
 
 도크 내부에 1대 배치되어 mmWave·환경 센서를 읽고 노드 단에서 1차 전처리(이동평균·이상치 제거·졸음 FSM)한 뒤

@@ -1,0 +1,1128 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DESKMATE 개발자 화면</title>
+<style>
+/* 1920×1080 기준. 외부 글꼴·CDN 없음(오프라인). 판단·제어는 보드에서, 이 페이지는 /data 를 그리기만 한다. */
+:root {
+  --k: 1;   /* 글씨·크기 배율 — 화면 위 A−/A+ 또는 -/= 키 (이 브라우저에 기억) */
+  --bg: #0b0d12; --panel: #151922; --line: #2a3040; --fg: #f3f5f8; --dim: #9aa3b5; --faint: #5d6578;
+  --ok: #4cc38a; --bad: #f06a6a; --warn: #f5b93a; --info: #5cc8ff; --accent: #8f9cff; --invalid: #3a3e48;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); }
+body { overflow-x: hidden; overflow-y: auto; font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif; font-size: calc(17px * var(--k)); }
+body[data-mode="video"] { overflow: hidden; }
+#dev {
+  display: grid; min-height: 100vh; grid-template-columns: minmax(0, 1fr); gap: calc(8px * var(--k)); padding: 0 calc(14px * var(--k)) calc(10px * var(--k));
+  /* 배너가 숨으면(display:none) 자리가 밀리지 않게 영역 이름으로 놓는다 */
+  grid-template-areas: "band" "banner" "row1" "row2" "trig" "control" "row4";
+  grid-template-rows: minmax(calc(40px * var(--k)), auto) auto auto auto auto auto minmax(calc(260px * var(--k)), 1fr);
+}
+#band { grid-area: band; } #banner { grid-area: banner; } #row1 { grid-area: row1; }
+#row2 { grid-area: row2; } #control { grid-area: control; } #row4 { grid-area: row4; }
+body:not([data-mode="dev"]) #dev { display: none; }
+body:not([data-mode="video"]) #video { display: none; }
+body:not([data-mode="virtual"]) #virt { display: none; }
+.mono, .num { font-family: Consolas, "D2Coding", "Cascadia Mono", monospace; font-variant-numeric: tabular-nums; }
+.panel { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: calc(10px * var(--k)); padding: calc(10px * var(--k)) calc(14px * var(--k)); min-height: 0; overflow: hidden; }
+.ptitle { font-size: calc(14px * var(--k)); color: var(--dim); margin-bottom: calc(6px * var(--k)); display: flex; justify-content: space-between; gap: calc(12px * var(--k)); white-space: nowrap; }
+.ptitle b { color: var(--fg); font-weight: 700; font-size: calc(16px * var(--k)); }
+.empty { color: var(--faint); }
+
+/* 맨 위 띠 */
+#band { display: flex; overflow: hidden; flex-wrap: wrap; row-gap: calc(4px * var(--k)); padding-top: calc(4px * var(--k)) !important; padding-bottom: calc(4px * var(--k)) !important; align-items: center; gap: calc(18px * var(--k)); font-size: calc(15px * var(--k)); color: var(--dim); border-bottom: 1px solid var(--line); margin: 0 -14px; padding: 0 calc(14px * var(--k)); white-space: nowrap; }
+#band .who { color: var(--fg); font-weight: 700; }
+#band .who em { font-style: normal; color: var(--warn); }
+#band .sp { flex: 1; }
+.chip { display: inline-flex; align-items: center; gap: calc(6px * var(--k)); }
+.dot { width: calc(10px * var(--k)); height: calc(10px * var(--k)); border-radius: 50%; background: var(--bad); display: inline-block; }
+.dot.on { background: var(--ok); }
+#fakeTag { color: #111; background: var(--warn); padding: 1px calc(8px * var(--k)); border-radius: calc(4px * var(--k)); font-weight: 700; display: none; }
+#banner { display: none; background: #3a1418; border: 1px solid var(--bad); color: #ffd6d6; border-radius: calc(8px * var(--k)); padding: calc(7px * var(--k)) calc(14px * var(--k)); font-size: calc(15px * var(--k)); }
+#banner b { color: var(--bad); }
+
+/* 1행: ToF 두 장 + 자세 서비스 + 엎드림 */
+#row1 { display: grid; grid-template-columns: auto auto minmax(0, 1fr) minmax(0, 1fr); gap: calc(8px * var(--k)); min-height: 0; }
+.tof .grid { display: grid; grid-template-columns: repeat(8, var(--cell)); grid-auto-rows: var(--cell); gap: 2px; --cell: calc(26px * var(--k)); }
+.tof .grid i { display: flex; align-items: center; justify-content: center; font-style: normal; font-size: calc(11px * var(--k)); border-radius: calc(3px * var(--k)); background: var(--invalid); color: rgba(255,255,255,.85); }
+.tof .grid i.near { color: #111; }
+.tof .sub { margin-top: calc(6px * var(--k)); font-size: calc(14px * var(--k)); color: var(--dim); }
+.tof .sub b { color: var(--fg); }
+.legend { display: flex; align-items: center; gap: calc(6px * var(--k)); font-size: calc(12px * var(--k)); color: var(--dim); margin-top: calc(4px * var(--k)); }
+.legend .bar { flex: 1; height: calc(7px * var(--k)); border-radius: calc(4px * var(--k)); background: linear-gradient(90deg, #f06a6a, #f5a524, #4cc38a, #3b82f6, #282d3c); }
+#svc .head { display: flex; align-items: baseline; gap: calc(14px * var(--k)); margin-bottom: calc(6px * var(--k)); white-space: nowrap; }
+.hubIgnore { display: inline-block; font-size: calc(14px * var(--k)); font-weight: 700; color: #1a1204; background: var(--warn); border-radius: 5px; padding: 0 calc(8px * var(--k)); vertical-align: middle; }
+.hubCount { display: inline-block; font-size: calc(14px * var(--k)); font-weight: 700; color: #06130c; background: var(--ok); border-radius: 5px; padding: 0 calc(8px * var(--k)); vertical-align: middle; }
+#svcRules { margin-top: calc(6px * var(--k)); font-size: calc(13px * var(--k)); color: var(--dim); line-height: 1.5; }
+#svcRules div { white-space: normal; overflow-wrap: anywhere; }
+#svcRules .on { color: var(--ok); } #svcRules .raw { color: var(--fg); }
+#svcLabel { font-size: calc(34px * var(--k)); font-weight: 800; }
+#svcConf { font-size: calc(15px * var(--k)); color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
+.prow { display: grid; grid-template-columns: calc(96px * var(--k)) minmax(0,1fr) calc(64px * var(--k)); gap: calc(8px * var(--k)); align-items: center; font-size: calc(14px * var(--k)); height: calc(22px * var(--k)); }
+.prow .track { height: calc(12px * var(--k)); background: #222836; border-radius: calc(6px * var(--k)); overflow: hidden; }
+.prow .track i { display: block; height: 100%; background: var(--faint); border-radius: calc(6px * var(--k)); }
+.prow.top { color: var(--fg); font-weight: 700; }
+.prow.top .track i { background: var(--info); }
+.prow.fd .track i { background: var(--warn); }
+.prow:not(.top) { color: var(--dim); }
+.prow .num { text-align: right; }
+
+/* 엎드림 face_down 칸 */
+#fd { border-color: #4a3f22; }
+#fd.goal { border-color: var(--ok); box-shadow: 0 0 0 2px rgba(76,195,138,.35) inset; }
+#fdBig { display: flex; align-items: baseline; gap: calc(14px * var(--k)); }
+#fdVal { font-size: calc(66px * var(--k)); font-weight: 800; line-height: 1; }
+#fdMark { font-size: calc(20px * var(--k)); font-weight: 700; }
+.fdgrid { display: grid; grid-template-columns: calc(80px * var(--k)) repeat(3, minmax(0,1fr)); gap: 2px calc(10px * var(--k)); font-size: calc(15px * var(--k)); margin-top: calc(8px * var(--k)); }
+.fdgrid .h { color: var(--faint); font-size: calc(13px * var(--k)); }
+.fdgrid .k { color: var(--dim); }
+.fdgrid .num { text-align: right; }
+#fdHits { font-size: calc(14px * var(--k)); color: var(--dim); margin-top: calc(6px * var(--k)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#spark { position: relative; height: calc(54px * var(--k)); margin-top: calc(6px * var(--k)); display: flex; align-items: flex-end; gap: 1px; background: #10141c; border-radius: calc(4px * var(--k)); }
+#spark i { flex: 1; background: var(--faint); min-height: 1px; }
+#spark i.hit { background: var(--ok); }
+#spark .goal { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--ok); }
+#spark .lbl { position: absolute; right: calc(4px * var(--k)); font-size: calc(11px * var(--k)); color: var(--ok); }
+.ok { color: var(--ok); } .bad { color: var(--bad); } .pend { color: var(--warn); }
+
+/* 2행: 판정 + 센서 원값 */
+#row2 { display: grid; grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.6fr); gap: calc(8px * var(--k)); min-height: 0; }
+#fsmWrap { display: flex; align-items: baseline; gap: calc(12px * var(--k)); white-space: nowrap; }
+#fsm { font-size: calc(46px * var(--k)); font-weight: 800; line-height: 1.05; }
+#fsmMeta { font-size: calc(14px * var(--k)); color: var(--dim); }
+.meters { display: grid; grid-template-columns: 1fr 1fr; gap: calc(14px * var(--k)); margin: 2px 0 calc(6px * var(--k)); }
+.meter .lab { display: flex; justify-content: space-between; font-size: calc(14px * var(--k)); color: var(--dim); }
+.meter .lab .num { color: var(--fg); font-size: calc(22px * var(--k)); font-weight: 700; }
+.meter .track { height: calc(14px * var(--k)); background: #222836; border-radius: calc(7px * var(--k)); overflow: hidden; }
+.meter .track i { display: block; height: 100%; border-radius: calc(7px * var(--k)); transition: width .3s; }
+.kv { display: grid; grid-template-columns: calc(104px * var(--k)) minmax(0, 1fr); gap: 0 calc(10px * var(--k)); font-size: calc(15px * var(--k)); align-content: start; margin: 0; }
+.kv dt { color: var(--dim); white-space: nowrap; }
+.kv dd { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.place { display: inline-flex; gap: calc(4px * var(--k)); vertical-align: middle; }
+.place span { padding: 0 calc(12px * var(--k)); border: 1px solid var(--line); border-radius: calc(5px * var(--k)); color: var(--faint); font-size: calc(14px * var(--k)); }
+.place span.on { background: var(--info); color: #071018; border-color: var(--info); font-weight: 700; }
+
+#raw { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: calc(6px * var(--k)) calc(16px * var(--k)); align-content: start; }
+.sec { min-width: 0; }
+/* 고정 배치: mmWave·환경(co2_window 포함)은 세로로 길게, 0x03 은 두 칸 폭, 그 아래 0x04·하트비트 (키 입력은 전용 패널) */
+.sec-mmwave { grid-column: 1; grid-row: 1 / span 2; }
+.sec-env { grid-column: 2; grid-row: 1 / span 2; }
+.sec-tof_feature { grid-column: 3 / span 2; grid-row: 1; }
+.sec-tof_posture { grid-column: 3; grid-row: 2; }
+.sec-heartbeat { grid-column: 4; grid-row: 2; }
+.sec h4 { margin: 0 0 2px; font-size: calc(14px * var(--k)); color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sec .src { font-size: calc(12px * var(--k)); color: var(--faint); margin-bottom: calc(3px * var(--k)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sec .src.stale { color: var(--bad); }
+.rkv { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr); gap: 0 calc(10px * var(--k)); font-size: calc(13px * var(--k)); line-height: calc(16px * var(--k)); }
+.sec.wide .rkv { grid-template-columns: repeat(3, minmax(0, auto) minmax(0, 1fr)); }
+.rkv span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rkv .k { color: var(--dim); }
+.rkv .v.t { color: var(--ok); } .rkv .v.f { color: var(--faint); } .rkv .v.n { color: var(--faint); font-style: italic; }
+
+/* 제어 결론: 한 줄 결론 + 세부 + 기기별 마지막 상태 */
+#control { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: calc(4px * var(--k)) calc(20px * var(--k)); padding: calc(8px * var(--k)) calc(14px * var(--k)); }
+#ctlHead { font-size: calc(22px * var(--k)); font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#ctlHead.command { color: var(--info); } #ctlHead.request { color: var(--warn); } #ctlHead.idle { color: var(--fg); }
+#ctlDetail { font-size: calc(14px * var(--k)); color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+#ctlDetail b { color: var(--fg); font-weight: 600; }
+#ctlCmds { font-size: calc(15px * var(--k)); margin-top: calc(3px * var(--k)); }
+#ctlCmds div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#ctlCmds .t { color: var(--faint); margin-right: calc(8px * var(--k)); }
+#devices { font-size: calc(15px * var(--k)); border-left: 1px solid var(--line); padding-left: calc(16px * var(--k)); }
+#devices div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
+#devices b { display: inline-block; min-width: calc(92px * var(--k)); color: var(--dim); font-weight: 600; }
+#devices .node { color: var(--faint); font-size: calc(12px * var(--k)); margin-left: calc(4px * var(--k)); }
+
+/* 4행: 명령 로그 + MQTT 토픽 */
+#row4 { display: grid; grid-template-columns: minmax(0, 1.9fr) minmax(0, 1.25fr) minmax(0, 0.85fr); gap: calc(8px * var(--k)); min-height: 0; }
+#logPanel, #topicPanel, #ksPanel { display: flex; flex-direction: column; }
+/* 키 입력 패널(Pi 5 keystroke_page.dart 와 같은 항목, 키 값 없음) */
+#ksStatus { padding: 0 calc(8px * var(--k)); border-radius: calc(4px * var(--k)); background: #222836; color: var(--fg); font-size: calc(13px * var(--k)); }
+#ksStatus.ok { background: rgba(76,195,138,.2); color: var(--ok); } #ksStatus.bad { background: rgba(240,106,106,.2); color: var(--bad); }
+#ksGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px calc(12px * var(--k)); font-size: calc(13px * var(--k)); }
+#ksGrid .m { color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#ksGrid .m b { display: block; color: var(--fg); font-size: calc(17px * var(--k)); font-family: Consolas, monospace; }
+#ksMeta { font-size: calc(12px * var(--k)); color: var(--faint); margin-top: calc(3px * var(--k)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#ksSpark { flex: 1; min-height: calc(30px * var(--k)); margin-top: calc(4px * var(--k)); background: #10141c; border-radius: calc(4px * var(--k)); position: relative; }
+#ksSpark svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+/* ---------- 가상 기기(/?mode=virtual): 주변기기가 다 연결돼 있었다면 ---------- */
+#virt { display: grid; min-height: 100vh; grid-template-columns: minmax(0, 1fr); gap: calc(10px * var(--k)); padding: 0 calc(16px * var(--k)) calc(12px * var(--k));
+  grid-template-rows: minmax(calc(44px * var(--k)), auto) auto auto auto auto auto auto minmax(calc(320px * var(--k)), 1fr); }
+#vband { display: flex; overflow: hidden; flex-wrap: wrap; row-gap: calc(4px * var(--k)); padding-top: calc(4px * var(--k)) !important; padding-bottom: calc(4px * var(--k)) !important; align-items: center; gap: calc(14px * var(--k)); border-bottom: 1px solid var(--line); margin: 0 -16px; padding: 0 calc(16px * var(--k)); white-space: nowrap; font-size: calc(15px * var(--k)); color: var(--dim); }
+#vband b { color: var(--fg); font-size: calc(17px * var(--k)); }
+#vband .virtTag { color: #111; background: var(--accent); border-radius: calc(4px * var(--k)); padding: 1px calc(8px * var(--k)); font-weight: 700; }
+#vband .sp { flex: 1; }
+#vtop { display: grid; grid-template-columns: calc(470px * var(--k)) minmax(0, 1fr); gap: calc(10px * var(--k)); }
+.pbtns { display: flex; gap: calc(8px * var(--k)); margin: calc(4px * var(--k)) 0 calc(8px * var(--k)); }
+.pbtns button { flex: 1; font: inherit; font-size: calc(17px * var(--k)); font-weight: 700; padding: calc(8px * var(--k)) 0; border-radius: calc(8px * var(--k)); border: 1px solid var(--line); background: #1c2130; color: var(--fg); cursor: pointer; }
+.pbtns button.on { background: var(--info); color: #071018; border-color: var(--info); }
+#pform { display: grid; grid-template-columns: calc(96px * var(--k)) minmax(0, 1fr) calc(96px * var(--k)) minmax(0, 1fr); gap: calc(4px * var(--k)) calc(8px * var(--k)); font-size: calc(14px * var(--k)); align-items: center; }
+#pform label { color: var(--dim); }
+#pform select, #pform input { font: inherit; font-size: calc(14px * var(--k)); background: #10141c; color: var(--fg); border: 1px solid var(--line); border-radius: calc(5px * var(--k)); padding: 2px calc(4px * var(--k)); min-width: 0; }
+#pform .helps { grid-column: 2 / -1; display: flex; gap: calc(10px * var(--k)); flex-wrap: wrap; }
+#pform .helps label { color: var(--fg); }
+#pform[aria-disabled="true"] { opacity: .55; pointer-events: none; }
+.prow2 { display: flex; gap: calc(8px * var(--k)); align-items: center; margin-top: calc(8px * var(--k)); font-size: calc(14px * var(--k)); }
+.btn { white-space: nowrap; font: inherit; font-size: calc(15px * var(--k)); font-weight: 700; padding: calc(6px * var(--k)) calc(14px * var(--k)); border-radius: calc(7px * var(--k)); border: 1px solid var(--line); background: #222836; color: var(--fg); cursor: pointer; }
+.btn.go { background: var(--ok); color: #06130c; border-color: var(--ok); }
+.btn.no { background: #3a1418; color: #ffd6d6; border-color: var(--bad); }
+.btn.warn { background: var(--warn); color: #1a1204; border-color: var(--warn); }
+.btn:disabled { opacity: .4; cursor: default; }
+#pconfirm { display: none; margin-top: calc(8px * var(--k)); background: #10141c; border: 1px dashed var(--warn); border-radius: calc(8px * var(--k)); padding: calc(8px * var(--k)); font-size: calc(12px * var(--k)); }
+#pconfirm pre { margin: calc(4px * var(--k)) 0 calc(6px * var(--k)); white-space: pre-wrap; word-break: break-all; color: var(--dim); max-height: calc(110px * var(--k)); overflow: auto; }
+#pstatus { margin-top: calc(8px * var(--k)); font-size: calc(14px * var(--k)); color: var(--dim); line-height: 1.5; }
+#pstatus b { color: var(--fg); }
+#vnow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: calc(10px * var(--k)) calc(20px * var(--k)); }
+#vnowState { font-size: calc(38px * var(--k)); font-weight: 800; }
+#vnowHead { font-size: calc(18px * var(--k)); font-weight: 700; margin-top: calc(4px * var(--k)); }
+#vnowMeta { font-size: calc(14px * var(--k)); color: var(--dim); margin-top: calc(4px * var(--k)); }
+/* 앱 화면(가상): Pi 5 앱이 띄웠을 카드·자동 실행 알림을 같은 문구로 */
+#appTag { font-size: calc(12px * var(--k)); color: #111; background: var(--accent); border-radius: 4px; padding: 0 calc(6px * var(--k)); font-weight: 700; }
+#appHome { font-size: calc(26px * var(--k)); font-weight: 800; margin: calc(6px * var(--k)) 0; }
+#cardTitle { font-size: calc(24px * var(--k)); font-weight: 800; margin: calc(4px * var(--k)) 0 calc(2px * var(--k)); }
+#cardBody { font-size: calc(16px * var(--k)); color: var(--fg); margin-bottom: calc(8px * var(--k)); }
+.autoN .lab { font-size: calc(13px * var(--k)); color: var(--ok); font-weight: 700; }
+.autoN .eff { font-size: calc(16px * var(--k)); color: var(--ok); margin: calc(2px * var(--k)) 0; }
+#noticeList { margin-top: calc(10px * var(--k)); border-top: 1px solid var(--line); padding-top: calc(6px * var(--k)); font-size: calc(15px * var(--k)); }
+#noticeList div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.55; }
+#noticeList .t { color: var(--faint); margin-right: calc(8px * var(--k)); font-family: Consolas, monospace; }
+#toasts { position: fixed; top: calc(70px * var(--k)); right: calc(18px * var(--k)); z-index: 50; display: flex; flex-direction: column; gap: calc(8px * var(--k)); pointer-events: none; }
+.toast { background: rgba(20,26,36,.96); border: 1px solid var(--line); border-left: calc(6px * var(--k)) solid var(--info); border-radius: calc(10px * var(--k));
+  padding: calc(10px * var(--k)) calc(16px * var(--k)); font-size: calc(20px * var(--k)); font-weight: 700; color: var(--fg); max-width: calc(560px * var(--k));
+  box-shadow: 0 8px 30px rgba(0,0,0,.5); animation: tin .25s ease-out; }
+.toast.on { border-left-color: var(--ok); } .toast.card { border-left-color: var(--warn); }
+.toast small { display: block; font-size: calc(12px * var(--k)); color: var(--dim); font-weight: 400; }
+@keyframes tin { from { transform: translateX(30px); opacity: 0; } to { transform: none; opacity: 1; } }
+body:not([data-mode="virtual"]) #toasts { display: none; }
+#cardBox { border: 1px solid var(--line); border-radius: calc(10px * var(--k)); padding: calc(10px * var(--k)) calc(12px * var(--k)); background: #10141c; }
+#cardBox.auto { border-color: var(--ok); box-shadow: 0 0 0 2px rgba(76,195,138,.25) inset; }
+#cardBox.live { border-color: var(--warn); box-shadow: 0 0 0 2px rgba(245,185,58,.25) inset; }
+#cardBox .ttl { font-size: calc(13px * var(--k)); color: var(--dim); }
+#cardText { font-size: calc(19px * var(--k)); font-weight: 700; margin: calc(4px * var(--k)) 0 calc(8px * var(--k)); }
+#cardBtns { display: flex; gap: calc(8px * var(--k)); align-items: center; flex-wrap: wrap; }
+#cardMsg { font-size: calc(13px * var(--k)); color: var(--dim); margin-top: calc(6px * var(--k)); }
+#vdevs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: calc(10px * var(--k)); }
+.dcard { background: var(--panel); border: 1px solid var(--line); border-radius: calc(12px * var(--k)); padding: calc(12px * var(--k)) calc(14px * var(--k)); position: relative; }
+.dcard.on { border-color: rgba(76,195,138,.7); box-shadow: 0 0 calc(18px * var(--k)) rgba(76,195,138,.12) inset; }
+.dcard .ic { font-size: calc(34px * var(--k)); line-height: 1; }
+.dcard .nm { font-size: calc(16px * var(--k)); font-weight: 700; margin-top: calc(6px * var(--k)); }
+.dcard .st { font-size: calc(18px * var(--k)); margin-top: calc(4px * var(--k)); min-height: calc(24px * var(--k)); }
+.dcard.on .st { color: var(--ok); }
+.dcard .bar { height: calc(10px * var(--k)); background: #222836; border-radius: calc(5px * var(--k)); overflow: hidden; margin-top: calc(6px * var(--k)); }
+.dcard .bar i { display: block; height: 100%; background: linear-gradient(90deg, #8a6a20, #ffd36b); }
+.dcard .lc { font-size: calc(13px * var(--k)); color: var(--dim); margin-top: calc(6px * var(--k)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dcard .vb { position: absolute; top: calc(10px * var(--k)); right: calc(12px * var(--k)); font-size: calc(11px * var(--k)); color: var(--accent); }
+#vtl { display: flex; flex-direction: column; min-height: 0; }
+#tl { flex: 1; overflow-y: auto; min-height: 0; font-size: calc(14px * var(--k)); }
+#tl .row { display: grid; grid-template-columns: calc(70px * var(--k)) calc(74px * var(--k)) minmax(0, 1.5fr) minmax(0, 1.4fr) minmax(0, 1fr); gap: calc(10px * var(--k)); padding: calc(5px * var(--k)) 0; border-bottom: 1px solid #1e2330; align-items: baseline; }
+#tl .k { font-weight: 700; font-size: calc(12px * var(--k)); border-radius: calc(4px * var(--k)); padding: 0 calc(6px * var(--k)); text-align: center; }
+#tl .k.command { background: rgba(92,200,255,.18); color: var(--info); }
+#tl .k.card { background: rgba(245,185,58,.18); color: var(--warn); }
+#tl .k.feedback { background: rgba(143,156,255,.18); color: var(--accent); }
+#tl .k.phase_light { background: #222836; color: var(--dim); }
+#tl .k.laptop { background: rgba(76,195,138,.18); color: var(--ok); }
+#tl .k.rest { background: rgba(143,156,255,.25); color: var(--accent); }
+#tl .tx { font-weight: 600; }
+#tl .why, #tl .rl { color: var(--dim); font-size: calc(13px * var(--k)); }
+
+/* ---------- 무드등 올릴 시점(트리거) ---------- */
+.trig { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: calc(8px * var(--k)) calc(18px * var(--k)); }
+body.narrow .trig { grid-template-columns: minmax(0, 1fr); }
+.trig .th { grid-column: 1 / -1; display: flex; align-items: baseline; gap: calc(14px * var(--k)); flex-wrap: wrap; }
+.trig .hl { font-size: calc(24px * var(--k)); font-weight: 800; }
+.trig .hl.go { color: var(--ok); } .trig .hl.wait { color: var(--warn); } .trig .hl.no { color: var(--dim); }
+.trig .eta { font-size: calc(40px * var(--k)); font-weight: 800; color: var(--warn); font-family: Consolas, monospace; }
+.trig .chk { font-size: calc(15px * var(--k)); }
+.trig .chk .r { display: grid; grid-template-columns: calc(22px * var(--k)) minmax(0, 1.2fr) minmax(0, 1fr); gap: calc(6px * var(--k)); align-items: center; padding: calc(2px * var(--k)) 0; }
+.trig .chk .r .y { color: var(--ok); font-weight: 800; } .trig .chk .r .n { color: var(--faint); font-weight: 800; }
+.trig .chk .r .v { color: var(--fg); font-family: Consolas, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trig .chk .r .pb { grid-column: 2 / -1; height: calc(8px * var(--k)); background: #222836; border-radius: 4px; overflow: hidden; }
+.trig .chk .r .pb i { display: block; height: 100%; background: var(--warn); }
+.trig .src { grid-column: 1 / -1; font-size: calc(12px * var(--k)); color: var(--faint); }
+.trig svg { width: 100%; height: calc(220px * var(--k)); display: block; background: #10141c; border-radius: calc(6px * var(--k)); }
+.trig .lg { font-size: calc(12px * var(--k)); color: var(--dim); margin-top: calc(4px * var(--k)); }
+
+.trig .bd { font-size: calc(14px * var(--k)); margin-top: calc(6px * var(--k)); }
+.trig .bd table { width: 100%; border-collapse: collapse; }
+.trig .bd td, .trig .bd th { padding: calc(2px * var(--k)) calc(6px * var(--k)); text-align: left; white-space: nowrap; }
+.trig .bd th { color: var(--faint); font-weight: 400; font-size: calc(12px * var(--k)); }
+.trig .bd td.n { font-family: Consolas, monospace; text-align: right; }
+.trig .bd td.note { color: var(--dim); white-space: normal; }
+.trig .bd .sum { color: var(--fg); font-weight: 700; } .trig .bd .warn { color: var(--warn); }
+.trig .prior { grid-column: 1 / -1; font-size: calc(14px * var(--k)); color: var(--accent); }
+#pPrior { margin-top: calc(6px * var(--k)); font-size: calc(14px * var(--k)); color: var(--accent); }
+#lapStat { font-size: calc(14px * var(--k)); color: var(--dim); }
+#lapStat b { color: var(--fg); } #lapStat .on { color: var(--ok); font-weight: 700; } #lapStat .off { color: var(--faint); }
+/* 선풍기(가상·화면 그림): 가상 기기 화면의 큰 칸, ?mode=fan 은 전체 화면 */
+.fanbox { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: calc(18px * var(--k)); align-items: center; }
+.fanbox svg { width: calc(220px * var(--k)); height: calc(220px * var(--k)); }
+.fanbox .fs { font-size: calc(30px * var(--k)); font-weight: 800; }
+.fanbox .fs.on { color: var(--ok); } .fanbox .fs.off { color: var(--faint); }
+.fanbox .fw { font-size: calc(16px * var(--k)); color: var(--dim); margin-top: calc(6px * var(--k)); line-height: 1.5; }
+body:not([data-mode="fan"]) #fanpage { display: none; }
+#fanpage { position: fixed; inset: 0; background: #06080c; display: grid; place-items: center; }
+#fanpage .fanbox { grid-template-columns: minmax(0, 1fr); justify-items: center; text-align: center; }
+#fanpage .fanbox svg { width: min(70vh, 70vw); height: min(70vh, 70vw); }
+#fanpage .fanbox .fs { font-size: min(7vh, 6vw); } #fanpage .fanbox .fw { font-size: min(3vh, 2.4vw); max-width: 80vw; }
+#fanpage .tag { position: absolute; top: 16px; left: 20px; color: rgba(255,255,255,.5); font-size: 18px; }
+#fanpage .back { position: absolute; top: 12px; right: 16px; opacity: 0; } #fanpage:hover .back { opacity: 1; }
+
+/* 휴식 배너(REST): hub rest_notice 문구와 남은 시간 — 가상 기기·영상 모드 */
+.restB { display: none; background: linear-gradient(90deg, rgba(143,156,255,.25), rgba(92,200,255,.18)); border: 2px solid var(--accent);
+  border-radius: calc(14px * var(--k)); padding: calc(14px * var(--k)) calc(22px * var(--k)); align-items: center; gap: calc(22px * var(--k)); }
+.restB.on { display: flex; }
+/* 자동 안내(기기 없는 arm 이 AUTO 로 고른 것): 답하지 않는 띠 — 시한이 지나면 사라진다 */
+#infoV:empty { display: none; }
+#infoV .info { display: flex; align-items: center; gap: calc(12px * var(--k)); background: rgba(92,200,255,.12); border: 1px solid rgba(92,200,255,.5);
+  border-radius: calc(10px * var(--k)); padding: calc(8px * var(--k)) calc(14px * var(--k)); margin-bottom: calc(6px * var(--k)); font-size: calc(18px * var(--k)); }
+#infoV .info b { color: var(--info); } #infoV .info .m { color: var(--dim); font-size: calc(13px * var(--k)); margin-left: auto; white-space: nowrap; }
+.restB .ic { font-size: calc(46px * var(--k)); }
+.restB .msg { font-size: calc(30px * var(--k)); font-weight: 800; color: var(--fg); }
+.restB .sub { font-size: calc(15px * var(--k)); color: var(--dim); margin-top: calc(4px * var(--k)); }
+.restB .cd { margin-left: auto; font-size: calc(48px * var(--k)); font-weight: 800; font-family: Consolas, monospace; color: var(--accent); }
+.restB .lb { font-size: calc(12px * var(--k)); color: #111; background: var(--accent); border-radius: 4px; padding: 0 calc(6px * var(--k)); font-weight: 700; }
+.restB .lb.old { background: var(--warn); }
+#vRest { position: absolute; left: 34px; right: 34px; top: 60px; --k: 1.4; }
+
+/* ---------- 영상 모드(/?mode=video): 시뮬 영상 하단 띠와 같은 칸, 실제 영상 옆·위에 녹화 ---------- */
+#video { position: fixed; inset: 0; background: #000; --k: var(--kv, 1); }   /* 영상 모드는 화면 크기에 맞춰(1920 기준) */
+#video.green { background: #00b140; }
+#vTag { position: absolute; top: calc(18px * var(--k)); left: calc(24px * var(--k)); font-size: calc(18px * var(--k)); color: rgba(255,255,255,.55); }
+#vTag b { color: rgba(255,255,255,.85); }
+#vToggle { position: absolute; top: calc(14px * var(--k)); right: calc(20px * var(--k)); opacity: 0; transition: opacity .2s; }
+#video:hover #vToggle { opacity: 1; }
+button.tg { background: #222836; color: var(--fg); border: 1px solid var(--line); border-radius: calc(6px * var(--k)); padding: 2px calc(10px * var(--k)); font: inherit; font-size: calc(13px * var(--k)); cursor: pointer; }
+#vBar { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(8,10,14,.82); border-top: 1px solid rgba(255,255,255,.12);
+  display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1.15fr) minmax(0, 1.35fr); gap: calc(34px * var(--k)); align-items: center; padding: calc(22px * var(--k)) calc(34px * var(--k)); }
+.vcap { font-size: calc(17px * var(--k)); color: rgba(255,255,255,.6); margin-bottom: calc(8px * var(--k)); white-space: nowrap; }
+.vtofs { display: flex; gap: calc(14px * var(--k)); }
+.vtof .grid { display: grid; grid-template-columns: repeat(8, calc(24px * var(--k))); grid-auto-rows: calc(24px * var(--k)); gap: 2px; }
+.vtof .grid i { border-radius: calc(3px * var(--k)); background: var(--invalid); }
+.vtof .nm { font-size: calc(14px * var(--k)); color: rgba(255,255,255,.55); margin-top: calc(5px * var(--k)); text-align: center; }
+#vPosture { font-size: calc(64px * var(--k)); font-weight: 800; line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#vConf { font-size: calc(18px * var(--k)); color: rgba(255,255,255,.6); margin-top: calc(6px * var(--k)); }
+.vchips { display: flex; gap: calc(10px * var(--k)); flex-wrap: wrap; margin-bottom: calc(16px * var(--k)); }
+.vchips span { background: rgba(76,195,138,.22); color: #7ee0ad; border: 1px solid rgba(76,195,138,.5); border-radius: calc(18px * var(--k)); padding: calc(4px * var(--k)) calc(16px * var(--k)); font-size: calc(22px * var(--k)); font-weight: 700; }
+.vfat { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: calc(14px * var(--k)); align-items: center; font-size: calc(22px * var(--k)); }
+.vfat .track { height: calc(18px * var(--k)); background: rgba(255,255,255,.12); border-radius: calc(9px * var(--k)); overflow: hidden; }
+.vfat .track i { display: block; height: 100%; border-radius: calc(9px * var(--k)); transition: width .4s; }
+.vfat .num { font-size: calc(30px * var(--k)); font-weight: 800; }
+#vEnv { font-size: calc(19px * var(--k)); color: rgba(255,255,255,.7); margin-top: calc(14px * var(--k)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#vDecision { font-size: calc(28px * var(--k)); font-weight: 800; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+#vDecStatus { font-size: calc(18px * var(--k)); color: rgba(255,255,255,.65); margin-top: calc(8px * var(--k)); }
+#log, #topics { flex: 1; overflow-y: auto; min-height: 0; font-size: calc(15px * var(--k)); line-height: 1.45; }
+#log div, #topics div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#log .t { color: var(--faint); margin-right: calc(10px * var(--k)); }
+#log .k { display: inline-block; width: calc(86px * var(--k)); font-weight: 700; }
+#log .CMD .k { color: var(--info); }
+#log .REQUEST .k, #log .FEEDBACK .k { color: var(--warn); }
+#log .RESULT .k { color: var(--dim); }
+#log .RESULT.ok .k, #log .RESULT.ok .x { color: var(--ok); }
+#log .RESULT.fail .k, #log .RESULT.fail .x { color: var(--bad); }
+#topics div { display: grid; grid-template-columns: minmax(0, 1fr) calc(64px * var(--k)) calc(70px * var(--k)); gap: calc(8px * var(--k)); }
+#topics .num { text-align: right; color: var(--dim); }
+#topics .fresh { color: var(--ok); }
+
+/* 좁은 창(배율을 감안한 폭 < 1700): 판정·원값, 로그·키 입력·토픽, 가상 기기 위쪽을 아래로 쌓는다 */
+body.narrow #row2 { grid-template-columns: minmax(0, 1fr); }
+body.narrow .sec.wide .rkv { grid-template-columns: repeat(2, minmax(0, auto) minmax(0, 1fr)); }
+body.narrow #row4 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+body.narrow #logPanel { grid-column: 1 / -1; min-height: calc(260px * var(--k)); }
+body.narrow #row1 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+body.narrow #svc { grid-column: 1 / -1; }
+body.narrow #fd { grid-column: 1 / -1; }
+body.narrow #control { grid-template-columns: minmax(0, 1fr); }
+body.narrow #devices { border-left: none; padding-left: 0; border-top: 1px solid var(--line); padding-top: 6px; }
+/* 좁은 화면: 앱 화면(카드·알림)과 기기를 먼저, 프로필 고르기는 그 아래 */
+body.narrow #virt { grid-template-rows: none; grid-auto-rows: auto; }
+body.narrow #vtop { display: contents; }
+body.narrow #restV { order: 1; } body.narrow #infoV { order: 1; } body.narrow #trigV { order: 1; }
+body.narrow #vband { order: 0; } body.narrow #vnow { order: 1; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); }
+body.narrow #vdevs { order: 2; } body.narrow #fanPanel { order: 2; } body.narrow #vperson { order: 3; }
+body.narrow #vtl { order: 4; min-height: calc(320px * var(--k)); }
+body.narrow #vdevs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+body.narrow #tl .row { grid-template-columns: calc(70px * var(--k)) calc(74px * var(--k)) minmax(0, 1fr); }
+body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
+.ksize { display: inline-flex; gap: 4px; align-items: center; }
+.ksize button { min-width: calc(30px * var(--k)); }
+</style>
+</head>
+<body>
+<div id="dev">
+<header id="band">
+  <span class="who">판단·제어는 <em>Pi 4·Pi 5 보드</em>에서 · 이 화면은 노트북 보기 전용</span>
+  <span id="fakeTag">가짜 데이터(--fake)</span>
+  <span class="sp"></span>
+  <span class="chip"><span class="dot" id="dMqtt"></span>MQTT <span class="num" id="aMqtt">-</span></span>
+  <span class="chip"><span class="dot" id="dPosture"></span>자세 서비스 <span class="num" id="aPosture">-</span></span>
+  <span class="chip"><span class="dot" id="dRaw"></span>ToF raw <span class="num" id="aRaw">-</span></span>
+  <span>Pi 4 <span class="num" id="target">-</span></span>
+  <span>마지막 수신 <span class="num" id="lastRx">-</span></span>
+  <span class="ksize"><button class="tg" data-k="-1" title="글씨 작게 (-)">A−</button><span class="num kval"></span><button class="tg" data-k="1" title="글씨 크게 (=)">A+</button></span>
+  <button class="tg" data-go="virtual" title="단축키 G">가상 기기</button>
+  <button class="tg" data-go="video" title="단축키 V">영상 모드</button>
+</header>
+<div id="banner"></div>
+
+<section id="row1">
+  <!-- 센서가 보는 방향(펌웨어 flags=1 사진 방향): 사용자 왼쪽 센서 A 가 화면 오른쪽 — Pi 5 앱 PR #83 과 같은 B · A 순서 -->
+  <div class="panel tof" id="tof1"></div>
+  <div class="panel tof" id="tof0"></div>
+  <div class="panel" id="svc">
+    <div class="ptitle"><span><b>자세 서비스</b> · Pi 4 GRU (:8771)</span><span class="mono" id="svcModel">-</span></div>
+    <div class="head"><span id="svcLabel">-</span><span id="svcConf">-</span></div>
+    <div id="probs"></div>
+    <div id="svcRules"></div>
+  </div>
+  <div class="panel" id="fd">
+    <div class="ptitle"><span><b>엎드림 face_down</b> · 목표 ≥ 0.99</span><span class="mono" id="fdSamples">-</span></div>
+    <div id="fdBig"><span id="fdVal" class="num">-</span><span id="fdMark">-</span></div>
+    <div class="fdgrid" id="fdGrid"></div>
+    <div id="fdHits">-</div>
+    <div id="spark"></div>
+  </div>
+</section>
+
+<section id="row2">
+  <div class="panel">
+    <div class="ptitle"><span><b>판정</b> · Pi 4 hub FSM (state/phase)</span><span class="mono" id="seq">-</span></div>
+    <div id="fsmWrap"><span id="fsm">-</span><span id="fsmMeta">-</span></div>
+    <div class="meters">
+      <div class="meter"><div class="lab"><span>피로도 C_fatigue</span><span class="num" id="fatT">-</span></div><div class="track"><i id="fatB"></i></div></div>
+      <div class="meter"><div class="lab"><span>집중 저하 C_focus</span><span class="num" id="focT">-</span></div><div class="track"><i id="focB"></i></div></div>
+    </div>
+    <dl class="kv" id="judgeKv"></dl>
+  </div>
+  <div class="panel">
+    <div class="ptitle"><span><b>센서 원값</b> · 출처 우선순위: /raw other(ESP32 프레임) → MQTT 센서 토픽 → hub 요약</span><span class="mono" id="rawNote"></span></div>
+    <div id="raw"></div>
+  </div>
+</section>
+
+<section class="panel trig" id="trigD" style="grid-area: trig"></section>
+<section class="panel" id="control">
+  <div>
+    <div class="ptitle"><span><b>제어 결론</b> · 어느 블루투스 기기를 왜 — interaction/request · control/cmd · control/result</span><span class="mono" id="ctlTime"></span></div>
+    <div id="ctlHead">-</div>
+    <div id="ctlDetail">-</div>
+    <div id="ctlCmds" class="mono"></div>
+  </div>
+  <div id="devices"></div>
+</section>
+
+<section id="row4">
+  <div class="panel" id="logPanel">
+    <div class="ptitle"><span><b>명령 로그</b> · control/cmd · control/result · interaction/request · feedback/user</span><span class="mono" id="logCount">0</span></div>
+    <div id="log" class="mono"></div>
+  </div>
+  <div class="panel" id="ksPanel">
+    <div class="ptitle"><span><b>키 입력</b> · PC 수집기 집계(키 값 없음)</span><span id="ksStatus">-</span></div>
+    <div id="ksGrid"></div>
+    <div id="ksMeta">-</div>
+    <div id="ksSpark"></div>
+  </div>
+  <div class="panel" id="topicPanel">
+    <div class="ptitle"><span><b>MQTT 토픽</b> · deskmate/# 받은 것</span><span class="mono" id="topicCount">0</span></div>
+    <div id="topics" class="mono"></div>
+  </div>
+</section>
+</div>
+
+<div id="virt">
+  <header id="vband">
+    <b>기기가 연결돼 있었다면</b><span class="virtTag">가상</span>
+    <span>hub 명령·카드를 Pi 5 앱과 같은 규칙으로 가상 기기에 적용 · 실제 Pi 5 결과는 따로 표시 · 판단은 Pi 4 hub</span>
+    <span class="sp"></span>
+    <span class="chip"><span class="dot" id="vdMqtt"></span>MQTT</span>
+    <span id="vFake2" style="display:none;color:#111;background:var(--warn);padding:0 8px;border-radius:4px;font-weight:700">가짜 데이터(--fake)</span>
+    <span class="ksize"><button class="tg" data-k="-1" title="글씨 작게 (-)">A−</button><span class="num kval"></span><button class="tg" data-k="1" title="글씨 크게 (=)">A+</button></span>
+    <button class="tg" data-go="dev" title="단축키 G">개발자 화면</button>
+    <button class="tg" data-go="video">영상 모드</button>
+  </header>
+  <section class="restB" id="restV"></section>
+  <section id="infoV"></section>
+  <section class="panel trig" id="trigV"></section>
+  <section class="panel" id="fanPanel"><div class="ptitle"><span><b>선풍기</b> · 가상(화면 그림) — 실제 Pico 2 W 선풍기는 Pi 5 앱이 따로 움직인다</span>
+    <span><span id="lapStat"></span> <button class="tg" data-go="fan" title="단축키 F">선풍기 전체 화면</button></span></div>
+    <div class="fanbox" id="fanV"></div></section>
+  <section id="vtop">
+    <div class="panel" id="vperson">
+      <div class="ptitle"><span><b>나는 누구?</b> · 첫 설정 프로필 → hub 개인화 기준(prior)</span><span class="mono" id="pNode">node laptop-devview</span></div>
+      <div class="pbtns" id="pbtns"></div>
+      <div id="pform"></div>
+      <div class="prow2"><button class="btn warn" id="pSend">이 프로필로 보내기…</button><span id="pHint" class="empty"></span></div>
+      <div id="pconfirm"><div>deskmate/profile/user (retain, QoS 1) 로 보냅니다 — 이름·직업은 싣지 않음:</div><pre id="pPreview"></pre>
+        <button class="btn go" id="pYes">확인하고 보내기</button> <button class="btn" id="pNo">취소</button></div>
+      <div id="pstatus">-</div>
+      <div id="pPrior"></div>
+    </div>
+    <div class="panel" id="vnow">
+      <div>
+        <div class="ptitle"><span><b>hub 지금</b> · state/phase</span><span class="mono" id="vnowTime"></span></div>
+        <div id="vnowState">-</div>
+        <div id="vnowHead">-</div>
+        <div id="vnowMeta">-</div>
+      </div>
+      <div id="cardBox">
+        <div class="ttl"><span id="appTag">앱 화면 · 가상</span> Pi 5 앱이 띄웠을 화면(같은 문구) · 내 반응이 학습 라벨이 됩니다</div>
+        <div id="appMain"></div>
+        <div id="cardBtns"></div>
+        <div id="cardMsg"></div>
+        <div id="noticeList"></div>
+      </div>
+    </div>
+  </section>
+  <section id="vdevs"></section>
+  <section class="panel" id="vtl">
+    <div class="ptitle"><span><b>타임라인</b> · 판정 → 가상 기기 조작 (최근 30) · 오른쪽 끝 = 실제 Pi 5 결과</span><span class="mono" id="tlCount"></span></div>
+    <div id="tl"></div>
+  </section>
+</div>
+
+<div id="fanpage"><div class="tag">DESKMATE · 선풍기(가상 — hub 명령을 화면에) · F 키로 돌아가기</div>
+  <button class="tg back" data-go="virtual">가상 기기</button><div class="fanbox" id="fanF"></div></div>
+<div id="toasts"></div>
+<div id="video">
+  <div id="vTag"><b>DESKMATE</b> · 보드 실시간 센서 · 판단·제어는 Pi 4·Pi 5 보드 <span id="vFake" style="display:none;color:#111;background:var(--warn);padding:0 8px;border-radius:4px;font-weight:700">가짜 데이터(--fake)</span></div>
+  <div id="vToggle"><button class="tg" data-go="dev" title="단축키 V">개발자 화면</button></div>
+  <div class="restB" id="vRest"></div>
+  <div id="vBar">
+    <div><div class="vcap">ToF 8×8 두 개 · 센서가 보는 방향(A 가 오른쪽)</div><div class="vtofs"><div class="vtof" id="vtof1"></div><div class="vtof" id="vtof0"></div></div></div>
+    <div><div class="vcap">센서가 본 자세</div><div id="vPosture">-</div><div id="vConf">-</div></div>
+    <div><div class="vchips" id="vChips"></div>
+      <div class="vfat"><span>피로</span><div class="track"><i id="vFatB"></i></div><span class="num" id="vFatT">-</span></div>
+      <div id="vEnv">-</div></div>
+    <div><div class="vcap">허브 결정</div><div id="vDecision">-</div><div id="vDecStatus">-</div></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const f2 = v => v == null ? "-" : v.toFixed(2);
+const f3 = v => v == null ? "-" : v.toFixed(3);
+const PHASE_COLOR = {start: "#5cc8ff", focus: "#4cc38a", fatigue: "#f5b93a", action: "#f06a6a", rest: "#8f9cff", end: "#9aa3b5"};
+
+// 거리(mm) → 색. posture_view.html·Pi 5 tof_heatmap.dart 와 같은 눈금(20 cm 붉음 → 2 m 어둠).
+function distColor(mm) {
+  const t = Math.min(Math.max((mm - 200) / 1800, 0), 1);
+  const stops = [[240,106,106],[245,165,36],[76,195,138],[59,130,246],[40,45,60]];
+  const x = t * (stops.length - 1), i = Math.min(Math.floor(x), stops.length - 2), f = x - i;
+  const c = stops[i].map((v, k) => Math.round(v + (stops[i + 1][k] - v) * f));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+function renderTof(el, s) {
+  if (!el.dataset.built) {
+    el.innerHTML = `<div class="ptitle"><span><b>ToF ${esc(s.name)}</b> · L8 8×8</span><span class="mono age"></span></div>
+      <div class="grid">${"<i></i>".repeat(64)}</div><div class="sub"></div>
+      <div class="legend"><span>20 cm</span><span class="bar"></span><span>2 m</span><span>· 회색=무효</span></div>
+      <div class="legend">센서가 보는 방향 — 사용자 왼쪽 센서 A 가 화면 오른쪽</div>`;
+    el.dataset.built = "1";
+  }
+  const cells = el.querySelectorAll(".grid i");
+  for (let i = 0; i < 64; i++) {
+    const c = cells[i];
+    const mm = s.grid ? s.grid[i] : null, ok = s.valid ? s.valid[i] : false;
+    if (mm != null && ok) {
+      c.style.background = distColor(mm);
+      c.textContent = Math.round(mm / 10);
+      c.className = mm < 900 ? "near" : "";
+    } else {
+      c.style.background = ""; c.textContent = s.have ? "·" : ""; c.className = "";
+    }
+  }
+  el.querySelector(".age").textContent = s.have ? (s.age_ms != null ? `${s.age_ms} ms 전` : "") : "프레임 없음";
+  el.querySelector(".sub").innerHTML = s.have
+    ? `유효 <b class="num">${s.valid_count}/${s.zone_count}</b> · 최소 <b class="num">${s.min_mm == null ? "-" : (s.min_mm / 10).toFixed(0) + " cm"}</b> · 칸=cm`
+    : `<span class="empty">센서 프레임 없음</span>`;
+}
+
+function renderSvc(p) {
+  if (!p) { $("svcLabel").textContent = "-"; $("svcConf").textContent = "자세 서비스 응답 없음"; $("probs").innerHTML = ""; return; }
+  // hub 하한(demo-b: 졸음 0.80 · 엎드림 0.99) 아래면 화면엔 떠도 hub 는 세지 않는다 — 그 사실을 라벨 옆에
+  const floor = p.floors ? p.floors[p.posture] : undefined;
+  $("svcLabel").innerHTML = esc(p.valid ? p.label : `${p.label} (입력 없음)`) +
+    (p.hub_note ? ` <span class="hubIgnore">${esc(p.hub_note)}</span>` : floor != null && p.valid ? ` <span class="hubCount">hub 셈 (≥ ${floor.toFixed(2)})</span>` : "");
+  const r = p.rules;
+  $("svcRules").innerHTML = r ? (r.model_raw ? `<div class="raw">모델 원 출력(게이트·규칙 전): ${esc(r.model_raw)}</div>` : "") +
+    r.lines.map(x => `<div class="${/켜짐 →|적용 중|막음/.test(x) ? "on" : ""}">${esc(x)}</div>`).join("") : "";
+  $("svcConf").textContent = `${p.posture} · 신뢰도 ${p.conf == null ? "-" : p.conf.toFixed(3)} · 센서 ${p.online_sensors ?? "-"}개${p.misplaced ? " · misplaced" : ""}`;
+  $("svcModel").textContent = p.model;
+  const top = p.probs.reduce((a, b) => (b[2] > a[2] ? b : a), p.probs[0] || ["", "", 0]);
+  $("probs").innerHTML = p.probs.map(([l, ko, v]) =>
+    `<div class="prow ${l === top[0] ? "top" : ""} ${l === "face_down" ? "fd" : ""}"><span>${esc(ko)}</span><div class="track"><i style="width:${(v * 100).toFixed(1)}%"></i></div><span class="num">${v.toFixed(3)}</span></div>`).join("");
+}
+
+function renderFaceDown(fd) {
+  const cur = fd.current, mx = fd.max, goal = fd.goal;
+  const v = cur.smooth;
+  const hit = v != null && v >= goal;
+  $("fd").className = "panel" + (hit ? " goal" : "");
+  $("fdVal").textContent = f3(v);
+  $("fdVal").className = "num " + (hit ? "ok" : v != null && v >= 0.9 ? "pend" : "");
+  $("fdMark").innerHTML = v == null ? `<span class="empty">자세 서비스 응답 없음</span>`
+    : hit ? `<span class="ok">✓ 0.99 이상</span>` : `<span class="empty">0.99 까지 ${(goal - v).toFixed(3)}</span>`;
+  const cell = x => `<span class="num ${x != null && x >= goal ? "ok" : ""}">${f3(x)}</span>`;
+  $("fdGrid").innerHTML = `<span class="h"></span><span class="h num">smooth(라벨)</span><span class="h num">instant</span><span class="h num">A · B</span>` +
+    `<span class="k">지금</span>${cell(cur.smooth)}${cell(cur.instant)}<span class="num">${f3(cur.A)} · ${f3(cur.B)}</span>` +
+    `<span class="k">최고</span>${cell(mx.smooth)}${cell(mx.instant)}<span class="num">${f3(mx.A)} · ${f3(mx.B)}</span>`;
+  $("fdHits").innerHTML = `0.99 이상: smooth <b>${fd.hits.smooth}</b>회 · instant <b>${fd.hits.instant}</b>회` +
+    (fd.last_hit ? ` · 마지막 <span class="ok">${fd.last_hit}</span>` : ` · <span class="empty">아직 없음</span>`) +
+    ` · 최근 60 s 최고 ${f3(fd.max_recent)}`;
+  $("fdSamples").textContent = `${fd.samples} 표본`;
+  const rr = lastRules;
+  if (rr) $("fdHits").innerHTML += rr.face_down_rule ? ` · <span class="ok">엎드림 규칙(d) 켜짐 → 서비스가 0.995 로</span>` : ` · <span class="empty">엎드림 규칙 꺼짐</span>`;
+  // 막대: 0.80 ~ 1.00 을 높이로(0.99 선이 보이게), 0.99 이상은 초록
+  const lo = 0.8, y = x => Math.max(0, Math.min(1, (x - lo) / (1 - lo))) * 100;
+  $("spark").innerHTML = fd.spark.map(([s, i]) => { const m = Math.max(s, i); return `<i class="${m >= goal ? "hit" : ""}" style="height:${y(m).toFixed(0)}%"></i>`; }).join("") +
+    `<span class="goal" style="bottom:${y(goal)}%"></span><span class="lbl" style="bottom:${y(goal) + 2}%">0.99 · 최근 60 s</span>`;
+}
+
+function kv(rows) { return rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join(""); }
+
+function placeHtml(pl) {
+  const names = [["left", "왼쪽"], ["center", "가운데"], ["right", "오른쪽"]];
+  return `<span class="place">${names.map(([k, n]) => `<span class="${k === pl ? "on" : ""}">${n}</span>`).join("")}</span>` + (pl ? "" : ` <span class="empty">-</span>`);
+}
+
+function renderJudge(ph, p, profile) {
+  $("fsm").textContent = ph.fsm_state;
+  $("fsm").style.color = PHASE_COLOR[ph.phase] || "var(--fg)";
+  $("fsmMeta").textContent = `단계 ${ph.phase} · 맥락 ${ph.context}`;
+  $("seq").textContent = ph.seq == null ? "-" : `seq ${ph.seq}`;
+  const meter = (v, t, b, color) => { $(t).textContent = f2(v); $(b).style.width = v == null ? "0" : (v * 100).toFixed(1) + "%"; $(b).style.background = color; };
+  meter(ph.fatigue, "fatT", "fatB", ph.fatigue >= 0.7 ? "var(--bad)" : ph.fatigue >= 0.45 ? "var(--warn)" : "var(--ok)");
+  meter(ph.focus, "focT", "focB", "var(--accent)");
+  $("judgeKv").innerHTML = kv([
+    ["원인·게이트", `${esc(ph.cause)} · ${esc(ph.gate)}` + (ph.reasons !== "-" ? ` <span class="empty">· ${esc(ph.reasons)}</span>` : "")],
+    ["자세(hub)", esc(ph.hub_posture)],
+    ["재실", `${esc(ph.presence)} · ${esc(ph.place)} · mmWave ${esc(ph.mmwave_distance)}`],
+    ["장치 위치", placeHtml(p && p.placement)],
+    ["프로필", esc(profile)],
+    ["개입 선택 개인화", esc(ph.explanation)],
+    ["2단계 피로 관찰", `${esc(ph.stage2)} <span class="empty">(판정 무관)</span>`],
+    ["반응 학습", esc(ph.learning)],
+  ]);
+}
+
+function rawCell(v) {
+  const cls = v === "true" ? "t" : v === "false" ? "f" : v === "null" ? "n" : "";
+  return `<span class="v ${cls}">${esc(v)}</span>`;
+}
+function renderRaw(sections) {
+  const WIDE = {tof_feature: 1, keystroke: 1};
+  $("raw").innerHTML = sections.filter(s => s.key !== "keystroke").map(s => {
+    const stale = s.age_s != null && s.age_s > 15;
+    const src = `${esc(s.source)}${s.meta ? " · " + esc(s.meta) : ""}${s.age_s != null ? ` · ${s.age_s.toFixed(1)} s 전` : ""}`;
+    const rows = s.rows.length ? s.rows.map(([k, v]) => `<span class="k" title="${esc(k)}">${esc(k.replace(/^tof_service\./, "svc.").replace(/^co2_window\./, "win."))}</span>${rawCell(v)}`).join("") : (s.source === "-" ? `<span class="empty">출처 없음 — /raw 에 other 블록이 없고 MQTT 토픽·hub 요약에도 없음</span>` : `<span class="empty">아직 없음</span>`);
+    return `<div class="sec sec-${s.key} ${WIDE[s.key] ? "wide" : ""}"><h4>${esc(s.title)}</h4><div class="src ${stale ? "stale" : ""}">${src}</div><div class="rkv mono">${rows}</div></div>`;
+  }).join("");
+}
+
+function renderDevices(devs) {
+  $("devices").innerHTML = `<div class="empty" style="font-size:12px">기기별 마지막 명령 · BLE 결과(Pi 5 실행기)</div>` + devs.map(d =>
+    `<div><b>${esc(d.name)}</b>${esc(d.value)} <span class="${d.ok === true ? "ok" : d.ok === false ? "bad" : "pend"}">${esc(d.mark)}</span>${d.node ? `<span class="node">${esc(d.node)}</span>` : ""}</div>`).join("");
+}
+
+function renderControl(c, ph) {
+  $("ctlHead").textContent = c.headline;
+  $("ctlHead").className = c.kind;
+  $("ctlTime").textContent = c.time || "";
+  const bits = [];
+  if (c.kind !== "idle") bits.push(`<b>${esc(c.gate)}</b>`);
+  bits.push(`원인 <b>${esc(c.cause)}</b>`);
+  if (c.origin) bits.push(esc(c.origin));
+  bits.push(`이유 ${esc(c.reason)}`);
+  if (c.status && c.status !== "-") bits.push(`<span class="${c.status.startsWith("✓") ? "ok" : c.status.startsWith("✗") ? "bad" : "pend"}">${esc(c.status)}</span>`);
+  bits.push(`hub 에피소드 ${esc(ph.episode)}`);
+  $("ctlDetail").innerHTML = bits.join(" · ");
+  $("ctlCmds").innerHTML = c.commands.length ? c.commands.map(l =>
+    `<div><span class="t">${l.time}</span>${esc(l.device)} · ${esc(l.action)} → <span class="${l.ok === true ? "ok" : l.ok === false ? "bad" : "pend"}">${esc(l.result)}</span>` +
+    `${l.by ? ` <span class="empty">(${esc(l.by)}${l.result_time ? " " + l.result_time : ""})</span>` : ""}${c.kind === "idle" ? ' <span class="empty">· 지난 명령</span>' : ""}</div>`).join("")
+    : `<div class="empty">아직 받은 제어 명령 없음</div>`;
+}
+
+const fmt = (v, d = 0, u = "") => v == null ? "-" : v.toFixed(d) + u;
+function renderKeystroke(k) {
+  const st = $("ksStatus");
+  st.textContent = k.status;
+  st.className = k.ok ? "ok" : (k.status === "수신 끊김" || k.status === "유효하지 않은 표본") ? "bad" : "";
+  const m = (label, val, sub) => `<div class="m">${label}<b>${val}</b>${sub ? `<span>${sub}</span>` : ""}</div>`;
+  $("ksGrid").innerHTML =
+    m("키 누름 유지", fmt(k.dwell_mean_ms, 0, " ms"), `±${fmt(k.dwell_std_ms)}`) +
+    m("키 입력 간격", fmt(k.flight_mean_ms, 0, " ms"), `±${fmt(k.flight_std_ms)}`) +
+    m("입력 수", `${fmt(k.event_count)} · ${fmt(k.rate_per_min, 0)}/분`, `${fmt(k.window_s)} s 창`) +
+    m("리듬 CV", fmt(k.flight_cv, 2)) + m("공백 · 교정", `${fmt(k.idle_ratio == null ? null : k.idle_ratio * 100)} · ${fmt(k.correction_rate == null ? null : k.correction_rate * 100)} %`) +
+    m("valid · typing", `${k.valid == null ? "-" : k.valid} · ${k.typing_active == null ? "-" : k.typing_active}`);
+  const ln = k.link;
+  $("ksMeta").innerHTML = `${esc(k.node)} · 표본 ${k.age_s == null ? "-" : k.age_s.toFixed(1) + " s 전"} · 연결 <span class="${ln.status === "online" ? "ok" : "bad"}">${esc(ln.status)}</span>` +
+    `${ln.reconnects != null ? ` (재연결 ${ln.reconnects})` : ""} · <span style="color:#5fd3b0">유지</span> / <span style="color:#d3a15f">간격</span> 최근 ${k.spark.length}개`;
+  const sp = k.spark;
+  if (sp.length < 2) { $("ksSpark").innerHTML = `<div class="empty" style="font-size:12px;padding:6px">표본 2개 이상이면 추이를 그림</div>`; return; }
+  const max = Math.max(100, ...sp.map(([d, f]) => Math.max(d, f))) * 1.1;
+  const W = 300, H = 60, pts = i => sp.map((v, j) => `${(j / (sp.length - 1) * W).toFixed(1)},${(H - v[i] / max * H).toFixed(1)}`).join(" ");
+  $("ksSpark").innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline fill="none" stroke="#5fd3b0" stroke-width="2" vector-effect="non-scaling-stroke" points="${pts(0)}"/>` +
+    `<polyline fill="none" stroke="#d3a15f" stroke-width="2" vector-effect="non-scaling-stroke" points="${pts(1)}"/></svg>`;
+}
+
+function renderMiniTof(el, s) {
+  if (!el.dataset.built) { el.innerHTML = `<div class="grid">${"<i></i>".repeat(64)}</div><div class="nm">${esc(s.name)}</div>`; el.dataset.built = "1"; }
+  const cells = el.querySelectorAll(".grid i");
+  for (let i = 0; i < 64; i++) {
+    const mm = s.grid ? s.grid[i] : null, ok = s.valid ? s.valid[i] : false;
+    cells[i].style.background = mm != null && ok ? distColor(mm) : "";
+  }
+}
+
+function renderVideo(d) {
+  const v = d.video;
+  $("vFake").style.display = d.mode === "fake" ? "inline" : "none";
+  d.raw.sensors.forEach(s => renderMiniTof($("vtof" + s.id), s));
+  $("vPosture").textContent = v.posture;
+  $("vConf").textContent = (v.posture_conf == null ? "자세 서비스 · Pi 4 GRU" : `신뢰도 ${(v.posture_conf * 100).toFixed(0)} % · Pi 4 GRU`) +
+    (d.posture && d.posture.hub_note ? ` · ${d.posture.hub_note}` : "");
+  $("vChips").innerHTML = v.chips.map(c => `<span>${esc(c)}</span>`).join("");
+  const f = v.fatigue;
+  $("vFatT").textContent = f == null ? "-" : f.toFixed(2);
+  $("vFatB").style.width = f == null ? "0" : (f * 100).toFixed(1) + "%";
+  $("vFatB").style.background = f >= 0.7 ? "var(--bad)" : f >= 0.45 ? "var(--warn)" : "var(--ok)";
+  $("vEnv").textContent = v.env;
+  $("vDecision").textContent = v.decision;
+  $("vDecStatus").textContent = v.decision_status === "-" ? "" : v.decision_status;
+}
+
+// 화면 전환: /?mode=video|virtual · 단추 · V(영상)·G(가상 기기) 키. &bg=green 이면 크로마키 초록 배경
+const Q = new URLSearchParams(location.search);
+function setMode(mode) {
+  document.body.dataset.mode = mode;
+  if (mode === "dev") Q.delete("mode"); else Q.set("mode", mode);
+  history.replaceState(null, "", location.pathname + (Q.toString() ? "?" + Q : ""));
+}
+setMode(["video", "virtual", "fan"].includes(Q.get("mode")) ? Q.get("mode") : "dev");
+if (Q.get("bg") === "green") $("video").classList.add("green");
+document.querySelectorAll("[data-go]").forEach(b => b.onclick = () => setMode(b.dataset.go));
+document.addEventListener("keydown", e => {
+  if (e.target.closest && e.target.closest("input,select,textarea")) return;
+  const m = document.body.dataset.mode;
+  if (e.key === "v" || e.key === "V") setMode(m === "video" ? "dev" : "video");
+  if (e.key === "g" || e.key === "G") setMode(m === "virtual" ? "dev" : "virtual");
+  if (e.key === "f" || e.key === "F") setMode(m === "fan" ? "virtual" : "fan");
+});
+
+// ---------------- 글씨 크기: --k 배율(0.8~2.5). 처음엔 창이 좁으면(노트북 1440 폭) 1.6, 1920 이상이면 1.2
+const KSTORE = "devview.k2";
+function loadK() { try { const v = parseFloat(localStorage.getItem(KSTORE)); if (v >= 0.8 && v <= 2.5) return v; } catch (e) {} return innerWidth < 1700 ? 1.6 : 1.2; }
+let K = loadK();
+function applyK() {
+  document.documentElement.style.setProperty("--k", K.toFixed(2));
+  document.documentElement.style.setProperty("--kv", Math.min(innerWidth / 1920, innerHeight / 1080).toFixed(3));
+  document.body.classList.toggle("narrow", innerWidth / K < 1700);
+  document.querySelectorAll(".kval").forEach(e => e.textContent = `${Math.round(K * 100)}%`);
+}
+function stepK(d) { K = Math.min(2.5, Math.max(0.8, Math.round((K + d * 0.1) * 10) / 10)); try { localStorage.setItem(KSTORE, String(K)); } catch (e) {} applyK(); }
+document.querySelectorAll("[data-k]").forEach(b => b.onclick = () => stepK(Number(b.dataset.k)));
+document.addEventListener("keydown", e => {
+  if (e.target.closest && e.target.closest("input,select,textarea")) return;
+  if (e.key === "-" || e.key === "_") stepK(-1);
+  if (e.key === "=" || e.key === "+") stepK(1);
+});
+addEventListener("resize", applyK);
+applyK();
+
+// ---------------- 가상 기기 화면
+async function post(path, body) {
+  // X-Devview: 다른 사이트가 이 로컬 서버로 몰래 보내지 못하게(서버가 이 머리글을 요구)
+  const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json", "X-Devview": "1"}, body: JSON.stringify(body)});
+  return r.json();
+}
+const LS = (() => { try { return window.localStorage; } catch (e) { return null; } })();
+function pid(key) {
+  // 페르소나마다 고정 profile_id(V18 과 같은 'p'+16 hex 난수). 이 브라우저에만 기억 — 다시 고르면 같은 사람으로 이어 배운다
+  let v = null;
+  try { v = LS && LS.getItem("devview.pid." + key); } catch (e) {}
+  if (!v) {
+    const b = new Uint8Array(8); crypto.getRandomValues(b);
+    v = "p" + Array.from(b, x => x.toString(16).padStart(2, "0")).join("");
+    try { LS && LS.setItem("devview.pid." + key, v); } catch (e) {}
+  }
+  return v;
+}
+const OPT = {age_band: ["10s", "20s", "30s", "40s", "50s+"], light_pref: ["low", "mid", "high"], sound_pref: ["off", "low", "mid", "high"],
+  wind_pref: ["off", "low", "mid", "high"], placement: ["left", "center", "right"]};
+const LAB = {age_band: "연령대", sleep_hours: "수면 h", bedtime: "잠드는 시각", wake_time: "일어나는 시각", light_pref: "조명", sound_pref: "소리",
+  wind_pref: "바람", placement: "장치 위치", focus_help: "도움 순서"};
+const HELP = [["light", "조명"], ["wind", "선풍기"], ["sound", "알림음"], ["voice", "음성 안내"], ["break", "휴식"]];
+let persona = null, presets = null, custom = null, pending = null;
+function personaKeys() { return [["student_exam", "수험생"], ["student_univ", "대학생"], ["custom", "직접 설정"]]; }
+function formData() {
+  const f = $("pform"), d = {};
+  for (const k of Object.keys(OPT)) d[k] = f.querySelector(`[name=${k}]`).value;
+  d.sleep_hours = Number(f.querySelector("[name=sleep_hours]").value);
+  d.bedtime = f.querySelector("[name=bedtime]").value;
+  d.wake_time = f.querySelector("[name=wake_time]").value;
+  d.focus_help = Array.from(f.querySelectorAll("[name=help]:checked"), x => x.value);
+  return d;
+}
+function buildForm(data, editable) {
+  const sel = k => `<label>${LAB[k]}</label><select name="${k}">${OPT[k].map(o => `<option ${o === data[k] ? "selected" : ""}>${o}</option>`).join("")}</select>`;
+  $("pform").innerHTML = sel("age_band") + `<label>${LAB.sleep_hours}</label><input name="sleep_hours" type="number" min="3" max="12" step="0.5" value="${data.sleep_hours}">` +
+    `<label>${LAB.bedtime}</label><input name="bedtime" type="time" value="${data.bedtime}">` + `<label>${LAB.wake_time}</label><input name="wake_time" type="time" value="${data.wake_time}">` +
+    sel("light_pref") + sel("sound_pref") + sel("wind_pref") + sel("placement") +
+    `<label>${LAB.focus_help}</label><div class="helps">${HELP.map(([k, n]) => `<label><input type="checkbox" name="help" value="${k}" ${(data.focus_help || []).includes(k) ? "checked" : ""}> ${n}</label>`).join("")}</div>`;
+  $("pform").setAttribute("aria-disabled", editable ? "false" : "true");
+}
+function pickPersona(key) {
+  persona = key;
+  pending = null; $("pconfirm").style.display = "none";
+  const data = key === "custom" ? (custom || presets.student_univ.data) : presets[key].data;
+  buildForm(data, key === "custom");
+  $("pHint").textContent = key === "custom" ? "값을 고친 뒤 보내기" : "V18 기본 페르소나 값(바꾸려면 직접 설정)";
+  renderPersonaButtons();
+}
+function renderPersonaButtons() {
+  $("pbtns").innerHTML = personaKeys().map(([k, n]) => `<button data-p="${k}" class="${k === persona ? "on" : ""}">${n}</button>`).join("");
+  $("pbtns").querySelectorAll("button").forEach(b => b.onclick = () => pickPersona(b.dataset.p));
+}
+$("pSend").onclick = () => {
+  if (!persona) return;
+  const data = Object.assign({profile_id: pid(persona)}, persona === "custom" ? formData() : presets[persona].data);
+  if (persona === "custom") custom = formData();
+  pending = {data, label: personaKeys().find(x => x[0] === persona)[1]};
+  $("pPreview").textContent = JSON.stringify(data, null, 1);
+  $("pconfirm").style.display = "block";
+};
+$("pNo").onclick = () => { pending = null; $("pconfirm").style.display = "none"; };
+$("pYes").onclick = async () => {
+  if (!pending) return;
+  const p = pending; pending = null; $("pconfirm").style.display = "none";
+  $("pHint").textContent = "보내는 중…";
+  const r = await post("/api/profile", p).catch(e => ({ok: false, error: e.message}));
+  $("pHint").textContent = r.ok ? `${p.label} 보냄 — hub 확인 대기(state/phase 10 s 주기)` : `보내기 실패: ${r.error}`;
+};
+
+let cardMsg = "", armed = null, cardKey = "", dismissedAuto = null, lastToast = null;
+// 새 기기 알림을 오른쪽 위에 6 초 띄운다(가상 기기 화면). 처음 열 때 쌓여 있던 것은 띄우지 않는다
+function showToasts(notices) {
+  const newest = notices.length ? notices[0].id : 0;
+  if (lastToast == null) { lastToast = newest; return; }
+  notices.filter(n => n.id > lastToast).reverse().forEach(n => {
+    const el = document.createElement("div");
+    el.className = "toast " + (n.tone || "");
+    el.innerHTML = `${n.icon} ${esc(n.text)}<small>가상 · ${n.t}</small>`;
+    $("toasts").appendChild(el);
+    setTimeout(() => el.remove(), 6000);
+    while ($("toasts").children.length > 4) $("toasts").firstChild.remove();
+  });
+  lastToast = Math.max(lastToast, newest);
+}
+const VLABEL = {accept: "수락", reject: "거절", undo: "되돌리기"};
+// 한 번 누르면 '한 번 더 눌러 보내기'(4 s), 두 번째에 보낸다 — 실수로 hub 에 라벨을 보내지 않게
+async function answer(rid, verdict) {
+  const now = Date.now();
+  if (!armed || armed.verdict !== verdict || armed.rid !== rid || now > armed.until) {
+    armed = {verdict, rid, until: now + 4000};
+    cardMsg = `'${VLABEL[verdict]}' — 한 번 더 누르면 hub 에 보냅니다(deskmate/feedback/user, 학습 라벨)`;
+    cardKey = ""; return;
+  }
+  armed = null; cardKey = "";
+  const r = await post("/api/feedback", {request_id: rid, verdict}).catch(e => ({ok: false, error: e.message}));
+  const n = new Date(), z = x => String(x).padStart(2, "0");
+  cardMsg = r.ok ? `${VLABEL[verdict]} 보냄 ${z(n.getHours())}:${z(n.getMinutes())}:${z(n.getSeconds())}` : `보내기 실패: ${r.error}`;
+}
+
+// ---------------- 무드등 올릴 시점: 체크리스트 + 지난 15 분 피로도 그래프
+const STATE_SHADE = {focus: "rgba(76,195,138,.10)", suspect: "rgba(245,185,58,.16)", fatigue: "rgba(240,106,106,.18)",
+  action: "rgba(240,106,106,.32)", other: "rgba(143,156,255,.10)"};
+function shadeOf(st) {
+  if (/^FOCUS/.test(st)) return "focus";
+  if (st === "FATIGUE_SUSPECT") return "suspect";
+  if (st === "FATIGUE" || st === "CAUSE_ANALYSIS" || st === "MONITOR" || st === "ESCALATE") return "fatigue";
+  if (/^ACTION_/.test(st)) return "action";
+  return "other";
+}
+function trigChart(tr) {
+  const W = 900, H = 220, L = 36, R = 8, T = 10, B = 22, now = tr.now;
+  // 받은 만큼만 넓힌다: 최소 2 분, 최대 window_s(15 분)
+  const span = Math.min(tr.window_s, Math.max(120, tr.series.length ? now - tr.series[0].at + 20 : 120));
+  const x = at => L + (W - L - R) * (1 - (now - at) / span), y = c => T + (H - T - B) * (1 - Math.max(0, Math.min(1, c)));
+  let g = "";
+  const sr = tr.series;
+  for (let i = 0; i < sr.length; i++) {   // 상태별 배경
+    const a = sr[i].at, b = i + 1 < sr.length ? sr[i + 1].at : now;
+    if (b < now - span) continue;
+    g += `<rect x="${x(Math.max(a, now - span)).toFixed(1)}" y="${T}" width="${Math.max(0, x(b) - x(Math.max(a, now - span))).toFixed(1)}" height="${H - T - B}" fill="${STATE_SHADE[shadeOf(sr[i].state)]}"/>`;
+  }
+  const rl = tr.rules || {};
+  [["confirm", "#f06a6a", "확정"], ["suspect", "#f5b93a", "의심"], ["natural", "#4cc38a", "회복"]].forEach(([k, col, nm]) => {
+    if (rl[k] == null) return;
+    g += `<line x1="${L}" x2="${W - R}" y1="${y(rl[k])}" y2="${y(rl[k])}" stroke="${col}" stroke-dasharray="5 4" stroke-width="1.2"/>` +
+      `<text x="${L + 4}" y="${y(rl[k]) - 3}" fill="${col}" font-size="12">${nm} ${rl[k]}</text>`;
+  });
+  for (let v = 0; v <= 1.001; v += 0.5) g += `<text x="4" y="${y(v) + 4}" fill="#5d6578" font-size="11">${v.toFixed(1)}</text>`;
+  if (sr.length) g += `<polyline fill="none" stroke="#f3f5f8" stroke-width="2.2" points="${sr.filter(p => p.at >= now - span).map(p => `${x(p.at).toFixed(1)},${y(p.c).toFixed(1)}`).join(" ")}"/>`;
+  const MC = {lamp: "#4cc38a", card: "#f5b93a", confirm: "#f06a6a", action_auto: "#4cc38a", action_suggest: "#f5b93a", action_none: "#9aa3b5"};
+  (tr.marks || []).forEach(m => {
+    const xx = x(m.at).toFixed(1), col = MC[m.kind] || "#8f9cff";
+    g += `<line x1="${xx}" x2="${xx}" y1="${T}" y2="${H - B}" stroke="${col}" stroke-width="${m.kind === "lamp" ? 3 : 1.5}"/>` +
+      `<text x="${xx}" y="${H - 6}" fill="${col}" font-size="11" text-anchor="middle">${m.kind === "lamp" ? "💡" : m.kind === "card" ? "카드" : m.kind === "confirm" ? "확정" : "개입"}</text>`;
+  });
+  const mm = sec => sec >= 60 ? `-${(sec / 60).toFixed(sec % 60 ? 1 : 0)}분` : `-${Math.round(sec)}초`;
+  [[span, mm(span)], [span / 2, mm(span / 2)], [0, "지금"]].forEach(([ago, lab]) =>
+    g += `<text x="${x(now - ago)}" y="${H - 6}" fill="#5d6578" font-size="11" text-anchor="${ago === 0 ? "end" : "start"}">${lab}</text>`);
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${g}</svg>`;
+}
+function breakdownHtml(b) {
+  const f = v => v == null ? "-" : Number(v).toFixed(2);
+  const rows = b.rows.map(r => r.key === "posture"
+    ? `<tr><td>${esc(r.name)}</td><td class="n">${f(r.w)}</td><td class="n">${f(r.delta)}</td><td class="n">${f(r.share)}</td><td class="note">${esc(r.note)} · 추정</td></tr>`
+    : `<tr><td>${esc(r.name)}</td><td class="n">${f(r.w)}</td><td class="n">?</td><td class="n">≤ ${f(r.share_max)}</td><td class="note">${esc(r.note)}</td></tr>`).join("");
+  return `<div class="bd"><table><tr><th>신호</th><th>w</th><th>δ</th><th>몫 w·δ/Σw</th><th>근거(hub 는 자세 말고 δ 를 안 보냄)</th></tr>${rows}` +
+    `<tr class="sum"><td>합</td><td class="n">${f(b.sum_w)}</td><td></td><td class="n">${f(b.c_fsm)}</td><td class="note">FSM 점수 c_fsm (맥락 ${esc(b.ctx)}) = 자세 ${f(b.posture_share)} + 나머지 ≈ ${f(b.rest)}(추정)</td></tr>` +
+    `<tr class="sum"><td>학습기</td><td></td><td></td><td class="n">${f(b.c_adj ?? b.c_shown)}</td><td class="note">반응 학습 c_fsm ${f(b.c_fsm)} → c_adj ${f(b.c_adj ?? b.c_shown)} (α ${f(b.alpha)}) = 화면의 C_fatigue</td></tr></table>` +
+    (b.mismatch ? `<div class="warn">자세 몫 추정(${f(b.posture_share)})이 c_fsm(${f(b.c_fsm)})보다 큼 — 이 tick 에 hub 가 다른 자세 값을 썼다(추정 오차)</div>` : "") + `</div>`;
+}
+function renderTrigger(el, tr) {
+  if (!el) return;
+  if (!tr || tr.error) {
+    el.innerHTML = `<div class="th"><span class="hl no">무드등 올릴 시점 — hub 설정을 못 읽음</span></div><div class="src">${esc(tr ? tr.error : "-")} · ${esc(tr ? tr.source : "")} — --hub-config 로 보드와 같은 hub 의 config 디렉터리를 주세요</div>`;
+    return;
+  }
+  const h = tr.headline || "-", cls = /^무드등 올림/.test(h) ? "go" : tr.eta_s != null ? "wait" : "no";
+  el.innerHTML = `<div class="th"><span class="ptitle" style="margin:0"><b>무드등 올릴 시점</b> · hub 규칙(설정에서 읽음) · 유지 시간은 tick 으로 추정</span></div>` +
+    `<div class="th"><span class="hl ${cls}">${esc(h)}</span>${tr.eta_s != null ? `<span class="eta">${tr.eta_s} s</span>` : ""}</div>` +
+    `<div class="chk">${(tr.checks || []).map(c => `<div class="r"><span class="${c.ok ? "y" : "n"}">${c.ok ? "✓" : "·"}</span><span>${esc(c.name)}</span><span class="v">${esc(c.value)}</span>` +
+      (c.progress != null ? `<div class="pb"><i style="width:${(c.progress * 100).toFixed(0)}%"></i></div>` : "") + `</div>`).join("")}</div>` +
+    (tr.breakdown ? breakdownHtml(tr.breakdown) : "") +
+    `<div>${trigChart(tr)}<div class="lg">흰 선 = C_fatigue · 배경 = FSM(초록 집중·노랑 의심·빨강 피로/개입) · 세로선: 💡 무드등 명령 · 카드 · 확정 · 개입(자동/제안)</div></div>` +
+    (tr.prior ? `<div class="prior">개입 선택 개인화 기준(첫 설정): ${esc(tr.prior)}</div>` : "") +
+    `<div class="src">설정: ${esc(tr.source)} · 프로파일 ${esc(tr.profile || "-")} · hub 는 유지 타이머를 싣지 않아 '남은 초'는 state/phase tick 으로 추정(engine.py 규칙)</div>`;
+}
+
+// ---------------- 선풍기 그림: 풍량에 비례한 회전(부드럽게 빨라지고 느려진다), 꺼지면 멈춤
+const fanAnim = {angle: 0, speed: 0, target: 0, natural: false, last: performance.now()};
+function fanSvg(id) {
+  const blades = [0, 120, 240].map(a => `<path transform="rotate(${a} 100 100)" d="M100 100 C 112 70, 138 38, 120 18 C 104 2, 86 20, 92 52 C 95 70, 97 86, 100 100 Z" fill="url(#bl${id})"/>`).join("");
+  return `<svg viewBox="0 0 200 200"><defs><radialGradient id="bl${id}" cx="50%" cy="30%"><stop offset="0" stop-color="#9fe7c4"/><stop offset="1" stop-color="#3fae80"/></radialGradient></defs>` +
+    `<circle cx="100" cy="100" r="96" fill="#0f141c" stroke="#2a3040" stroke-width="3"/>` +
+    `<g class="rot">${blades}</g><circle cx="100" cy="100" r="13" fill="#1d2430" stroke="#4cc38a" stroke-width="3"/>` +
+    [0, 30, 60, 90, 120, 150].map(a => `<line transform="rotate(${a} 100 100)" x1="100" y1="6" x2="100" y2="194" stroke="#2a3040" stroke-width="1.5"/>`).join("") +
+    `<circle cx="100" cy="100" r="96" fill="none" stroke="#3a4152" stroke-width="5"/></svg>`;
+}
+function fanTarget(f) {
+  if (!f || !f.power) return 0;
+  if (f.speed != null) return 0.25 + 2.0 * f.speed / 100;      // 회전/초
+  const lv = f.level == null ? 2 : f.level;                     // 풍량 0~3(정보 없으면 가운데)
+  return lv === 0 ? 0 : [0, 0.8, 1.5, 2.3][lv] || 1.5;
+}
+function renderFan(el, f) {
+  if (!el) return;
+  if (!el.dataset.built) { el.innerHTML = `${fanSvg(el.id)}<div><div class="fs"></div><div class="fw"></div></div>`; el.dataset.built = "1"; }
+  const on = f && f.power;
+  const st = el.querySelector(".fs");
+  st.className = "fs " + (on ? "on" : "off");
+  st.textContent = !f ? "-" : on ? `켜짐 · 풍량 ${f.level ?? "정보 없음"}${f.speed != null ? " · 속도 " + f.speed : ""}${f.mode ? " · " + f.mode : ""}` : "꺼짐";
+  const w = f && f.why;
+  el.querySelector(".fw").innerHTML = w ? `켠 이유: ${esc(w.cause || "-")} · ${esc(w.gate || "")}${w.arm ? " · " + esc(w.arm) : ""}${w.reason ? "<br>" + esc(w.reason) : ""}<br><span class="empty">${esc(w.text)} · ${w.t}</span>`
+    : `<span class="empty">hub 선풍기 명령이 오면 돌기 시작합니다(가상)</span>`;
+}
+function fanLoop(now) {
+  const dt = Math.min(0.1, (now - fanAnim.last) / 1000); fanAnim.last = now;
+  const target = fanAnim.target * (fanAnim.natural ? (0.75 + 0.25 * Math.sin(now / 900)) : 1);
+  fanAnim.speed += (target - fanAnim.speed) * Math.min(1, dt * 1.2);   // 부드럽게 돌기 시작·멈춤
+  fanAnim.angle = (fanAnim.angle + fanAnim.speed * 360 * dt) % 360;
+  document.querySelectorAll(".fanbox .rot").forEach(g => g.setAttribute("transform", `rotate(${fanAnim.angle.toFixed(1)} 100 100)`));
+  requestAnimationFrame(fanLoop);
+}
+requestAnimationFrame(fanLoop);
+
+// 휴식 알림·자동 안내 닫기: 한 번 누르면 hub 에 dismiss(닫은 횟수만 셈 — 판정·제어에 안 들어가 두 번 확인하지 않는다)
+document.addEventListener("click", async e => {
+  const b = e.target.closest && e.target.closest("[data-dismiss]");
+  if (!b) return;
+  b.disabled = true; b.textContent = "닫는 중…";
+  const r = await post("/api/feedback", {request_id: b.dataset.dismiss, verdict: "dismiss"}).catch(x => ({ok: false, error: x.message}));
+  if (!r.ok) { b.disabled = false; b.textContent = "닫기 실패"; b.title = r.error; }
+});
+function renderRest(el, r) {
+  if (!el) return;
+  el.className = "restB" + (r ? " on" : "");
+  if (!r) { el.innerHTML = ""; return; }
+  const mm = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  el.innerHTML = `<span class="ic">${r.ended ? "✅" : "☕"}</span><div><div class="msg">${esc(r.ended ? "휴식 끝 — 다시 시작해요" : r.message)}</div>` +
+    `<div class="sub"><span class="lb ${r.source === "notice" ? "" : "old"}">${esc(r.label)}</span>${r.reason ? " " + esc(r.reason) : ""}` +
+    `${r.duration_s ? ` · 휴식 ${Math.round(r.duration_s)} s` : ""}${r.counts ? ` · <span class="empty">hub ${esc(r.counts)}</span>` : ""}</div></div>` +
+    (r.left_s != null && !r.ended ? `<span class="cd">${mm(r.left_s)}</span>` : "") +
+    (r.request_id && !r.ended && !r.dismissed ? `<button class="btn" data-dismiss="${esc(r.request_id)}">닫기</button>` :
+     r.dismissed ? `<span class="empty">닫음</span>` : "");
+}
+
+function renderVirtual(d) {
+  const v = d.virtual, P = d.persona, ph = d.phase;
+  renderRest($("restV"), v.rest); renderRest($("vRest"), v.rest);
+  $("infoV").innerHTML = (v.info || []).map(x => `<div class="info"><span>💬</span><b>자동 안내</b><span>${esc(x.text)}</span>` +
+    `<span class="m">${esc(x.arm_label || "")}${x.channel ? " · " + esc(x.channel) : ""} · ${x.t} · ${x.left_s} s</span>` +
+    (x.request_id ? `<button class="btn" data-dismiss="${esc(x.request_id)}">닫기</button>` : "") + `</div>`).join("");
+  fanAnim.target = fanTarget(v.fan); fanAnim.natural = !!(v.fan && v.fan.mode === "natural");
+  renderFan($("fanV"), v.fan); renderFan($("fanF"), v.fan);
+  const L = d.laptop;
+  $("lapStat").innerHTML = L && L.enabled
+    ? `💻 노트북 대역 <span class="on">켜짐</span> · 화면 <b>${L.cur.brightness ?? "-"} %</b> · 볼륨 <b>${L.cur.volume == null ? "-" : Math.round(L.cur.volume * 100) + " %"}</b> · 원래 ${L.orig.brightness ?? "-"} % / ${L.orig.volume == null ? "-" : Math.round(L.orig.volume * 100) + " %"} · ${esc(L.result_policy)}${L.error ? ` · <span class="bad">${esc(L.error)}</span>` : ""}`
+    : `💻 노트북 대역 <span class="off">꺼짐</span>(--act-laptop 으로 켬)`;
+  $("pPrior").textContent = P.prior ? `hub 가 반영한 첫 설정(개입 선택 개인화 기준): ${P.prior}` : "";
+  $("vFake2").style.display = d.mode === "fake" ? "inline" : "none";
+  $("vdMqtt").className = "dot" + (d.links.mqtt.ok ? " on" : "");
+  if (!presets) { presets = P.presets; pickPersona("student_exam"); }
+  $("pSend").disabled = !P.enabled;
+  const sent = P.sent;
+  $("pstatus").innerHTML =
+    `보낸 프로필: ${sent ? `<b>${esc(sent.label || "-")}</b> <span class="mono">${esc(sent.profile_id)}</span> · ${sent.t}` : "아직 없음"}<br>` +
+    `hub 가 쓰는 프로필: <span class="mono">${esc(P.hub_active)}</span> ` +
+    (sent ? (P.ack ? `<span class="ok">✓ hub 적용 확인</span>` : `<span class="pend">… 확인 대기</span>`) : "") +
+    (Object.keys(P.hub_fields).length ? `<br><span class="empty">hub 개인화: ${esc(Object.entries(P.hub_fields).map(([k, x]) => k + " " + x).join(" · "))}</span>` : "") +
+    `<br>hub 시연 프로파일(DESKMATE_PROFILE): <b>${esc(P.hub_profile)}</b> <span class="empty">— demo-b ↔ demo-b-study 는 hub 재시작이 필요해 여기서 바꾸지 않음(hub.env)</span>` +
+    (P.enabled ? "" : `<br><span class="bad">보내기 꺼짐(--read-only)</span>`);
+  // hub 지금
+  $("vnowState").textContent = `${FSM_KO_JS[ph.fsm_state] || ph.fsm_state}`;
+  $("vnowState").style.color = PHASE_COLOR[ph.phase] || "var(--fg)";
+  $("vnowTime").textContent = `${ph.fsm_state} · seq ${ph.seq ?? "-"}`;
+  $("vnowHead").textContent = d.control.headline;
+  $("vnowMeta").textContent = `피로도 ${ph.fatigue_text} · 원인 ${ph.cause} · 게이트 ${ph.gate} · 개인화 ${ph.explanation}`;
+  // 앱 화면(가상): 제안 카드 > 자동 실행 알림 > 평소 화면 — Pi 5 앱과 같은 우선순위·문구
+  const c = v.card, u = v.undo, au = v.auto && v.auto.key !== dismissedAuto ? v.auto : null;
+  $("cardBox").className = c ? "live" : au ? "auto" : "";
+  if (c) {
+    $("appMain").innerHTML = `<div id="cardTitle">${esc(c.title)}</div><div id="cardBody">${esc(c.body)}</div>`;
+  } else if (au) {
+    $("appMain").innerHTML = `<div class="autoN"><div class="lab">✓ 자동으로 실행했어요 · ${au.t}</div><div id="cardTitle">${esc(au.title)}</div>` +
+      au.effects.map(x => `<div class="eff">${esc(x)}</div>`).join("") +
+      `<div id="cardBody">이유: ${esc(au.reason)}<br><span class="empty">원하지 않으면 되돌릴 수 있어요.</span></div></div>`;
+  } else {
+    $("appMain").innerHTML = `<div class="empty">평소 화면</div><div id="appHome">${esc(v.home)}</div>`;
+  }
+  $("noticeList").innerHTML = v.notices.length ? v.notices.slice(0, 6).map(n => `<div><span class="t">${n.t}</span>${n.icon} ${esc(n.text)}</div>`).join("")
+    : `<div class="empty">기기 알림이 오면 여기에 쌓입니다(가상)</div>`;
+  showToasts(v.notices);
+  // 단추는 카드·되돌리기 대상이 바뀔 때만 다시 만든다(250 ms 마다 갈면 누르는 순간 사라질 수 있다)
+  const key = `${c ? c.request_id : ""}|${u ? u.command_id : ""}|${armed ? armed.verdict : ""}|${P.enabled}`;
+  if (key !== cardKey) {
+    cardKey = key;
+    const names = Object.assign({}, VLABEL, c ? c.buttons : {});   // 앱 단추 글자(적용할게요/괜찮아요, 예/아니오, 열게요)
+    const lab = a => armed && armed.verdict === a ? "한 번 더 → 보내기" : names[a];
+    let btns = "";
+    if (c) btns += `<button class="btn go" data-a="accept">${lab("accept")}</button><button class="btn no" data-a="reject">${lab("reject")}</button>` +
+      `<span class="empty">${esc(c.kind)}${c.arm_label ? " · " + esc(c.arm_label) : ""} · 남은 <span id="cardLeft"></span> s</span>`;
+    if (u) btns += `<button class="btn warn" data-a="undo">${lab("undo")}</button>` + (au ? `<button class="btn" id="autoOk">확인</button>` : "") +
+      `<span class="empty">자동 실행 되돌리기 · <span id="undoLeft"></span> s 안</span>`;
+    $("cardBtns").innerHTML = btns || `<span class="empty">카드·자동 실행이 오면 여기서 답합니다</span>`;
+    $("cardBtns").querySelectorAll("[data-a]").forEach(b => { b.disabled = !P.enabled; b.onclick = () => answer(c ? c.request_id : null, b.dataset.a); });
+    if ($("autoOk")) $("autoOk").onclick = () => { dismissedAuto = au.key; cardKey = ""; };   // 확인 = 이 화면에서만 알림 닫기(보내지 않음)
+  }
+  if (c && $("cardLeft")) $("cardLeft").textContent = c.left_s ?? "-";
+  if (u && $("undoLeft")) $("undoLeft").textContent = u.left_s;
+  if (armed && Date.now() > armed.until) { armed = null; cardMsg = ""; cardKey = ""; }
+  $("cardMsg").textContent = cardMsg || (P.enabled ? "" : "보내기 꺼짐(--read-only)");
+  // 기기 카드
+  $("vdevs").innerHTML = v.devices.map(x => `<div class="dcard ${x.on ? "on" : ""}"><span class="vb">가상</span><div class="ic">${x.icon}</div>` +
+    `<div class="nm">${esc(x.name)}</div><div class="st">${esc(x.state)}</div>` +
+    (x.level != null ? `<div class="bar"><i style="width:${(x.level * 100).toFixed(0)}%"></i></div>` : "") +
+    `<div class="lc">${x.last ? esc(x.last) + " · " + x.time : "아직 바뀐 적 없음"}</div></div>`).join("");
+  // 타임라인
+  const KIND = {command: "명령", card: "카드", feedback: "응답", phase_light: "단계 조명", laptop: "노트북", rest: "휴식"};
+  $("tlCount").textContent = `${v.timeline.length}`;
+  $("tl").innerHTML = v.timeline.length ? v.timeline.map(e => {
+    const why = [e.fsm_state && (FSM_KO_JS[e.fsm_state] || e.fsm_state), e.cause && ("원인 " + e.cause), e.gate && (e.gate === "auto" ? "자동" : e.gate === "suggest" ? "제안" : e.gate),
+      e.arm_label && ("arm " + e.arm_label), e.decision_source && ("결정 " + e.decision_source), e.reason].filter(Boolean).join(" · ");
+    const real = e.kind === "command" ? (e.real ? `<span class="${e.real_ok ? "ok" : "bad"}">Pi 5 실제: ${esc(e.real)}</span>` : `<span class="pend">Pi 5 실제: 결과 대기</span>`) +
+      ` · <span class="${e.virtual_ok ? "ok" : "bad"}">가상 ${e.virtual_ok ? "✓" : "✗"}</span>` : "";
+    return `<div class="row"><span class="mono empty">${e.t}</span><span class="k ${e.kind}">${KIND[e.kind] || e.kind}</span><span class="tx">${esc(e.text)}</span><span class="why">${esc(why)}</span><span class="rl">${real}</span></div>`;
+  }).join("") : `<div class="empty">아직 hub 명령·카드 없음 — 오면 여기에 '판정 → 기기' 로 쌓입니다</div>`;
+}
+const FSM_KO_JS = {IDLE: "대기", START: "시작", CONTEXT_DETECT: "맥락 판정", FOCUS_PC: "집중(PC)", FOCUS_MIXED: "집중(혼합)", FOCUS_NPC: "집중(책·필기)",
+  FOCUS_BREAK: "집중 저하", FATIGUE_SUSPECT: "피로 의심", FATIGUE: "피로 확정", CAUSE_ANALYSIS: "원인 분석", MONITOR: "효과 확인", ESCALATE: "재시도",
+  RECOVERY: "회복", ACTION_ENV: "환경 개입", ACTION_POSTURE: "자세 개입", ACTION_BREAK: "휴식 개입", REST: "휴식", END: "종료"};
+
+let logKey = "";
+function renderLog(log) {
+  const key = log.length + "|" + (log.length ? log[log.length - 1].t + log[log.length - 1].text : "");
+  if (key === logKey) return;
+  logKey = key;
+  const box = $("log");
+  const stick = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+  box.innerHTML = log.length ? log.map(e => {
+    const cls = e.kind + (e.ok === true ? " ok" : e.ok === false ? " fail" : "");
+    return `<div class="${cls}"><span class="t">${e.t}</span><span class="k">${e.kind}</span><span class="x">${esc(e.text)}</span></div>`;
+  }).join("") : `<div class="empty">아직 명령·결과·제안·피드백 없음</div>`;
+  $("logCount").textContent = `${log.length} / 200`;
+  if (stick) box.scrollTop = box.scrollHeight;
+}
+
+function renderTopics(ts) {
+  $("topicCount").textContent = `${ts.length}개`;
+  $("topics").innerHTML = ts.length ? ts.map(t =>
+    `<div><span>${esc(t.topic.replace(/^deskmate\//, ""))}</span><span class="num">${t.count}</span><span class="num ${t.age_s < 2 ? "fresh" : ""}">${t.age_s < 1 ? "방금" : t.age_s.toFixed(0) + " s"}</span></div>`).join("")
+    : `<div class="empty">아직 받은 토픽 없음</div>`;
+}
+
+const LINKS = [["mqtt", "MQTT 브로커 :1883", "dMqtt", "aMqtt"], ["posture", "자세 서비스 :8771", "dPosture", "aPosture"], ["raw", "ToF raw :8772", "dRaw", "aRaw"]];
+function renderBand(d) {
+  $("fakeTag").style.display = d.mode === "fake" ? "inline" : "none";
+  $("target").textContent = d.target || "-";
+  const down = [];
+  let last = null;
+  for (const [k, name, dot, age] of LINKS) {
+    const l = d.links[k];
+    $(dot).className = "dot" + (l.ok ? " on" : "");
+    $(age).textContent = l.age_s == null ? "-" : l.age_s < 1 ? "방금" : l.age_s.toFixed(0) + " s 전";
+    if (!l.ok) down.push(`<b>${name}</b> ${esc(l.reason)}`);
+    if (l.age_s != null) last = last == null ? l.age_s : Math.min(last, l.age_s);
+  }
+  const two = n => String(n).padStart(2, "0"), at = new Date(Date.now() - (last || 0) * 1000);
+  $("lastRx").textContent = last == null ? "없음" : `${two(at.getHours())}:${two(at.getMinutes())}:${two(at.getSeconds())}`;
+  const b = $("banner");
+  b.style.display = down.length ? "block" : "none";
+  b.innerHTML = down.length ? "연결 안 됨: " + down.join(" · ") + " — 계속 다시 시도 중" : "";
+}
+
+let serverFails = 0, pageVersion = null, lastRules = null;
+async function tick() {
+  try {
+    const r = await fetch("/data", {cache: "no-store"});
+    const d = await r.json();
+    serverFails = 0;
+    // 화면 파일이 바뀌면(업데이트) 스스로 다시 불러온다 — F5 없이 새 화면
+    if (d.page_version != null) { if (pageVersion == null) pageVersion = d.page_version; else if (d.page_version !== pageVersion) { location.reload(); return; } }
+    renderBand(d);
+    d.raw.sensors.forEach(s => renderTof($("tof" + s.id), s));
+    lastRules = d.posture ? d.posture.rules : null;
+    renderSvc(d.posture);
+    renderFaceDown(d.face_down);
+    renderJudge(d.phase, d.posture, d.profile);
+    renderRaw(d.sections);
+    renderDevices(d.devices);
+    renderControl(d.control, d.phase);
+    renderKeystroke(d.keystroke);
+    renderVideo(d);
+    renderVirtual(d);
+    renderTrigger($("trigD"), d.trigger);
+    renderTrigger($("trigV"), d.trigger);
+    renderLog(d.log);
+    renderTopics(d.topics);
+  } catch (e) {
+    serverFails++;
+    if (serverFails > 2) {
+      $("banner").style.display = "block";
+      $("banner").innerHTML = `연결 안 됨: <b>노트북 서버(devview.py)</b> ${esc(e.message)} — 터미널에서 실행 중인지 확인`;
+    }
+  }
+}
+tick();
+setInterval(tick, 250);
+</script>
+</body>
+</html>

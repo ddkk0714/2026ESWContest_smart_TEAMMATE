@@ -1,16 +1,16 @@
 import 'package:flutter/material.dart';
 
 abstract final class DeskmateColors {
-  static const background = Color(0xFFD8D6D1);
-  static const surface = Color(0xFFE0DED9);
-  static const surfaceRaised = Color(0xFFE7E5E0);
-  static const surfaceMuted = Color(0xFFCFCDC8);
-  static const ink = Color(0xFF292A28);
-  static const inkMuted = Color(0xFF777873);
-  static const inkFaint = Color(0xFFA3A39E);
-  static const accent = Color(0xFF9BC4BC);
-  static const accentStrong = Color(0xFF729F97);
-  static const line = Color(0xFFCBC9C4);
+  static const background = Color(0xFFEFF6FC);
+  static const surface = Color(0xFFFFFFFF);
+  static const surfaceRaised = Color(0xFFF8FCFF);
+  static const surfaceMuted = Color(0xFFE5F0F9);
+  static const ink = Color(0xFF1E3B5A);
+  static const inkMuted = Color(0xFF627A91);
+  static const inkFaint = Color(0xFF93AABD);
+  static const accent = Color(0xFFD7EAFB);
+  static const accentStrong = Color(0xFF2C67A0);
+  static const line = Color(0xFFD2E3F1);
   static const warning = Color(0xFFA77B5D);
   static const offline = Color(0xFFA6665F);
 }
@@ -28,6 +28,13 @@ ThemeData buildDeskmateTheme() {
     surface: DeskmateColors.surface,
   );
   return ThemeData(
+    fontFamily: 'High1Wonchuri',
+    fontFamilyFallback: const [
+      'LGEIText',
+      'LGEIHeadline',
+      'Noto Sans KR',
+      'sans-serif'
+    ],
     brightness: Brightness.light,
     useMaterial3: true,
     scaffoldBackgroundColor: DeskmateColors.background,

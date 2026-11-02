@@ -73,6 +73,13 @@
   <div class="rawgrids" id="rawgrids"></div>
   <div class="legend">가까움 <i style="background:#f06a6a"></i><i style="background:#f5a524"></i><i style="background:#4cc38a"></i><i style="background:#3b82f6"></i><i style="background:#1c1f27"></i> 멀거나 없음 · row 0 = 위, col 0 = 센서 기준 왼쪽(펌웨어 원본 순서) · 상태 5·6·9·10 만 유효</div>
 </section>
+<section class="card raw" id="othercard">
+  <div class="head">
+    <strong style="color:var(--fg)">나머지 센서 raw (중계기 /raw.other — mmWave 0x20 · 환경 0x10 · ToF 특징 0x03 · ToF 자세 0x04 · 하트비트 0xF0)</strong>
+    <span id="otherstatus"></span>
+  </div>
+  <div class="rawgrids" id="other"></div>
+</section>
 <footer>GET /api/state 를 0.3초마다 읽는다. 원본 거리는 중계기 :8772/raw (센서별 마지막 0x05 프레임). posture 는 1초 이동평균, 막대는 이번 순간값(instant). 센서 앞에 앉으면 바뀐다.</footer>
 <script>
 const KO = {upright:"바른자세", lean_forward:"상체 앞으로", recline:"젖힘", face_down:"엎드림", chin_rest:"턱괴기",
@@ -81,6 +88,10 @@ const COLOR = {upright:"#4cc38a", lean_forward:"#f5a524", recline:"#f5a524", fac
                drowsy:"#f06a6a", away:"#8a90a0", misplaced:"#8a90a0", forward_head:"#f06a6a", unknown:"#2a2f3a"};
 const hist = []; const HIST_N = 120;
 const $ = id => document.getElementById(id);
+// 주소를 URL 로 받는다: posture_view.html?base=http://127.0.0.1:8771&raw=http://127.0.0.1:8772 (ssh 터널로 볼 때, pc/view.ps1)
+{ const q = new URLSearchParams(location.search);
+  if (q.get("base")) $("base").value = q.get("base");
+  if (q.get("raw")) $("rawbase").value = q.get("raw"); }
 let fails = 0;
 async function tick() {
   const base = $("base").value.replace(/\/$/, "");
@@ -133,10 +144,39 @@ async function tickRaw() {
     rawFails = 0;
     $("rawstatus").textContent = `frames ${j.frames} · type5 ${j.type5} · bad ${j.bad}`;
     renderRaw(j);
+    renderOther(j.other);
   } catch (e) {
     rawFails++;
     $("rawstatus").textContent = "raw 연결 실패 (" + rawFails + "): " + e.message;
   }
+}
+// 나머지 센서(0x20·0x10·0x03·0x04·0xF0)의 마지막 값. 중계기 /raw 의 other 를 그대로 보여 준다(펌웨어 바이트 해석은 relay/other_sensors.h).
+function fmtAge(ms) { return ms == null ? "" : ms < 1000 ? ms + " ms 전" : (ms / 1000).toFixed(1) + " s 전"; }
+function kv(label, v, unit) {
+  const s = (v === null || v === undefined) ? "<span style='color:var(--dim)'>null</span>" : (typeof v === "boolean" ? (v ? "true" : "false") : v + (unit || ""));
+  return `<div class="row"><span>${label}</span><span style="text-align:right;font-variant-numeric:tabular-nums">${s}</span></div>`;
+}
+function otherCard(title, o, rows) {
+  if (!o || !o.have) return `<div class="rawcard"><div class="t">${title}</div><div style="color:var(--dim)">아직 프레임 없음</div></div>`;
+  const stale = o.age_ms > 15000;
+  return `<div class="rawcard"><div class="t">${title} <span style="color:${stale ? '#f06a6a' : 'var(--dim)'}">· ${fmtAge(o.age_ms)} · seq ${o.seq} · ${o.count}개 · ESP ms ${o.ts_ms}</span></div>` +
+         rows.map(r => kv(r[0], o[r[1]], r[2])).join("") + `</div>`;
+}
+function renderOther(ot) {
+  if (!ot) { $("other").innerHTML = "<div class='rawcard'><div style='color:var(--dim)'>중계기가 other 를 안 준다(옛 중계기?)</div></div>"; return; }
+  const hb = ot.heartbeat || {};
+  $("otherstatus").textContent = hb.have ? `fw ${hb.fw} · uptime ${(hb.uptime_ms / 1000).toFixed(0)} s · ToF A ${hb.tof_a ? "OK" : "X"} · B ${hb.tof_b ? "OK" : "X"} · mmWave ${hb.mmwave_ready ? "ready" : "없음"}` : "하트비트 없음";
+  $("other").innerHTML =
+    otherCard("mmWave C1001 (0x20, 1 Hz)", ot.mmwave, [["present", "present"], ["motion_state", "motion_state"], ["motion_level", "motion_level"], ["distance", "distance_cm", " cm"],
+      ["resp_bpm", "resp_bpm"], ["resp_valid", "resp_valid"], ["heart_bpm", "heart_bpm"], ["heart_valid", "heart_valid"], ["drowsy_state", "drowsy_state"], ["valid", "valid"]]) +
+    otherCard("환경 SCD41·DHT22·BH1750 (0x10, 5 s)", ot.env, [["CO₂", "co2_ppm", " ppm"], ["온도", "temp_c", " ℃"], ["습도", "humidity_pct", " %"], ["조도", "lux", " lx"],
+      ["co2_valid", "co2_valid"], ["temp_valid", "temp_valid"], ["humidity_valid", "humidity_valid"], ["lux_valid", "lux_valid"]]) +
+    otherCard("ToF 규칙 특징 (0x03, 5 Hz, 노드 추정기)", ot.tof_feature, [["present", "present"], ["posture", "posture"], ["confidence", "confidence_pct", " %"], ["motion", "motion_pct", " %"],
+      ["head_delta", "head_delta_mm", " mm"], ["nod_rate", "nod_rate_hz", " Hz"], ["nods/60s", "nods"], ["drowsy", "drowsy"], ["valid_zones", "valid_zones"], ["coverage", "coverage_pct", " %"],
+      ["centroid", "centroid_mm", " mm"], ["head_row", "head_row_pct", " %"], ["shoulder_tilt", "shoulder_tilt_mm", " mm"], ["motion_mm_s", "motion_mm_s"], ["baseline_dev", "baseline_dev_pct", " %"],
+      ["baseline_ready", "baseline_ready"], ["geometry_valid", "geometry_valid"], ["sensor A/B", "sensor_a"], ["sensor B", "sensor_b"]]) +
+    otherCard("ToF 자세 요약 (0x04, 1 Hz)", ot.tof_posture, [["present", "present"], ["posture", "posture"], ["confidence", "confidence_pct", " %"], ["drowsy", "drowsy"]]) +
+    otherCard("하트비트 (0xF0, 1 Hz)", ot.heartbeat, [["fw", "fw"], ["uptime", "uptime_ms", " ms"], ["mmwave_ready", "mmwave_ready"], ["tof_ok_mask", "tof_ok_mask"], ["ToF A", "tof_a"], ["ToF B", "tof_b"]]);
 }
 function renderRaw(j) {
   const fc = $("flipc").checked, fr = $("flipr").checked;

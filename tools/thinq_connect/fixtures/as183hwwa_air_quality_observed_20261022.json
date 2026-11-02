@@ -1,0 +1,33 @@
+{
+  "provenance": "Minimal reconstruction from user-reported AS183HWWA GET observations; not a raw Profile/State response. Unreported fields and device identifiers are omitted.",
+  "profile": {
+    "property": {
+      "airQualitySensor": {
+        "PM1": {"type": "number", "mode": ["r"], "value": {"r": null}},
+        "PM2": {"type": "number", "mode": ["r"], "value": {"r": null}},
+        "PM10": {"type": "number", "mode": ["r"], "value": {"r": null}},
+        "odor": {"type": "number", "mode": ["r"], "value": {"r": null}},
+        "totalPollution": {"type": "number", "mode": ["r"], "value": {"r": null}},
+        "monitoringEnabled": {
+          "type": "enum",
+          "mode": ["r"],
+          "value": {"r": ["ON_WORKING", "ALWAYS"]}
+        }
+      },
+      "filterInfo": {
+        "filterRemainPercent": {"type": "number", "mode": ["r"], "value": {"r": null}}
+      }
+    }
+  },
+  "state": {
+    "airQualitySensor": {
+      "PM1": 8,
+      "PM2": 8,
+      "PM10": 10,
+      "odor": 1,
+      "totalPollution": 1,
+      "monitoringEnabled": "ON_WORKING"
+    },
+    "filterInfo": {"filterRemainPercent": 96}
+  }
+}

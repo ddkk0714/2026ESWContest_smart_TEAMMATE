@@ -37,6 +37,8 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 | `deskmate/sensor/weather` | Pi 5 앱 | hub(personalize) | 30 분 + 시작 시 1회(retain, QoS 0) | 바깥 날씨·계절. FSM 입력이 아니라 개입 선택(환기 vs 공기청정기, 겨울 짧은 환기)에만 쓴다 |
 | `deskmate/state/phase` | hub | display, control | 10 s 주기(retain) | 추론 결과 + 신뢰도. `python -m deskmate_hub run` 이 발행 |
 | `deskmate/display/message` | Node-RED/debug | display | 이벤트 | Pi 5 화면에 일회성 텍스트 표시 |
+| `deskmate/display/audio` | Pi 5 앱(V32) | hub | 바뀔 때·연결 직후(retain, QoS 1) | 지금 음악 상태 `{on, volume, track, track_id, profile_id, last_command_id}`. 이름 없음 |
+| `deskmate/profile/user` | Pi 5 앱 · devview | hub, Pi 5 앱(V34) | 바뀔 때·연결 직후(retain, QoS 1) | 첫 설정(이름 없음, `profile_id` 난수). V34 부터 앱도 다른 노드가 보낸 같은 id 를 받아 저장 |
 | `deskmate/session/report` | hub | display | 10 s 주기 스냅샷(retain) + 세션 종료 시 | 화면용 세션 요약. 개별 행동 로그 없음 |
 | `deskmate/interaction/request` | hub | display | 이벤트 | 불확실한 판정의 사용자 확인 질문 |
 | `deskmate/control/cmd` | hub | control 어댑터, Pi 5 앱(조명) | 이벤트, QoS 1, retain 없음 | 기기 제어 명령 (`control_command`, data-spec §10) |
@@ -295,6 +297,61 @@ Node-RED에서 Pi 5 화면을 확인할 때 쓰는 일회성 안내 문구다. �
 }
 ```
 
+### `deskmate/display/audio`
+
+V32(0.32.0, 2026-11-01). Pi 5 앱이 지금 음악 상태를 hub 에 알린다 — hub 의 "집중이 잘 된 환경 기억"(사람별)이 쓴다.
+
+```json
+{
+  "schema_version": "1.0", "ts": 1793530000.0, "node": "pi5-ui", "seq": 4,
+  "data": {
+    "on": true,                      // 재생 중
+    "volume": 0.45,                  // 출력 장치 볼륨 0~1, 소수 둘째 자리
+    "track": 2,                      // 앱 재생 목록 순번(0~5)
+    "track_id": "satie_gymnopedie_no1",   // 앱에 든 음원 파일 이름(곡 제목 아님)
+    "profile_id": "p266eb9c0c514d18c",    // 지금 프로필(profile/user 와 같은 난수). 없으면 생략
+    "last_command_id": "296582093851"     // 마지막으로 실행한 hub 음악 명령. 없으면 생략
+  }
+}
+```
+
+- **retain**, QoS 1. 바뀔 때마다(볼륨 슬라이더처럼 잇따르면 0.4 s 모아 마지막 값 한 번), MQTT 연결 직후, 프로필이 바뀔 때 보낸다.
+  곡만 바꾼 것은 1 s 안에 따라간다. 직전과 같은 상태는 다시 보내지 않는다.
+- 이름·곡 제목·스피커 주소는 싣지 않는다. hub 는 `last_command_id` 이후의 변화를 사용자가 직접 바꾼 것으로 볼 수 있다.
+
+**hub → 앱 음악 명령** (`control/cmd`, V32): `target_id: "music"`, `operation: "set_music"`,
+`value: {"on": true|false, "volume": 0~1(선택), "track": 0~5(선택)}`. 다른 대상과 같은 문을 거친다(자동 피드백 스위치 · gate
+auto|suggest|undo|notice · `requires_confirmation` false · 만료 · retain 무시 · `command_id` 중복 무시). 결과(`control/result`):
+
+```json
+{ "command_id": "296582093851", "status": "succeeded",
+  "actual_value": {"on": true, "volume": 0.8, "track": 2, "track_id": "satie_gymnopedie_no1"},
+  "previous":     {"on": false, "volume": 0.3, "track": 0, "track_id": "deskmate_test_music"},
+  "actual":       {"on": true, "volume": 0.8, "track": 2, "track_id": "satie_gymnopedie_no1"},
+  "completed_ts_ms": 1793530001200 }
+```
+
+- **되돌리기**: hub 는 결과의 `previous` 를 그대로 `value` 로 실어 `gate: "undo"` 의 `set_music` 을 보낸다(램프 `undo: previous` 와 같은 뜻).
+- 실패 `error_code`: `unsupported_operation_or_value`(on 없음·볼륨 0~1 밖·없는 곡·다른 operation) · `speaker_not_connected`
+  (블루투스 스피커를 골랐는데 A2DP 가 끊김 — 켜지 않는다) · `audio_failed`(재생기 오류, `previous`·현재 `actual_value` 동봉) ·
+  `state_mismatch` · `feedback_disabled` · `invalid_command` · `expired`.
+- 명령을 실행한 국면(phase) 동안은 앱 자체의 졸음 음악 켜기·회복 때 끄기가 hub 의 결정을 덮지 않는다. 국면이 바뀌면 원래대로.
+
+### `deskmate/profile/user` 주고받기 (V34)
+
+V34(0.34.0, 2026-11-01). 첫 설정 프로필은 Pi 5 앱(`node: pi5-ui`)과 devview(`node: laptop-devview`)가 **같은 사람이면 같은
+`profile_id`** 로 보낸다(devview 는 hub 의 `active_profile_id` 와 같은 retain 프로필을 "지금 사람"으로 불러와 고친다).
+Pi 5 앱은 이 토픽을 구독해, `node` 가 자기가 아니고 `profile_id` 가 저장된 프로필 중 하나면 그 프로필을 고쳐 `profiles.json` 에 남긴다.
+
+- 모르는 `profile_id` 는 무시한다(새 프로필을 만들지 않는다). retain 으로 온 것도 받는다.
+- 거꾸로 옮기기: `light_pref` low·mid·high → 밝기 0.3·0.55·0.85(조명 켬), `sound_pref` off → 음악 끔 · low·mid·high → 볼륨
+  0.2·0.5·0.85(소리 종류가 "무음"이면 기본 "백색 소음"으로), `wind_pref` off → 선풍기 끔 · low·mid·high → 켬 + 1·2·3단,
+  `sleep_hours`·`bedtime`·`placement` 그대로, `focus_help` 순서 → 도움 순서(light 조명 · wind 선풍기 · sound 알림, voice·break 는
+  앱 항목이 없어 버리고 빠진 항목은 원래 순서로 뒤에), `age_band` 는 지금 나이가 그 대역이면 그대로 아니면 대역 가운데(15·25·35·45·55).
+  **받은 대역이 지금 값의 대역과 같으면 값을 바꾸지 않는다**(사람이 맞춘 밝기·볼륨을 지킨다).
+- 고친 뒤 앱이 보낼 값이 받은 값과 같으면 다시 보내지 않는다. 다르면(앱에 없는 항목을 버린 경우 등) **지금 고른 사람일 때만**
+  앱의 값으로 한 번 다시 보낸다 — 다른 사람 프로필을 보내면 hub 의 지금 사람이 바뀌기 때문이다.
+
 ### `deskmate/session/report`
 
 Hub가 발행하는 화면용 세션 요약이다. 세션 종료를 기다리지 않고 **10 s 주기 스냅샷**을 retain 으로
@@ -396,6 +453,18 @@ ACTION_ENV 진입 시 원인별 명령 목록, 게이트 auto 면 즉시 · sugg
 
 모든 명령이 종료(succeeded/failed/timeout)되거나 제안이 만료(`suggest_timeout_sec`)되면 hub 는 `frame.action_done=true` 로
 FSM 을 MONITOR 로 보낸다. `state/phase.sensor_summary.control` 에 진행 중 에피소드(명령·상태)가 실린다.
+기본 비활성인 `environment_control.yaml` 정책을 Mock 시험에서 활성화한 경우에만
+`state/phase.data.sensor_summary.control.execution_mode`가 `"mock"`으로 추가된다.
+이는 합성 제어 결과를 실측 기기 동작과 구분하기 위한 선택 필드다. 기존 cmd/result 필드,
+게이트·수락/거절·undo 계약과 정책 비활성 상태의 payload는 유지한다.
+
+통합 검증에서 `sensor_summary.control`에 선택적 진단 필드를 보강했다:
+`commands[*].command_id/error_code`, 명령 없는 사용자 행동 제안 `advice`, 비활성 에피소드의
+직전 결과 `last_episode`. `advice.kind=manual_ventilation`은 기기 제어 성공을 뜻하지 않는다.
+`MONITOR`는 실행 성공과 무관하게 에피소드가 종료됐다는 뜻이며 commands의 실제 status로 결과를 판단한다.
+새 정책의 제안 수락은 현재 interaction/request의 정확한 request_id가 필요하다.
+기존 cmd/result topic·필드와 정책 OFF의 legacy HTTP feedback 경로는 유지한다.
+
 어댑터가 없을 때의 리허설: `python tools/mock_plug.py --broker <ip>` (결과 응답 + `deskmate/control/state/<target>` retain).
 
 Pi 5 앱은 `desk_lamp`의 `adjust_brightness`(`value: {"percent": ±정수}` — **지금 밝기 대비 %**, 2026-10-25. 앱이 지금 원시 밝기로
@@ -404,11 +473,24 @@ Pi 5 앱은 `desk_lamp`의 `adjust_brightness`(`value: {"percent": ±정수}` �
 돌려준다. 기본 설정은 환경 +30 %, 졸음 +60 %, 개인화 arm ±50 % 다. 다른 대상은 해당 어댑터가
 처리하며, 앱이 환기팬 등의 성공 응답을 대신 만들지 않는다.
 
+`vent_fan` 은 Pico 2 W 블루투스 선풍기(`firmware/pico2w_ble_fan/`)다. **Pi 5 앱의 블루투스 탭에서 `DESKMATE-FAN` 을
+선풍기로 고르면 앱이 vent_fan 명령을 맡는다** — 램프와 같은 문(자동 피드백 스위치·gate·확인 필요·만료·retain·중복)을 거쳐
+GATT로 쓴 뒤 유효한 선풍기 상태 특성을 읽고 요청과 일치할 때만 `succeeded`,
+`confirmation=state_readback`, 읽은 `actual_value`를 돌려준다. 상태가 없거나 잘못되면
+`executing`/`confirmation=transport_only`/`device_state_unconfirmed`이며 `actual_value`와 완료 시각을 만들지 않는다.
+유효한 상태가 요청과 다르면 `failed`/`state_mismatch`와 읽은 값을 반환한다. 받는 operation: `set_power`(on|off) · `set_level`(0~3, 풍량) ·
+`set_speed`(0~100) · `set_mode`(normal|natural) · `set_timer`(초). 선풍기를 고르지 않았으면 앱은 vent_fan 에 대답하지 않고,
+그때는 PC 의 `python tools/ble_fan.py bridge --broker <ip>` 가 같은 문으로 맡을 수 있다(`ble-fan` 노드). **둘을 같이 띄우지 않는다** —
+블루투스 연결이 하나뿐이라 한쪽은 실패한다. FSM 없이 경로만 확인하려면 `python tools/send_control.py --broker <ip> vent_fan set_level 3`.
+
 앱의 자동 피드백 스위치가 꺼졌거나 램프가 미설정·실패·만료이면 `failed`와 `error_code`를
 응답한다. `requires_confirmation=true` 명령과 지원하지 않는 동작은 실행하지 않는다.
+자동 제어 승인과 대상 기기 선택은 앱의 설정 화면에서 관리한다. 조명을 대상에서 제외하면
+`lamp_automation_disabled`로 응답하며 BLE 쓰기를 하지 않는다. 직접 조절은 이 선택과 별개다.
 retain으로 들어온 명령은 무시한다. 최근 128개 `command_id`의 처리 결과(진행 중 포함)를
 메모리에 보관해 QoS 1 중복 수신 시 BLE를 다시 쓰지 않고 같은 결과를 재발행한다.
-`succeeded`는 GATT 쓰기 호출 완료를 뜻하며 실제 밝기를 센서로 측정했다는 뜻은 아니다.
+`executing`+`confirmation=transport_only`는 GATT 전송 완료만 의미한다. 상태 확인이 없으므로
+`succeeded`/`actual_value`를 보고하지 않는다(아래 2026-10-19 보완 계약 참고).
 
 제안 명령의 `expires_ts_ms`는 **수락 후 발행 시각 + result_timeout_sec**로 정한다.
 카드가 30초 동안 대기했다고 수락 즉시 만료되는 일이 없어야 한다. 앱은 큐 대기·재연결
@@ -436,6 +518,8 @@ retain으로 들어온 명령은 무시한다. 최근 128개 `command_id`의 처
 `corrected_state` 는 `FOCUS_PC`·`FATIGUE`·`REST`·`IDLE` 중 하나여야 한다. 정정은 평가용 라벨로만
 저장하고 FSM 판정이나 제어 명령을 바꾸지 않는다. 선택 필드 `response_ms` 는 응답까지 걸린 밀리초다.
 라벨은 hub 로컬 JSONL에 기록하며 별도 MQTT 토픽으로 발행하지 않는다.
+Pi 5 앱의 프리뷰(개발자) 탭은 같은 메시지에 선택 필드 `note`(문자열, 200자 이내, 사용자가 적은 짧은 메모)를 더할 수 있다.
+키 값·센서 원본은 싣지 않으며, hub 는 모르는 필드를 무시해도 된다(라벨 기록에 같이 남기는 것은 선택).
 
 조명 직접 조절 보고(2026-10-25): 사용자가 앱의 조명 조절로 밝기를 바꾸면 앱이 `{"kind": "manual_adjust", "target_id": "desk_lamp",
 "from": 180, "to": 90, "input": "app"}`(원시 0~255)를 같은 토픽에 보낸다. 허브 명령으로 생긴 변화는 보내지 않는다. 허브는 이 보고를
@@ -496,6 +580,91 @@ ESM·제어 승인에 쓰지 않고, 허브가 밝힌 뒤 `implicit.dim_window_m
 실행 중인 학습 job이 있고 실제 상태가 IDLE/END 밖이면 status=paused로 표시한다. 입력·판단·제어는 유지하고, 다시 유휴 상태가 되면 training으로 재개한다. Pi 5는 이 snapshot을 표시하며 연결 끊김이나 동의 철회 때 이전 개인 모델 상태를 현재처럼 표시하지 않는다. 서비스 시작 self-check는 stderr 진단만 사용하며 MQTT 명령·개인 표본을 새로 만들지 않는다.
 
 ondevice.yaml이 활성화된 경우에만 `state/phase.data.sensor_summary.ondevice_learning`을 추가한다. `execution: local`, `decision_source: fsm`, `head_source: common|personal`, `samples`, `sessions`, `training_step`(job이 없으면 null)을 제공한다. status는 disabled, unavailable, awaiting_consent, awaiting_portable_model, collecting, training, paused, accepted, rejected, storage_error, head_load_failed이다. embedding·개인 head·표본·파일 경로는 MQTT로 보내지 않는다. 기본 비활성에서는 기존 출력과 FSM을 유지한다. [실행·학습 계약](ondevice-personalization.md)을 따른다.
+
+## Pi5 알림 및 기기 복구 응답 (PR83 0.1.10 통합)
+
+기존 envelope/topic을 유지한다. display는 control/cmd target_id=speaker의 operation=speak 또는 chime을 실행한다. 기존 gate 외 notice를 허용하며 feedback_enabled, requires_confirmation=false, expires_ts_ms 검사를 동일하게 적용한다. speak.value는 text와 선택 lang(기본 ko), chime.value는 pattern(single/double/triple, 과거 alert/warning/urgent는 triple)과 volume(low/mid/high)을 사용한다. 음량 배율은 각각 0.35/0.65/1.0이며 미지정은 1.0이다.
+
+TTS 성공 결과는 succeeded와 actual_value.mode=tts다. TTS를 사용할 수 없으면 알림음/화면 문구로 대신하고 failed, error_code=tts_unavailable, fallback=chime_text 또는 text를 보고한다. 실제 TTS 성공으로 보고하지 않는다. chime 재생 실패는 audio_failed다. speaker 명령도 command_id 중복 실행을 막는다.
+
+interaction/request의 kind=rest_notice, auto=true, 또는 options=[dismiss]는 닫기 전용 알림으로 처리한다. text/explanation, arm_label, rest_min_sec, expires_in_s를 사용하며 retain으로 온 지난 알림은 표시하지 않는다. 사용자가 닫으면 feedback/user에 request_id, verdict=dismiss, response_ms를 보낸다. 수락·거절 제안 카드와 자동 실행 승인을 만들지 않는다.
+
+램프/선풍기 control/result에는 검색을 시도한 경우 recovery=rediscovered|not_found가 추가된다. 찾지 못하면 error_code=device_not_found, 명령이 만료됐으면 expired다. 검색하지 않은 경우 recovery를 생략하며 성공/실패 status의 의미는 유지한다.
+
+### 환경 제안/결과의 표시 및 수락 바인딩 (2026-10-19)
+
+기존 topic/schema 1.0은 유지하며, `env_suggest`의 `data.control_plan`을 선택 필드로 추가한다.
+값은 같은 에피소드의 `sensor_summary.control` 스냅샷이다.
+
+```json
+{
+  "request_id": "mock-hub-12", "kind": "env_suggest", "expires_in_s": 60,
+  "control_plan": {
+    "active": true, "execution_mode": "mock", "state": "ACTION_ENV",
+    "cause": "environment", "gate": "suggest", "awaiting_user": true,
+    "commands": [{"command_id": "mock-c1", "target": "mock_ac", "op": "set_power",
+      "value": "on", "status": "accepted", "reason": "temperature_high", "error_code": null}],
+    "advice": []
+  }
+}
+```
+
+- `commands[].reason`은 실제 planner rule(기존 planner는 cause)이다. UI는 target/op/value/reason을
+  그대로 표시하며 env_flags에서 실행 동작을 추정하지 않는다. `advice`는 별도로 모두 표시한다.
+- UI는 request_id/boot_id, 절대 만료(ts+expires_in_s), 최신 상태(30초, 미래 오차 2초 이내),
+  gate=suggest/awaiting_user, mode 및 명령 ID/대상/op/value/reason/advice가 일치할 때만 수락한다.
+  계획이 없는 구버전 ENV 카드나 연결이 끊긴 상태는 실행 수락을 차단한다. 기존 휴식/자세 카드는 유지한다.
+- feedback/user는 기존 request_id+verdict를 사용한다. 재연결 전후 request_id를 다시 검사한다.
+  `correct`는 제안을 소모하지 않는다. retain request/cmd는 재실행하지 않는다.
+- `active=false`에서도 `last_episode`의 명령 상태·오류를 유지한다. `outcome=executed/undone`,
+  MONITOR 진입, API accepted는 성공 증거가 아니다. Mock은 항상 "MOCK · 모의 제어"로 표시한다.
+- Mock용 UART/FSM 종단 시험의 cmd에는 선택 필드 `execution_mode=mock`을 붙인다. Pi5 BLE는
+  이 명령을 `cancelled/mock_command_blocked`로 차단한다. 일반 제어를 활성화하는 플래그가 아니다.
+- undo cmd의 `undo_of_command_id`는 원래 명령을 가리킨다. Pi5는 마지막 램프 명령과 다르거나
+  누락된 undo를 `cancelled/superseded_command`로 차단한다(구형 서버 undo는 안전하게 거절).
+
+**BLE 우선순위와 확인 수준**: 사용자 직접 밝기 조작 > 명시적 환경 명령 > phase 피드백.
+수동 조작은 프로세스 안의 대기 쓰기를 무효화하고, 자동 피드백을 명시적으로 OFF→ON 하기
+전까지 자동/undo 쓰기를 차단한다. 환경 명령 후 MONITOR/RECOVERY phase는 램프를 덮어쓰지 않는다.
+GATT 연결 이후, 각 프레임 쓰기 직전에 만료·권한·수동 변경을 재검사한다. 이미 전송된 프레임은
+취소할 수 없으며 수동 쓰기가 뒤이어 적용된다. 실제 기기의 외부 버튼 조작 감지는 아직 없다.
+
+기존 설명의 `succeeded=GATT 쓰기 완료`를 대체한다: BLE 쓰기만 완료되면
+`executing`, `confirmation=transport_only`, `error_code=device_state_unconfirmed`를 반환하고
+`actual_value`를 만들어 넣지 않는다. 상태 읽기/피드백이 없으면 Hub의 기존 timeout이 적용된다.
+따라서 이를 실제 기기 성공으로 표시하지 않는다. 메모리 중복 억제는 프로세스 재시작을 넘지 않는다.
+
+- `commands[].state_confirmed`는 일치하는 `actual_value`로 확인된 결과인지 나타낸다.
+  이 필드 없는 legacy succeeded는 새 UI에서 '기기 상태 미확인'으로 남긴다.
+  BLE executing의 completed_ts_ms도 null이다. MqttStateSource는 MQTT 3.1.1을 명시적으로 사용한다.
+
+환경 결과 카드의 되돌리기에는 선택 필드 `feedback/user.data.undo_command_ids`에 표시 중인
+에피소드의 command_id 목록을 넣는다(verdict=reject 유지). UI는 현재 상태/계획과 대조하고,
+Hub도 새 pending 제안이 없고 현재/직전 에피소드의 ID 목록과 일치할 때만 처리한다.
+이전 결과 카드의 늦은 터치가 새 에피소드의 명령을 되돌리는 것을 차단한다.
+휴식/자세 카드의 기존 feedback 및 기존 client payload는 유지한다.
+
+### 독립 Mock Gateway 실행
+
+일반 Linux의 `deskmate_hub.control.gateway_service`는 기존 cmd/result QoS1 계약만 사용한다.
+명시적 Mock 실행과 private journal이 필요하며, 등록된 `mock_*` target과
+`data.execution_mode=mock`인 명령만 처리한다. 결과는 `node=device-gateway-mock`,
+retain=false다. 재시작/재연결 시 journal의 결과를 다시 알릴 수 있지만 명령은 재실행하지 않는다.
+기존 BLE/실기 controller의 target을 소유하지 않는다. 실행·인증·TLS·ACL·저장 위치는
+[mock-device-gateway.md](mock-device-gateway.md)를 참조한다.
+
+### main / PR #57 통합: BLE 결과 확인 수준
+
+- GATT 쓰기 완료는 전송 반환이다. 현재 램프·선풍기 프로토콜에는 별도 command_id별 기기 수락 ACK가 없으므로 수락을 추정하지 않는다.
+- 램프는 상태 읽기가 없어 `executing`/`transport_only`, completed_ts_ms=null로 유지하고 Hub timeout을 따른다.
+- 선풍기는 유효한 상태 readback과 요청값 일치를 확인한 경우만 성공한다. 이는 기기가 보고한 설정 상태이며 모터 회전·실제 풍량의 물리 검증이 아니다.
+- `vent_fan.set_timer`의 readback은 기존 Flutter 계약과 같이 요청값 대비 2초 차이까지 비교한다. 실제 읽은 초를 보내며 요청 초로 덮어쓰지 않는다. 다른 operation은 기존 값 비교를 유지한다.
+- `succeeded`에 `confirmation=transport_only`가 함께 오면 Hub는 성공 종료하지 않고 executing/상태 미확인으로 처리한다. 기존 결과의 선택 필드가 없는 경우 하위 호환 검사를 유지한다.
+- Mock 차단은 램프·선풍기 모두 적용한다. undo는 대상별 마지막 명령 ID와 일치해야 하며, 선풍기는 연결 대기 후 실제 쓰기 직전에도 만료·활성 권한·선택 장치를 재검사한다.
+
+- 일반 DeviceGateway도 기존 Pi 5/BLE bridge의 canonical `desk_lamp`와 `vent_fan`을 소유하지 않는다. 미등록 실패 결과도 대신 발행하지 않으며 새 Gateway 기기는 별도 논리 target을 사용한다.
+
+- 구버전 BLE controller가 confirmation 없이 succeeded/actual_value를 보내도 `desk_lamp`·`vent_fan`의 `state_confirmed`는 false다. legacy 명령은 기존 처리 응답 상태를 유지하되 UI는 미확인으로 표시하고, 새 정책 명령(policy_rule)은 executing/미확인으로 유지해 timeout을 적용한다.
 
 ## 피로 데이터 수집 (2026-10-20)
 

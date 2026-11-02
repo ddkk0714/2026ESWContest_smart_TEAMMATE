@@ -1,0 +1,71 @@
+{
+ "tool": "tof_wall_noise.py",
+ "version": "2026-10-24b",
+ "label": "wall50",
+ "kind": "wall",
+ "distance_cm": 50,
+ "light": "천장 형광등",
+ "note": "벽 흰 콘크리트, 지그 위로 약 25도",
+ "raw_url": "http://127.0.0.1:9109",
+ "api_url": "http://127.0.0.1:9110",
+ "seconds_planned": 300,
+ "interval_s": 0.08,
+ "pollers": 3,
+ "started": "2026-10-24 23:08:33",
+ "started_epoch": 1792850913.941,
+ "relay_dev": "tcp:9100",
+ "sensors_at_start": [
+  {
+   "id": 0,
+   "flags": 3,
+   "mask": 0,
+   "w": 8,
+   "h": 8
+  },
+  {
+   "id": 1,
+   "flags": 3,
+   "mask": 0,
+   "w": 8,
+   "h": 8
+  }
+ ],
+ "sensors_stuck_at_start": [],
+ "service": {
+  "model": {
+   "file": "models/opt_l8_c256/posture_net.bin",
+   "classes": 9,
+   "rate_hz": 10,
+   "fusion": "logprob",
+   "flip_rows": "auto",
+   "flip_cols": "auto",
+   "labels": [
+    "upright",
+    "lean_forward",
+    "recline",
+    "face_down",
+    "chin_rest",
+    "drowsy",
+    "away",
+    "misplaced",
+    "forward_head"
+   ]
+  },
+  "online_sensors": 2,
+  "posture_at_start": "misplaced"
+ },
+ "ended": "2026-10-24 23:13:34",
+ "seconds_actual": 300.27,
+ "polls": 3261,
+ "poll_errors": 0,
+ "poll_latency_ms": {
+  "median": 168.6,
+  "p95": 410.1
+ },
+ "frames": {
+  "s0": 1260,
+  "s1": 1254
+ },
+ "state_lines": 297,
+ "state_errors": 0
+}

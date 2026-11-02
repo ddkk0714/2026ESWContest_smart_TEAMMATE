@@ -39,6 +39,13 @@ class DeskmateSettings {
     this.postureUrl,
     this.speaker,
     this.lamp,
+    this.fan,
+    this.previewHost,
+    this.devModeDefault = false,
+    this.placement,
+    this.placementAsked = false,
+    this.lampBrightnessFloor,
+    this.feedbackEnabled,
   });
 
   final String? mqttHost;
@@ -46,6 +53,28 @@ class DeskmateSettings {
   final String? postureUrl;
   final SavedBluetoothDevice? speaker;
   final SavedBluetoothDevice? lamp;
+  final SavedBluetoothDevice? fan;
+
+  /// 개발자 화면의 프리뷰 탭이 ToF 원본·자세 라벨을 읽을 Pi 4 주소(IP 또는 호스트 이름). 비우면 MQTT 호스트를 쓴다.
+  final String? previewHost;
+
+  /// 앱을 켤 때 개발자 모드 화면(ToF 열지도·판정·명령 로그)을 바로 띄울지. 기본 false.
+  final bool devModeDefault;
+
+  /// 장치를 보통 두는 위치(앉은 자리 기준): left | center | right. 미설정이면 null.
+  /// Pi 4 자세 서비스(:8771 `/api/placement`)에 같은 값을 보내 모델을 고른다.
+  final String? placement;
+
+  /// 첫 실행 질문("장치를 보통 어디에 두나요?")을 건너뛴 적이 있는지. true 면 다시 묻지 않는다.
+  final bool placementAsked;
+
+  static const placementOptions = ['left', 'center', 'right'];
+
+  /// adjust_brightness 의 하한(원시 0~255). null 이면 lamp_defaults 의 기본값.
+  final int? lampBrightnessFloor;
+
+  /// 블루투스 탭의 "상태 기반 조명·음악 피드백" 스위치. null 이면 켠 채로 시작한다(시연 기본값).
+  final bool? feedbackEnabled;
 
   static const empty = DeskmateSettings();
 
@@ -54,7 +83,14 @@ class DeskmateSettings {
       mqttPort == null &&
       postureUrl == null &&
       speaker == null &&
-      lamp == null;
+      lamp == null &&
+      fan == null &&
+      previewHost == null &&
+      !devModeDefault &&
+      placement == null &&
+      !placementAsked &&
+      lampBrightnessFloor == null &&
+      feedbackEnabled == null;
 
   DeskmateSettings copyWith({
     String? mqttHost,
@@ -67,6 +103,17 @@ class DeskmateSettings {
     bool clearSpeaker = false,
     SavedBluetoothDevice? lamp,
     bool clearLamp = false,
+    SavedBluetoothDevice? fan,
+    bool clearFan = false,
+    String? previewHost,
+    bool clearPreviewHost = false,
+    bool? devModeDefault,
+    String? placement,
+    bool clearPlacement = false,
+    bool? placementAsked,
+    int? lampBrightnessFloor,
+    bool clearLampBrightnessFloor = false,
+    bool? feedbackEnabled,
   }) =>
       DeskmateSettings(
         mqttHost: clearMqttHost ? null : mqttHost ?? this.mqttHost,
@@ -74,6 +121,15 @@ class DeskmateSettings {
         postureUrl: clearPostureUrl ? null : postureUrl ?? this.postureUrl,
         speaker: clearSpeaker ? null : speaker ?? this.speaker,
         lamp: clearLamp ? null : lamp ?? this.lamp,
+        fan: clearFan ? null : fan ?? this.fan,
+        previewHost: clearPreviewHost ? null : previewHost ?? this.previewHost,
+        devModeDefault: devModeDefault ?? this.devModeDefault,
+        placement: clearPlacement ? null : placement ?? this.placement,
+        placementAsked: placementAsked ?? this.placementAsked,
+        lampBrightnessFloor: clearLampBrightnessFloor
+            ? null
+            : lampBrightnessFloor ?? this.lampBrightnessFloor,
+        feedbackEnabled: feedbackEnabled ?? this.feedbackEnabled,
       );
 
   Map<String, Object?> toJson() {
@@ -93,6 +149,27 @@ class DeskmateSettings {
     if (lamp != null) {
       json['lamp'] = lamp!.toJson();
     }
+    if (fan != null) {
+      json['fan'] = fan!.toJson();
+    }
+    if (previewHost != null) {
+      json['preview_host'] = previewHost;
+    }
+    if (devModeDefault) {
+      json['dev_mode_default'] = true;
+    }
+    if (placement != null) {
+      json['placement'] = placement;
+    }
+    if (placementAsked) {
+      json['placement_asked'] = true;
+    }
+    if (lampBrightnessFloor != null) {
+      json['lamp_brightness_floor'] = lampBrightnessFloor;
+    }
+    if (feedbackEnabled != null) {
+      json['feedback_enabled'] = feedbackEnabled;
+    }
     return json;
   }
 
@@ -104,13 +181,41 @@ class DeskmateSettings {
         rawPort is int && rawPort >= 1 && rawPort <= 65535 ? rawPort : null;
     final rawPosture = json['posture_url'];
     final posture = rawPosture is String ? _validHttpUrl(rawPosture) : null;
+    final rawPreviewHost = json['preview_host'];
     return DeskmateSettings(
       mqttHost: host,
       mqttPort: port,
       postureUrl: posture,
       speaker: SavedBluetoothDevice._from(json['speaker']),
       lamp: SavedBluetoothDevice._from(json['lamp']),
+      fan: SavedBluetoothDevice._from(json['fan']),
+      previewHost: rawPreviewHost is String ? validHostName(rawPreviewHost) : null,
+      devModeDefault: json['dev_mode_default'] == true,
+      placement: validPlacement(json['placement']),
+      placementAsked: json['placement_asked'] == true,
+      lampBrightnessFloor: _byte(json['lamp_brightness_floor']),
+      feedbackEnabled: json['feedback_enabled'] is bool
+          ? json['feedback_enabled'] as bool
+          : null,
     );
+  }
+
+  static int? _byte(Object? raw) =>
+      raw is int && raw >= 0 && raw <= 255 ? raw : null;
+
+  /// left | center | right 만 받는다(대소문자·공백 무시). 아니면 null.
+  static String? validPlacement(Object? raw) {
+    if (raw is! String) return null;
+    final text = raw.trim().toLowerCase();
+    return placementOptions.contains(text) ? text : null;
+  }
+
+  /// IP 나 호스트 이름만 받는다(스킴·경로 없이). 모양이 아니면 null.
+  static String? validHostName(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty || text.length > 253) return null;
+    if (!RegExp(r'^[A-Za-z0-9.\-]+$').hasMatch(text)) return null;
+    return text;
   }
 
   static String? _validHttpUrl(String raw) {

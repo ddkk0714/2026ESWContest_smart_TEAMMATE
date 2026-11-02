@@ -1,0 +1,783 @@
+{
+  "provenance": "synthetic sensors; real Hub/FSM/Dispatcher; loopback MQTT; Mock Gateway; no hardware",
+  "cases": [
+    {
+      "name": "low_light_suggestion",
+      "state": {
+        "schema_version": "1.0",
+        "ts": 1720.0,
+        "node": "hub",
+        "boot_id": "mock-ui-contract",
+        "seq": 71,
+        "data": {
+          "fsm_state": "ACTION_ENV",
+          "phase": "fatigue",
+          "context": "npc",
+          "c_focus": 0.2,
+          "c_fatigue": 0.73,
+          "confidence": 0.73,
+          "source": "fsm",
+          "gate": "suggest",
+          "cause": "environment",
+          "reasons": [
+            "route:environment"
+          ],
+          "sensor_summary": {
+            "present": true,
+            "mmwave": {
+              "motion_state": "active",
+              "motion_level": 40,
+              "distance_cm": 55,
+              "resp_bpm": 15,
+              "resp_valid": true,
+              "heart_bpm": null,
+              "heart_valid": false,
+              "drowsy_state": "AWAKE"
+            },
+            "co2_ppm": 700,
+            "temp_c": 25,
+            "humidity_pct": 45,
+            "lux": 50,
+            "env_flags": [
+              "too_dark"
+            ],
+            "valid": true,
+            "control": {
+              "active": true,
+              "state": "ACTION_ENV",
+              "cause": "environment",
+              "gate": "suggest",
+              "outcome": null,
+              "awaiting_user": true,
+              "commands": [
+                {
+                  "command_id": "ebf0772615b1",
+                  "target": "mock_lamp",
+                  "op": "set_brightness",
+                  "value": 70,
+                  "status": "accepted",
+                  "error_code": null,
+                  "reason": "lux_low",
+                  "state_confirmed": false
+                }
+              ],
+              "execution_mode": "mock"
+            }
+          }
+        }
+      },
+      "request": {
+        "schema_version": "1.0",
+        "ts": 1720.0,
+        "node": "hub",
+        "boot_id": "mock-ui-contract",
+        "seq": 72,
+        "data": {
+          "request_id": "mock-ui-contract-72",
+          "kind": "env_suggest",
+          "prompt_code": "adjust_environment",
+          "options": [
+            "accept",
+            "reject"
+          ],
+          "expires_in_s": 180.0,
+          "evidence": [
+            "route:environment"
+          ],
+          "cause": "environment",
+          "c_fatigue": 0.73,
+          "control_plan": {
+            "active": true,
+            "state": "ACTION_ENV",
+            "cause": "environment",
+            "gate": "suggest",
+            "outcome": null,
+            "awaiting_user": true,
+            "commands": [
+              {
+                "command_id": "ebf0772615b1",
+                "target": "mock_lamp",
+                "op": "set_brightness",
+                "value": 70,
+                "status": "accepted",
+                "error_code": null,
+                "reason": "lux_low",
+                "state_confirmed": false
+              }
+            ],
+            "execution_mode": "mock"
+          }
+        }
+      }
+    },
+    {
+      "name": "accepted_mock_success_monitor",
+      "state": {
+        "schema_version": "1.0",
+        "ts": 1740.0,
+        "node": "hub",
+        "boot_id": "mock-ui-contract",
+        "seq": 74,
+        "data": {
+          "fsm_state": "MONITOR",
+          "phase": "fatigue",
+          "context": "npc",
+          "c_focus": 0.2,
+          "c_fatigue": 0.73,
+          "confidence": 0.73,
+          "source": "fsm",
+          "gate": "suggest",
+          "cause": null,
+          "reasons": [
+            "thinq:env"
+          ],
+          "sensor_summary": {
+            "present": true,
+            "mmwave": {
+              "motion_state": "active",
+              "motion_level": 40,
+              "distance_cm": 55,
+              "resp_bpm": 15,
+              "resp_valid": true,
+              "heart_bpm": null,
+              "heart_valid": false,
+              "drowsy_state": "AWAKE"
+            },
+            "co2_ppm": 700,
+            "temp_c": 25,
+            "humidity_pct": 45,
+            "lux": 50,
+            "env_flags": [
+              "too_dark"
+            ],
+            "valid": true,
+            "control": {
+              "active": false,
+              "last_episode": {
+                "state": "ACTION_ENV",
+                "cause": "environment",
+                "gate": "suggest",
+                "outcome": "executed",
+                "awaiting_user": false,
+                "commands": [
+                  {
+                    "command_id": "ebf0772615b1",
+                    "target": "mock_lamp",
+                    "op": "set_brightness",
+                    "value": 70,
+                    "status": "succeeded",
+                    "error_code": null,
+                    "reason": "lux_low",
+                    "state_confirmed": true
+                  }
+                ]
+              },
+              "execution_mode": "mock"
+            }
+          }
+        }
+      },
+      "request": null
+    },
+    {
+      "name": "co2_manual_ventilation",
+      "state": {
+        "schema_version": "1.0",
+        "ts": 1990.0,
+        "node": "hub",
+        "boot_id": "mock-ui-contract",
+        "seq": 99,
+        "data": {
+          "fsm_state": "ACTION_ENV",
+          "phase": "fatigue",
+          "context": "npc",
+          "c_focus": 0.2,
+          "c_fatigue": 0.73,
+          "confidence": 0.73,
+          "source": "fsm",
+          "gate": "suggest",
+          "cause": "environment",
+          "reasons": [
+            "route:environment"
+          ],
+          "sensor_summary": {
+            "present": true,
+            "mmwave": {
+              "motion_state": "active",
+              "motion_level": 40,
+              "distance_cm": 55,
+              "resp_bpm": 15,
+              "resp_valid": true,
+              "heart_bpm": null,
+              "heart_valid": false,
+              "drowsy_state": "AWAKE"
+            },
+            "co2_ppm": 2000,
+            "temp_c": 25,
+            "humidity_pct": 45,
+            "lux": 500,
+            "env_flags": [
+              "co2_high",
+              "co2_rising"
+            ],
+            "valid": true,
+            "control": {
+              "active": true,
+              "state": "ACTION_ENV",
+              "cause": "environment",
+              "gate": "suggest",
+              "outcome": null,
+              "awaiting_user": true,
+              "commands": [],
+              "advice": [
+                {
+                  "rule": "co2_high",
+                  "sensor": "co2_ppm",
+                  "role": "outside_air",
+                  "reason": "no_eligible_device",
+                  "kind": "manual_ventilation"
+                }
+              ],
+              "execution_mode": "mock"
+            }
+          }
+        }
+      },
+      "request": {
+        "schema_version": "1.0",
+        "ts": 1990.0,
+        "node": "hub",
+        "boot_id": "mock-ui-contract",
+        "seq": 100,
+        "data": {
+          "request_id": "mock-ui-contract-100",
+          "kind": "env_suggest",
+          "prompt_code": "adjust_environment",
+          "options": [
+            "accept",
+            "reject"
+          ],
+          "expires_in_s": 180.0,
+          "evidence": [
+            "route:environment"
+          ],
+          "cause": "environment",
+          "c_fatigue": 0.73,
+          "control_plan": {
+            "active": true,
+            "state": "ACTION_ENV",
+            "cause": "environment",
+            "gate": "suggest",
+            "outcome": null,
+            "awaiting_user": true,
+            "commands": [],
+            "advice": [
+              {
+                "rule": "co2_high",
+                "sensor": "co2_ppm",
+                "role": "outside_air",
+                "reason": "no_eligible_device",
+                "kind": "manual_ventilation"
+              }
+            ],
+            "execution_mode": "mock"
+          }
+        }
+      }
+    },
+    {
+      "name": "ventilation_ack_monitor",
+      "state": {
+        "schema_version": "1.0",
+        "ts": 2000.0,
+        "node": "hub",
+        "boot_id": "mock-ui-contract",
+        "seq": 101,
+        "data": {
+          "fsm_state": "MONITOR",
+          "phase": "fatigue",
+          "context": "npc",
+          "c_focus": 0.2,
+          "c_fatigue": 0.73,
+          "confidence": 0.73,
+          "source": "fsm",
+          "gate": "suggest",
+          "cause": null,
+          "reasons": [
+            "thinq:env"
+          ],
+          "sensor_summary": {
+            "present": true,
+            "mmwave": {
+              "motion_state": "active",
+              "motion_level": 40,
+              "distance_cm": 55,
+              "resp_bpm": 15,
+              "resp_valid": true,
+              "heart_bpm": null,
+              "heart_valid": false,
+              "drowsy_state": "AWAKE"
+            },
+            "co2_ppm": 2000,
+            "temp_c": 25,
+            "humidity_pct": 45,
+            "lux": 500,
+            "env_flags": [
+              "co2_high",
+              "co2_rising"
+            ],
+            "valid": true,
+            "control": {
+              "active": false,
+              "last_episode": {
+                "state": "ACTION_ENV",
+                "cause": "environment",
+                "gate": "suggest",
+                "outcome": "advised",
+                "awaiting_user": false,
+                "commands": [],
+                "advice": [
+                  {
+                    "rule": "co2_high",
+                    "sensor": "co2_ppm",
+                    "role": "outside_air",
+                    "reason": "no_eligible_device",
+                    "kind": "manual_ventilation"
+                  }
+                ]
+              },
+              "execution_mode": "mock"
+            }
+          }
+        }
+      },
+      "request": null
+    },
+    {
+      "name": "hot_cooling_suggestion",
+      "state": {
+        "schema_version": "1.0",
+        "ts": 2250.0,
+        "node": "hub",
+        "boot_id": "mock-ui-contract",
+        "seq": 126,
+        "data": {
+          "fsm_state": "ACTION_ENV",
+          "phase": "fatigue",
+          "context": "npc",
+          "c_focus": 0.7,
+          "c_fatigue": 0.73,
+          "confidence": 0.73,
+          "source": "fsm",
+          "gate": "suggest",
+          "cause": "environment",
+          "reasons": [
+            "route:environment"
+          ],
+          "sensor_summary": {
+            "present": true,
+            "mmwave": {
+              "motion_state": "active",
+              "motion_level": 40,
+              "distance_cm": 55,
+              "resp_bpm": 15,
+              "resp_valid": true,
+              "heart_bpm": null,
+              "heart_valid": false,
+              "drowsy_state": "AWAKE"
+            },
+            "co2_ppm": 2000,
+            "temp_c": 32,
+            "humidity_pct": 45,
+            "lux": 500,
+            "env_flags": [
+              "co2_high",
+              "co2_rising",
+              "too_hot"
+            ],
+            "valid": true,
+            "control": {
+              "active": true,
+              "state": "ACTION_ENV",
+              "cause": "environment",
+              "gate": "suggest",
+              "outcome": null,
+              "awaiting_user": true,
+              "commands": [
+                {
+                  "command_id": "b808f3c6a6f6",
+                  "target": "mock_ac",
+                  "op": "set_power",
+                  "value": "on",
+                  "status": "accepted",
+                  "error_code": null,
+                  "reason": "temperature_high",
+                  "state_confirmed": false
+                }
+              ],
+              "advice": [
+                {
+                  "rule": "co2_high",
+                  "sensor": "co2_ppm",
+                  "role": "outside_air",
+                  "reason": "no_eligible_device",
+                  "kind": "manual_ventilation"
+                }
+              ],
+              "execution_mode": "mock"
+            }
+          }
+        }
+      },
+      "request": {
+        "schema_version": "1.0",
+        "ts": 2250.0,
+        "node": "hub",
+        "boot_id": "mock-ui-contract",
+        "seq": 127,
+        "data": {
+          "request_id": "mock-ui-contract-127",
+          "kind": "env_suggest",
+          "prompt_code": "adjust_environment",
+          "options": [
+            "accept",
+            "reject"
+          ],
+          "expires_in_s": 180.0,
+          "evidence": [
+            "route:environment"
+          ],
+          "cause": "environment",
+          "c_fatigue": 0.73,
+          "control_plan": {
+            "active": true,
+            "state": "ACTION_ENV",
+            "cause": "environment",
+            "gate": "suggest",
+            "outcome": null,
+            "awaiting_user": true,
+            "commands": [
+              {
+                "command_id": "b808f3c6a6f6",
+                "target": "mock_ac",
+                "op": "set_power",
+                "value": "on",
+                "status": "accepted",
+                "error_code": null,
+                "reason": "temperature_high",
+                "state_confirmed": false
+              }
+            ],
+            "advice": [
+              {
+                "rule": "co2_high",
+                "sensor": "co2_ppm",
+                "role": "outside_air",
+                "reason": "no_eligible_device",
+                "kind": "manual_ventilation"
+              }
+            ],
+            "execution_mode": "mock"
+          }
+        }
+      }
+    },
+    {
+      "name": "rejected_monitor",
+      "state": {
+        "schema_version": "1.0",
+        "ts": 2260.0,
+        "node": "hub",
+        "boot_id": "mock-ui-contract",
+        "seq": 128,
+        "data": {
+          "fsm_state": "MONITOR",
+          "phase": "fatigue",
+          "context": "npc",
+          "c_focus": 0.7,
+          "c_fatigue": 0.73,
+          "confidence": 0.73,
+          "source": "fsm",
+          "gate": "suggest",
+          "cause": null,
+          "reasons": [
+            "thinq:env"
+          ],
+          "sensor_summary": {
+            "present": true,
+            "mmwave": {
+              "motion_state": "active",
+              "motion_level": 40,
+              "distance_cm": 55,
+              "resp_bpm": 15,
+              "resp_valid": true,
+              "heart_bpm": null,
+              "heart_valid": false,
+              "drowsy_state": "AWAKE"
+            },
+            "co2_ppm": 2000,
+            "temp_c": 32,
+            "humidity_pct": 45,
+            "lux": 500,
+            "env_flags": [
+              "co2_high",
+              "co2_rising",
+              "too_hot"
+            ],
+            "valid": true,
+            "control": {
+              "active": false,
+              "last_episode": {
+                "state": "ACTION_ENV",
+                "cause": "environment",
+                "gate": "suggest",
+                "outcome": "rejected",
+                "awaiting_user": false,
+                "commands": [
+                  {
+                    "command_id": "b808f3c6a6f6",
+                    "target": "mock_ac",
+                    "op": "set_power",
+                    "value": "on",
+                    "status": "skipped",
+                    "error_code": null,
+                    "reason": "temperature_high",
+                    "state_confirmed": false
+                  }
+                ],
+                "advice": [
+                  {
+                    "rule": "co2_high",
+                    "sensor": "co2_ppm",
+                    "role": "outside_air",
+                    "reason": "no_eligible_device",
+                    "kind": "manual_ventilation"
+                  }
+                ]
+              },
+              "execution_mode": "mock"
+            }
+          }
+        }
+      },
+      "request": null
+    },
+    {
+      "name": "failed_monitor",
+      "state": {
+        "schema_version": "1.0",
+        "ts": 2530.0,
+        "node": "hub",
+        "boot_id": "mock-ui-contract",
+        "seq": 156,
+        "data": {
+          "fsm_state": "MONITOR",
+          "phase": "fatigue",
+          "context": "npc",
+          "c_focus": 0.7,
+          "c_fatigue": 0.73,
+          "confidence": 0.73,
+          "source": "fsm",
+          "gate": "suggest",
+          "cause": null,
+          "reasons": [
+            "thinq:env"
+          ],
+          "sensor_summary": {
+            "present": true,
+            "mmwave": {
+              "motion_state": "active",
+              "motion_level": 40,
+              "distance_cm": 55,
+              "resp_bpm": 15,
+              "resp_valid": true,
+              "heart_bpm": null,
+              "heart_valid": false,
+              "drowsy_state": "AWAKE"
+            },
+            "co2_ppm": 2000,
+            "temp_c": 32,
+            "humidity_pct": 45,
+            "lux": 500,
+            "env_flags": [
+              "co2_high",
+              "co2_rising",
+              "too_hot"
+            ],
+            "valid": true,
+            "control": {
+              "active": false,
+              "last_episode": {
+                "state": "ACTION_ENV",
+                "cause": "environment",
+                "gate": "suggest",
+                "outcome": "executed",
+                "awaiting_user": false,
+                "commands": [
+                  {
+                    "command_id": "b3c442eff6e6",
+                    "target": "mock_ac",
+                    "op": "set_power",
+                    "value": "on",
+                    "status": "failed",
+                    "error_code": "network_error",
+                    "reason": "temperature_high",
+                    "state_confirmed": false
+                  }
+                ],
+                "advice": [
+                  {
+                    "rule": "co2_high",
+                    "sensor": "co2_ppm",
+                    "role": "outside_air",
+                    "reason": "no_eligible_device",
+                    "kind": "manual_ventilation"
+                  }
+                ]
+              },
+              "execution_mode": "mock"
+            }
+          }
+        }
+      },
+      "request": null
+    },
+    {
+      "name": "expired_monitor",
+      "state": {
+        "schema_version": "1.0",
+        "ts": 2960.0,
+        "node": "hub",
+        "boot_id": "mock-ui-contract",
+        "seq": 200,
+        "data": {
+          "fsm_state": "MONITOR",
+          "phase": "fatigue",
+          "context": "npc",
+          "c_focus": 0.2,
+          "c_fatigue": 0.73,
+          "confidence": 0.73,
+          "source": "fsm",
+          "gate": "suggest",
+          "cause": null,
+          "reasons": [
+            "thinq:env"
+          ],
+          "sensor_summary": {
+            "present": true,
+            "mmwave": {
+              "motion_state": "active",
+              "motion_level": 40,
+              "distance_cm": 55,
+              "resp_bpm": 15,
+              "resp_valid": true,
+              "heart_bpm": null,
+              "heart_valid": false,
+              "drowsy_state": "AWAKE"
+            },
+            "co2_ppm": 2000,
+            "temp_c": 25,
+            "humidity_pct": 45,
+            "lux": 500,
+            "env_flags": [
+              "co2_high",
+              "co2_rising"
+            ],
+            "valid": true,
+            "control": {
+              "active": false,
+              "last_episode": {
+                "state": "ACTION_ENV",
+                "cause": "environment",
+                "gate": "suggest",
+                "outcome": "expired",
+                "awaiting_user": false,
+                "commands": [],
+                "advice": [
+                  {
+                    "rule": "co2_high",
+                    "sensor": "co2_ppm",
+                    "role": "outside_air",
+                    "reason": "no_eligible_device",
+                    "kind": "manual_ventilation"
+                  }
+                ]
+              },
+              "execution_mode": "mock"
+            }
+          }
+        }
+      },
+      "request": null
+    },
+    {
+      "name": "gateway_missing_timeout",
+      "state": {
+        "schema_version": "1.0",
+        "ts": 1750.0,
+        "node": "hub",
+        "boot_id": "mock-ui-contract",
+        "seq": 75,
+        "data": {
+          "fsm_state": "MONITOR",
+          "phase": "fatigue",
+          "context": "npc",
+          "c_focus": 0.2,
+          "c_fatigue": 0.73,
+          "confidence": 0.73,
+          "source": "fsm",
+          "gate": "suggest",
+          "cause": null,
+          "reasons": [
+            "thinq:env"
+          ],
+          "sensor_summary": {
+            "present": true,
+            "mmwave": {
+              "motion_state": "active",
+              "motion_level": 40,
+              "distance_cm": 55,
+              "resp_bpm": 15,
+              "resp_valid": true,
+              "heart_bpm": null,
+              "heart_valid": false,
+              "drowsy_state": "AWAKE"
+            },
+            "co2_ppm": 700,
+            "temp_c": 25,
+            "humidity_pct": 45,
+            "lux": 50,
+            "env_flags": [
+              "too_dark"
+            ],
+            "valid": true,
+            "control": {
+              "active": false,
+              "last_episode": {
+                "state": "ACTION_ENV",
+                "cause": "environment",
+                "gate": "suggest",
+                "outcome": "executed",
+                "awaiting_user": false,
+                "commands": [
+                  {
+                    "command_id": "8abca3f3085d",
+                    "target": "mock_lamp",
+                    "op": "set_brightness",
+                    "value": 70,
+                    "status": "timeout",
+                    "error_code": "result_timeout",
+                    "reason": "lux_low",
+                    "state_confirmed": false
+                  }
+                ]
+              },
+              "execution_mode": "mock"
+            }
+          }
+        }
+      },
+      "request": null
+    }
+  ]
+}

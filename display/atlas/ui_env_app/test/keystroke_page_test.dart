@@ -1,3 +1,4 @@
+import 'workspace_test_helpers.dart';
 import 'package:deskmate_display/display_state.dart';
 import 'package:deskmate_display/keystroke_page.dart';
 import 'package:deskmate_display/main.dart';
@@ -103,9 +104,11 @@ void main() {
     tester.view.physicalSize = const Size(1024, 600);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(DeskmateApp(
-        settings: SettingsStore(
-            candidates: const [], legacyPostureCandidates: const [])));
+    await pumpDeveloperApp(
+        tester,
+        DeskmateApp(
+            settings: SettingsStore(
+                candidates: const [], legacyPostureCandidates: const [])));
     await tester.pump();
     await tester.sendKeyDownEvent(LogicalKeyboardKey.keyA);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.keyA);

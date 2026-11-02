@@ -34,6 +34,7 @@ LinkSnapshot assembleLinkSnapshot({
   LinkStatus? posture,
   LinkStatus? speaker,
   LinkStatus? lamp,
+  LinkStatus? fan,
   LinkRules rules = const LinkRules(),
 }) {
   final list = <LinkStatus>[];
@@ -108,6 +109,11 @@ LinkSnapshot assembleLinkSnapshot({
           id: LinkId.lamp,
           health: LinkHealth.unconfigured,
           cause: LinkCause.notConfigured));
+  list.add(fan ??
+      const LinkStatus(
+          id: LinkId.fan,
+          health: LinkHealth.unconfigured,
+          cause: LinkCause.notConfigured));
   return LinkSnapshot(list);
 }
 
@@ -171,7 +177,7 @@ String? linkActionLabel(LinkId id) => switch (id) {
       LinkId.environment =>
         '다시 연결',
       LinkId.posture => '다시 찾기',
-      LinkId.speaker || LinkId.lamp => '기기 설정',
+      LinkId.speaker || LinkId.lamp || LinkId.fan => '기기 설정',
       LinkId.keystroke => null,
     };
 
@@ -184,6 +190,9 @@ class ConnectionPage extends StatelessWidget {
     required this.onAction,
     required this.onReloadAll,
     required this.onChangeAddress,
+    this.placementLabel,
+    this.placementApplied,
+    this.onChangePlacement,
   });
 
   final LinkSnapshot snapshot;
@@ -192,6 +201,13 @@ class ConnectionPage extends StatelessWidget {
   final ValueChanged<LinkId> onAction;
   final VoidCallback onReloadAll;
   final VoidCallback onChangeAddress;
+
+  /// 장치 위치 항목. [placementLabel] = 이 앱에 저장된 값(없으면 "미설정"),
+  /// [placementApplied] = Pi 4 자세 서비스에 실제 적용된 값·모델(모르면 null).
+  /// [onChangePlacement] 가 null 이면 항목을 그리지 않는다.
+  final String? placementLabel;
+  final String? placementApplied;
+  final VoidCallback? onChangePlacement;
 
   @override
   Widget build(BuildContext context) {
@@ -223,6 +239,51 @@ class ConnectionPage extends StatelessWidget {
           ),
         ]),
         const SizedBox(height: 16),
+        if (onChangePlacement != null)
+          Card(
+            key: const ValueKey('placement-row'),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(children: [
+                const Padding(
+                  padding: EdgeInsets.only(top: 3),
+                  child: Icon(Icons.place_outlined,
+                      size: 16, color: DeskmateColors.inkMuted),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(children: [
+                          const Text('장치 위치',
+                              style: TextStyle(fontWeight: FontWeight.w700)),
+                          const SizedBox(width: 8),
+                          Text(placementLabel ?? '미설정',
+                              key: const ValueKey('placement-current'),
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  color: DeskmateColors.accentStrong)),
+                        ]),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Pi 4 자세 서비스: ${placementApplied ?? '알 수 없음'}',
+                          key: const ValueKey('placement-applied'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall
+                              ?.copyWith(color: DeskmateColors.inkMuted),
+                        ),
+                      ]),
+                ),
+                TextButton(
+                  key: const ValueKey('placement-change'),
+                  onPressed: onChangePlacement,
+                  child: const Text('바꾸기'),
+                ),
+              ]),
+            ),
+          ),
         for (final status in snapshot.all)
           _LinkRow(
             status: status,

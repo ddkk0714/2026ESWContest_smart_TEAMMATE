@@ -32,6 +32,29 @@ SET_LOOP_TASK_STACK_SIZE(16 * 1024);
 #define DESKMATE_TOF_SWAP 0
 #endif
 
+// USB 직결(ESP32 USB-C ↔ Pi 4 USB-A, 10-22): UART2 프레임을 USB diag(UART0) 로도 그대로 낸다(같은 COBS+CRC).
+// 이 모드에서 USB 는 사람이 읽는 JSON·텍스트 진단 포트가 아니라 Pi 4 수신기 전용이므로, 진단 출력은 버리고
+// 한 글자 USB 명령도 받지 않는다(수신 쪽 tty 가 에코하면 바이트가 명령 글자로 되돌아올 수 있다).
+// 운영 요약(센서 마스크·펌웨어 버전)은 0xF0 하트비트에 있고, 원본 격자는 Pi 4 중계기 :8772/raw 로 본다.
+#ifndef DESKMATE_USB_FRAMES
+#define DESKMATE_USB_FRAMES 0
+#endif
+#if DESKMATE_USB_FRAMES
+class NullStream : public Stream {
+ public:
+  size_t write(uint8_t) override { return 1; }
+  size_t write(const uint8_t*, size_t n) override { return n; }
+  int available() override { return 0; }
+  int read() override { return -1; }
+  int peek() override { return -1; }
+  void flush() override {}
+};
+NullStream null_diag;
+Stream& diag = null_diag;  // 진단·JSON 은 버린다
+#else
+Stream& diag = diag;     // 기본: USB 는 JSON 진단 + 한 글자 명령
+#endif
+
 TofArrayConfig tofConfig() {
   TofArrayConfig c;
   c.wire = &Wire1;
@@ -104,8 +127,20 @@ bool periodDue(uint32_t now_ms, uint32_t& next_ms, uint32_t period_ms) {
   return true;
 }
 
-void writeMmwaveUart(uint32_t now_ms, const MmwaveSample& sample, DrowsyState drowsy_state) {
+// 프레임을 Pi 4 링크로 보낸다: UART2(기본)와, USB 직결 모드면 USB diag 에도 같은 바이트를.
+bool writeFrame(uint8_t type, uint16_t sequence, uint32_t now_ms, const uint8_t* payload, uint16_t length) {
+  bool ok = true;
 #if DESKMATE_UART2_TX
+  ok = writeUartFrame(pi4_serial, type, sequence, now_ms, payload, length) && ok;
+#endif
+#if DESKMATE_USB_FRAMES
+  ok = writeUartFrame(Serial, type, sequence, now_ms, payload, length) && ok;
+#endif
+  return ok;
+}
+
+void writeMmwaveUart(uint32_t now_ms, const MmwaveSample& sample, DrowsyState drowsy_state) {
+#if DESKMATE_UART2_TX || DESKMATE_USB_FRAMES
   const uint16_t distance = sample.distance_valid ? sample.distance_cm : kFrameNullU16;
   const uint8_t payload[] = {
       static_cast<uint8_t>(sample.present),
@@ -120,25 +155,25 @@ void writeMmwaveUart(uint32_t now_ms, const MmwaveSample& sample, DrowsyState dr
       static_cast<uint8_t>(wireDrowsyState(drowsy_state)),
       static_cast<uint8_t>(sample.valid),
   };
-  writeUartFrame(pi4_serial, kFrameTypeMmwave, mmwave_sequence++, now_ms, payload,
+  writeFrame(kFrameTypeMmwave, mmwave_sequence++, now_ms, payload,
                  sizeof(payload));
 #endif
 }
 
 void writeEnvironmentUart(uint32_t now_ms, const EnvironmentSample& sample) {
-#if DESKMATE_UART2_TX
+#if DESKMATE_UART2_TX || DESKMATE_USB_FRAMES
   uint8_t payload[kEnvironmentPayloadSize];
   encodeEnvironmentPayload(sample, payload);
-  writeUartFrame(pi4_serial, kFrameTypeEnvironment, environment_sequence++, now_ms, payload,
+  writeFrame(kFrameTypeEnvironment, environment_sequence++, now_ms, payload,
                  sizeof(payload));
 #endif
 }
 
 void writeTofFeatureUart(uint32_t now_ms) {
-#if DESKMATE_UART2_TX
+#if DESKMATE_UART2_TX || DESKMATE_USB_FRAMES
   uint8_t payload[kTofFeaturePayloadSize];
   encodeTofFeaturePayload(tof.features(), tof.okMask(), payload);
-  if (writeUartFrame(pi4_serial, kFrameTypeTofFeatures, tof_sequence++, now_ms, payload,
+  if (writeFrame(kFrameTypeTofFeatures, tof_sequence++, now_ms, payload,
                      sizeof(payload))) {
     ++tof_feature_tx;
   }
@@ -146,10 +181,10 @@ void writeTofFeatureUart(uint32_t now_ms) {
 }
 
 void writeTofPostureUart(uint32_t now_ms) {
-#if DESKMATE_UART2_TX
+#if DESKMATE_UART2_TX || DESKMATE_USB_FRAMES
   uint8_t payload[kTofPosturePayloadSize];
   encodeTofPosturePayload(tof.features(), payload);
-  writeUartFrame(pi4_serial, kFrameTypeTofPosture, tof_sequence++, now_ms, payload,
+  writeFrame(kFrameTypeTofPosture, tof_sequence++, now_ms, payload,
                  sizeof(payload));
 #endif
 }
@@ -158,7 +193,7 @@ void writeTofPostureUart(uint32_t now_ms) {
 // 자세 AI 모델은 Pi 4 에서 센서별로 추론해 융합한다(10-17 표준 — TofPayload.h). 16×8 스티칭은 보내지 않는다.
 // 한 프레임이라도 못 쓰면 나머지는 건너뛴다(hub 는 frame_id 가 바뀌면 미완성 표본을 폐기한다).
 void writeTofGridUart(uint32_t now_ms) {
-#if DESKMATE_UART2_TX
+#if DESKMATE_UART2_TX || DESKMATE_USB_FRAMES
   static uint8_t payload[kTofGridMaxPayloadSize];  // 200 B — loop 스택 대신 정적
   const uint8_t sensors = tof.okCount();
   if (sensors == 0) return;
@@ -172,7 +207,7 @@ void writeTofGridUart(uint32_t now_ms) {
     const uint16_t len = encodeTofSensorFrame(tof.sensorDistance(i), tof.sensorStatus(i), kTofSensorW, kTofSensorH,
                                               i, sensors, frame_id, tof.okMask(), flags, payload);
     if (len == 0 ||
-        !writeUartFrame(pi4_serial, kFrameTypeTofGrid, tof_grid_sequence++, now_ms, payload, len)) {
+        !writeFrame(kFrameTypeTofGrid, tof_grid_sequence++, now_ms, payload, len)) {
       return;
     }
     ++tof_grid_tx;
@@ -192,12 +227,12 @@ void writeTofGridJson(uint32_t now_ms) {
                         (DESKMATE_TOF_FLIP_COLS ? kTofGridFlagFlipCols : 0) |
                         (DESKMATE_TOF_STACK_ROWS ? kTofGridFlagStackRows : 0) |
                         (DESKMATE_TOF_SWAP ? kTofGridFlagSwap : 0);
-  writeTofGridJson(Serial, now_ms, static_cast<uint8_t>(tof_grid_frame_id - 1), tof.okMask(), flags, kTofSensorW,
+  writeTofGridJson(diag, now_ms, static_cast<uint8_t>(tof_grid_frame_id - 1), tof.okMask(), flags, kTofSensorW,
                    kTofSensorH, DESKMATE_TOF_COUNT, dist, status);
 }
 
 void writeHeartbeatUart(uint32_t now_ms) {
-#if DESKMATE_UART2_TX
+#if DESKMATE_UART2_TX || DESKMATE_USB_FRAMES
   const uint16_t version = DESKMATE_FIRMWARE_VERSION;
   // 8번째 바이트 tof_ok(b0 = A, b1 = B)는 10-16 추가. 이전 디코더는 7 B 까지만 읽는다.
   const uint8_t payload[] = {
@@ -210,7 +245,7 @@ void writeHeartbeatUart(uint32_t now_ms) {
       static_cast<uint8_t>(mmwave_ready),
       tof.okMask(),
   };
-  writeUartFrame(pi4_serial, kFrameTypeHeartbeat, heartbeat_sequence++, now_ms, payload,
+  writeFrame(kFrameTypeHeartbeat, heartbeat_sequence++, now_ms, payload,
                  sizeof(payload));
 #endif
 }
@@ -219,15 +254,15 @@ void writeHeartbeatUart(uint32_t now_ms) {
 //   b  바른 자세 기준선 다시 잡기   g  다음 프레임을 배경으로(빈 자리에서)   r  추정기 초기화
 //   z  원본 8×8 USB 출력(tof_grid) 켜기/끄기 — 기본 꺼짐   i  환경 I2C 버스 주소 스캔(SCD41 0x62·BH1750 0x23 확인)
 void handleUsbCommands() {
-  while (Serial.available() > 0) {
-    switch (Serial.read()) {
-      case 'b': tof.estimator().resetBaseline(); Serial.println(F("# tof baseline reset")); break;
-      case 'g': tof.estimator().requestBackgroundCapture(); Serial.println(F("# tof background capture")); break;
-      case 'r': tof.estimator().reset(); Serial.println(F("# tof estimator reset")); break;
-      case 'i': environment_sensors.scanBus(Serial); break;
+  while (diag.available() > 0) {
+    switch (diag.read()) {
+      case 'b': tof.estimator().resetBaseline(); diag.println(F("# tof baseline reset")); break;
+      case 'g': tof.estimator().requestBackgroundCapture(); diag.println(F("# tof background capture")); break;
+      case 'r': tof.estimator().reset(); diag.println(F("# tof estimator reset")); break;
+      case 'i': environment_sensors.scanBus(diag); break;
       case 'z':
         usb_tof_grid = !usb_tof_grid;
-        Serial.println(usb_tof_grid ? F("# tof_grid usb on") : F("# tof_grid usb off"));
+        diag.println(usb_tof_grid ? F("# tof_grid usb on") : F("# tof_grid usb off"));
         break;
       default: break;
     }
@@ -235,22 +270,22 @@ void handleUsbCommands() {
 }
 
 void printTofStatus() {
-  Serial.print(F("VL53L8CX x"));
-  Serial.print(DESKMATE_TOF_COUNT);
-  Serial.print(F(": ok_mask="));
-  Serial.print(tof.okMask());
-  Serial.print(F(" grid="));
-  Serial.print(tof.width());
-  Serial.print('x');
-  Serial.print(tof.height());
+  diag.print(F("VL53L8CX x"));
+  diag.print(DESKMATE_TOF_COUNT);
+  diag.print(F(": ok_mask="));
+  diag.print(tof.okMask());
+  diag.print(F(" grid="));
+  diag.print(tof.width());
+  diag.print('x');
+  diag.print(tof.height());
   for (uint8_t i = 0; i < DESKMATE_TOF_COUNT; ++i) {
     if (tof.sensorOk(i) || tof.errorWhere(i) == nullptr) continue;
-    Serial.print(i == 0 ? F(" A=") : F(" B="));
-    Serial.print(tof.errorWhere(i));
-    Serial.print('/');
-    Serial.print(tof.errorCode(i));
+    diag.print(i == 0 ? F(" A=") : F(" B="));
+    diag.print(tof.errorWhere(i));
+    diag.print('/');
+    diag.print(tof.errorCode(i));
   }
-  Serial.println();
+  diag.println();
 }
 
 void setup() {
@@ -258,18 +293,21 @@ void setup() {
   // 115200 에서 1.1 kB 는 95 ms 라 기본 버퍼면 ToF 폴링·Pi 4 송신 주기가 밀린다.
   Serial.setTxBufferSize(4096);
   Serial.begin(kUsbBaud);
+#if DESKMATE_USB_FRAMES
+  Serial.write(static_cast<uint8_t>(0));  // 부팅 ROM 텍스트를 끊어 첫 프레임이 섞이지 않게
+#endif
   // 능동 보고를 놓치지 않도록 수신 버퍼를 키운다. begin() 앞에서 해야 적용된다
   Serial1.setRxBufferSize(1024);
   Serial1.begin(kC1001Baud, SERIAL_8N1, kC1001RxPin, kC1001TxPin);
   pi4_serial.begin(kPi4Baud, SERIAL_8N1, kPi4RxPin, kPi4TxPin);
 
-  Serial.println(F("DESKMATE ESP32 sensor node starting"));
+  diag.println(F("DESKMATE ESP32 sensor node starting"));
   mmwave_ready = mmwave.begin();
-  Serial.println(mmwave_ready ? F("C1001 ready") : F("C1001 initialization failed"));
+  diag.println(mmwave_ready ? F("C1001 ready") : F("C1001 initialization failed"));
   drowsy_detector.begin(millis());
   environment_sensors.begin(millis(), environment_sample);
   // ToF 는 센서당 init(펌웨어 업로드)에 수 초가 걸린다. 실패한 센서는 loop 에서 5 s 마다 다시 올린다.
-  tof.begin(millis(), &Serial);
+  tof.begin(millis(), &diag);
   printTofStatus();
 }
 
@@ -293,11 +331,11 @@ void loop() {
     mmwave_ready = mmwave.begin();
     if (mmwave_ready) {
       c1001_retry_interval_ms = kC1001RetryMs;
-      Serial.println(F("C1001 ready (late init)"));
+      diag.println(F("C1001 ready (late init)"));
     } else if (c1001_retry_interval_ms < kC1001RetryMaxMs) {
       c1001_retry_interval_ms *= 2;
-      Serial.print(F("C1001 retry backoff -> "));
-      Serial.println(c1001_retry_interval_ms);
+      diag.print(F("C1001 retry backoff -> "));
+      diag.println(c1001_retry_interval_ms);
     }
   }
   if (mmwave_ready) drowsy_detector.update(mmwave, now_ms);
@@ -319,7 +357,7 @@ void loop() {
     if (now_ms - last_tof_posture_ms >= kTofPosturePeriodMs) {
       last_tof_posture_ms = now_ms;
       writeTofPostureUart(now_ms);
-      writeTofJson(Serial, now_ms, tof.features(), tof.okMask(), tof_grid_tx, tof_feature_tx);
+      writeTofJson(diag, now_ms, tof.features(), tof.okMask(), tof_grid_tx, tof_feature_tx);
     }
   } else if (now_ms - last_tof_posture_ms >= kTofRetryMs) {
     last_tof_posture_ms = now_ms;
@@ -330,14 +368,14 @@ void loop() {
     last_mmwave_ms = now_ms;
     const MmwaveSample sample = mmwave_ready ? mmwave.sample(now_ms) : MmwaveSample{};
     const DrowsyState drowsy_state = drowsy_detector.state();
-    writeMmwaveJson(Serial, now_ms, sample, drowsy_state);
+    writeMmwaveJson(diag, now_ms, sample, drowsy_state);
     writeMmwaveUart(now_ms, sample, drowsy_state);
   }
 
   environment_sensors.poll(now_ms, environment_sample);
   if (now_ms - last_environment_ms >= kEnvironmentPeriodMs) {
     last_environment_ms = now_ms;
-    writeEnvironmentJson(Serial, now_ms, environment_sample);
+    writeEnvironmentJson(diag, now_ms, environment_sample);
     writeEnvironmentUart(now_ms, environment_sample);
   }
   if (now_ms - last_heartbeat_ms >= kMmwavePeriodMs) {

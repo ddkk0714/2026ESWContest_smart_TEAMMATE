@@ -61,6 +61,12 @@ class Features:
             "input_active": self.input_active,
             "flight_cv": self.flight_cv,
             "mouse_event_rate": self.mouse_event_rate,
+            # hub 피로 특징(hub/deskmate_hub/fatigue/features.py)은 valid 일 때만 키 특징을 읽고,
+            # event_count / window_s 로 분당 타건 수를 만든다(10-26). 개수만이라 키 값은 여전히 없다.
+            # valid = "표본이 제대로 계산됐다" — 타이핑 여부는 typing_active 가 따로 말한다. Pi 5 키스트로크 탭(PR #37)과
+            # 연결 화면(PR #43)은 valid=false 를 '유효하지 않은 표본'·끊김으로 보므로, 미입력 창도 true 다.
+            "event_count": self.keydown_count,
+            "valid": True,
         }
 
 

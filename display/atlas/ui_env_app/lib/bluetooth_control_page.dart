@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'bluetooth_link.dart';
 import 'bluetooth_service.dart';
+import 'fan_control.dart';
 import 'feedback_policy.dart';
 import 'link_status.dart';
 import 'music_playback.dart';
@@ -15,6 +16,7 @@ class BluetoothControlPage extends StatefulWidget {
     required this.feedback,
     required this.music,
     required this.links,
+    this.onManualAdjust,
   });
   final AtlasBluetoothService bluetooth;
   final FeedbackCoordinator feedback;
@@ -22,6 +24,9 @@ class BluetoothControlPage extends StatefulWidget {
 
   /// 저장·자동 재연결을 맡는다. 연결은 전부 이것을 거쳐야 저장된다.
   final BluetoothLinkManager links;
+
+  /// 사람이 직접 램프 밝기·선풍기 단계를 바꿨을 때(target_id, 이전 값(모르면 null), 새 값). hub 에 manual_adjust 로 간다.
+  final void Function(String targetId, int? from, int to)? onManualAdjust;
 
   @override
   State<BluetoothControlPage> createState() => _BluetoothControlPageState();
@@ -37,12 +42,44 @@ class _BluetoothControlPageState extends State<BluetoothControlPage> {
   Future<void> _testBrightness(int value) async {
     setState(() => _testing = true);
     try {
+      // 사람이 직접 바꾼 값만 hub 에 manual_adjust 로 알린다(hub 명령·국면 조명은 제외). from 은 실제 이전 상태.
+      final from = widget.feedback.lamp.previousBrightness;
       final ok = await widget.feedback.lamp.setBrightness(value);
+      if (ok) widget.onManualAdjust?.call('desk_lamp', from, value);
       _notice(ok
           ? '밝기 명령을 전송했습니다. 실제 조명 변화를 확인하세요.'
           : '조명 쓰기 실패: ${widget.feedback.lamp.lastError ?? '램프를 먼저 연결하세요'}');
     } catch (error) {
       _notice('조명 테스트 실패: $error');
+    } finally {
+      if (mounted) setState(() => _testing = false);
+    }
+  }
+
+  /// 허브 명령과 같은 쓰기 경로(BleFanControl.send)로 보낸다. 자동 피드백 스위치와 무관하다.
+  Future<void> _testFan(List<int> frame, String label) async {
+    final fan = widget.feedback.fan;
+    if (fan == null) return;
+    setState(() => _testing = true);
+    try {
+      final before = fan.lastState;
+      final from = before == null ? null : (before.power ? before.level : 0);
+      final sent = await fan.send(frame);
+      final state = sent.state;
+      if (sent.written) {
+        // [0x03, n] = 단계 n · [0x01, 0] = 끔(단계 0). 읽은 상태가 있으면 그 단계가 더 정확하다.
+        final to = state == null
+            ? (frame.first == 0x03 ? frame[1] : 0)
+            : (state.power ? state.level : 0);
+        widget.onManualAdjust?.call('vent_fan', from, to);
+      }
+      _notice(!sent.written
+          ? '선풍기 쓰기 실패: ${fan.lastError ?? '선풍기를 먼저 연결하세요'}'
+          : state == null
+              ? '선풍기 $label 명령을 보냈습니다. 실제 바람을 확인하세요.'
+              : '선풍기 $label — 지금 ${state.summary}');
+    } catch (error) {
+      _notice('선풍기 테스트 실패: $error');
     } finally {
       if (mounted) setState(() => _testing = false);
     }
@@ -117,6 +154,13 @@ class _BluetoothControlPageState extends State<BluetoothControlPage> {
         : '${device.name}을(를) 램프로 저장했지만 연결에 실패했습니다. 다시 연결 또는 조명 테스트를 눌러 주세요.');
   }
 
+  Future<void> _selectFan(BluetoothDeviceInfo device) async {
+    final ok = await widget.links.selectFan(device);
+    _notice(ok
+        ? '${device.name}을(를) 선풍기로 연결하고 저장했습니다. 허브의 선풍기 명령을 이 앱이 실행합니다.'
+        : '${device.name}을(를) 선풍기로 저장했지만 연결에 실패했습니다. 다시 연결 또는 선풍기 테스트를 눌러 주세요.');
+  }
+
   Future<void> _connectPair(
       BluetoothDeviceInfo speaker, BluetoothDeviceInfo lamp) async {
     try {
@@ -131,6 +175,7 @@ class _BluetoothControlPageState extends State<BluetoothControlPage> {
 
   String _roleLabel(BluetoothDeviceInfo device) {
     if (device.isAudioSink) return '오디오 기기 · A2DP 스피커';
+    if (isFanDevice(device)) return 'BLE · DESKMATE 선풍기';
     if (device.isBleOnly) return 'BLE · 램프 제어(GATT)';
     return '기타';
   }
@@ -165,10 +210,11 @@ class _BluetoothControlPageState extends State<BluetoothControlPage> {
                       contentPadding: EdgeInsets.zero,
                       title: const Text('상태 기반 조명·음악 피드백'),
                       subtitle: const Text(
-                          '제안 수락·자동 개입 뒤 실행, recovery/idle/end에서 음악 정지'),
+                          '제안 수락·자동 개입 뒤 실행, recovery/idle/end에서 음악 정지. 허브의 램프·선풍기 명령도 이 스위치가 켜져 있어야 실행. '
+                          '켜고 끈 상태는 저장되어 앱을 다시 켜도 그대로입니다(처음에는 켜짐).'),
                       value: widget.feedback.enabled,
-                      onChanged: (value) =>
-                          setState(() => widget.feedback.enabled = value),
+                      onChanged: (value) => setState(
+                          () => widget.links.setFeedbackEnabled(value)),
                     ),
                     Row(children: [
                       const Icon(Icons.volume_up_rounded),
@@ -198,6 +244,19 @@ class _BluetoothControlPageState extends State<BluetoothControlPage> {
                             : () => _testBrightness(255),
                         child: const Text('조명 100% 테스트'),
                       ),
+                      if (widget.feedback.fan case final fan?)
+                        for (final (key, label, frame) in [
+                          ('fan-test-1', '1단', [0x03, 1]),
+                          ('fan-test-3', '3단', [0x03, 3]),
+                          ('fan-test-off', '끄기', [0x01, 0]),
+                        ])
+                          OutlinedButton(
+                            key: ValueKey(key),
+                            onPressed: _testing || !fan.configured
+                                ? null
+                                : () => _testFan(frame, label),
+                            child: Text('선풍기 $label 테스트'),
+                          ),
                       OutlinedButton(
                         key: const ValueKey('music-test'),
                         onPressed: _testMusic,
@@ -244,7 +303,7 @@ class _BluetoothControlPageState extends State<BluetoothControlPage> {
                   child: Center(
                     child: Text(_scanning
                         ? '기기를 찾는 중입니다…'
-                        : '검색을 눌러 Bluetooth 스피커 또는 iLink 램프를 찾으세요. '
+                        : '검색을 눌러 Bluetooth 스피커, iLink 램프 또는 DESKMATE-FAN 선풍기를 찾으세요. '
                             '스피커가 목록에 없으면 페어링 모드로 두고 다시 검색하세요.'),
                   ),
                 ),
@@ -253,15 +312,26 @@ class _BluetoothControlPageState extends State<BluetoothControlPage> {
                   child: ListTile(
                     leading: Icon(device.isAudioSink
                         ? Icons.speaker_rounded
-                        : Icons.lightbulb_outline_rounded),
+                        : isFanDevice(device)
+                            ? Icons.air_rounded
+                            : Icons.lightbulb_outline_rounded),
                     title: Text(device.name),
                     subtitle: Text('${device.address} · ${_roleLabel(device)}'),
                     trailing: Wrap(spacing: 6, children: [
-                      OutlinedButton(
-                        onPressed:
-                            device.isBleOnly ? () => _selectLamp(device) : null,
-                        child: const Text('램프 선택'),
-                      ),
+                      if (isFanDevice(device))
+                        OutlinedButton(
+                          onPressed: widget.feedback.fan == null
+                              ? null
+                              : () => _selectFan(device),
+                          child: const Text('선풍기 선택'),
+                        )
+                      else
+                        OutlinedButton(
+                          onPressed: device.isBleOnly
+                              ? () => _selectLamp(device)
+                              : null,
+                          child: const Text('램프 선택'),
+                        ),
                       FilledButton(
                         onPressed: device.isAudioSink
                             ? () => _connectSpeaker(device)
@@ -277,7 +347,7 @@ class _BluetoothControlPageState extends State<BluetoothControlPage> {
       );
 }
 
-/// 저장된 스피커·램프와 지금 상태, 다시 연결·잊기.
+/// 저장된 스피커·램프·선풍기와 지금 상태, 다시 연결·잊기.
 class _SavedDevices extends StatelessWidget {
   const _SavedDevices({required this.links});
 
@@ -302,6 +372,15 @@ class _SavedDevices extends StatelessWidget {
         busy: links.lampBusy,
         reconnect: links.reconnectLamp,
       ),
+      if (links.feedback.fan != null)
+        (
+          id: LinkId.fan,
+          icon: Icons.air_rounded,
+          saved: links.savedFan,
+          status: links.fanStatus,
+          busy: links.fanBusy,
+          reconnect: links.reconnectFan,
+        ),
     ];
     return Card(
       key: const ValueKey('bluetooth-saved'),

@@ -84,7 +84,46 @@ python -m collector
 pytest collector/tests -v
 ```
 
-옵션: `--port`, `--node`, `--window`, `--period`. 환경변수(`DESKMATE_BROKER` 등)로도 지정 가능.
+### 실기(핫스팟) 연동 — 수험생·대학생 개인화 확인 때
+
+노트북을 Pi 4 와 같은 휴대폰 핫스팟에 붙인 뒤 저장소 루트에서:
+
+```bash
+python -m collector --target hotspot    # = --broker 172.20.10.3 (Pi 4 wlan0)
+python -m collector --target lan        # = --broker 172.16.34.199 (연구실 LAN · Pi 5 직결)
+```
+
+- 켜면 `[mqtt] connected → 172.20.10.3:1883` 이 뜨고 1초마다 `[PUB]` 줄이 나온다. 핫스팟이 끊기면 `disconnected (자동 재연결)` 뒤
+  1→30 s 백오프로 다시 붙는다. 그동안 값은 `logs/keystroke.jsonl` 에만 남는다.
+- Pi 4 에서 수신 확인: `ssh pi4-via-pi5 '/data/share/deskmate/bin/mosquitto_sub -h 127.0.0.1 -t deskmate/sensor/keystroke -v'`
+- hub 반영 확인: `deskmate/state/phase` 의 `sensor_summary.keystroke` 가 이 값이고, 타이핑하면 `context` 가 `npc` → `mixed`/`pc` 로
+  간다(demo 프로파일은 `pc_ratio_window_sec` 120 s, 기본 900 s 창의 입력 비율).
+- 대학생 세션은 타이핑 중 켜 둔다. 수험생(책·필기) 세션도 켜 두면 입력이 없어 `context: npc` 로 잡히는지 함께 확인된다.
+- Pi 5 개발자 앱 키보드 탭(PR #37·#43)에서도 보인다. 그 탭은 표본 `ts`(노트북 시계)와 Pi 5 시계 차이로 5 s 넘으면 '수신 끊김'이라
+  두 시계가 맞아야 한다(10-26 실측: Pi 5 가 노트북보다 88 s 늦음 — 늦은 쪽이면 통과, Pi 5 가 앞서면 끊김으로 보인다).
+- 보내는 것은 타이밍 통계와 keydown 개수뿐이다. 어떤 키인지는 어디에도 남지 않는다.
+
+### Pi 4 자동 찾기·로그인 때 자동 시작 (11-02)
+
+```bash
+python -m collector --broker auto       # 같은 Wi-Fi 에서 DESKMATE hub 브로커를 스스로 찾는다
+```
+
+- 찾는 순서: 지난번 찾은 주소(`%LOCALAPPDATA%\DESKMATE\collector_broker.json`) → `--target` 별칭 주소 → 노트북 IPv4 마다 같은 /24 전체.
+  1883 포트가 열린 기기 중 hub 의 retain 토픽(`deskmate/health/hub`·`deskmate/state/phase`)이 실제로 오는 브로커만 고른다
+  (핫스팟 공유기 등은 걸러진다). 11-02 핫스팟 실측: 힌트 없이 Pi 4 `172.20.10.6` 을 4.5 s 에 찾음.
+- 처음엔 찾을 때까지 15 s 마다 다시 찾고, 붙은 뒤엔 30 s 넘게 끊기면(핫스팟·장소가 바뀐 경우) 다시 찾는다. 그 사이 값은
+  `logs/keystroke.jsonl` 에만 남는다.
+- 로그인 때 창 없이 자동으로 켜기(Windows 작업 스케줄러, 현재 사용자):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File collector\autostart.ps1 -Python <venv>\Scripts\pythonw.exe   # 등록 + 지금 켜기
+powershell -ExecutionPolicy Bypass -File collector\autostart.ps1 -Uninstall                           # 해제 + 끄기
+```
+
+  작업 이름은 "DESKMATE keystroke collector". `-Python` 을 생략하면 `<저장소>\.venv\Scripts\pythonw.exe` 를 쓴다.
+
+옵션: `--target {hotspot,lan}`, `--broker <ip|auto>`, `--port`, `--node`, `--window`, `--period`. 환경변수(`DESKMATE_BROKER` 등)로도 지정 가능.
 브로커를 생략하면 `localhost:1883`을 사용하며, 연결되지 않아도 `logs/keystroke.jsonl`에
 동일한 MQTT envelope를 기록한다. `logs/`는 수집 데이터이므로 Git에 포함하지 않는다.
 

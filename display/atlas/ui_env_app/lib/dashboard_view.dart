@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -6,11 +7,16 @@ import 'app_motion.dart';
 import 'deskmate_theme.dart';
 import 'display_state.dart';
 import 'intervention.dart';
+import 'control_state.dart';
+import 'environment_control_view.dart';
+import 'state_source.dart' show PendingRequest;
 
 class DashboardView extends StatelessWidget {
   const DashboardView({
     super.key,
     required this.state,
+    this.controlProposal,
+    this.controlConnected = false,
     this.displayMessage,
     this.hasPendingRequest = false,
     this.pinAmbient = false,
@@ -26,19 +32,28 @@ class DashboardView extends StatelessWidget {
     this.liveKeys,
     this.autoNotice,
     this.onUndoAuto,
+    this.onUndoEnvironment,
     this.onDismissAuto,
     this.suggestionRemaining,
     this.onCorrect,
     this.focusSummary,
+    this.pendingRequest,
   });
 
+  final ControlProposal? controlProposal;
+  final bool controlConnected;
   final DisplayState state;
   final String? displayMessage;
   final bool hasPendingRequest;
 
+  /// 떠 있는 질문의 상세. checkin_suggest("지금 피곤하세요?")·vent_suggest("창문을 N분 열어 주세요")는
+  /// FSM 원인과 무관한 문구를 쓴다. null 이면 원인(cause) 기준 문구.
+  final PendingRequest? pendingRequest;
+
   /// 자동 실행 뒤 알림. 있으면 다른 화면보다 먼저 띄운다.
   final AutoNotice? autoNotice;
   final VoidCallback? onUndoAuto;
+  final VoidCallback? onUndoEnvironment;
   final VoidCallback? onDismissAuto;
 
   /// 제안 카드의 남은 응답 시간. 만료되면 앱이 무응답(timeout)을 보낸다.
@@ -91,7 +106,10 @@ class DashboardView extends StatelessWidget {
         state: state,
         onFeedback: onFeedback,
         remaining: suggestionRemaining,
+        controlProposal: controlProposal,
+        controlConnected: controlConnected,
         onCorrect: onCorrect,
+        request: pendingRequest,
       );
     } else if (pinAmbient) {
       // 자동 순환이 꺼져 있으면 국면이 바뀌어도 화면을 바꾸지 않는다.
@@ -121,6 +139,8 @@ class DashboardView extends StatelessWidget {
         state: state,
         onFeedback: onFeedback,
         remaining: suggestionRemaining,
+        controlProposal: controlProposal,
+        controlConnected: controlConnected,
         onCorrect: onCorrect,
       );
     } else if (phase == 'recovery') {
@@ -160,11 +180,25 @@ class DashboardView extends StatelessWidget {
             ],
           )
         : animatedContent;
-    if (message == null || message.isEmpty) return dashboardContent;
+    final control = state.control;
+    final showResult = control != null &&
+        !control.awaitingUser &&
+        (control.commands.isNotEmpty ||
+            control.advice.isNotEmpty ||
+            control.outcome.isNotEmpty);
+    if ((message == null || message.isEmpty) && !showResult) {
+      return dashboardContent;
+    }
     return Column(children: [
-      DisplayMessageBanner(message: message),
-      const SizedBox(height: 10),
+      if (message != null && message.isNotEmpty) ...[
+        DisplayMessageBanner(message: message),
+        const SizedBox(height: 10),
+      ],
       Expanded(child: dashboardContent),
+      if (showResult) ...[
+        const SizedBox(height: 8),
+        EnvironmentControlResult(control: control, onUndo: onUndoEnvironment),
+      ],
     ]);
   }
 }
@@ -222,7 +256,7 @@ class DisplayMessageBanner extends StatelessWidget {
       );
 }
 
-class AmbientView extends StatelessWidget {
+class AmbientView extends StatefulWidget {
   const AmbientView({
     super.key,
     required this.state,
@@ -236,10 +270,34 @@ class AmbientView extends StatelessWidget {
   final VoidCallback? onCorrect;
 
   @override
+  State<AmbientView> createState() => _AmbientViewState();
+}
+
+class _AmbientViewState extends State<AmbientView> {
+  late final Timer _clockTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    // The wall clock keeps ticking even when demo state updates are paused.
+    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _clockTimer.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final now = state.timestamp.millisecondsSinceEpoch == 0
-        ? DateTime.now()
-        : state.timestamp;
+    final now = DateTime.now();
+    final state = widget.state;
+    final onDetail = widget.onDetail;
+    final focusSummary = widget.focusSummary;
+    final onCorrect = widget.onCorrect;
     return Padding(
       padding: const EdgeInsets.fromLTRB(22, 50, 22, 8),
       child: Row(children: [
@@ -376,11 +434,19 @@ class SuggestionView extends StatelessWidget {
     super.key,
     required this.state,
     required this.onFeedback,
+    this.controlProposal,
+    this.controlConnected = false,
     this.remaining,
     this.onCorrect,
+    this.request,
   });
+  final ControlProposal? controlProposal;
+  final bool controlConnected;
   final DisplayState state;
   final ValueChanged<String> onFeedback;
+
+  /// hub 질문의 상세(kind). null 이면 원인 기준 문구.
+  final PendingRequest? request;
 
   /// 응답 제한 시간까지 남은 시간. 모르면 표시하지 않는다.
   final Duration? remaining;
@@ -388,6 +454,13 @@ class SuggestionView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (state.fsmState == 'ACTION_ENV') {
+      return EnvironmentControlSuggestion(
+          state: state,
+          proposal: controlProposal,
+          connected: controlConnected,
+          onFeedback: onFeedback);
+    }
     return Stack(children: [
       Positioned.fill(
         child: Row(children: [
@@ -431,8 +504,8 @@ class SuggestionView extends StatelessWidget {
                       switchOutCurve: AppMotion.reverseCurve,
                       transitionBuilder: AppMotion.fadeTransition,
                       child: Text(
-                        _suggestionTitle(state),
-                        key: ValueKey('title-${state.cause}'),
+                        suggestionTitle(state, request),
+                        key: ValueKey('title-${request?.kind ?? state.cause}'),
                         style: Theme.of(context).textTheme.headlineMedium,
                       ),
                     ),
@@ -448,8 +521,8 @@ class SuggestionView extends StatelessWidget {
                       switchOutCurve: AppMotion.reverseCurve,
                       transitionBuilder: AppMotion.fadeTransition,
                       child: Text(
-                        '이유: ${interventionReason(state)}',
-                        key: ValueKey('body-${state.cause}'),
+                        suggestionBody(state, request),
+                        key: ValueKey('body-${request?.kind ?? state.cause}'),
                         style: Theme.of(context).textTheme.bodyLarge,
                       ),
                     ),
@@ -472,13 +545,15 @@ class SuggestionView extends StatelessWidget {
                       const Spacer(),
                     ],
                     OutlinedButton(
+                      key: const ValueKey('suggestion-reject'),
                       onPressed: () => onFeedback('reject'),
-                      child: const Text('괜찮아요'),
+                      child: Text(suggestionButtons(request).reject),
                     ),
                     const SizedBox(width: 10),
                     FilledButton(
+                      key: const ValueKey('suggestion-accept'),
                       onPressed: () => onFeedback('accept'),
-                      child: const Text('적용할게요'),
+                      child: Text(suggestionButtons(request).accept),
                     ),
                   ]),
                 ]),
@@ -1078,6 +1153,58 @@ String _stateLabel(DisplayState state) =>
       'end': '세션 완료',
     }[state.phase] ??
     state.fsmState;
+
+/// 카드 제목. checkin_suggest 는 "지금 피곤하세요?", vent_suggest 는 "창문을 N분 열어 주세요", 그 밖은 원인 기준.
+String suggestionTitle(DisplayState state, PendingRequest? request) =>
+    switch (request?.kind) {
+      'checkin_suggest' => '지금 피곤하세요?',
+      'vent_suggest' => request!.minutes == null
+          ? '창문을 잠깐 열어 주세요'
+          : '창문을 ${request.minutes}분 열어 주세요',
+      _ => _suggestionTitle(state),
+    };
+
+/// 카드 본문. vent_suggest 는 why[] 를 사람 말로, checkin 은 설명이 있으면 그것, 없으면 짧은 안내.
+String suggestionBody(DisplayState state, PendingRequest? request) {
+  switch (request?.kind) {
+    case 'checkin_suggest':
+      return request!.explanation ?? '예/아니오로만 답해 주세요. 판정을 다듬는 데 써요.';
+    case 'vent_suggest':
+      // hub 의 explanation(한국어 문장, 예 "CO₂ 1180 ppm 이 5 분째 높아요 — 창문을 15 분만 열어 주세요 (가을)")이 있으면 그것.
+      if (request!.explanation != null) return request.explanation!;
+      final why = [for (final w in request.why) ventWhyText(w)];
+      if (why.isNotEmpty) return '이유: ${why.join(' · ')}';
+      return '이유: ${interventionReason(state)}';
+    default:
+      return '이유: ${interventionReason(state)}';
+  }
+}
+
+/// 카드 버튼 글자. checkin 은 예/아니오(feedback 은 그대로 accept/reject).
+({String accept, String reject}) suggestionButtons(PendingRequest? request) =>
+    switch (request?.kind) {
+      'checkin_suggest' => (accept: '예', reject: '아니오'),
+      'vent_suggest' => (accept: '열게요', reject: '괜찮아요'),
+      _ => (accept: '적용할게요', reject: '괜찮아요'),
+    };
+
+/// vent_suggest 의 why 코드(hub CO₂ 창문 규칙이 실제로 보내는 것) → 문구. 모르는 코드는 그대로.
+/// `co2_avg=<숫자>` 는 값이 붙은 코드다.
+String ventWhyText(String code) {
+  if (code.startsWith('co2_avg=')) {
+    final n = code.substring('co2_avg='.length);
+    return '평균 $n ppm';
+  }
+  return switch (code) {
+    'co2_rule' => 'CO₂ 가 5분 넘게 높음',
+    'urgent' => '1400 ppm 넘음',
+    'after_focus_wait' => '몰입이 끝나 지금 알림',
+    'windy' => '바람이 불어 환기가 잘 됨',
+    'weather_unknown' => '날씨 정보 없음',
+    _ => code,
+  };
+}
+
 String _suggestionTitle(DisplayState state) => switch (state.cause) {
       // 환경은 원인이 여럿이라 플래그로 무엇을 할지 고른다(CO₂ 면 환기, 어두우면 조명).
       'environment' => _environmentTitle(state.envFlags),

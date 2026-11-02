@@ -1,3 +1,4 @@
+import 'workspace_test_helpers.dart';
 import 'dart:async';
 
 import 'package:deskmate_display/main.dart';
@@ -15,7 +16,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final music = _FakeMusicPlayback();
-    await tester.pumpWidget(DeskmateApp(music: music));
+    await pumpDeveloperApp(tester, DeskmateApp(music: music));
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('music-select')));
     await tester.pumpAndSettle();
@@ -33,7 +34,7 @@ void main() {
   testWidgets('music button toggles the bundled playlist on and off',
       (tester) async {
     final music = _FakeMusicPlayback();
-    await tester.pumpWidget(DeskmateApp(music: music));
+    await pumpDeveloperApp(tester, DeskmateApp(music: music));
     await tester.pump();
 
     expect(find.byKey(const ValueKey('music-toggle')), findsOneWidget);
@@ -57,7 +58,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final music = _FakeMusicPlayback();
-    await tester.pumpWidget(DeskmateApp(music: music));
+    await pumpDeveloperApp(tester, DeskmateApp(music: music));
     await tester.pump();
 
     await tester.tap(find.byKey(const ValueKey('music-volume')));
@@ -81,7 +82,7 @@ void main() {
 
   testWidgets('header exposes exit confirmation and the full FSM graph',
       (tester) async {
-    await tester.pumpWidget(const DeskmateApp());
+    await pumpDeveloperApp(tester, const DeskmateApp());
     await tester.pump();
 
     expect(find.byKey(const ValueKey('app-exit')), findsOneWidget);
@@ -103,7 +104,7 @@ void main() {
     tester.view.physicalSize = const Size(1024, 600);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(const DeskmateApp());
+    await pumpDeveloperApp(tester, const DeskmateApp());
     await tester.pump();
 
     expect(find.byTooltip('상태'), findsOneWidget);
@@ -124,7 +125,7 @@ void main() {
     tester.view.physicalSize = const Size(1024, 600);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(const DeskmateApp());
+    await pumpDeveloperApp(tester, const DeskmateApp());
     await tester.pump();
 
     await tester.tap(find.byTooltip('개발자'));
@@ -141,12 +142,22 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('dev-suggest-env')));
     await tester.pumpAndSettle();
     expect(find.textContaining('ACTION_ENV · gate suggest'), findsOneWidget);
-    expect(find.text('적용할게요'), findsOneWidget); // 미리보기 안의 제안 카드
+    expect(find.byKey(const ValueKey('control-accept')), findsOneWidget);
+    expect(
+        tester
+            .widget<FilledButton>(find.byKey(const ValueKey('control-accept')))
+            .onPressed,
+        isNull); // 미리보기 안의 제안 카드
 
     await tester.tap(find.byTooltip('상태'));
     await tester.pumpAndSettle();
-    expect(find.text('적용할게요'), findsOneWidget);
-    expect(find.textContaining('뒤 닫혀요'), findsOneWidget);
+    expect(find.byKey(const ValueKey('control-accept')), findsOneWidget);
+    expect(
+        tester
+            .widget<FilledButton>(find.byKey(const ValueKey('control-accept')))
+            .onPressed,
+        isNull);
+    expect(find.textContaining('계획 누락'), findsOneWidget);
   });
 
   testWidgets('연결 배지는 5초 뒤 사라진다', (tester) async {
@@ -154,7 +165,7 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(const DeskmateApp());
+    await pumpDeveloperApp(tester, const DeskmateApp());
     await tester.pump();
 
     // 붙었다는 것은 한 번은 보여 줘야 한다.
@@ -176,11 +187,13 @@ void _connectionTabTest() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    await tester.pumpWidget(DeskmateApp(
-      music: _FakeMusicPlayback(),
-      settings: SettingsStore(
-          candidates: const [], legacyPostureCandidates: const []),
-    ));
+    await pumpDeveloperApp(
+        tester,
+        DeskmateApp(
+          music: _FakeMusicPlayback(),
+          settings: SettingsStore(
+              candidates: const [], legacyPostureCandidates: const []),
+        ));
     await tester.pump();
     await tester.pump(const Duration(seconds: 1)); // 연결 스냅샷 1회 갱신
 

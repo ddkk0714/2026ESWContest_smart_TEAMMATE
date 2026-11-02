@@ -1,0 +1,91 @@
+{
+ "runs": [
+  "wall45_20261024_230241",
+  "wall50_20261024_230833",
+  "wall60_20261024_231606"
+ ],
+ "skipped": [
+  "wall45_20261024_230241 센서 0: σ 1.79 mm · 놓침 12.0 %",
+  "wall45_20261024_230241 센서 1: σ 1.89 mm · 놓침 12.4 %",
+  "wall50_20261024_230833 센서 0: σ 1.9 mm · 놓침 15.9 %",
+  "wall50_20261024_230833 센서 1: σ 1.87 mm · 놓침 16.3 %"
+ ],
+ "reflectance_assumed": 0.7,
+ "per_run": [
+  {
+   "run": "wall60_20261024_231606",
+   "sensor": "0",
+   "distance_cm": 60,
+   "center_mm": 643.0,
+   "std_mm": 2.11,
+   "diff_std_mm": 2.39,
+   "slow_ratio": 0.79,
+   "nod_ratio": 0.79,
+   "lost_pct": 8.8,
+   "valid_rate_median": 1.0,
+   "sim_sigma_mm": 4.3
+  },
+  {
+   "run": "wall60_20261024_231606",
+   "sensor": "1",
+   "distance_cm": 60,
+   "center_mm": 649.0,
+   "std_mm": 2.1,
+   "diff_std_mm": 2.39,
+   "slow_ratio": 0.76,
+   "nod_ratio": 0.77,
+   "lost_pct": 8.5,
+   "valid_rate_median": 1.0,
+   "sim_sigma_mm": 4.32
+  }
+ ],
+ "sensors": {
+  "0": {
+   "points": 64,
+   "d_range_mm": [
+    568,
+    748
+   ],
+   "dropout_mean": 0.0,
+   "lag1_r_median": -0.253,
+   "sigma0_mm": 0.0,
+   "k_mm_per_m": 4.93,
+   "sigma1_mm": 4.12,
+   "white_sigma0_mm": 0.0,
+   "white_k_mm_per_m": 5.01,
+   "white_sigma1_mm": 4.19,
+   "warning": "거리 폭이 20 cm 미만 — 거리에 따른 증가(k)는 믿기 어렵다. 다른 거리 녹화를 더한다."
+  },
+  "1": {
+   "points": 64,
+   "d_range_mm": [
+    556,
+    781
+   ],
+   "dropout_mean": 0.0,
+   "lag1_r_median": -0.298,
+   "sigma0_mm": 0.0,
+   "k_mm_per_m": 4.06,
+   "sigma1_mm": 3.4,
+   "white_sigma0_mm": 0.0,
+   "white_k_mm_per_m": 4.0,
+   "white_sigma1_mm": 3.35
+  },
+  "all": {
+   "points": 128,
+   "d_range_mm": [
+    556,
+    781
+   ],
+   "dropout_mean": 0.0,
+   "lag1_r_median": -0.271,
+   "sigma0_mm": 0.0,
+   "k_mm_per_m": 4.4,
+   "sigma1_mm": 3.68,
+   "white_sigma0_mm": 0.0,
+   "white_k_mm_per_m": 4.41,
+   "white_sigma1_mm": 3.69
+  }
+ },
+ "l8params": "L8Params(sigma0_mm=0.0, sigma1_mm=3.68, dropout=0.0)"
+}

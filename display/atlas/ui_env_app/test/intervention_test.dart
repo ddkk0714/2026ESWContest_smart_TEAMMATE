@@ -86,13 +86,13 @@ void main() {
 
   group('InterventionTracker — auto notice', () {
     final auto =
-        _state(fsmState: 'ACTION_ENV', gate: 'auto', cause: 'environment');
+        _state(fsmState: 'ACTION_BREAK', gate: 'auto', cause: 'cognitive');
 
     test('appears on entering an automatic action', () {
       final tracker = InterventionTracker();
       tracker.update(auto, hasPendingRequest: false, now: _t0);
-      expect(tracker.autoNotice?.title, '환경을 조정했어요');
-      expect(tracker.autoNotice?.reason, contains('CO₂'));
+      expect(tracker.autoNotice?.title, '휴식을 권하는 알림을 켰어요');
+      expect(tracker.autoNotice?.reason, contains('작업 시간'));
     });
 
     test('suggest gate never shows the auto notice', () {
@@ -203,9 +203,9 @@ void main() {
     testWidgets('auto notice comes before a pending suggestion and undoes',
         (tester) async {
       final auto = _state(
-          fsmState: 'ACTION_ENV',
+          fsmState: 'ACTION_POSTURE',
           gate: 'auto',
-          cause: 'environment',
+          cause: 'posture',
           envFlags: const ['co2_rising']);
       final tracker = InterventionTracker()
         ..update(auto, hasPendingRequest: true, now: _t0);
@@ -218,7 +218,7 @@ void main() {
               onUndo: () => undone++));
 
       expect(find.byKey(const ValueKey('auto-action-card')), findsOneWidget);
-      expect(find.text('이유: CO₂가 빠르게 오르고 있어요'), findsOneWidget);
+      expect(find.text('이유: 움직임이 줄고 졸음 신호가 보여요'), findsOneWidget);
       expect(find.text('확신도 82%'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('auto-undo')));
       expect(undone, 1);
@@ -233,18 +233,18 @@ void main() {
           tester,
           dashboard(
             _state(
-                fsmState: 'ACTION_ENV',
+                fsmState: 'ACTION_POSTURE',
                 phase: 'fatigue',
                 gate: 'suggest',
-                cause: 'environment',
+                cause: 'posture',
                 envFlags: const ['too_dark']),
             pending: true,
             onFeedback: verdicts.add,
             onCorrect: () => corrections++,
           ));
 
-      expect(find.text('조명을 조금 밝혀 볼까요?'), findsOneWidget);
-      expect(find.text('이유: 조명이 어두워요 (150 lx)'), findsOneWidget);
+      expect(find.byType(SuggestionView), findsOneWidget);
+      expect(find.text('이유: 움직임이 줄고 졸음 신호가 보여요'), findsOneWidget);
       expect(find.textContaining('25초 뒤 닫혀요'), findsOneWidget);
       await tester.tap(find.text('적용할게요'));
       await tester.tap(find.byKey(const ValueKey('suggestion-correct')));
