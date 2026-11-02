@@ -789,7 +789,9 @@ def test_trigger_facedown_counts_down_then_fires(hub_cfg):
     # 엎드림을 처음 본 tick 부터 예상 시각이 실제 명령 시각과 같다(추정이 hub 규칙과 맞음)
     preds = [round(t + e) for t, _, e, _ in seen if e is not None]
     assert preds and all(p == round(fired) for p in preds)
-    assert any("초 더 이어지면 무드등 +60 % (최소 153) (자동)" in h for *_, h in seen)
+    # ad76ff0: 자세 개입에서 무엇을 할지는 개인화가 고른다(결정 없으면 기본 무드등)
+    assert any("초 더 이어지면 자세 개입 — 개인화가 고름(" in h and "결정 없으면 무드등 +60 % (최소 153)) (자동)" in h
+               for *_, h in seen)
     assert any(h.startswith("무드등 올림") for *_, h in seen)
     assert {m["kind"] for m in st.trigger.marks} >= {"confirm", "lamp", "action_auto"}
     v = st.trigger.view(base + 100)
@@ -946,9 +948,9 @@ def test_laptop_original_values_survive_a_kill(tmp_path):
 def test_laptop_speaker_to_volume_by_sound_pref():
     st, act, fake = _laptop_store()
     st.profile_sent = {"profile_id": "p", "label": "x", "at": 0.0, "data": {"profile_id": "p", "sound_pref": "mid"}}
-    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "ACTION_POSTURE", "phase": "fatigue", "gate": "auto"}), at=1.0)
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "ACTION_BREAK", "phase": "fatigue", "gate": "auto"}), at=1.0)
     act.tick(5.0)
-    assert fake.v == 0.5                                        # 음악 재생 → sound_pref mid
+    assert fake.v == 0.5                                        # 음악 재생(깨우기 아님) → sound_pref mid
     time.sleep(0.05)
     assert "music" in fake.sounds
     st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "RECOVERY", "phase": "recovery"}), at=2.0)
@@ -959,6 +961,7 @@ def test_laptop_speaker_to_volume_by_sound_pref():
     st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "ACTION_POSTURE", "phase": "fatigue", "gate": "auto"}), at=3.0)
     act.tick(20.0)
     assert fake.v == 0.41                                       # 소리 싫음(off) → 올리지 않음
+    assert act.wake is None                                     # 자세 개입이어도 off 면 깨우기 음량도 안 올림
 
 
 def test_laptop_manual_change_logged_not_published():
@@ -1026,7 +1029,8 @@ def test_speak_command_goes_to_virtual_speaker_and_laptop_tts():
     act.tick(time.time() + 5)                                         # 볼륨 먼저(기본 0.3)
     assert fake.v == dv.DEFAULT_VOLUME
     deadline = time.time() + 5                                        # 볼륨을 올린 뒤(약 1.8 s) 스스로 한 번 말한다
-    while not fake.spoken and time.time() < deadline:
+    said = lambda: any("노트북이 말함" in e["text"] for e in list(st.virtual.timeline) if e["kind"] == "laptop")
+    while not (fake.spoken and said()) and time.time() < deadline:   # 말한 뒤 타임라인 기록까지 기다린다
         time.sleep(0.1)
     assert fake.spoken == ["잠깐 쉬어 가요"]
     assert any("노트북이 말함(Microsoft Heami Desktop)" in e["text"] for e in st.virtual.timeline if e["kind"] == "laptop")
@@ -1094,16 +1098,153 @@ def test_dismiss_rest_notice_and_info_card():
     assert st.snapshot()["virtual"]["info"] == []                             # 닫은 안내는 띠에서 빠진다
 
 
-def test_chime_command_plays_laptop_sound():
+# ----------------------------------------------------------------- 깨우기: 노트북 음악 음량
+def _b(e):
+    return json.dumps(e, ensure_ascii=False).encode()
+
+
+def _laptop_lines(st):
+    return [e["text"] for e in st.virtual.timeline if e["kind"] == "laptop"]
+
+
+def test_wake_raises_volume_once_and_restores_on_recovery():
     st, act, fake = _laptop_store()
-    st.on_mqtt(dv.TOPIC_CMD, payload({"command_id": "c9", "target_id": "speaker", "operation": "chime", "value": {"pattern": "soft"},
-                                      "gate": "notice", "requires_confirmation": False,
-                                      "expires_ts_ms": int((time.time() + 15) * 1000)}), at=time.time())
-    assert st.virtual.speaker["voice"] == "알림음 (soft)"
-    deadline = time.time() + 3
-    while "soft" not in fake.sounds and time.time() < deadline:
+    now = time.time()
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "ACTION_POSTURE", "phase": "fatigue", "gate": "auto", "cause": "posture"}), at=now)
+    st.profile_sent = {"data": {"sound_pref": "low"}}                     # 첫 설정 '작게'여도 깨우기는 크게
+    st.on_mqtt(dv.TOPIC_CMD, _b(cmd_env("w1", "desk_lamp", "adjust_brightness", {"percent": 60, "min_raw": 153}, at=now)),
+               at=now)
+    act.tick(now + 5)
+    assert fake.v == 0.8
+    assert [x for x in _laptop_lines(st) if x.startswith("깨우기:")] == ["깨우기: 노트북 음량 41 % → 80 % (자세 개입)"]
+    st.on_mqtt(dv.TOPIC_CMD, _b(cmd_env("w2", "speaker", "chime", {"pattern": "double"}, gate="notice", at=now + 6)),
+               at=now + 6)                                                 # 다시 와도 쌓지 않는다
+    act.tick(now + 10)
+    assert fake.v == 0.8 and act.wake["before"] == 0.41
+    time.sleep(0.2)
+    assert fake.sounds == []                                               # 음악 위에 삑 소리 없음
+    assert any("알림음 생략" in x for x in _laptop_lines(st))
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "MONITOR", "phase": "fatigue"}), at=now + 20)
+    act.tick(now + 21)
+    assert fake.v == 0.8
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "RECOVERY", "phase": "recovery"}), at=now + 30)
+    act.tick(now + 31)
+    assert fake.v == 0.41 and act.wake is None
+    assert "깨우기 끝: 노트북 음량 80 % → 41 % (회복)" in _laptop_lines(st)
+    assert act.view()["wake"] is None
+
+
+def test_wake_keeps_louder_volume_and_times_out():
+    st, act, fake = _laptop_store()
+    fake.v = act.cur["volume"] = 0.9
+    now = time.time()
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "ACTION_POSTURE", "phase": "fatigue", "gate": "auto"}), at=now)
+    st.on_mqtt(dv.TOPIC_CMD, _b(cmd_env("w1", "desk_lamp", "adjust_brightness", {"percent": 60}, at=now)), at=now)
+    act.tick(now + 5)
+    assert fake.v == 0.9 and not any(c[0] == "v" for c in fake.calls)    # 이미 더 크면 그대로(max)
+    act.tick(now + dv.WAKE_MAX_S + 1)                                      # 회복이 안 와도 5분 뒤 되돌림(같은 값)
+    assert act.wake is None
+
+
+def test_rest_speak_wakes_and_still_talks_but_non_wake_chime_keeps_volume():
+    st, act, fake = _laptop_store()
+    now = time.time()
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "REST", "phase": "recovery"}), at=now)
+    st.on_mqtt(dv.TOPIC_CMD, payload(dict(F91_SPEAK, expires_ts_ms=int((now + 15) * 1000))), at=now)
+    act.tick(now + 2)
+    assert fake.v == 0.8 and act.wake["why"] == "휴식 말하기"
+    deadline = time.time() + 4
+    while not fake.spoken and time.time() < deadline:
         time.sleep(0.05)
-    assert "soft" in fake.sounds
+    assert fake.spoken == ["잠깐 눈을 붙여요"]                              # 말하기는 그대로
+    fake.no_voice = True
+    act._chime("speak:다시")
+    assert fake.sounds == []                                               # TTS 실패여도 깨우는 중엔 삑 없음
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "FOCUS_PC", "phase": "focus"}), at=now + 60)
+    act.tick(now + 62)
+    assert fake.v == 0.41
+    st.on_mqtt(dv.TOPIC_CMD, payload({"command_id": "n1", "target_id": "speaker", "operation": "chime",
+                                      "value": {"pattern": "single"}, "gate": "notice", "requires_confirmation": False,
+                                      "expires_ts_ms": int((now + 80) * 1000)}), at=now + 64)
+    deadline = time.time() + 3
+    while "single" not in fake.sounds and time.time() < deadline:
+        time.sleep(0.05)
+    assert "single" in fake.sounds and act.wake is None and fake.v == 0.41  # 깨우기 아닌 알림음은 지금 음량으로
+
+
+def test_wake_disabled_keeps_sound_pref_volume():
+    st = dv.Store()
+    fake = FakeLaptop()
+    act = dv.LaptopActuator(st, fake, wake_volume=None)
+    st.laptop = act
+    act.start(thread=False)
+    now = time.time()
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "ACTION_POSTURE", "phase": "fatigue", "gate": "auto"}), at=now)
+    st.on_mqtt(dv.TOPIC_CMD, _b(cmd_env("w1", "desk_lamp", "adjust_brightness", {"percent": 60}, at=now)), at=now)
+    act.tick(now + 5)
+    assert act.wake is None and fake.v == dv.DEFAULT_VOLUME
+
+
+def test_fake_facedown_wakes_then_restores(hub_cfg):
+    rules = dv.load_hub_rules(hub_cfg, "demo-b")
+    st = dv.Store()
+    fake = FakeLaptop()
+    act = dv.LaptopActuator(st, fake)
+    st.laptop = act
+    act.start(thread=False)
+    sc = dv.FakeHubScenario(st, "facedown", rules)
+    base, real = 1_000_000.0, dv.time.time
+    seen = []
+    try:
+        for i in range(0, 1300):
+            t = i * 0.1
+            dv.time.time = lambda t=t: base + t
+            sc.step(t)
+            act.tick(base + t)
+            seen.append(fake.v)
+    finally:
+        dv.time.time = real
+    lines = _laptop_lines(st)
+    assert any(x.startswith("깨우기: 노트북 음량 41 % → 80 %") for x in lines)
+    assert any(x.startswith("깨우기 끝: 노트북 음량 80 % → 41 %") for x in lines)
+    assert max(seen) == 0.8 and seen[-1] == 0.41
+
+
+def test_chime_command_plays_laptop_sound():
+    """ad76ff0: chime {pattern: single|double|triple, volume: low|mid|high} — 볼륨을 잠깐 바꿔 울리고 되돌린다."""
+    st, act, fake = _laptop_store()
+    st.on_mqtt(dv.TOPIC_CMD, payload({"command_id": "c9", "target_id": "speaker", "operation": "chime",
+                                      "value": {"pattern": "double", "volume": "high"}, "gate": "notice",
+                                      "requires_confirmation": False, "expires_ts_ms": int((time.time() + 15) * 1000)}), at=time.time())
+    assert st.virtual.speaker["voice"] == "알림음 (double · high)"
+    deadline = time.time() + 3
+    while "double" not in fake.sounds and time.time() < deadline:
+        time.sleep(0.05)
+    assert "double" in fake.sounds
+    time.sleep(0.05)
+    assert ("v", 0.8) in fake.calls and fake.v == 0.41          # high = 0.8 로 울리고 원래 볼륨으로
+    assert any(e["text"] == "노트북 알림음 double · 볼륨 80 %" for e in st.virtual.timeline if e["kind"] == "laptop")
+
+
+def test_arm_notice_and_trigger_headline(hub_cfg):
+    rules = dv.load_hub_rules(hub_cfg, "demo-b")
+    tr = dv.TriggerTracker(rules)
+    tr.on_phase(env({"fsm_state": "FATIGUE_SUSPECT", "context": "npc", "c_fatigue": 0.81, "sensor_summary": {
+        "tof": {"posture": "face_down", "posture_confidence": 0.995}}}), at=100.0)
+    tr.on_phase(env({"fsm_state": "FATIGUE_SUSPECT", "context": "npc", "c_fatigue": 0.81, "sensor_summary": {
+        "tof": {"posture": "face_down", "posture_confidence": 0.995}}}), at=110.0)
+    h = tr.view(111.0)["headline"]
+    assert "자세 개입 — 개인화가 고름(무드등·음성 안내·알림음·자세 카드 중, 결정 없으면 무드등 +60 % (최소 153))" in h
+    tr.on_phase(env({"fsm_state": "ACTION_POSTURE", "context": "npc", "c_fatigue": 0.81, "gate": "auto", "sensor_summary": {
+        "tof": {"posture": "face_down", "posture_confidence": 0.995},
+        "personalize": {"arm": "sound_cue", "arm_label": "알림음", "source": "policy", "delivered_gate": "auto"},
+        "arm_notice": {"enabled": True, "counts": {"cards": 1, "speaks": 0, "chimes": 1, "dismissed": 0},
+                       "last": {"ts": 120.0, "arm": "sound_cue", "channel": "sound", "gate": "auto", "delivered": ["card", "chime"]}}}}),
+        at=120.0)
+    v = tr.view(121.0)
+    assert any(m["kind"] == "arm" and m["text"] == "개인화가 고른 것: 알림음 (sound) → 카드, 알림음" for m in v["marks"])
+    assert v["arm_counts"] == "안내 1 · 음성 0 · 알림음 1 · 닫음 0"
+    assert v["headline"].startswith("자세 개입 — 개인화가 고른 것: 알림음(무드등 아님)")
 
 
 def test_fake_rest_scenarios(hub_cfg):
@@ -1167,6 +1308,48 @@ def test_send_profile_and_hub_ack():
     assert pv["ack"] is True and pv["hub_active"] == "pabc" and pv["hub_fields"]["source"] == "prior"
     st.publisher = None
     assert st.send_profile({"profile_id": "pabc"})["ok"] is False
+
+
+def test_persona_view_current_person_follows_hub():
+    """지금 사람 = 브로커에 남은 profile/user 중 hub 가 쓰는 id 와 같은 것(11-01). 화면은 이 id 로 고쳐 보낸다."""
+    st = dv.Store()
+    assert st.persona_view()["current"] is None                       # 아무것도 안 받음
+    soyeon = {"profile_id": "p266eb9c0c514d18c", "age_band": "10s", "light_pref": "mid", "sound_pref": "low",
+              "wind_pref": "off", "focus_help": ["sound", "light", "wind"], "placement": "left", "name": "소연"}
+    st.on_mqtt(dv.TOPIC_PROFILE, payload(soyeon, node="pi5-ui"))
+    cur = st.persona_view()["current"]                                 # hub id 를 아직 모르면 받은 것을 지금 사람으로
+    assert cur["profile_id"] == "p266eb9c0c514d18c" and cur["node"] == "pi5-ui"
+    assert "name" not in cur["data"] and cur["data"]["focus_help"] == ["sound", "light", "wind"]
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "FOCUS_PC", "sensor_summary": {
+        "personalize": {"active_profile_id": "p266eb9c0c514d18c"}}}))
+    assert st.persona_view()["current"]["profile_id"] == "p266eb9c0c514d18c"
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "FOCUS_PC", "sensor_summary": {     # hub 가 다른 사람으로 바뀜
+        "personalize": {"active_profile_id": "pother"}}}))
+    assert st.persona_view()["current"] is None                        # 남은 첫 설정이 다른 사람 것이면 지금 사람 아님
+
+
+def test_profile_names_are_local_and_shown(tmp_path):
+    """profile_id → 부르는 이름(11-01). 노트북 파일에만 남고, 보내는 프로필에는 실리지 않는다."""
+    path = tmp_path / "names.json"
+    st = dv.Store()
+    st.names = dv.ProfileNames(str(path))
+    st.publisher = FakePub()
+    sid = "p266eb9c0c514d18c"
+    st.on_mqtt(dv.TOPIC_PROFILE, payload({"profile_id": sid, "light_pref": "mid"}, node="pi5-ui"))
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "FOCUS_PC", "sensor_summary": {
+        "personalize": {"active_profile_id": sid}}}))
+    assert st.persona_view()["current"]["name"] is None and st.persona_view()["hub_active_name"] is None
+    assert st.names.set(sid, "  소연  ") == {"ok": True, "error": None}
+    pv = st.persona_view()
+    assert pv["current"]["name"] == "소연" and pv["hub_active_name"] == "소연"
+    assert dv.ProfileNames(str(path)).get(sid) == "소연"                    # 다시 켜도 남는다
+    assert st.send_profile({"profile_id": sid, "light_pref": "high"})["ok"]
+    assert st.publisher.sent[-1] == (dv.TOPIC_PROFILE, {"profile_id": sid, "light_pref": "high"})   # 이름은 안 실린다
+    assert st.persona_view()["sent"]["name"] == "소연" and st.profile_sent["label"] == "소연"
+    assert st.names.set(sid, "") == {"ok": True, "error": None}             # 비우면 지운다
+    assert dv.ProfileNames(str(path)).get(sid) is None
+    assert st.names.set("bad id/../x", "누구")["ok"] is False
+    assert dv.ProfileNames(str(tmp_path / "none.json")).names == {}
 
 
 def test_send_feedback_card_and_undo():
@@ -1244,6 +1427,9 @@ def test_http_post_requires_header_and_routes():
         assert post("/api/profile", {"data": {"profile_id": "p1", "age_band": "20s"}, "label": "대학생"}) == \
             (200, {"ok": True, "error": None})
         assert post("/api/feedback", {"request_id": "nope", "verdict": "accept"})[0] == 409
+        assert post("/api/name", {"profile_id": "p1", "name": "소연"}) == (200, {"ok": True, "error": None})
+        assert st.names.get("p1") == "소연"
+        assert post("/api/name", {"profile_id": "p1", "name": "x"}, header=False)[0] == 403
     finally:
         server.shutdown()
         server.server_close()
@@ -1298,3 +1484,200 @@ def test_http_serves_page_and_data():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ----------------------------------------------------------------- 자리 비움: 점수 없음
+def test_away_ticks_show_no_score_and_skip_trigger():
+    away = {"fsm_state": "IDLE", "phase": "idle", "c_fatigue": 0.0, "c_focus": 0.0, "scores_valid": False,
+            "sensor_summary": {"present": False}}
+    v = dv.phase_view(env(away))
+    assert v["away"] is True and v["fatigue"] is None and v["focus"] is None
+    old = dict(away, c_fatigue=1.0, c_focus=1.0)            # 예전 hub: present false 인데 1.0
+    old.pop("scores_valid")
+    assert dv.phase_view(env(old))["fatigue"] is None
+    assert dv.video_view(env(away), None, {})["away"] is True
+    here = {"fsm_state": "FOCUS_NPC", "phase": "focus", "c_fatigue": 0.3, "c_focus": 0.1, "scores_valid": True,
+            "sensor_summary": {"present": True}}
+    assert dv.phase_view(env(here))["fatigue"] == 0.3 and dv.phase_view(env(here))["away"] is False
+    tr = dv.TriggerTracker({"suspect": 0.4, "confirm": 0.6, "focus_low": 0.4, "tick": 10})
+    tr.on_phase(env(here), 100.0)
+    for i in range(3):
+        tr.on_phase(env(away), 110.0 + i * 10)
+    assert len(tr.ticks) == 1                               # 그래프·유지 판정에 안 들어감
+    view = tr.view(135.0)
+    assert view["away"] is True and view["headline"].startswith("자리 비움 — 점수 없음") and view["eta_s"] is None
+    assert [p["c"] for p in view["series"]] == [0.3]
+    tr.on_phase(env(here), 140.0)
+    assert len(tr.ticks) == 2 and tr.view(141.0)["away"] is False
+
+
+def test_seated_away_is_masked_like_hub():
+    """hub away_bottom_row_mm 과 같게: 격자 가장 아랫줄에 70 cm 보다 가까운 칸이 있으면 away 대신 1위 자세(10-27)."""
+    svc = {"valid": True, "posture": "away", "conf": 0.9, "posture_ko": "자리비움",
+           "probs": {"upright": 0.02, "recline": 0.04, "away": 0.9, "misplaced": 0.03, "drowsy": 0.01}}
+
+    def raw(bottom, status=5):
+        far = {"id": 1, "have": True, "w": 8, "h": 8, "dist_mm": [1500] * 64, "status": [5] * 64}
+        return {"sensors": [{"id": 0, "have": True, "w": 8, "h": 8, "dist_mm": [1500] * 56 + [bottom] * 8,
+                             "status": [5] * 56 + [status] * 8}, far]}
+    v = dv.posture_view(dv.mask_seated_away(svc, raw(620)))
+    assert v["posture"] == "recline" and v["away_masked"] is True and v["conf"] == 0.04
+    for r in (None, raw(700), raw(950), raw(-1), raw(500, status=255)):          # far 거나 격자 없음 → away 그대로
+        v = dv.posture_view(dv.mask_seated_away(svc, r))
+        assert v["posture"] == "away" and v["away_masked"] is False
+    up = dict(svc, posture="upright")
+    assert dv.mask_seated_away(up, raw(500))["posture"] == "upright"
+    fd = dict(svc, posture="face_down", conf=0.99)
+    v = dv.posture_view(dv.mask_seated_away(fd, raw(870)))
+    assert v["posture"] == "away" and v["away_forced"] is True
+    assert dv.mask_seated_away(fd, raw(200))["posture"] == "face_down"
+    dead = {"sensors": [{"id": 0, "have": True, "w": 8, "h": 8, "dist_mm": [-1] * 64, "status": [255] * 64}]}
+    assert dv.mask_seated_away(fd, dead)["posture"] == "face_down"
+
+
+# ----------------------------------------------------------------- 제어 진행(10-31)
+
+def test_progress_from_mqtt_when_hub_log_missing():
+    st = dv.Store()
+    st.on_mqtt(dv.TOPIC_CMD, payload({"command_id": "c1", "target_id": "desk_lamp", "operation": "adjust_brightness",
+                                      "value": {"percent": 60}, "origin_state": "ACTION_POSTURE", "cause": "posture",
+                                      "gate": "auto"}), at=100.0)
+    st.on_mqtt(dv.TOPIC_RESULT, payload({"command_id": "c1", "status": "succeeded", "previous": 110, "actual": 176},
+                                        node="display-control"), at=100.8)
+    st.on_mqtt(dv.TOPIC_CMD, payload({"command_id": "c2", "target_id": "vent_fan", "operation": "set_power",
+                                      "value": "on", "gate": "auto"}), at=101.0)
+    st.on_mqtt(dv.TOPIC_RESULT, payload({"command_id": "zz", "status": "failed"}), at=101.5)     # 못 본 명령의 결과
+    v = st.progress.view(now=110.0)
+    assert v["source"] == "mqtt" and [r["id"] for r in v["rows"]] == ["c2", "c1"]
+    lamp = v["rows"][1]
+    assert (lamp["status"], lamp["latency_ms"], lamp["value"], lamp["previous"], lamp["actual"], lamp["node"]) == \
+        ("succeeded", 800, "+60%", 110, 176, "display-control")
+    assert v["rows"][0]["status"] == "executing"
+    assert (lamp["why_ko"], lamp["why_sub_ko"], lamp["action_ko"], lamp["status_ko"], lamp["latency_ko"]) == \
+        ("자세 — 졸음·엎드림 신호", "자세 개입", "밝기 60 % 올림", "성공", "0.80초")
+    assert lamp["notes_ko"] == ["밝기 110 → 176 확인"]
+    late = st.progress.view(now=116.5)
+    assert late["rows"][0]["status"] == "timeout" and "추정" in late["rows"][0]["reason"]
+    assert late["rows"][0]["latency_ko"] == "" and late["summary"]["success_rate"] == 50
+
+
+def _speak_cmd(st, cid, at):
+    st.on_mqtt(dv.TOPIC_CMD, payload({"command_id": cid, "target_id": "speaker", "operation": "speak"}), at=at)
+
+
+def test_progress_mqtt_accepted_is_not_terminal():
+    # PR #88 리뷰 재현: accepted 를 failed 로 닫고 latency 를 accepted 시각(1000 ms)에 고정했다
+    st = dv.Store()
+    _speak_cmd(st, "review88", 100.0)
+    st.on_mqtt(dv.TOPIC_RESULT, payload({"command_id": "review88", "status": "accepted"}), at=101.0)
+    v = st.progress.view(now=101.5)
+    [r] = v["rows"]
+    assert (r["status"], r["latency_ms"], r["latency_ko"]) == ("executing", None, "")
+    assert (v["summary"]["failed"], v["summary"]["pending"], v["summary"]["success_rate"]) == (0, 1, None)
+    st.on_mqtt(dv.TOPIC_RESULT, payload({"command_id": "review88", "status": "executing"}), at=102.0)
+    st.on_mqtt(dv.TOPIC_RESULT, payload({"command_id": "review88", "status": "succeeded"}), at=103.0)
+    v = st.progress.view(now=104.0)
+    [r] = v["rows"]
+    assert (r["status"], r["latency_ms"], r["latency_ko"]) == ("succeeded", 3000, "3.00초")
+    assert (v["summary"]["succeeded"], v["summary"]["failed"], v["summary"]["success_rate"],
+            v["summary"]["avg_latency_ko"]) == (1, 0, 100, "3.00초")
+    # 끝난 뒤 다시 온 결과는 상태·소요를 바꾸지 않는다
+    st.on_mqtt(dv.TOPIC_RESULT, payload({"command_id": "review88", "status": "failed"}), at=105.0)
+    assert st.progress.view(now=105.0)["rows"][0]["latency_ms"] == 3000
+
+
+def test_progress_mqtt_accepted_then_failed_or_timeout():
+    st = dv.Store()
+    _speak_cmd(st, "f", 100.0)
+    st.on_mqtt(dv.TOPIC_RESULT, payload({"command_id": "f", "status": "accepted"}), at=101.0)
+    st.on_mqtt(dv.TOPIC_RESULT, payload({"command_id": "f", "status": "failed", "error_code": "speaker_unavailable"}),
+               at=102.0)
+    _speak_cmd(st, "t", 200.0)
+    st.on_mqtt(dv.TOPIC_RESULT, payload({"command_id": "t", "status": "accepted"}), at=201.0)
+    v = st.progress.view(now=214.9)
+    t, f = v["rows"]
+    assert (f["status"], f["latency_ms"], f["error"]) == ("failed", 2000, "speaker_unavailable")
+    assert (t["status"], v["summary"]["pending"], v["summary"]["failed"]) == ("executing", 1, 1)
+    v = st.progress.view(now=215.0)                       # accepted 만 받고 15 s → 응답 없음(추정)
+    t = v["rows"][0]
+    assert (t["status"], t["latency_ms"], t["latency_ko"]) == ("timeout", None, "") and "추정" in t["reason"]
+    assert (v["summary"]["failed"], v["summary"]["pending"], v["summary"]["success_rate"], v["summary"]["avg_latency_ko"])         == (2, 0, 0, "")
+    _speak_cmd(st, "u", 300.0)
+    st.on_mqtt(dv.TOPIC_RESULT, payload({"command_id": "u", "status": "weird"}), at=300.5)
+    u = st.progress.view(now=301.0)["rows"][0]
+    assert (u["status"], u["reason"]) == ("failed", "unknown_status:weird")
+
+
+def test_progress_words_failure_and_unknowns():
+    w = dv.progress_words({"target_id": "vent_fan", "operation": "set_power", "value": "on", "gate": "suggest",
+                           "cause": "environment", "status": "failed", "error_code": "ble_not_connected"}, 1100)
+    assert (w["mode_ko"], w["status_ko"], w["latency_ko"], w["notes_ko"]) == \
+        ("제안 → 수락", "실패", "1.10초", ["블루투스 연결 안 됨"])
+    w = dv.progress_words({"target_id": "speaker", "operation": "speak", "value": {"text": "쉬어요"},
+                           "status": "skipped", "reason": "expired: no_response", "error_code": "weird"}, None)
+    assert w["why_ko"] == "원인 미기록" and w["action_ko"] == "음성 안내 “쉬어요”"
+    assert w["notes_ko"] == ["제안에 응답이 없어 만료", "오류 weird"] and w["latency_ko"] == ""
+
+
+def test_progress_prefers_fresh_hub_log():
+    st = dv.Store()
+    st.on_mqtt(dv.TOPIC_CMD, payload({"command_id": "m1", "target_id": "speaker", "operation": "speak",
+                                      "value": {"text": "쉬어요", "lang": "ko"}}), at=50.0)
+    hub_rows = [{"command_id": "h1", "source": "dispatcher", "created_ts": 40.0, "state": "ACTION_ENV",
+                 "cause": "environment", "gate": "auto", "target_id": "vent_fan", "operation": "set_power",
+                 "value": "on", "status": "skipped", "reason": "cooldown 40s/300s"},
+                {"command_id": "h2", "source": "dispatcher", "created_ts": 45.0, "target_id": "desk_lamp",
+                 "operation": "set_brightness", "value": 100, "status": "succeeded", "latency_ms": 320,
+                 "undo": True, "undo_of": "abcdef123456"}]
+    st.set_control_log(hub_rows, at=60.0)
+    v = st.progress.view(now=62.0)
+    assert v["source"] == "hub" and [r["id"] for r in v["rows"]] == ["h2", "h1"]
+    assert v["rows"][1]["reason"] == "cooldown 40s/300s" and v["rows"][0]["undo_of"] == "abcdef"
+    assert v["counts"] == {"skipped": 1, "succeeded": 1}
+    fallback = st.progress.view(now=70.0)                                     # 5 s 넘게 안 오면 MQTT 로 돌아간다
+    assert fallback["source"] == "mqtt" and fallback["rows"][0]["value"] == "“쉬어요”"
+    skip, undo = v["rows"][1], v["rows"][0]
+    assert skip["why_ko"].startswith("환경") and skip["mode_ko"] == "자동" and skip["action_ko"] == "켜기"
+    assert skip["notes_ko"] == ["같은 조치는 5분에 한 번 — 40초 전에 이미 실행"]
+    assert (undo["mode_ko"], undo["device_ko"], undo["action_ko"], undo["latency_ko"]) == \
+        ("되돌리기", "무드등", "원래 밝기로 (100)", "0.32초")
+    assert v["summary"] == {"total": 2, "succeeded": 1, "failed": 0, "skipped": 1, "pending": 0,
+                            "success_rate": 100, "avg_latency_ko": "0.32초"}
+    with pytest.raises(ValueError):
+        st.set_control_log({"error": "not_found"})
+    snap = st.snapshot()
+    assert "progress" in snap and snap["progress"]["hub_link"]["ok"] is False
+
+
+def test_progress_posture_effect_counts_as_success():
+    """11-02 사용자 기준: 사람이 바른 자세로 돌아오면(hub effect=improved) 기기 응답이 없어도 성공."""
+    st = dv.Store()
+    rows = [{"command_id": "p1", "source": "dispatcher", "created_ts": 40.0, "state": "ACTION_POSTURE", "cause": "posture",
+             "gate": "auto", "target_id": "desk_lamp", "operation": "adjust_brightness", "value": {"percent": 60},
+             "status": "timeout", "reason": "no_result", "sent_ts": 40.0, "completed_ts": 55.0, "latency_ms": 15000,
+             "effect": "improved", "effect_text": "바른 자세로 돌아옴", "effect_after_sec": 3.0},
+            {"command_id": "p2", "source": "dispatcher", "created_ts": 45.0, "state": "ACTION_POSTURE", "cause": "posture",
+             "gate": "auto", "target_id": "desk_lamp", "operation": "adjust_brightness", "value": {"percent": 60},
+             "status": "succeeded", "latency_ms": 400, "effect": "none", "effect_text": "자세 그대로"}]
+    st.set_control_log(rows, at=60.0)
+    v = st.progress.view(now=61.0)
+    by = {r["id"]: r for r in v["rows"]}
+    assert by["p1"]["status"] == "succeeded" and by["p1"]["status_ko"] == "성공" and by["p1"]["device_status"] == "timeout"
+    assert by["p1"]["notes_ko"][0] == "바른 자세로 돌아옴 (3초 뒤)" and "기기 확인 응답은 못 받음" in by["p1"]["notes_ko"]
+    assert by["p2"]["status_ko"] == "성공" and "자세 그대로" in by["p2"]["notes_ko"]      # 기기는 성공, 효과는 없음 — 그대로 표시
+    assert v["summary"]["succeeded"] == 2 and v["summary"]["failed"] == 0 and v["summary"]["success_rate"] == 100
+
+
+def test_demo_mode_button_publishes_and_phase_shows_speed():
+    """빠른 시연(hub demo_mode.py, 10-31): 버튼 → deskmate/demo/mode {"speed"}, 지금 모드는 state/phase sensor_summary.demo_mode."""
+    st = dv.Store()
+    st.publisher = FakePub()
+    assert st.send_demo_mode("turbo")["ok"] is False
+    assert st.send_demo_mode("fast")["ok"] is True
+    assert st.publisher.sent[-1] == (dv.TOPIC_DEMO_MODE, {"speed": "fast"})
+    assert dv.PUBLISH_TOPICS[dv.TOPIC_DEMO_MODE] is False           # retain 안 함 — 재시작한 hub 가 옛 요청을 받지 않게
+    env = {"schema_version": "1.0", "data": {"fsm_state": "FOCUS_PC", "sensor_summary": {"demo_mode": {"speed": "fast"}}}}
+    assert dv.phase_view(env)["demo_speed"] == "fast"
+    assert dv.phase_view({"data": {"fsm_state": "FOCUS_PC"}})["demo_speed"] == ""   # 옛 hub
+    st.publisher = None
+    assert st.send_demo_mode("normal")["ok"] is False                 # --read-only

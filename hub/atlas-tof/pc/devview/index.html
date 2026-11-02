@@ -18,11 +18,11 @@ body[data-mode="video"] { overflow: hidden; }
 #dev {
   display: grid; min-height: 100vh; grid-template-columns: minmax(0, 1fr); gap: calc(8px * var(--k)); padding: 0 calc(14px * var(--k)) calc(10px * var(--k));
   /* 배너가 숨으면(display:none) 자리가 밀리지 않게 영역 이름으로 놓는다 */
-  grid-template-areas: "band" "banner" "row1" "row2" "trig" "control" "row4";
-  grid-template-rows: minmax(calc(40px * var(--k)), auto) auto auto auto auto auto minmax(calc(260px * var(--k)), 1fr);
+  grid-template-areas: "band" "banner" "row1" "row2" "trig" "control" "progress" "row4";
+  grid-template-rows: minmax(calc(40px * var(--k)), auto) auto auto auto auto auto auto minmax(calc(260px * var(--k)), 1fr);
 }
 #band { grid-area: band; } #banner { grid-area: banner; } #row1 { grid-area: row1; }
-#row2 { grid-area: row2; } #control { grid-area: control; } #row4 { grid-area: row4; }
+#row2 { grid-area: row2; } #control { grid-area: control; } #progress { grid-area: progress; } #row4 { grid-area: row4; }
 body:not([data-mode="dev"]) #dev { display: none; }
 body:not([data-mode="video"]) #video { display: none; }
 body:not([data-mode="virtual"]) #virt { display: none; }
@@ -135,6 +135,40 @@ body:not([data-mode="virtual"]) #virt { display: none; }
 #devices div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
 #devices b { display: inline-block; min-width: calc(92px * var(--k)); color: var(--dim); font-weight: 600; }
 #devices .node { color: var(--faint); font-size: calc(12px * var(--k)); margin-left: calc(4px * var(--k)); }
+
+/* 제어 진행: 명령 하나당 한 줄(hub /api/control-log, 없으면 MQTT 로 추정) */
+#progFlow { display: flex; flex-wrap: wrap; align-items: center; gap: calc(6px * var(--k)); margin: calc(2px * var(--k)) 0 calc(10px * var(--k)); font-size: calc(15px * var(--k)); color: var(--dim); }
+#progFlow .step { border: 1px solid var(--line); border-radius: calc(14px * var(--k)); padding: calc(2px * var(--k)) calc(10px * var(--k)); color: var(--fg); }
+#progFlow .arr { color: var(--faint); }
+#progSum { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: calc(8px * var(--k)); margin-bottom: calc(10px * var(--k)); }
+#progSum .tile { background: var(--bg); border: 1px solid var(--line); border-radius: calc(8px * var(--k)); padding: calc(6px * var(--k)) calc(10px * var(--k)); }
+#progSum .lab { color: var(--dim); font-size: calc(13px * var(--k)); }
+#progSum .num { font-size: calc(26px * var(--k)); font-weight: 800; line-height: 1.15; font-variant-numeric: tabular-nums; }
+@media (max-width: 900px) { #progSum { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+#progSum .ok .num { color: var(--ok); } #progSum .bad .num { color: var(--bad); } #progSum .skip .num { color: var(--dim); }
+#progBox { max-height: calc(360px * var(--k)); overflow-y: auto; }
+#progTable { width: 100%; border-collapse: collapse; font-size: calc(16px * var(--k)); table-layout: fixed; }
+#progTable th { text-align: left; color: var(--faint); font-weight: 600; font-size: calc(13px * var(--k)); padding: 0 calc(8px * var(--k)) calc(4px * var(--k)); position: sticky; top: 0; background: var(--panel); }
+#progTable td { padding: calc(7px * var(--k)) calc(8px * var(--k)); border-top: 1px solid var(--line); vertical-align: top; word-break: keep-all; overflow-wrap: anywhere; }
+#progTable td.t, #progTable td.ms, #progTable td.res { white-space: nowrap; }
+#progTable td.t { color: var(--faint); }
+#progTable td.ms { font-size: calc(17px * var(--k)); font-weight: 700; }
+#progTable .main { display: block; color: var(--fg); font-weight: 700; }
+#progTable .sub { display: block; color: var(--dim); font-size: calc(14px * var(--k)); }
+#progTable .note { display: block; color: var(--dim); font-size: calc(14px * var(--k)); }
+#progTable .note.warn { color: var(--warn); }
+#progTable .mode { display: inline-block; border: 1px solid var(--line); border-radius: calc(5px * var(--k)); padding: 0 calc(6px * var(--k)); margin-right: calc(6px * var(--k)); color: var(--dim); font-size: calc(13px * var(--k)); font-weight: 600; vertical-align: 1px; }
+#progTable tr.undo .mode { color: var(--info); border-color: var(--info); }
+#progTable tr.fresh td { animation: progFresh 2.5s ease-out; }
+@keyframes progFresh { from { background: rgba(120, 180, 255, 0.22); } to { background: transparent; } }
+.pst { display: inline-block; border-radius: calc(6px * var(--k)); padding: calc(1px * var(--k)) calc(9px * var(--k)); font-weight: 800; font-size: calc(15px * var(--k)); }
+.pst.succeeded { background: var(--ok); color: #06130c; }
+.pst.failed, .pst.timeout { background: var(--bad); color: #1d0607; }
+.pst.executing { background: var(--info); color: #04121b; }
+.pst.accepted { background: var(--warn); color: #1a1204; }
+.pst.skipped, .pst.cancelled { background: var(--invalid); color: var(--dim); }
+#progSrc { font-size: calc(12px * var(--k)); }
+#progSrc.hub { color: var(--ok); } #progSrc.mqtt { color: var(--warn); }
 
 /* 4행: 명령 로그 + MQTT 토픽 */
 #row4 { display: grid; grid-template-columns: minmax(0, 1.9fr) minmax(0, 1.25fr) minmax(0, 0.85fr); gap: calc(8px * var(--k)); min-height: 0; }
@@ -390,7 +424,8 @@ body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
 <section id="row2">
   <div class="panel">
     <div class="ptitle"><span><b>판정</b> · Pi 4 hub FSM (state/phase)</span><span class="mono" id="seq">-</span></div>
-    <div id="fsmWrap"><span id="fsm">-</span><span id="fsmMeta">-</span></div>
+    <div id="fsmWrap"><span id="fsm">-</span><span id="fsmMeta">-</span>
+      <button class="btn" id="demoFast" title="hub 피로 유지 시간을 줄인다(시연 프로파일에서만) — deskmate/demo/mode">빠른 시연</button></div>
     <div class="meters">
       <div class="meter"><div class="lab"><span>피로도 C_fatigue</span><span class="num" id="fatT">-</span></div><div class="track"><i id="fatB"></i></div></div>
       <div class="meter"><div class="lab"><span>집중 저하 C_focus</span><span class="num" id="focT">-</span></div><div class="track"><i id="focB"></i></div></div>
@@ -412,6 +447,17 @@ body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
     <div id="ctlCmds" class="mono"></div>
   </div>
   <div id="devices"></div>
+</section>
+
+<section class="panel" id="progress">
+  <div class="ptitle"><span><b>제어 진행</b> · 기기에 보낸 명령 하나가 한 줄</span><span id="progSrc">-</span></div>
+  <div id="progFlow"><span class="step">① 센서로 감지</span><span class="arr">→</span><span class="step">② 원인 판단</span><span class="arr">→</span><span class="step">③ 기기 실행</span><span class="arr">→</span><span class="step">④ 결과 확인</span><span class="arr">→</span><span class="step">⑤ 싫다면 되돌림</span></div>
+  <div id="progSum"></div>
+  <div id="progBox"><table id="progTable">
+    <colgroup><col style="width: calc(84px * var(--k))"><col style="width: 30%"><col><col style="width: calc(110px * var(--k))"><col style="width: calc(84px * var(--k))"></colgroup>
+    <thead><tr><th>시각</th><th>왜 (감지·판단)</th><th>무엇을 했나</th><th>결과</th><th>걸린 시간</th></tr></thead>
+    <tbody id="progRows"><tr><td colspan="5" class="empty">아직 기기에 보낸 명령이 없어요</td></tr></tbody>
+  </table></div>
 </section>
 
 <section id="row4">
@@ -454,7 +500,9 @@ body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
       <div class="ptitle"><span><b>나는 누구?</b> · 첫 설정 프로필 → hub 개인화 기준(prior)</span><span class="mono" id="pNode">node laptop-devview</span></div>
       <div class="pbtns" id="pbtns"></div>
       <div id="pform"></div>
-      <div class="prow2"><button class="btn warn" id="pSend">이 프로필로 보내기…</button><span id="pHint" class="empty"></span></div>
+      <div class="prow2"><button class="btn warn" id="pSend">이 프로필로 보내기…</button>
+        <label class="empty" title="끄면 지금 사람(hub 가 쓰는 profile_id)의 값을 고친다 — 켜면 새 사람이라 hub 학습이 따로 쌓인다"><input type="checkbox" id="pNew"> 새 사람으로</label>
+        <span id="pHint" class="empty"></span></div>
       <div id="pconfirm"><div>deskmate/profile/user (retain, QoS 1) 로 보냅니다 — 이름·직업은 싣지 않음:</div><pre id="pPreview"></pre>
         <button class="btn go" id="pYes">확인하고 보내기</button> <button class="btn" id="pNo">취소</button></div>
       <div id="pstatus">-</div>
@@ -548,7 +596,9 @@ function renderSvc(p) {
   // hub 하한(demo-b: 졸음 0.80 · 엎드림 0.99) 아래면 화면엔 떠도 hub 는 세지 않는다 — 그 사실을 라벨 옆에
   const floor = p.floors ? p.floors[p.posture] : undefined;
   $("svcLabel").innerHTML = esc(p.valid ? p.label : `${p.label} (입력 없음)`) +
-    (p.hub_note ? ` <span class="hubIgnore">${esc(p.hub_note)}</span>` : floor != null && p.valid ? ` <span class="hubCount">hub 셈 (≥ ${floor.toFixed(2)})</span>` : "");
+    (p.hub_note ? ` <span class="hubIgnore">${esc(p.hub_note)}</span>` : floor != null && p.valid ? ` <span class="hubCount">hub 셈 (≥ ${floor.toFixed(2)})</span>` : "") +
+    (p.away_masked ? ` <span class="hubCount">자리 비움 가림 (아랫줄 &lt; 70 cm)</span>` : "") +
+    (p.away_forced ? ` <span class="hubCount">아랫줄 전부 ≥ 70 cm → 자리 비움</span>` : "");
   const r = p.rules;
   $("svcRules").innerHTML = r ? (r.model_raw ? `<div class="raw">모델 원 출력(게이트·규칙 전): ${esc(r.model_raw)}</div>` : "") +
     r.lines.map(x => `<div class="${/켜짐 →|적용 중|막음/.test(x) ? "on" : ""}">${esc(x)}</div>`).join("") : "";
@@ -596,9 +646,14 @@ function renderJudge(ph, p, profile) {
   $("fsm").style.color = PHASE_COLOR[ph.phase] || "var(--fg)";
   $("fsmMeta").textContent = `단계 ${ph.phase} · 맥락 ${ph.context}`;
   $("seq").textContent = ph.seq == null ? "-" : `seq ${ph.seq}`;
+  const fast = ph.demo_speed === "fast";
+  $("demoFast").textContent = fast ? "빠른 시연 켜짐 · 끄기" : ph.demo_speed ? "빠른 시연 켜기" : "빠른 시연(hub 미지원)";
+  $("demoFast").classList.toggle("warn", fast);
+  $("demoFast").dataset.next = fast ? "normal" : "fast";
   const meter = (v, t, b, color) => { $(t).textContent = f2(v); $(b).style.width = v == null ? "0" : (v * 100).toFixed(1) + "%"; $(b).style.background = color; };
   meter(ph.fatigue, "fatT", "fatB", ph.fatigue >= 0.7 ? "var(--bad)" : ph.fatigue >= 0.45 ? "var(--warn)" : "var(--ok)");
   meter(ph.focus, "focT", "focB", "var(--accent)");
+  if (ph.away) { $("fatT").textContent = "자리 비움 — 점수 없음"; $("focT").textContent = "자리 비움 — 점수 없음"; }
   $("judgeKv").innerHTML = kv([
     ["원인·게이트", `${esc(ph.cause)} · ${esc(ph.gate)}` + (ph.reasons !== "-" ? ` <span class="empty">· ${esc(ph.reasons)}</span>` : "")],
     ["자세(hub)", esc(ph.hub_posture)],
@@ -689,7 +744,7 @@ function renderVideo(d) {
     (d.posture && d.posture.hub_note ? ` · ${d.posture.hub_note}` : "");
   $("vChips").innerHTML = v.chips.map(c => `<span>${esc(c)}</span>`).join("");
   const f = v.fatigue;
-  $("vFatT").textContent = f == null ? "-" : f.toFixed(2);
+  $("vFatT").textContent = v.away ? "자리 비움 — 점수 없음" : f == null ? "-" : f.toFixed(2);
   $("vFatB").style.width = f == null ? "0" : (f * 100).toFixed(1) + "%";
   $("vFatB").style.background = f >= 0.7 ? "var(--bad)" : f >= 0.45 ? "var(--warn)" : "var(--ok)";
   $("vEnv").textContent = v.env;
@@ -759,7 +814,12 @@ const LAB = {age_band: "연령대", sleep_hours: "수면 h", bedtime: "잠드는
   wind_pref: "바람", placement: "장치 위치", focus_help: "도움 순서"};
 const HELP = [["light", "조명"], ["wind", "선풍기"], ["sound", "알림음"], ["voice", "음성 안내"], ["break", "휴식"]];
 let persona = null, presets = null, custom = null, pending = null;
-function personaKeys() { return [["student_exam", "수험생"], ["student_univ", "대학생"], ["custom", "직접 설정"]]; }
+// 지금 사람(11-01): hub 가 쓰는 profile_id 와 그 첫 설정(브로커 retain). 있으면 보내기는 기본으로 이 id 를 그대로 쓴다
+let current = null, currentSig = "", autoPicked = false, currentName = "";
+function personaKeys() {
+  return (current ? [["current", current.name ? `지금 사람 · ${current.name}` : "지금 사람"]] : []).concat([["student_exam", "수험생"], ["student_univ", "대학생"], ["custom", "직접 설정"]]);
+}
+function sendId() { return persona === "current" ? current.profile_id : (current && !$("pNew").checked ? current.profile_id : pid(persona)); }
 function formData() {
   const f = $("pform"), d = {};
   for (const k of Object.keys(OPT)) d[k] = f.querySelector(`[name=${k}]`).value;
@@ -769,20 +829,27 @@ function formData() {
   d.focus_help = Array.from(f.querySelectorAll("[name=help]:checked"), x => x.value);
   return d;
 }
+// 도움 순서는 순위가 hub 첫 기준을 바꾼다(11-01 hub focus_help_rank_weights) — 받은 순서대로 먼저 그리고 나머지를 뒤에.
+// formData 는 화면 순서로 읽으므로 고쳐 보내도 순위가 그대로 간다
+function helpOrder(order) {
+  return order.map(k => HELP.find(h => h[0] === k)).filter(Boolean).concat(HELP.filter(h => !order.includes(h[0])));
+}
 function buildForm(data, editable) {
   const sel = k => `<label>${LAB[k]}</label><select name="${k}">${OPT[k].map(o => `<option ${o === data[k] ? "selected" : ""}>${o}</option>`).join("")}</select>`;
   $("pform").innerHTML = sel("age_band") + `<label>${LAB.sleep_hours}</label><input name="sleep_hours" type="number" min="3" max="12" step="0.5" value="${data.sleep_hours}">` +
     `<label>${LAB.bedtime}</label><input name="bedtime" type="time" value="${data.bedtime}">` + `<label>${LAB.wake_time}</label><input name="wake_time" type="time" value="${data.wake_time}">` +
     sel("light_pref") + sel("sound_pref") + sel("wind_pref") + sel("placement") +
-    `<label>${LAB.focus_help}</label><div class="helps">${HELP.map(([k, n]) => `<label><input type="checkbox" name="help" value="${k}" ${(data.focus_help || []).includes(k) ? "checked" : ""}> ${n}</label>`).join("")}</div>`;
+    `<label>${LAB.focus_help}</label><div class="helps">${helpOrder(data.focus_help || []).map(([k, n], i) => `<label><input type="checkbox" name="help" value="${k}" ${(data.focus_help || []).includes(k) ? "checked" : ""}> ${(data.focus_help || []).includes(k) ? (i + 1) + ". " : ""}${n}</label>`).join("")}</div>`;
   $("pform").setAttribute("aria-disabled", editable ? "false" : "true");
 }
 function pickPersona(key) {
   persona = key;
   pending = null; $("pconfirm").style.display = "none";
-  const data = key === "custom" ? (custom || presets.student_univ.data) : presets[key].data;
-  buildForm(data, key === "custom");
-  $("pHint").textContent = key === "custom" ? "값을 고친 뒤 보내기" : "V18 기본 페르소나 값(바꾸려면 직접 설정)";
+  const data = key === "current" ? current.data : key === "custom" ? (custom || (current && current.data) || presets.student_univ.data) : presets[key].data;
+  buildForm(data, key === "current" || key === "custom");
+  $("pHint").textContent = key === "current" ? "지금 사람의 첫 설정 — 고쳐 보내면 같은 사람으로 이어 배운다"
+    : key === "custom" ? "값을 고친 뒤 보내기" : "V18 기본 페르소나 값(바꾸려면 직접 설정)";
+  $("pNew").disabled = key === "current" || !current;
   renderPersonaButtons();
 }
 function renderPersonaButtons() {
@@ -791,9 +858,12 @@ function renderPersonaButtons() {
 }
 $("pSend").onclick = () => {
   if (!persona) return;
-  const data = Object.assign({profile_id: pid(persona)}, persona === "custom" ? formData() : presets[persona].data);
+  const editable = persona === "custom" || persona === "current";
+  const data = Object.assign({profile_id: sendId()}, editable ? formData() : presets[persona].data);
   if (persona === "custom") custom = formData();
-  pending = {data, label: personaKeys().find(x => x[0] === persona)[1]};
+  const name = personaKeys().find(x => x[0] === persona)[1];
+  const same = current && data.profile_id === current.profile_id;
+  pending = {data, label: persona === "current" ? (current.name || name) : same ? `${name} 값 → 지금 사람` : `${name}(새 사람)`};
   $("pPreview").textContent = JSON.stringify(data, null, 1);
   $("pconfirm").style.display = "block";
 };
@@ -822,6 +892,11 @@ function showToasts(notices) {
   lastToast = Math.max(lastToast, newest);
 }
 const VLABEL = {accept: "수락", reject: "거절", undo: "되돌리기"};
+// 빠른 시연은 학습 라벨이 아니라 한 번에 보낸다. 지금 모드는 다음 state/phase(10 s 안)에 버튼 글자로 돌아온다
+$("demoFast").onclick = async () => {
+  const r = await post("/api/demo-mode", {speed: $("demoFast").dataset.next || "fast"}).catch(e => ({ok: false, error: e.message}));
+  cardMsg = r.ok ? "빠른 시연 요청 보냄 — 다음 판정(10 s 안)에 반영" : `빠른 시연 보내기 실패: ${r.error}`;
+};
 // 한 번 누르면 '한 번 더 눌러 보내기'(4 s), 두 번째에 보낸다 — 실수로 hub 에 라벨을 보내지 않게
 async function answer(rid, verdict) {
   const now = Date.now();
@@ -866,11 +941,12 @@ function trigChart(tr) {
   });
   for (let v = 0; v <= 1.001; v += 0.5) g += `<text x="4" y="${y(v) + 4}" fill="#5d6578" font-size="11">${v.toFixed(1)}</text>`;
   if (sr.length) g += `<polyline fill="none" stroke="#f3f5f8" stroke-width="2.2" points="${sr.filter(p => p.at >= now - span).map(p => `${x(p.at).toFixed(1)},${y(p.c).toFixed(1)}`).join(" ")}"/>`;
-  const MC = {lamp: "#4cc38a", card: "#f5b93a", confirm: "#f06a6a", action_auto: "#4cc38a", action_suggest: "#f5b93a", action_none: "#9aa3b5"};
+  const MC = {lamp: "#4cc38a", card: "#f5b93a", confirm: "#f06a6a", action_auto: "#4cc38a", action_suggest: "#f5b93a", action_none: "#9aa3b5",
+    arm: "#8f9cff", prior: "#5d6578"};
   (tr.marks || []).forEach(m => {
     const xx = x(m.at).toFixed(1), col = MC[m.kind] || "#8f9cff";
     g += `<line x1="${xx}" x2="${xx}" y1="${T}" y2="${H - B}" stroke="${col}" stroke-width="${m.kind === "lamp" ? 3 : 1.5}"/>` +
-      `<text x="${xx}" y="${H - 6}" fill="${col}" font-size="11" text-anchor="middle">${m.kind === "lamp" ? "💡" : m.kind === "card" ? "카드" : m.kind === "confirm" ? "확정" : "개입"}</text>`;
+      `<text x="${xx}" y="${H - 6}" fill="${col}" font-size="11" text-anchor="middle">${m.kind === "lamp" ? "💡" : m.kind === "card" ? "카드" : m.kind === "confirm" ? "확정" : m.kind === "arm" ? "개인화" : m.kind === "prior" ? "첫설정" : "개입"}</text>`;
   });
   const mm = sec => sec >= 60 ? `-${(sec / 60).toFixed(sec % 60 ? 1 : 0)}분` : `-${Math.round(sec)}초`;
   [[span, mm(span)], [span / 2, mm(span / 2)], [0, "지금"]].forEach(([ago, lab]) =>
@@ -899,8 +975,10 @@ function renderTrigger(el, tr) {
     `<div class="chk">${(tr.checks || []).map(c => `<div class="r"><span class="${c.ok ? "y" : "n"}">${c.ok ? "✓" : "·"}</span><span>${esc(c.name)}</span><span class="v">${esc(c.value)}</span>` +
       (c.progress != null ? `<div class="pb"><i style="width:${(c.progress * 100).toFixed(0)}%"></i></div>` : "") + `</div>`).join("")}</div>` +
     (tr.breakdown ? breakdownHtml(tr.breakdown) : "") +
-    `<div>${trigChart(tr)}<div class="lg">흰 선 = C_fatigue · 배경 = FSM(초록 집중·노랑 의심·빨강 피로/개입) · 세로선: 💡 무드등 명령 · 카드 · 확정 · 개입(자동/제안)</div></div>` +
+    `<div>${trigChart(tr)}<div class="lg">흰 선 = C_fatigue · 배경 = FSM(초록 집중·노랑 의심·빨강 피로/개입) · 세로선: 💡 무드등 명령 · 카드 · 확정 · 개입(자동/제안) · 개인화가 고른 것</div></div>` +
     (tr.prior ? `<div class="prior">개입 선택 개인화 기준(첫 설정): ${esc(tr.prior)}</div>` : "") +
+    (tr.last_arm && tr.last_arm.text ? `<div class="prior">${esc(tr.last_arm.text)}</div>` : "") +
+    (tr.arm_counts ? `<div class="src">hub 개인화 안내 집계: ${esc(tr.arm_counts)}</div>` : "") +
     `<div class="src">설정: ${esc(tr.source)} · 프로파일 ${esc(tr.profile || "-")} · hub 는 유지 타이머를 싣지 않아 '남은 초'는 state/phase tick 으로 추정(engine.py 규칙)</div>`;
 }
 
@@ -972,21 +1050,44 @@ function renderVirtual(d) {
   renderFan($("fanV"), v.fan); renderFan($("fanF"), v.fan);
   const L = d.laptop;
   $("lapStat").innerHTML = L && L.enabled
-    ? `💻 노트북 대역 <span class="on">켜짐</span> · 화면 <b>${L.cur.brightness ?? "-"} %</b> · 볼륨 <b>${L.cur.volume == null ? "-" : Math.round(L.cur.volume * 100) + " %"}</b> · 원래 ${L.orig.brightness ?? "-"} % / ${L.orig.volume == null ? "-" : Math.round(L.orig.volume * 100) + " %"} · ${esc(L.result_policy)}${L.error ? ` · <span class="bad">${esc(L.error)}</span>` : ""}`
+    ? `💻 노트북 대역 <span class="on">켜짐</span> · 화면 <b>${L.cur.brightness ?? "-"} %</b> · 볼륨 <b>${L.cur.volume == null ? "-" : Math.round(L.cur.volume * 100) + " %"}</b> · 원래 ${L.orig.brightness ?? "-"} % / ${L.orig.volume == null ? "-" : Math.round(L.orig.volume * 100) + " %"}` +
+      (L.wake ? ` · <span class="on">깨우는 중</span> ${esc(L.wake.why)} (올리기 전 ${L.wake.before == null ? "-" : Math.round(L.wake.before * 100) + " %"}, ${L.wake.left_s} s 뒤 되돌림)`
+       : L.wake_volume != null ? ` · 깨우기 ${Math.round(L.wake_volume * 100)} %` : "") +
+      ` · ${esc(L.result_policy)}${L.error ? ` · <span class="bad">${esc(L.error)}</span>` : ""}`
     : `💻 노트북 대역 <span class="off">꺼짐</span>(--act-laptop 으로 켬)`;
   $("pPrior").textContent = P.prior ? `hub 가 반영한 첫 설정(개입 선택 개인화 기준): ${P.prior}` : "";
   $("vFake2").style.display = d.mode === "fake" ? "inline" : "none";
   $("vdMqtt").className = "dot" + (d.links.mqtt.ok ? " on" : "");
-  if (!presets) { presets = P.presets; pickPersona("student_exam"); }
+  current = P.current || null;
+  const sig = current ? JSON.stringify(current.data) : "";
+  if (!presets) { presets = P.presets; autoPicked = true; pickPersona(current ? "current" : "student_exam"); currentSig = sig; }
+  else if (sig !== currentSig) {
+    currentSig = sig;
+    // 지금 사람이 새로 생기거나(처음엔 retain 이 늦게 옴) Pi 5 앱이 값을 바꾸면 폼을 다시 채운다 — 보내기 확인 중이면 그대로
+    if (!pending && ((autoPicked && current) || persona === "current")) { autoPicked = false; pickPersona(current ? "current" : "student_exam"); }
+    else renderPersonaButtons();
+  }
   $("pSend").disabled = !P.enabled;
   const sent = P.sent;
+  // 이름은 이 노트북에만 적어 둔 것(프로필 메시지에는 이름이 없다) — 이름 붙이기 버튼으로 정한다
+  const who = (name, pid) => `${name ? `<b>${esc(name)}</b> ` : ""}<span class="mono">${esc(pid)}</span>`;
   $("pstatus").innerHTML =
-    `보낸 프로필: ${sent ? `<b>${esc(sent.label || "-")}</b> <span class="mono">${esc(sent.profile_id)}</span> · ${sent.t}` : "아직 없음"}<br>` +
-    `hub 가 쓰는 프로필: <span class="mono">${esc(P.hub_active)}</span> ` +
+    `지금 사람: ${current ? `${who(current.name, current.profile_id)} <button class="tg" id="pName" title="이 노트북에만 적어 두는 이름 — MQTT 로는 보내지 않음">${current.name ? "이름 바꾸기" : "이름 붙이기"}</button> · 마지막 첫 설정 ${esc(current.node)} ${esc(current.t)}` : `<span class="empty">모름 — 브로커에 profile/user 가 없음(Pi 5 앱에서 프로필을 고르면 생김)</span>`}<br>` +
+    `보낸 프로필: ${sent ? `${who(sent.name || sent.label || "-", sent.profile_id)} · ${sent.t}` : "아직 없음"}<br>` +
+    `hub 가 쓰는 프로필: ${who(P.hub_active_name, P.hub_active)} ` +
     (sent ? (P.ack ? `<span class="ok">✓ hub 적용 확인</span>` : `<span class="pend">… 확인 대기</span>`) : "") +
     (Object.keys(P.hub_fields).length ? `<br><span class="empty">hub 개인화: ${esc(Object.entries(P.hub_fields).map(([k, x]) => k + " " + x).join(" · "))}</span>` : "") +
     `<br>hub 시연 프로파일(DESKMATE_PROFILE): <b>${esc(P.hub_profile)}</b> <span class="empty">— demo-b ↔ demo-b-study 는 hub 재시작이 필요해 여기서 바꾸지 않음(hub.env)</span>` +
     (P.enabled ? "" : `<br><span class="bad">보내기 꺼짐(--read-only)</span>`);
+  if ($("pName")) $("pName").onclick = async () => {
+    const name = prompt("이 사람을 뭐라고 부를까요? 이 노트북에만 저장해요(비우면 지움).", current.name || "");
+    if (name === null) return;
+    const r = await post("/api/name", {profile_id: current.profile_id, name}).catch(e => ({ok: false, error: e.message}));
+    $("pHint").textContent = r.ok ? "이름을 적어 두었어요" : `이름 저장 실패: ${r.error}`;
+  };
+  // 이름이 바뀌면 "지금 사람" 버튼 글자도 — 폼은 다시 채우지 않는다(고치던 값을 지킨다)
+  const nameNow = current ? current.name || "" : "";
+  if (nameNow !== currentName) { currentName = nameNow; renderPersonaButtons(); }
   // hub 지금
   $("vnowState").textContent = `${FSM_KO_JS[ph.fsm_state] || ph.fsm_state}`;
   $("vnowState").style.color = PHASE_COLOR[ph.phase] || "var(--fg)";
@@ -1062,6 +1163,39 @@ function renderLog(log) {
   if (stick) box.scrollTop = box.scrollHeight;
 }
 
+const PST_ICON = {succeeded: "✓ ", failed: "✕ ", timeout: "⏱ ", executing: "… ", accepted: "? "};
+let progKey = "";
+const progSeen = new Set();
+function renderProgress(pg) {
+  if (!pg) return;
+  const hl = pg.hub_link || {};
+  const src = $("progSrc");
+  src.className = pg.source;
+  src.textContent = pg.source === "hub" ? "출처: 허브 제어 기록" : "출처: MQTT 로 추정" + (hl.reason ? ` (허브 기록 없음: ${hl.reason})` : "");
+  src.title = pg.source === "hub" ? "hub control_log(GET :8765/api/control-log) — 생략·제안 대기·되돌림까지" : "옛 hub 이거나 :8765 연결 안 됨 — 생략·되돌림 연결 없음";
+  const s = pg.summary || {};
+  const tile = (cls, lab, num) => `<div class="tile ${cls}"><div class="lab">${lab}</div><div class="num">${num}</div></div>`;
+  $("progSum").innerHTML = tile("", "보낸 명령", s.total ?? 0) + tile("ok", "성공", s.succeeded ?? 0) +
+    tile("bad", "실패 · 응답 없음", s.failed ?? 0) + tile("skip", "판단으로 생략", s.skipped ?? 0) +
+    tile("ok", "성공률", s.success_rate == null ? "-" : `${s.success_rate}%`) + tile("", "평균 응답", s.avg_latency_ko || "-");
+  const key = JSON.stringify(pg.rows);
+  if (key === progKey) return;
+  const first = progKey === "";
+  progKey = key;
+  $("progRows").innerHTML = pg.rows.length ? pg.rows.map(r => {
+    const fresh = !first && !progSeen.has(r.id);
+    progSeen.add(r.id);
+    const notes = (r.notes_ko || []).map(n => `<span class="note${r.status === "failed" || r.status === "timeout" ? " warn" : ""}">${esc(n)}</span>`).join("");
+    const raw = [r.id, r.source, r.state, r.cause, r.gate, r.arm && `arm ${r.arm}`, `${r.target} ${r.op} ${r.value || ""}`.trim(),
+      r.reason, r.error, r.node].filter(Boolean).join(" · ");
+    return `<tr class="${r.undo ? "undo" : ""}${fresh ? " fresh" : ""}" title="${esc(raw)}"><td class="t mono">${esc(r.t)}</td>` +
+      `<td><span class="main">${esc(r.why_ko || "-")}</span>${r.why_sub_ko ? `<span class="sub">${esc(r.why_sub_ko)}</span>` : ""}</td>` +
+      `<td><span class="main">${r.mode_ko ? `<span class="mode">${esc(r.mode_ko)}</span>` : ""}${esc(r.device_ko)} · ${esc(r.action_ko)}</span>${notes}</td>` +
+      `<td class="res"><span class="pst ${esc(r.status)}">${PST_ICON[r.status] || ""}${esc(r.status_ko || r.status)}</span></td>` +
+      `<td class="ms mono">${esc(r.latency_ko || "")}</td></tr>`;
+  }).join("") : `<tr><td colspan="5" class="empty">아직 기기에 보낸 명령이 없어요</td></tr>`;
+}
+
 function renderTopics(ts) {
   $("topicCount").textContent = `${ts.length}개`;
   $("topics").innerHTML = ts.length ? ts.map(t =>
@@ -1111,6 +1245,7 @@ async function tick() {
     renderVirtual(d);
     renderTrigger($("trigD"), d.trigger);
     renderTrigger($("trigV"), d.trigger);
+    renderProgress(d.progress);
     renderLog(d.log);
     renderTopics(d.topics);
   } catch (e) {

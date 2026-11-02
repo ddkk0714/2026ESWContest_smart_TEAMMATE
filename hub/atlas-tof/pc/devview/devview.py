@@ -19,6 +19,7 @@ import argparse
 import json
 import math
 import os
+import re
 import socket
 import struct
 import sys
@@ -26,7 +27,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from collections import deque
+from collections import OrderedDict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 
@@ -51,6 +52,7 @@ TOPIC_REQUEST = "deskmate/interaction/request"
 TOPIC_FEEDBACK = "deskmate/feedback/user"
 TOPIC_HEALTH_HUB = "deskmate/health/hub"
 TOPIC_PROFILE = "deskmate/profile/user"
+TOPIC_DEMO_MODE = "deskmate/demo/mode"   # 빠른 시연 버튼 → hub demo_mode.py {"speed": "fast"|"normal"} (보내기만, 지금 모드는 state/phase)
 
 DASH = "-"
 
@@ -89,6 +91,15 @@ def _txt(v: Any, fmt: str = "{}", unit: str = "") -> str:
         return str(v) + unit
 
 
+AWAY_TEXT = "자리 비움 — 점수 없음"
+
+
+def scores_away(data: dict[str, Any]) -> bool:
+    """hub 가 사람이 없다고 한 tick: scores_valid false 또는 sensor_summary.present false. 이때 c_fatigue·c_focus 는
+    점수가 아니다(전에는 환경 신호만으로 재정규화돼 1.0, 이제 0.0) — 숫자를 보이지도, 유지 판정에 세지도 않는다."""
+    return data.get("scores_valid") is False or _map(data.get("sensor_summary")).get("present") is False
+
+
 def phase_view(envelope: Any) -> dict[str, Any]:
     """`deskmate/state/phase` envelope → 판정 화면 데이터. 키가 없으면 '-' (숫자 막대는 None).
 
@@ -102,8 +113,9 @@ def phase_view(envelope: Any) -> dict[str, Any]:
     # (CNN, observe 전용 — 판정에 안 들어감. demo-b 는 linear 정규화라 unavailable 이 정상)
     pers = _map(ss.get("personalize"))
     stage2 = _map(ss.get("personalization"))
-    fatigue = _num(data.get("c_fatigue", data.get("C_fatigue")))
-    focus = _num(data.get("c_focus", data.get("C_focus")))
+    away = scores_away(data)
+    fatigue = None if away else _num(data.get("c_fatigue", data.get("C_fatigue")))
+    focus = None if away else _num(data.get("c_focus", data.get("C_focus")))
 
     hub_posture = DASH
     if tof.get("posture"):
@@ -159,6 +171,7 @@ def phase_view(envelope: Any) -> dict[str, Any]:
         "seq": _map(envelope).get("seq"),
         "fatigue": fatigue,
         "focus": focus,
+        "away": away,
         "fatigue_text": DASH if fatigue is None else f"{fatigue:.2f}",
         "focus_text": DASH if focus is None else f"{focus:.2f}",
         "cause": str(data.get("cause") or DASH),
@@ -173,6 +186,8 @@ def phase_view(envelope: Any) -> dict[str, Any]:
         "learning": learn,
         "stage2": stage2_text,
         "prior": prior or DASH,
+        # hub 빠른 시연 모드(demo_mode.py): fast·normal, 옛 hub 면 ""
+        "demo_speed": str(_map(ss.get("demo_mode")).get("speed") or ""),
     }
 
 
@@ -448,6 +463,42 @@ def hub_floor_note(posture: str, conf: float | None, floors: dict[str, float]) -
     return f"hub 무시 ({conf:.2f} < {f:.2f})"
 
 
+AWAY_BOTTOM_ROW_MM = 700   # hub tof.service.away_bottom_row_mm (10-27) 과 같은 값
+
+
+def bottom_row_state(raw: Any, max_mm: float = AWAY_BOTTOM_ROW_MM) -> str | None:
+    """`/raw` 격자 가장 아랫줄 → 'near'(어느 센서든 max_mm 보다 가까운 유효 칸) | 'far'(유효 8칸 이상인 센서 모두 아랫줄이
+    max_mm 이상이거나 비었음) | None(격자 없음). hub _bottom_row_state 와 같은 규칙."""
+    working = 0
+    for s in parse_raw(raw)["sensors"]:
+        if not s["grid"] or s["valid_count"] < 8:
+            continue
+        working += 1
+        w, h = int(s.get("w") or 8), int(s.get("h") or 8)
+        if any(s["valid"][k] and 0 < s["grid"][k] < max_mm for k in range((h - 1) * w, min(h * w, len(s["grid"])))):
+            return "near"
+    return "far" if working else None
+
+
+def mask_seated_away(j: Any, raw: Any) -> Any:
+    """hub `tof.service.away_bottom_row_mm`(10-27)과 같은 규칙. 아랫줄 near 인데 away → away·misplaced 뺀 확률 1위(신뢰도는
+    원래 확률), 아랫줄 far 인데 away 가 아님 → away(빈 의자의 엎드림·뒤로 기댐)."""
+    j = _map(j)
+    p = j.get("posture")
+    if p in (None, "unknown"):
+        return j
+    state = bottom_row_state(raw)
+    if state == "far" and p != "away":
+        return {**j, "posture": "away", "posture_ko": POSTURE_KO.get("away", "away"), "conf": 1.0, "away_forced": True}
+    if state != "near" or p != "away":
+        return j
+    cand = {str(k): _num(v) or 0.0 for k, v in _map(j.get("probs")).items() if k not in ("away", "misplaced")}
+    if not cand:
+        return j
+    label = max(cand, key=cand.__getitem__)
+    return {**j, "posture": label, "posture_ko": POSTURE_KO.get(label, label), "conf": cand[label], "away_masked": True}
+
+
 def posture_view(j: Any, floors: dict[str, float] | None = None) -> dict[str, Any]:
     """자세 서비스 `/api/state` → 라벨·신뢰도·9 클래스 막대·장치 위치·보정 상태·hub 하한 표시.
 
@@ -474,6 +525,8 @@ def posture_view(j: Any, floors: dict[str, float] | None = None) -> dict[str, An
         "hub_note": hub_floor_note(p, _num(j.get("conf")), floors) if j.get("valid") else None,
         "floors": floors,
         "rules": _rule_view(j),
+        "away_masked": bool(j.get("away_masked")),
+        "away_forced": bool(j.get("away_forced")),
     }
 
 
@@ -729,6 +782,14 @@ ACTION_PLAN = {
     "cognitive": [],
 }
 # 개인화 arm → 하는 일(hub config/personalize.yaml arms 의 device·label_ko). 카드 머리줄을 원인 전체가 아니라 고른 arm 으로.
+# arm id → 화면 이름(hub config/personalize.yaml arms label_ko)
+ARM_LABEL = {"light_cool_bright": "조명 밝고 차갑게", "light_warm_dim": "조명 따뜻하고 어둡게", "air_fan_up": "공기청정기 풍량 올리기",
+             "fan_on": "환기팬(선풍기) 켜기", "ventilate_suggest": "창문 환기", "posture_card": "자세 안내 카드",
+             "wake_light": "무드등 밝혀 깨우기", "posture_voice": "자세 음성 안내", "sound_cue": "알림음",
+             "break_short": "5분 휴식", "break_long": "긴 휴식", "sleep_suggest": "취침 권유"}
+POSTURE_ARMS = ("wake_light", "posture_card", "posture_voice", "sound_cue")   # personalize.yaml causes 에 posture 가 있는 arm
+DELIVERED_KO = {"card": "카드", "speak": "음성", "chime": "알림음", "lamp": "무드등", "desk_lamp": "무드등", "fan": "선풍기",
+                "vent_fan": "선풍기", "air": "공기청정기", "cmd": "기기 명령", "display": "화면"}
 ARM_ACTION = {
     "light_cool_bright": [("desk_lamp", "adjust_brightness", {"percent": 50})],
     "light_warm_dim": [("desk_lamp", "adjust_brightness", {"percent": -50})],
@@ -779,8 +840,8 @@ def op_text(op: str, value: Any) -> str:
         t = value.get("text") if isinstance(value, dict) else value
         return f"말하기 “{_clip(str(t or ''), 40)}”"
     if op == "chime":
-        pat = value.get("pattern") if isinstance(value, dict) else value
-        return "알림음" + (f" {pat}" if pat else "")
+        v = value if isinstance(value, dict) else {"pattern": value}
+        return "알림음" + "".join(f" {v[k]}" for k in ("pattern", "volume") if v.get(k))
     return f"{op} {raw_value(value)}".strip()
 
 
@@ -950,13 +1011,15 @@ def video_view(phase_env: Any, posture: Any, control: dict[str, Any]) -> dict[st
     if _num(ss.get("lux")) is not None:
         env.append(f"{ss['lux']:.0f} lx")
     state = str(data.get("fsm_state") or "")
-    fatigue = _num(data.get("c_fatigue"))
+    away = scores_away(data)
+    fatigue = None if away else _num(data.get("c_fatigue"))
     return {
         "posture": label,
         "posture_conf": _num(p.get("conf")) if p else None,
         "chips": ["허브", FSM_KO.get(state, state or DASH), CONTEXT_KO.get(str(data.get("context")), DASH)],
         "phase": str(data.get("phase") or ""),
         "fatigue": fatigue,
+        "away": away,
         "env": " · ".join(env) or DASH,
         "decision": control.get("headline") or DASH,
         "decision_status": " · ".join(x for x in (control.get("status"), control.get("time")) if x and x != DASH) or DASH,
@@ -1119,6 +1182,7 @@ class VirtualHome:
         self.rest_min_s: float | None = None    # hub fsm timers.rest_min_sec (load_hub_rules 가 넣는다)
         self.rest_counts: str | None = None     # state/phase sensor_summary.rest_notice.counts 요약
         self.info: deque[dict[str, Any]] = deque(maxlen=8)   # 자동 안내 카드(auto: true, options [dismiss]) — 답하지 않는 배너
+        self.current_cmd: dict[str, Any] | None = None       # 실행 중인 control/cmd data — listeners 가 '깨우기'인지 본다
 
     # ---------------------------------------------------------------- 공통
     def _notify(self, key: str, text: str, at: float, tone: str = "info") -> None:
@@ -1295,7 +1359,11 @@ class VirtualHome:
             return None
         if isinstance(cid, str) and cid in self._by_cmd:   # QoS 1 중복 — 두 번 실행하지 않는다
             return self._by_cmd[cid]
-        res = self._execute(c, at)
+        self.current_cmd = c
+        try:
+            res = self._execute(c, at)
+        finally:
+            self.current_cmd = None
         line = self._command_line(c, res)
         arm, arm_label, reason = self._arm_for(str(target), at)
         e = self._event(at, kind="command", target=target, operation=op, gate=c.get("gate"),
@@ -1392,8 +1460,9 @@ class VirtualHome:
             self._stamp(self.speaker, self.speaker["voice"], at)
             return {"status": "succeeded", "actual_value": "spoken"}
         if op == "chime":
-            pattern = (value or {}).get("pattern") if isinstance(value, dict) else value
-            self.speaker["voice"] = "알림음" + (f" ({pattern})" if pattern else "")
+            v = value if isinstance(value, dict) else {"pattern": value}
+            parts = [str(x) for x in (v.get("pattern"), v.get("volume")) if x]
+            self.speaker["voice"] = "알림음" + (f" ({' · '.join(parts)})" if parts else "")
             self._stamp(self.speaker, self.speaker["voice"], at)
             return {"status": "succeeded", "actual_value": "chimed"}
         if target == "air_purifier":
@@ -1612,6 +1681,47 @@ def validate_profile(data: Any) -> tuple[dict[str, Any] | None, str]:
     return out, ""
 
 
+class ProfileNames:
+    """profile_id → 부르는 이름(11-01). 프로필 메시지에는 이름이 없어(난수 id 만) 화면이 사람을 id 로만 보였다.
+    이 노트북에만 적어 두고 MQTT 로는 보내지 않는다. path 가 None 이면 메모리에만(시험·--fake)."""
+
+    MAX_LEN = 20
+
+    def __init__(self, path: str | None) -> None:
+        self.path = path
+        self.names: dict[str, str] = {}
+        if path and os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    raw = json.load(fh)
+                self.names = {k: v for k, v in _map(raw).items() if isinstance(k, str) and _PID.match(k)
+                              and isinstance(v, str) and v.strip()}
+            except (OSError, ValueError):
+                self.names = {}
+
+    def get(self, pid: Any) -> str | None:
+        return self.names.get(pid) if isinstance(pid, str) else None
+
+    def set(self, pid: Any, name: Any) -> dict[str, Any]:
+        if not isinstance(pid, str) or not _PID.match(pid):
+            return {"ok": False, "error": "profile_id 형식 오류"}
+        text = " ".join(str(name or "").split())[: self.MAX_LEN]
+        if text:
+            self.names[pid] = text
+        else:
+            self.names.pop(pid, None)    # 빈 이름 = 지우기
+        if self.path:
+            try:
+                os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+                tmp = self.path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump(self.names, fh, ensure_ascii=False)
+                os.replace(tmp, self.path)
+            except OSError as e:
+                return {"ok": False, "error": f"이름 저장 실패: {e}"}
+        return {"ok": True, "error": None}
+
+
 def new_profile_id() -> str:
     """V18 newProfileId 와 같은 모양: 'p' + 16 hex (이름과 무관한 난수)."""
     return "p" + os.urandom(8).hex()
@@ -1635,6 +1745,11 @@ LAMP_OFF_PERCENT = 10          # 무드등 '끔' = 화면이 까매지지 않는
 MIN_BRIGHTNESS_INTERVAL_S = 3.0  # 깜빡임 방지: 화면 밝기는 3 s 에 한 번까지(사이 값은 마지막 것만)
 MIN_VOLUME_INTERVAL_S = 1.5
 MANUAL_POLL_S = 5.0
+# 깨우기(블루투스 대신 노트북에서 틀어 둔 음악으로 깨운다): 자세 개입 무드등·자세/휴식 말하기·알림음이 오면 노트북 음량을
+# max(지금, WAKE_VOLUME) 으로 올리고, FSM 이 회복·집중으로 가거나 WAKE_MAX_S 가 지나면 올리기 전 음량으로 되돌린다.
+WAKE_VOLUME = 0.8
+WAKE_MAX_S = 300.0
+WAKE_END_FSM = ("RECOVERY", "FOCUS_PC", "FOCUS_MIXED", "FOCUS_NPC", "IDLE", "END")
 
 
 class LaptopActuator:
@@ -1648,8 +1763,12 @@ class LaptopActuator:
       바꾼 것과 구별할 수 없어서).
     """
 
-    def __init__(self, store: "Store", backend: Any, state_file: str | None = None) -> None:
+    def __init__(self, store: "Store", backend: Any, state_file: str | None = None,
+                 wake_volume: float | None = WAKE_VOLUME, wake_max_s: float = WAKE_MAX_S) -> None:
         self.store, self.b = store, backend
+        # 깨우기 음량(0~1, None 이면 깨우기 없음 = 예전처럼 첫 설정 소리 구간)·최대 유지 시간
+        self.wake_volume, self.wake_max_s = wake_volume, wake_max_s
+        self.wake: dict[str, Any] | None = None   # {before, at, until, why, fsm_seen}
         # 원래 밝기·볼륨을 적어 두는 파일 — 강제 종료로 되돌리지 못했으면 다음 실행이 이 값으로 되돌린다
         self.state_file = state_file
         self.lock = threading.Lock()
@@ -1723,10 +1842,67 @@ class LaptopActuator:
             except OSError:
                 pass
 
+    # ---- 깨우기
+    def _wake_reason(self, c: dict[str, Any] | None) -> str | None:
+        """이 명령이 '깨우기'인가: 자세 개입 무드등 밝기, 자세·휴식에서 온 말하기·알림음."""
+        if not c or self.wake_volume is None:
+            return None
+        origin, cause, op = str(c.get("origin_state") or ""), c.get("cause"), c.get("operation")
+        posture = origin == "ACTION_POSTURE" or cause == "posture"
+        if c.get("target_id") == "desk_lamp" and op in ("adjust_brightness", "set_brightness") and posture:
+            return "자세 개입 무드등"
+        if op in ("speak", "chime") and (posture or origin == "REST"):
+            return ("휴식 " if origin == "REST" else "자세 ") + ("말하기" if op == "speak" else "알림음")
+        return None
+
+    def _wake_start(self, why: str, at: float) -> None:
+        """store.lock·self.lock 밖에서 불러도 되게 값만 적는다. 이미 깨우는 중이면 다시 올리지 않고 시한만 늘린다."""
+        if self._pref_volume() is None:          # 첫 설정에서 소리 '끔'을 고른 사람은 소리로 깨우지 않는다('작게'는 깨운다)
+            return
+        with self.lock:
+            if self.wake is not None:
+                self.wake["until"] = at + self.wake_max_s
+                return
+            before = self.cur["volume"]          # 실제 지금 음량(아직 안 쓴 첫 설정 음량이 아니라)
+            fsm = str(self.store.virtual._latest.get("fsm_state") or "")
+            self.wake = {"before": before, "at": at, "until": at + self.wake_max_s, "why": why,
+                         "fsm_seen": fsm not in WAKE_END_FSM}
+            target = max(float(before or 0.0), float(self.wake_volume))
+            self.want["volume"], self.why["volume"] = target, f"깨우기 · {why}"
+
+    def _wake_check(self, now: float) -> None:
+        """회복·집중으로 가면(깨우는 동안 다른 상태를 한 번은 본 뒤) 또는 시한이 지나면 올리기 전 음량으로."""
+        with self.store.lock:
+            fsm = str(self.store.virtual._latest.get("fsm_state") or "")
+        with self.lock:
+            w = self.wake
+            if w is None:
+                return
+            if fsm not in WAKE_END_FSM:
+                w["fsm_seen"] = True
+                if now < w["until"]:
+                    return
+                end = f"{round(self.wake_max_s / 60)}분 지남"
+            elif w["fsm_seen"]:
+                end = FSM_KO.get(fsm, fsm)
+            elif now < w["until"]:
+                return
+            else:
+                end = f"{round(self.wake_max_s / 60)}분 지남"
+            self.wake = None
+            if w["before"] is not None:
+                self.want["volume"], self.why["volume"] = w["before"], f"깨우기 끝 · {end}"
+
     # ---- 가상 기기가 바뀔 때(store.lock 안에서 불린다 — 여기서는 원하는 값만 적고 실제 쓰기는 스레드가)
     def on_change(self, key: str, dev: dict[str, Any], at: float, text: str) -> None:
         if not self.active:
             return
+        wake = self._wake_reason(self.store.virtual.current_cmd)
+        if (not wake and self.wake_volume is not None and key == "speaker" and dev.get("music")
+                and self.store.virtual.current_cmd is None and self.store.virtual._latest.get("fsm_state") == "ACTION_POSTURE"):
+            wake = "자세 개입"                     # 자동 자세 개입 국면의 음악 — 명령보다 state/phase 가 먼저 온다
+        if wake:
+            self._wake_start(wake, at)
         if key == "lamp":
             if dev.get("power") is False:
                 pct, why = LAMP_OFF_PERCENT, "무드등 끔"
@@ -1740,6 +1916,8 @@ class LaptopActuator:
             level = self._pref_volume()
             if dev.get("music"):
                 target, why, sound = level, "스피커 음악 재생", "music"
+            elif dev.get("voice") and text.startswith("알림음 ("):
+                target, why, sound = None, text, "chime:" + text[text.index("(") + 1:-1]
             elif dev.get("voice") and text.startswith(("음성", "알림음")):
                 target, why, sound = level, text, ("speak:" + text.split(":", 1)[1].strip()) if text.startswith("음성 안내:") \
                     else "voice" if text.startswith("음성") else \
@@ -1747,8 +1925,13 @@ class LaptopActuator:
             else:
                 target, why, sound = self.orig["volume"], "스피커 음악 정지 → 원래 볼륨", None
             with self.lock:
-                if target is not None:
+                waking = self.wake is not None
+                if target is not None and not waking:   # 깨우는 동안은 깨우기 음량을 지킨다(첫 설정 '작게'와 무관)
                     self.want["volume"], self.why["volume"] = target, why
+            if sound and waking and not sound.startswith("speak:"):
+                # 음악 위에 삑 소리를 얹지 않는다 — 틀어 둔 음악을 키워서 깨운다
+                self.store.virtual.log_laptop(f"깨우는 중 — 알림음 생략, 음악 음량으로 깨움 ({text})", at)
+                sound = None
             if sound:
                 threading.Thread(target=self._chime, args=(sound,), daemon=True).start()
 
@@ -1761,6 +1944,26 @@ class LaptopActuator:
             return None
         return SOUND_PREF_VOLUME.get(str(pref), DEFAULT_VOLUME)
 
+    def _chime_with_volume(self, pattern: str, volume: str | None) -> None:
+        """hub chime {pattern, volume}: 볼륨(low·mid·high → 첫 설정 소리 구간과 같은 값)으로 잠깐 바꿔 울리고 되돌린다."""
+        level = SOUND_PREF_VOLUME.get(str(volume)) if volume else None
+        before = self.cur["volume"]
+        try:
+            if level is not None:
+                self.b.set_volume(level)
+            self.b.chime(pattern)
+            with self.store.lock:
+                self.store.virtual.log_laptop(f"노트북 알림음 {pattern}" + (f" · 볼륨 {_pct(level)}" if level is not None else ""),
+                                              time.time())
+        except Exception as e:  # noqa: BLE001
+            self.error = f"소리 실패: {_reason(e)}"
+        finally:
+            if level is not None and before is not None:
+                try:
+                    self.b.set_volume(before)
+                except Exception as e:  # noqa: BLE001
+                    self.error = f"볼륨 되돌리기 실패: {_reason(e)}"
+
     def _chime(self, kind: str) -> None:
         if kind.startswith("speak:"):
             text = kind[len("speak:"):]
@@ -1770,11 +1973,16 @@ class LaptopActuator:
                 with self.store.lock:
                     self.store.virtual.log_laptop(f"노트북이 말함({voice}): “{_clip(text, 40)}”", time.time())
                 return
-            except Exception as e:  # noqa: BLE001 — 한국어 목소리 없음·TTS 실패 → 알림음
+            except Exception as e:  # noqa: BLE001 — 한국어 목소리 없음·TTS 실패 → 알림음(깨우는 중이면 생략)
                 self.error = f"음성 실패 → 알림음: {_reason(e)}"
+                if self.wake is not None:
+                    return
                 kind = "voice"
         if kind.startswith("chime:"):
-            kind = kind[len("chime:"):]    # hub 알림음 패턴 이름(모르는 이름은 laptop_win 이 기본 한 음)
+            # hub 알림음 "pattern · volume"(ad76ff0: single|double|triple · low|mid|high). 모르는 패턴은 기본 한 음
+            bits = [x.strip() for x in kind[len("chime:"):].split("·")]
+            self._chime_with_volume(bits[0] or "single", bits[1] if len(bits) > 1 else None)
+            return
         try:
             self.b.chime(kind)
             if kind not in ("music",):
@@ -1790,6 +1998,7 @@ class LaptopActuator:
             self._stop.wait(0.2)
 
     def tick(self, now: float) -> None:
+        self._wake_check(now)
         for key, gap, setter, fmt in (("brightness", MIN_BRIGHTNESS_INTERVAL_S, self.b.set_brightness, lambda v: f"{v} %"),
                                       ("volume", MIN_VOLUME_INTERVAL_S, self.b.set_volume, _pct)):
             with self.lock:
@@ -1805,8 +2014,13 @@ class LaptopActuator:
                 self.cur[key], self.last_set[key] = want, now
                 self.count += 1
                 name = "노트북 화면 밝기" if key == "brightness" else "노트북 볼륨"
+                if why.startswith("깨우기"):
+                    head, _, detail = why.partition(" · ")
+                    text = f"{head}: 노트북 음량 {fmt(before)} → {fmt(want)} ({detail})"
+                else:
+                    text = f"{name} {fmt(before)} → {fmt(want)} ({why})"
                 with self.store.lock:
-                    self.store.virtual.log_laptop(f"{name} {fmt(before)} → {fmt(want)} ({why})", now)
+                    self.store.virtual.log_laptop(text, now)
             except Exception as e:  # noqa: BLE001
                 self.error = f"{key} 쓰기 실패: {_reason(e)}"
                 with self.store.lock:
@@ -1824,7 +2038,10 @@ class LaptopActuator:
                 self.cur["brightness"] = real
 
     def view(self) -> dict[str, Any]:
+        w = self.wake
         return {"enabled": self.active, "orig": self.orig, "cur": self.cur, "error": self.error, "count": self.count,
+                "wake_volume": self.wake_volume, "wake_max_s": self.wake_max_s,
+                "wake": None if w is None else {"why": w["why"], "before": w["before"], "left_s": max(0, round(w["until"] - time.time()))},
                 "result_policy": "결과 안 보냄(Pi 5 앱 결과와 섞이지 않게)", "manual_policy": "직접 바꾼 밝기는 화면에만(보고 안 함)"}
 
 
@@ -1905,8 +2122,13 @@ class TriggerTracker:
         self.ticks: deque[dict[str, Any]] = deque()
         self.marks: deque[dict[str, Any]] = deque(maxlen=60)   # 그래프 표시: 명령·카드·조건 충족
         self._state_since: dict[str, Any] = {"state": None, "at": None}
+        self.away_since: float | None = None   # 자리 비움 tick 이 이어지는 동안(그래프·유지 판정에서 뺀다)
+        self.away_ticks = 0
         self._last_lamp: dict[str, float] = {}
         self._prior: str | None = None
+        self._arm_ts: Any = None
+        self.last_arm: dict[str, Any] | None = None
+        self.arm_counts: str | None = None
 
     def on_phase(self, env: Any, at: float) -> None:
         d = _map(_map(env).get("data"))
@@ -1923,6 +2145,12 @@ class TriggerTracker:
             if state in ACTION_FSM:
                 self.marks.append({"at": at, "kind": "action_" + str(d.get("gate") or ""),
                                    "text": f"{FSM_KO.get(state, state)}({d.get('gate')})"})
+        if scores_away(d):
+            if self.away_since is None:
+                self.away_since = at
+            self.away_ticks += 1
+            return
+        self.away_since = None
         learn = _map(ss.get("learning"))
         ks = _map(ss.get("keystroke"))
         self.ticks.append({"at": at, "state": state, "c": float(d["c_fatigue"]), "gate": d.get("gate"),
@@ -1932,6 +2160,25 @@ class TriggerTracker:
                            "env_flags": list(ss.get("env_flags") or []), "typing": ks.get("typing_active") if ks else None,
                            "c_fsm": _num(learn.get("c_fsm")), "c_adj": _num(learn.get("c_adj")), "alpha": _num(learn.get("alpha")),
                            "since": self._state_since["at"]})
+        an = _map(ss.get("arm_notice"))
+        last = _map(an.get("last"))
+        if last.get("ts") is not None and last.get("ts") != self._arm_ts:
+            self._arm_ts = last["ts"]
+            arm = str(last.get("arm") or "")
+            got = ", ".join(DELIVERED_KO.get(str(x), str(x)) for x in (last.get("delivered") or [])) or "실행됨"
+            text = f"개인화가 고른 것: {ARM_LABEL.get(arm, arm or '-')} ({last.get('channel') or '-'}) → {got}"
+            self.marks.append({"at": at, "kind": "arm", "text": text})
+            self.last_arm = {"arm": arm, "label": ARM_LABEL.get(arm, arm), "channel": last.get("channel"),
+                             "gate": last.get("gate"), "delivered": got, "at": at, "text": text}
+        if an:
+            c = _map(an.get("counts"))
+            self.arm_counts = ("꺼짐 · " if an.get("enabled") is False else "") + " · ".join(
+                f"{lab} {c[k]}" for k, lab in (("cards", "안내"), ("speaks", "음성"), ("chimes", "알림음"), ("dismissed", "닫음"))
+                if c.get(k) is not None)
+        pers = _map(ss.get("personalize"))
+        if pers.get("arm") and state in ACTION_FSM:
+            self.last_arm = {**(self.last_arm or {}), "arm": pers["arm"], "label": pers.get("arm_label") or ARM_LABEL.get(pers["arm"]),
+                             "source": pers.get("source"), "at": at}
         prior = prior_text(_map(ss.get("personalize")))
         if prior and prior != self._prior:
             self._prior = prior
@@ -2042,7 +2289,8 @@ class TriggerTracker:
         if r.get("error"):
             return {"error": r["error"], "source": r.get("source"), "profile": r.get("profile")}
         if not self.ticks:
-            return {"error": None, "headline": "hub state/phase 대기", "checks": [], "series": [], "marks": [],
+            return {"error": None, "headline": f"{AWAY_TEXT} (유지 판정·그래프에서 뺌)" if self.away_since is not None
+                    else "hub state/phase 대기", "checks": [], "series": [], "marks": [], "away": self.away_since is not None,
                     "rules": self._rules_brief(), "source": r.get("source"), "profile": r.get("profile")}
         t = self.ticks[-1]
         c, state = t["c"], t["state"]
@@ -2054,6 +2302,14 @@ class TriggerTracker:
         act_text = " + ".join(f"{'무드등' if a.get('target_id') == 'desk_lamp' else a.get('target_id')} "
                               f"{op_text(str(a.get('operation')), a.get('value'))}" for a in acts) or "기기 명령 없음(카드만)"
         act_text = act_text.replace("무드등 밝기", "무드등")   # "무드등 +60 % (최소 153)"
+        # hub ad76ff0: 자세 개입 때 개인화(밴딧)가 고른 arm 이 실행된다 — wake_light 일 때만 무드등. 정책 결정이 없으면 기본(무드등).
+        la = self.last_arm if self.last_arm and now - self.last_arm.get("at", 0) <= 600 and \
+            self.last_arm.get("arm") in POSTURE_ARMS else None
+        if la:
+            choice = act_text if la["arm"] == "wake_light" else f"{la['label']}(무드등 아님)"
+            act_text = f"자세 개입 — 개인화가 고른 것: {choice}"
+        else:
+            act_text = f"자세 개입 — 개인화가 고름(무드등·음성 안내·알림음·자세 카드 중, 결정 없으면 {act_text})"
         last = max(self._last_lamp.values()) if self._last_lamp else None
         if control_cooldown_from:
             last = max([x for x in [last, *control_cooldown_from.values()] if x is not None], default=None)
@@ -2082,8 +2338,8 @@ class TriggerTracker:
             head = f"피로 확정 — 다음 tick 원인 분석{' → 자세 → ' + act_text + ' (' + gate_ko + ')' if pp['dominant'] else ''}"
         elif state == "ACTION_POSTURE":
             sent = bool(self._last_lamp) and now - max(self._last_lamp.values()) <= 2 * tick
-            head = (f"무드등 올림 — {act_text} ({gate_ko}) 명령을 hub 가 보냄" if sent
-                    else f"자세 개입 중 — {act_text} ({gate_ko})" + (" · 쿨다운이라 생략될 수 있음" if cool_left else ""))
+            head = (f"무드등 올림 — hub 가 무드등 명령을 보냄 ({gate_ko})" if sent
+                    else f"{act_text} ({gate_ko})" + (" · 쿨다운이라 생략될 수 있음" if cool_left else ""))
         elif state == "FOCUS_BREAK":
             head = "집중 저하(FOCUS_BREAK) — 관찰이 끝난 뒤 피로가 오르면 피로 의심으로, 아직 무드등 판단 단계 아님"
         else:
@@ -2117,8 +2373,13 @@ class TriggerTracker:
         ]
         series = [{"at": x["at"], "c": round(x["c"], 3), "state": x["state"]} for x in self.ticks]
         marks = [m for m in self.marks if now - m["at"] <= self.keep_s]
+        away = self.away_since is not None
+        if away:
+            head, eta = f"{AWAY_TEXT} — {round(now - self.away_since)} 초째, 유지 판정·그래프에서 뺌 (자리 비움 tick {self.away_ticks})", None
         return {"error": None, "headline": head, "eta_s": None if eta is None else round(eta), "checks": checks,
+                "away": away,
                 "breakdown": self.breakdown(t, pp), "prior": self._prior,
+                "last_arm": self.last_arm, "arm_counts": self.arm_counts,
                 "series": series, "marks": marks, "now": now, "window_s": self.keep_s, "rules": self._rules_brief(),
                 "source": r.get("source"), "profile": r.get("profile")}
 
@@ -2129,6 +2390,224 @@ class TriggerTracker:
 
 
 # --------------------------------------------------------------------------- 상태 저장소
+
+# --------------------------------------------------------------------------- 제어 진행(명령 하나당 한 줄)
+
+CONTROL_RESULT_TIMEOUT_S = 15.0     # hub control.yaml result_timeout_sec — MQTT 로 추정할 때만 쓴다
+TERMINAL_STATUSES = ("succeeded", "failed", "timeout", "cancelled", "skipped")
+IN_PROGRESS_STATUSES = ("accepted", "executing")   # control/result 중간 상태 — 명령을 닫지 않는다(data-spec control_result)
+
+
+def _clock_text(ts: Any) -> str:
+    t = _num(ts)
+    return time.strftime("%H:%M:%S", time.localtime(t)) if t is not None else DASH
+
+
+# 제어 진행 표를 심사·시연에서 바로 읽게 — 원인·동작·사유를 사람 말로. 원값(state·op·reason·error_code)은 행에 그대로 두고
+# 화면은 아래 말만 쓴다(마우스를 올리면 원값).
+CAUSE_WHY = {"posture": "자세 — 졸음·엎드림 신호", "environment": "환경 — CO₂·온습도", "cognitive": "인지 — 오래 집중함",
+             "respiration": "호흡 신호", "elapsed": "작업 시간이 길어짐", "keystroke": "타이핑 리듬 흐트러짐",
+             "absent": "자리 비움 — 기기 끄기"}   # hub absent_off(11-02): 재실이었다가 1분 부재면 선풍기·무드등·음악 끄기
+MODE_KO = {"auto": "자동", "suggest": "제안 → 수락", "notice": "알림", "undo": "되돌리기", "none": "기록만"}
+DEVICE_SHORT = {"desk_lamp": "무드등", "vent_fan": "선풍기", "speaker": "스피커", "air_purifier": "공기청정기", "music": "음악",
+                "plug_1": "스마트 플러그"}
+ERROR_KO = {"ble_not_connected": "블루투스 연결 안 됨", "device_not_found": "기기를 찾지 못함",
+            "device_state_unconfirmed": "기기 상태 확인 안 됨", "lamp_not_configured": "무드등 미설정",
+            "speaker_unavailable": "스피커 사용 불가", "lamp_automation_disabled": "무드등 자동 제어 꺼짐",
+            "speaker_automation_disabled": "스피커 자동 제어 꺼짐", "lamp_brightness_floor": "밝기 하한에 걸림"}
+STATUS_KO = {"succeeded": "성공", "failed": "실패", "timeout": "응답 없음", "executing": "실행 중",
+             "accepted": "제안 대기", "skipped": "생략", "cancelled": "취소"}
+
+
+def _action_ko(op: str, value: Any, undo: bool) -> str:
+    v = _map(value)
+    if op == "adjust_brightness" and _num(v.get("percent")) is not None:
+        p = round(v["percent"])
+        return f"밝기 {abs(p)} % {'올림' if p >= 0 else '낮춤'}"
+    if op == "set_brightness":
+        return f"원래 밝기로 ({value})" if undo else f"밝기 {value}"
+    if op == "set_power":
+        return {"on": "켜기", "off": "끄기"}.get(str(value).lower(), f"전원 {value}")
+    if op == "speak":
+        t = value.get("text") if isinstance(value, dict) else value
+        return f"음성 안내 “{_clip(str(t or ''), 40)}”"
+    if op == "chime":
+        return "알림음"
+    return op_text(op, value)
+
+
+def _reason_ko(reason: Any) -> str | None:
+    if not reason:
+        return None
+    r = str(reason)
+    m = re.match(r"cooldown (\d+)s/(\d+)s", r)
+    if m:
+        return f"같은 조치는 {int(m.group(2)) // 60}분에 한 번 — {m.group(1)}초 전에 이미 실행"
+    if r.startswith("expired"):
+        return "제안에 응답이 없어 만료"
+    if r.startswith("unknown_status"):
+        return "기기가 알 수 없는 응답을 보냄"
+    return {"gate_none": "확신이 낮아 실행하지 않고 기록만", "user_rejected": "사용자가 제안을 거절",
+            "irreversible_auto": "되돌릴 수 없는 동작이라 자동 실행 안 함",
+            "no_result": f"기기 응답이 {CONTROL_RESULT_TIMEOUT_S:.0f}초 안에 안 옴",
+            "result_after_deadline": "응답이 제한 시간 뒤에 옴", "actual_value_mismatch": "기기 값이 명령과 다름"}.get(r, r)
+
+
+def _latency_ko(ms: Any) -> str:
+    n = _num(ms)
+    if n is None:
+        return ""
+    return f"{n / 1000:.0f}초" if n >= 10000 else f"{n / 1000:.2f}초"
+
+
+def progress_words(r: dict[str, Any], latency: Any) -> dict[str, Any]:
+    """제어 진행 한 줄의 화면 문구: 왜(원인·판단) → 어떻게(자동·제안·알림·되돌리기) → 무엇을 → 결과·사유."""
+    undo = bool(r.get("undo"))
+    cause, state, arm = r.get("cause"), r.get("state"), r.get("arm")
+    why_sub = [FSM_KO.get(str(state), str(state))] if state else []
+    if arm:
+        why_sub.append(f"개인화: {ARM_LABEL.get(str(arm), arm)}")
+    notes = [n for n in (_reason_ko(r.get("reason")),) if n]
+    if r.get("error_code"):
+        notes.append(ERROR_KO.get(str(r["error_code"]), f"오류 {r['error_code']}"))
+    if r.get("previous") is not None and r.get("actual") is not None and r.get("target_id") == "desk_lamp":
+        notes.append(f"밝기 {r['previous']} → {r['actual']} 확인")
+    if r.get("effect") == "improved":
+        after = _num(r.get("effect_after_sec"))
+        notes.insert(0, (r.get("effect_text") or "바른 자세로 돌아옴") + (f" ({after:.0f}초 뒤)" if after is not None else ""))
+        if r.get("status") in ("timeout", "failed"):
+            notes.append("기기 확인 응답은 못 받음")
+    elif r.get("effect") == "none":
+        notes.append(r.get("effect_text") or "자세 그대로")
+    if undo:
+        notes.append("사용자가 거절해 직전 조치를 되돌림")
+    if r.get("undone_by"):
+        notes.append("사용자가 거절 → 되돌림")
+    op = str(r.get("operation") or "?")
+    return {"why_ko": CAUSE_WHY.get(str(cause), CAUSE_KO.get(str(cause), cause)) if cause else "원인 미기록",
+            "why_sub_ko": " · ".join(why_sub), "mode_ko": MODE_KO["undo"] if undo else MODE_KO.get(str(r.get("gate")), ""),
+            "device_ko": DEVICE_SHORT.get(str(r.get("target_id")), r.get("target_id") or "?"),
+            "action_ko": _action_ko(op, r.get("value"), undo), "notes_ko": notes,
+            "status_ko": STATUS_KO.get(_outcome(r), _outcome(r)),
+            # 응답 없음의 latency 는 '포기할 때까지 기다린 시간'이라 응답 시간 칸에 두지 않는다
+            "latency_ko": "" if r.get("status") == "timeout" else _latency_ko(latency)}
+
+
+def _outcome(r: dict[str, Any]) -> str:
+    """표의 결과: hub 가 효과를 'improved'(사람이 바른 자세로 돌아옴)로 판정했으면 기기 응답과 상관없이 성공(11-02 사용자 기준)."""
+    return "succeeded" if r.get("effect") == "improved" else (r.get("status") or "?")
+
+
+def _row_latency(r: dict[str, Any]) -> Any:
+    """명령→최종 결과(ms). 끝나지 않았으면(accepted·executing·추정 시간 초과) None."""
+    if r.get("latency_ms") is not None:
+        return r["latency_ms"]
+    sent, done = _num(r.get("sent_ts")), _num(r.get("completed_ts"))
+    return int(round((done - sent) * 1000)) if sent is not None and done is not None else None
+
+
+def progress_summary(rows: list[dict[str, Any]], ok_latencies: list[Any]) -> dict[str, Any]:
+    """표 위 요약: 전체·성공·실패(응답 없음 포함)·생략·진행 중, 성공률(끝난 것 중), 성공한 명령의 평균 응답."""
+    c: dict[str, int] = {}
+    for r in rows:
+        c[_outcome(r)] = c.get(_outcome(r), 0) + 1
+    ok, bad = c.get("succeeded", 0), c.get("failed", 0) + c.get("timeout", 0)
+    lat = [x for x in (_num(v) for v in ok_latencies) if x is not None]
+    return {"total": len(rows), "succeeded": ok, "failed": bad,
+            "skipped": c.get("skipped", 0) + c.get("cancelled", 0), "pending": c.get("executing", 0) + c.get("accepted", 0),
+            "success_rate": round(100 * ok / (ok + bad)) if ok + bad else None,
+            "avg_latency_ko": _latency_ko(sum(lat) / len(lat)) if lat else ""}
+
+
+class ControlProgress:
+    """제어 진행 표(2026-10-31) — control/cmd 로 나간 명령 하나당 한 줄: 시각 · 원인 → 기기·동작·값 → 상태 · 소요 ms · 되돌림.
+
+    hub 가 GET :8765/api/control-log 를 주면(hub control_log.py → C++ 링버퍼) 그 기록을 그대로 쓴다 — 원인·arm·쿨다운/비가역
+    생략·제안 대기·거절·만료·시간 초과·되돌림 연결까지 hub 가 아는 단계가 다 있다. 응답이 없으면(옛 hub IPK·연결 끊김·가짜 각본)
+    MQTT control/cmd·result 로 같은 줄을 만든다 — 생략·되돌림 연결은 없고, 결과 없는 명령은 15 s 뒤 '응답 없음(추정)'.
+    """
+
+    HUB_FRESH_S = 5.0
+
+    def __init__(self, max_rows: int = 200) -> None:
+        self.max_rows = max_rows
+        self.hub_rows: list[dict[str, Any]] | None = None
+        self.hub_at: float | None = None
+        self.mqtt_rows: OrderedDict[str, dict[str, Any]] = OrderedDict()
+
+    def set_hub(self, rows: Any, at: float) -> None:
+        if not isinstance(rows, list):
+            raise ValueError("control-log 응답이 배열이 아님")
+        self.hub_rows = [r for r in rows if isinstance(r, dict) and r.get("command_id")]
+        self.hub_at = at
+
+    def on_mqtt(self, topic: str, env: Any, at: float) -> None:
+        data = _map(_map(env).get("data"))
+        cid = data.get("command_id")
+        if not cid:
+            return
+        cid = str(cid)
+        if topic == TOPIC_CMD:
+            row = self.mqtt_rows.setdefault(cid, {"command_id": cid, "source": "mqtt", "created_ts": at})
+            row.update(state=data.get("origin_state"), cause=data.get("cause"), gate=data.get("gate"),
+                       target_id=data.get("target_id"), operation=data.get("operation"), value=data.get("value"),
+                       status="executing", sent_ts=at, undo=data.get("gate") == "undo")
+        elif topic == TOPIC_RESULT:
+            row = self.mqtt_rows.get(cid)
+            if row is None:
+                return                      # 이 화면이 명령을 못 본 결과(켜기 전 명령)는 줄을 만들지 않는다
+            status = str(data.get("status") or "").lower()
+            # 이미 끝난 명령은 상태·완료 시각을 그대로 두고 값만 보충한다(hub control_log 와 같게). accepted·executing 은
+            # 기기가 받았다·하는 중이라 끝이 아니다 — status 는 executing 그대로, completed_ts 없음. 최종 결과에서만 닫는다
+            if row.get("status") not in TERMINAL_STATUSES and status not in IN_PROGRESS_STATUSES:
+                row["status"], row["completed_ts"] = (status if status in TERMINAL_STATUSES else "failed"), at
+                if status not in TERMINAL_STATUSES:
+                    row["reason"] = f"unknown_status:{status}"
+            for k in ("error_code", "previous", "actual", "recovery"):
+                if k in data:
+                    row[k] = data[k]
+            row["node"] = _map(env).get("node")
+        else:
+            return
+        self.mqtt_rows.move_to_end(cid)
+        while len(self.mqtt_rows) > self.max_rows:
+            self.mqtt_rows.popitem(last=False)
+
+    def view(self, now: float, limit: int = 40) -> dict[str, Any]:
+        hub_ok = self.hub_rows is not None and self.hub_at is not None and now - self.hub_at <= self.HUB_FRESH_S
+        if hub_ok:
+            rows, source = [dict(r) for r in self.hub_rows or []], "hub"
+        else:
+            rows, source = [dict(r) for r in self.mqtt_rows.values()], "mqtt"
+            for r in rows:
+                if (r.get("status") == "executing" and r.get("sent_ts") is not None
+                        and now - r["sent_ts"] >= CONTROL_RESULT_TIMEOUT_S):
+                    r["status"], r["reason"] = "timeout", f"결과 없음 {CONTROL_RESULT_TIMEOUT_S:.0f} s(추정)"
+        rows.sort(key=lambda r: _num(r.get("created_ts")) or 0.0, reverse=True)
+        out = []
+        for r in rows[:limit]:
+            latency = _row_latency(r)
+            op = str(r.get("operation") or "?")
+            value = _value_text(op, r.get("value")).strip()
+            if op == "speak" and isinstance(r.get("value"), dict) and r["value"].get("text"):
+                value = f"“{r['value']['text']}”"           # 음성 안내는 문구만
+            out.append({
+                "id": str(r["command_id"]), "t": _clock_text(r.get("created_ts")), "source": r.get("source") or source,
+                "state": r.get("state"), "cause": r.get("cause"), "gate": r.get("gate"), "arm": r.get("arm"),
+                "target": r.get("target_id"), "op": op, "value": value,
+                "status": _outcome(r), "device_status": r.get("status") or "?", "effect": r.get("effect"),
+                "reason": r.get("reason"), "error": r.get("error_code"),
+                "latency_ms": latency, "previous": r.get("previous"), "actual": r.get("actual"),
+                "node": r.get("node"), "undo": bool(r.get("undo")), "undo_of": _short(r.get("undo_of")) if r.get("undo_of") else None,
+                "undone_by": _short(r.get("undone_by")) if r.get("undone_by") else None,
+            })
+            out[-1].update(progress_words(r, latency))
+        counts: dict[str, int] = {}
+        for r in rows:
+            counts[r.get("status") or "?"] = counts.get(r.get("status") or "?", 0) + 1
+        return {"source": source, "rows": out, "total": len(rows), "counts": counts,
+                "summary": progress_summary(rows, [_row_latency(r) for r in rows if r.get("status") == "succeeded"])}
+
 
 class Store:
     """받은 최신값을 메모리에만 둔다. 모든 쓰기는 lock 안에서."""
@@ -2148,6 +2627,7 @@ class Store:
         self.face_down = FaceDownTracker()
         self.keystroke = KeystrokeTracker()
         self.control = ControlTracker()
+        self.progress = ControlProgress()
         self.virtual = VirtualHome()
         self.trigger = TriggerTracker({"error": "hub 설정을 아직 안 읽음(--hub-config)"})
         self.laptop: LaptopActuator | None = None
@@ -2155,9 +2635,11 @@ class Store:
         self.publisher: Publisher | None = None
         self.sent: deque[dict[str, Any]] = deque(maxlen=20)
         self.profile_sent: dict[str, Any] | None = None
+        # profile_id → 부르는 이름(이 노트북에만, main 이 파일 경로를 준다)
+        self.names = ProfileNames(None)
         # 연결별 상태: ok, reason, last(마지막 수신 epoch)
         self.links: dict[str, dict[str, Any]] = {
-            k: {"ok": False, "reason": "아직 연결 시도 전", "last": None} for k in ("mqtt", "posture", "raw")}
+            k: {"ok": False, "reason": "아직 연결 시도 전", "last": None} for k in ("mqtt", "posture", "raw", "control_log")}
         self.mode = "board"
         self.target = ""
         self.hub_profile = ""  # --hub-profile: 보드가 싣지 않는 시연 프로파일을 노트북에서 적은 값
@@ -2214,6 +2696,7 @@ class Store:
                 self.log.append(entry)
             if topic in (TOPIC_CMD, TOPIC_RESULT):
                 self.board.on_message(topic, env)
+                self.progress.on_mqtt(topic, env, at)
 
     # ---------------------------------------------------------------- 화면에서 보내기(사용자 요청: 프로필·카드 응답만)
     def _send(self, topic: str, data: dict[str, Any], what: str) -> dict[str, Any]:
@@ -2233,11 +2716,18 @@ class Store:
         prof, err = validate_profile(data)
         if prof is None:
             return {"ok": False, "error": err}
+        label = label or self.names.get(prof["profile_id"]) or ""
         res = self._send(TOPIC_PROFILE, prof, f"프로필 {label or prof['profile_id']}")
         if res["ok"]:
             with self.lock:
                 self.profile_sent = {"profile_id": prof["profile_id"], "label": label, "at": time.time(), "data": prof}
         return res
+
+    def send_demo_mode(self, speed: Any) -> dict[str, Any]:
+        """빠른 시연 켜기·끄기 — Pi 5 앱 개발자 모드 스위치와 같은 data {"speed"}. hub 가 시연 프로파일이 아니면 무시한다."""
+        if speed not in ("fast", "normal"):
+            return {"ok": False, "error": "speed 는 fast|normal"}
+        return self._send(TOPIC_DEMO_MODE, {"speed": speed}, f"빠른 시연 {'켜기' if speed == 'fast' else '끄기'}")
 
     def send_feedback(self, request_id: Any, verdict: Any) -> dict[str, Any]:
         """Pi 5 앱과 같은 data: {request_id, verdict, response_ms(, kind)}. 되돌리기 = 자동 실행 뒤 reject.
@@ -2288,10 +2778,20 @@ class Store:
         pers = _map(_map(data.get("sensor_summary")).get("personalize"))
         hub_id = pers.get("active_profile_id")
         sent = self.profile_sent
-        return {"enabled": self.publisher is not None, "presets": PERSONAS,
+        # 지금 사람(11-01): 브로커에 남은 마지막 profile/user(retain — Pi 5 앱이든 이 화면이든). hub 가 쓰는 id 와 같을 때만
+        # "지금 사람"이다. 화면은 이 값을 불러와 같은 profile_id 로 고쳐 보낸다 — 새 id 로 보내면 hub 학습이 사람별로 갈린다.
+        env = _map(self.profile_user)
+        cur, _ = validate_profile(env.get("data"))
+        current = None
+        if cur is not None and (not hub_id or hub_id == cur["profile_id"]):
+            current = {"profile_id": cur["profile_id"], "name": self.names.get(cur["profile_id"]),
+                       "data": cur, "node": env.get("node") or DASH,
+                       "t": time.strftime("%H:%M:%S", time.localtime(float(env["ts"]))) if isinstance(env.get("ts"), (int, float)) else DASH}
+        return {"enabled": self.publisher is not None, "presets": PERSONAS, "current": current,
                 "sent": None if sent is None else {k: sent[k] for k in ("profile_id", "label", "data")} |
-                {"t": time.strftime("%H:%M:%S", time.localtime(sent["at"]))},
+                {"t": time.strftime("%H:%M:%S", time.localtime(sent["at"])), "name": self.names.get(sent["profile_id"])},
                 "hub_active": hub_id or DASH,
+                "hub_active_name": self.names.get(hub_id),
                 "hub_fields": {k: pers[k] for k in ("active_profile_id", "arm", "source", "delivered_gate") if pers.get(k)},
                 "prior": prior_text(pers),
                 "ack": bool(sent and hub_id == sent["profile_id"]),
@@ -2306,12 +2806,18 @@ class Store:
         with self.lock:
             self.raw = j
 
+    def set_control_log(self, j: Any, at: float | None = None) -> None:
+        """hub GET :8765/api/control-log — 배열이 아니면 예외(poll_loop 가 연결 실패로 띄운다)."""
+        with self.lock:
+            self.progress.set_hub(j, time.time() if at is None else at)
+
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
             now = time.time()
             links = {k: {**v, "age_s": None if v["last"] is None else round(now - v["last"], 1)}
                      for k, v in self.links.items()}
             control = self.control.view(self.phase, now)
+            posture = None if self.posture is None else mask_seated_away(self.posture, self.raw)
             return {
                 "page_version": _page_version(),
                 "virtual": self.virtual.view(now),
@@ -2320,19 +2826,20 @@ class Store:
                 "persona": self.persona_view(),
                 "control": control,
                 "keystroke": self.keystroke.view(now),
-                "video": video_view(self.phase, self.posture, control),
+                "video": video_view(self.phase, posture, control),
                 "mode": self.mode,
                 "target": self.target,
                 "now": time.strftime("%H:%M:%S"),
                 "links": links,
                 "phase": phase_view(self.phase),
                 "profile": profile_text(self.phase, self.profile_user, self.health_hub, self.hub_profile),
-                "posture": posture_view(self.posture, self.hub_floors) if self.posture is not None else None,
+                "posture": posture_view(posture, self.hub_floors) if posture is not None else None,
                 "face_down": self.face_down.view(now),
                 "raw": parse_raw(self.raw),
                 "sections": sensor_sections(self.raw, self.topics, self.phase, now),
                 "topics": topics_view(self.topics, now),
                 "devices": self.board.lines(),
+                "progress": dict(self.progress.view(now), hub_link=links["control_log"]),
                 "log": list(self.log),
             }
 
@@ -2434,7 +2941,7 @@ def mqtt_loop(host: str, port: int, store: Store, stop: threading.Event, topic: 
 
 PUBLISH_NODE = "laptop-devview"
 # 화면에서 보낼 수 있는 토픽은 이 둘뿐이다(사용자 요청 10-26: 프로필 고르기·카드 응답). 나머지는 계속 읽기만.
-PUBLISH_TOPICS = {TOPIC_PROFILE: True, TOPIC_FEEDBACK: False}   # topic → retain
+PUBLISH_TOPICS = {TOPIC_PROFILE: True, TOPIC_FEEDBACK: False, TOPIC_DEMO_MODE: False}   # topic → retain
 
 
 class Publisher:
@@ -2974,6 +3481,12 @@ def make_handler(store: Store) -> type[BaseHTTPRequestHandler]:
                 res = store.send_profile(_map(body).get("data"), str(_map(body).get("label") or "")[:20])
             elif path == "/api/feedback":
                 res = store.send_feedback(_map(body).get("request_id"), _map(body).get("verdict"))
+            elif path == "/api/demo-mode":
+                res = store.send_demo_mode(_map(body).get("speed"))
+            elif path == "/api/name":
+                # 이 노트북에만 적는 이름 — MQTT 로는 보내지 않는다
+                with store.lock:
+                    res = store.names.set(_map(body).get("profile_id"), _map(body).get("name"))
             else:
                 self._send(404, b"not found", "text/plain")
                 return
@@ -2999,6 +3512,11 @@ def main(argv: list[str] | None = None) -> None:
                     help="hub 가 자세를 세는 신뢰도 하한(demo-b bd47052). 화면 라벨이 이 아래면 'hub 무시' 표시. 빈 값이면 표시 안 함")
     ap.add_argument("--act-laptop", action="store_true",
                     help="이 노트북을 대역 기기로: 가상 무드등 → 화면 밝기, 가상 스피커 → 볼륨·짧은 소리(Windows). 끝나면 원래대로")
+    ap.add_argument("--wake-volume", type=float, default=WAKE_VOLUME * 100, metavar="PCT",
+                    help="깨우기(자세 개입 무드등·자세/휴식 말하기·알림음) 때 노트북 음량을 max(지금, PCT %%) 로 올린다 — "
+                         "틀어 둔 음악으로 깨우기. 0 이면 깨우기 없음(첫 설정 소리 구간대로)")
+    ap.add_argument("--wake-max-min", type=float, default=WAKE_MAX_S / 60, metavar="MIN",
+                    help="깨우기 음량을 이만큼 지나면 되돌린다(회복·집중으로 가면 그 전에)")
     ap.add_argument("--read-only", action="store_true",
                     help="화면에서 보내기(프로필·카드 응답)도 끈다 — 녹화만 할 때")
     ap.add_argument("--fake", action="store_true", help="보드 없이 가짜 각본으로")
@@ -3006,10 +3524,13 @@ def main(argv: list[str] | None = None) -> None:
                     help="cycle = 40 s 각본 · facedown = 15 s 부터 90 s 엎드림(hub 규칙대로 → 무드등) · recline = 계속 젖힘(의심까지만)")
     ap.add_argument("--fake-start", type=float, default=0.0, metavar="S",
                     help=f"가짜 각본을 S 초부터(0–{FAKE_PERIOD:.0f}, 예: 26 = 졸음→무드등 직전)")
+    ap.add_argument("--names-file", default=os.path.join(os.environ.get("LOCALAPPDATA", HERE), "deskmate-devview", "profile_names.json"),
+                    metavar="PATH", help="profile_id → 부르는 이름(이 노트북에만, MQTT 로 안 보냄)")
     ap.add_argument("--bind", choices=("127.0.0.1", "0.0.0.0"), default="127.0.0.1")
     args = ap.parse_args(argv)
 
     store = Store()
+    store.names = ProfileNames(args.names_file)
     store.hub_floors = parse_floors(args.hub_floor)
     rules = load_hub_rules(args.hub_config, args.hub_profile or ("demo-b" if args.fake else ""))
     store.trigger = TriggerTracker(rules)
@@ -3021,6 +3542,7 @@ def main(argv: list[str] | None = None) -> None:
     threads: list[threading.Thread] = []
     if args.fake:
         store.mode, store.target = "fake", "가짜 데이터"
+        store.link("control_log", False, "가짜 각본 — hub 없음")
         store.hub_profile = args.hub_profile or "demo-b"
         store.publisher = None if args.read_only else LoopbackPublisher(store)
         threads.append(threading.Thread(target=fake_loop, args=(store, stop, args.fake_start, args.fake_scenario, rules), daemon=True))
@@ -3035,6 +3557,9 @@ def main(argv: list[str] | None = None) -> None:
                                                      store.set_posture, store, stop), daemon=True),
             threading.Thread(target=poll_loop, args=("raw", [f"http://{h}:8772/raw", f"http://{h}:8771/raw"], 0.2,
                                                      store.set_raw, store, stop), daemon=True),
+            # 제어 진행 로그(hub :8765, 10-31 hub 부터). 없으면 표는 MQTT cmd·result 로 만든다 — 배너에는 안 띄운다
+            threading.Thread(target=poll_loop, args=("control_log", [f"http://{h}:8765/api/control-log"], 1.0,
+                                                     store.set_control_log, store, stop), daemon=True),
         ]
     if args.act_laptop:
         if sys.platform != "win32":
@@ -3042,7 +3567,9 @@ def main(argv: list[str] | None = None) -> None:
         else:
             import laptop_win
             state_file = os.path.join(os.environ.get("LOCALAPPDATA", HERE), "deskmate-devview", "laptop_original.json")
-            store.laptop = LaptopActuator(store, laptop_win, state_file)
+            store.laptop = LaptopActuator(store, laptop_win, state_file,
+                                          wake_volume=(min(100.0, args.wake_volume) / 100) if args.wake_volume > 0 else None,
+                                          wake_max_s=args.wake_max_min * 60)
             store.laptop.start()
             import atexit
             atexit.register(store.laptop.restore)
