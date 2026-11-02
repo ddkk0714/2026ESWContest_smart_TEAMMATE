@@ -29,7 +29,7 @@ class LeaseService extends Fake implements AtlasBluetoothService {
           required String characteristicId}) async =>
       null;
   @override
-  Future<GattConnection> connectLamp(String address) async => waiting == null
+  Future<GattConnection> connectLamp(String address, {String role = '램프'}) async => waiting == null
       ? GattConnection(adapter: 'adapter', clientId: 'lease-${++next}')
       : waiting!.future;
   @override

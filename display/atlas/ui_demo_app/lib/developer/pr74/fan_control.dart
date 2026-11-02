@@ -190,6 +190,9 @@ class BleFanControl {
   bool get configured => _address?.isNotEmpty ?? false;
   String? get address => _address;
   bool get connected => _connection != null;
+
+  /// 지금 맺은 GATT 링크(clientId 를 앱 데이터에 남겨 다음 실행이 정리하게, V38). 없으면 null.
+  GattConnection? get connection => _connection;
   DateTime? get lastOkAt => _lastOkAt;
   Object? get lastError => _lastError;
   FanState? get lastState => _lastState;
@@ -225,32 +228,8 @@ class BleFanControl {
     unawaited(_release(old));
   }
 
-  /// 시작 복원용: 한 번만 붙어 본다(검색·재시도 없음). 실패한 연결마다 시스템 팝업이 뜬다(10-26).
-  /// 다시 붙는 길은 hub 명령([send])과 블루투스 탭의 "다시 연결"([connect])뿐이다.
-  Future<bool> connectOnce() async {
-    if (!configured) return false;
-    if (_connection != null) return true;
-    final pending = _connecting;
-    if (pending != null) return pending;
-    final generation = _generation;
-    try {
-      final connection = await _bluetooth.connectLamp(_address!);
-      if (generation != _generation) {
-        await _release(connection);
-        return false;
-      }
-      _connection = connection;
-      _lastError = null;
-      return true;
-    } catch (error) {
-      if (generation != _generation) return false;
-      _connection = null;
-      _lastError = error;
-      return false;
-    }
-  }
-
   /// 동시에 불러도 GATT Connect 는 한 번 — 두 번째는 "Already Connected" 로 실패한다.
+  /// 시작 복원·다시 연결·명령 모두 이 길이다(V38: 시작 복원도 한 번이 아니라 [connectAttempts] 번까지).
   Future<bool> connect() {
     if (!configured) return Future.value(false);
     if (_connection != null) return Future.value(true);
@@ -260,13 +239,12 @@ class BleFanControl {
     });
   }
 
-  Future<bool> _connect() async {
+  Future<bool> _connect() {
     final generation = _generation;
     final address = _address!;
-    for (var attempt = 1;; attempt++) {
-      if (generation != _generation) return false;
+    return connectWithRetry(() async {
       try {
-        final connection = await _bluetooth.connectLamp(address);
+        final connection = await _bluetooth.connectLamp(address, role: '선풍기');
         if (generation != _generation) {
           await _release(connection);
           return false;
@@ -278,16 +256,20 @@ class BleFanControl {
         if (generation != _generation) return false;
         _connection = null;
         _lastError = error;
-        if (attempt >= connectAttempts) return false;
+        return false;
       }
-      await Future<void>.delayed(retryDelay);
-      if (generation != _generation) return false;
-      if (attempt.isEven) {
-        final found = await _rediscover();
-        if (generation != _generation) return false;
-        _lastRediscovered = (_lastRediscovered ?? false) || found;
-      }
-    }
+    },
+        attempts: connectAttempts,
+        retryDelay: retryDelay,
+        rediscover: () async {
+          final found = await _rediscover();
+          if (generation == _generation) {
+            _lastRediscovered = (_lastRediscovered ?? false) || found;
+          }
+        },
+        // 이전 실행의 링크가 남아 거절되면(Already connected) 검색·재시도로는 안 풀린다 — 더 시도하지 않는다
+        stop: () =>
+            generation != _generation || isAlreadyConnectedError(_lastError));
   }
 
   /// 선풍기가 다시 보일 때까지(최대 [rescanFor]) 검색한다. 검색 실패는 다음 연결 시도가 판정한다.

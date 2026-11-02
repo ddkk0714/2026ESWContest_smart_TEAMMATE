@@ -93,6 +93,28 @@ Future<bool> rediscoverDevice(AtlasBluetoothService bluetooth, String address,
   return found;
 }
 
+/// V38: Gatt.Connect 가 "Already connected" 로 거절됐나 — 이전 실행이 남긴 링크라 앱만으로는 못 푼다.
+bool isAlreadyConnectedError(Object? error) =>
+    error != null && '$error'.toLowerCase().contains('already connected');
+
+/// V38: 저장된 블루투스 기기에 다시 붙는 공통 틀 — 선풍기(BleFanControl, 10-24)의 방식을 램프·스피커도 쓴다.
+/// 최대 [attempts] 번 [attempt] 해 보고, 실패 사이에 [retryDelay] 를 기다리며, 짝수 번째 실패 뒤에는
+/// [rediscover] 로 기기를 다시 찾은 다음 붙는다. 실패 뒤마다 [stop] 을 보고 true 면 그만둔다(기기를 바꿈·명령 만료).
+/// 10-26 팝업 누적(실패한 연결마다 시스템 창)을 넘지 않도록 [attempts] 가 기기당 상한이다.
+Future<bool> connectWithRetry(Future<bool> Function() attempt,
+    {required int attempts,
+    required Duration retryDelay,
+    required Future<void> Function() rediscover,
+    bool Function()? stop}) async {
+  for (var n = 1;; n++) {
+    if (await attempt()) return true;
+    if (n >= attempts || (stop?.call() ?? false)) return false;
+    if (retryDelay > Duration.zero) await Future<void>.delayed(retryDelay);
+    if (stop?.call() ?? false) return false;
+    if (n.isEven) await rediscover();
+  }
+}
+
 /// Atlas Bluetooth1 wrapper. Pairing and connection require user-consent
 /// permissions declared in atlas/meta/appinfo.json; no system setting is
 /// changed silently by this app.
@@ -350,6 +372,42 @@ class AtlasBluetoothService {
     }
   }
 
+  /// V38: 저장된 스피커를 검색으로 다시 찾고, 페어링이 안 된 채(paired=false)면 페어링한다. 찾았으면 true.
+  /// 11-02 Pi 5: 스피커 "KLZS-L1" 이 paired=false 라 [connectSpeakerAddress](A2dp.Connect 만)가 계속 실패로 보였다.
+  /// 페어링이 실패해도 던지지 않는다 — 다음 연결 시도가 결과를 판정한다.
+  Future<bool> rediscoverSpeaker(String address,
+      {Duration limit = const Duration(seconds: 6),
+      Duration atLeast = const Duration(seconds: 3)}) async {
+    final wanted = address.toLowerCase();
+    final clock = Stopwatch()..start();
+    BluetoothDeviceInfo? seen;
+    try {
+      await for (final devices in scanProgressive(duration: limit)) {
+        for (final d in devices) {
+          if (d.address.toLowerCase() == wanted) seen = d;
+        }
+        if (seen != null && clock.elapsed >= atLeast) break;
+      }
+    } catch (_) {
+      // 검색이 안 되면 지금까지 본 것으로 판정한다.
+    }
+    final device = seen;
+    if (device == null) return false;
+    if (!device.paired) {
+      try {
+        await _adapterOperation(() async {
+          final adapter = await adapterAddress();
+          diag.write('스피커 페어링 ${device.address}');
+          await _bluetooth.callMethod(_adapterInterface, 'Pair',
+              [DBusString(adapter), DBusString(device.address)]);
+        });
+      } catch (error) {
+        diag.write('스피커 페어링 실패 ${device.address}: $error');
+      }
+    }
+    return true;
+  }
+
   Future<void> _confirmSpeakerConnected(String address) async {
     // Connecting is asynchronous in Bluetooth1. Do not claim success or start
     // feedback music until the A2DP profile reports an actual connection.
@@ -422,10 +480,11 @@ class AtlasBluetoothService {
     return _bool(result.returnValues.first as DBusDict, 'connected');
   }
 
-  Future<GattConnection> connectLamp(String address) =>
-      _adapterOperation(() => _connectGatt(address.toUpperCase()));
+  /// BLE 기기(램프·선풍기)에 GATT 로 붙는다. [role] 은 진단 로그의 이름일 뿐 동작은 같다(V38 — 전엔 선풍기도 "램프 …"로 찍혔다).
+  Future<GattConnection> connectLamp(String address, {String role = '램프'}) =>
+      _adapterOperation(() => _connectGatt(address.toUpperCase(), role));
 
-  Future<GattConnection> _connectGatt(String address) async {
+  Future<GattConnection> _connectGatt(String address, String role) async {
     final existing = _gattConnections[address];
     if (existing != null) return existing;
     if (!await ensureBluetoothPermission()) {
@@ -445,11 +504,11 @@ class AtlasBluetoothService {
       // (fan 10-24, lamp 10-26), then our Disconnect dropped the late link.
       final link = await waitForGattLink(_gattStatus, address,
           onChange: (state, elapsed) => diag.write(
-              'GATT 링크 $address ($clientId): "$state" ${elapsed.inMilliseconds} ms'));
+              '$role GATT 링크 $address ($clientId): "$state" ${elapsed.inMilliseconds} ms'));
       if (adapter.isEmpty) {
         // Connect tolerates an empty adapter; DiscoverServices and writes do not.
         adapter = link.adapter;
-        diag.write('램프 어댑터: GetInfo 비어 있음 → GetStatus "$adapter"');
+        diag.write('$role 어댑터: GetInfo 비어 있음 → GetStatus "$adapter"');
       }
     } catch (_) {
       try {
@@ -460,15 +519,17 @@ class AtlasBluetoothService {
     }
     var discovered = const <DBusValue>[];
     try {
-      await discoverWithRetry(
-          () async => discovered = (await _bluetooth.callMethod(
+      discovered = await discoverUntilServices(
+          () async => (await _bluetooth.callMethod(
                 _gattInterface,
                 'DiscoverServices',
                 [DBusString(adapter), DBusString(address)],
               ))
                   .returnValues,
           onError: (error, attempt) => diag
-              .write('램프 서비스 검색 실패 $attempt ($address, $clientId): $error'));
+              .write('$role 서비스 검색 실패 $attempt ($address, $clientId): $error'),
+          onEmpty: (retry) => diag
+              .write('$role GATT 서비스 $address: 빈 목록 — 다시 검색 $retry'));
     } catch (_) {
       // Release by client id (not address), or every later Connect fails
       // with "Already Connected".
@@ -479,7 +540,7 @@ class AtlasBluetoothService {
       rethrow;
     }
     final services = gattServiceUuids(discovered);
-    diag.write('GATT 서비스 $address: ${services.isEmpty ? '응답에 UUID 없음' : services.join(', ')}');
+    diag.write('$role GATT 서비스 $address: ${services.isEmpty ? '응답에 UUID 없음' : services.join(', ')}');
     final connection =
         GattConnection(adapter: adapter, clientId: clientId, services: services);
     _gattConnections[address] = connection;
@@ -496,6 +557,20 @@ class AtlasBluetoothService {
 
   Future<void> disconnectGatt(GattConnection connection) =>
       _adapterOperation(() => _releaseGatt(connection));
+
+  /// V38: 이전 실행이 남긴 GATT 링크를 그때 저장한 clientId 로 끊어 본다. 실패는 무시한다(이미 끊겼거나
+  /// 다른 프로세스의 id 라 거절될 수 있다 — 그다음 Connect 가 판정한다). 11-02 Pi 5: 앱을 껐다 켜면 이전 링크가
+  /// bluetooth-service 에 남아 새 Connect 가 "Already connected" 로 막혔고, GetStatus 에는 clientId 가 없다.
+  Future<void> releaseStaleGatt(String adapter, String clientId) =>
+      _adapterOperation(() async {
+        try {
+          await _bluetooth.callMethod(_gattInterface, 'Disconnect',
+              [DBusString(adapter), DBusString(clientId)]);
+          diag.write('이전 GATT 링크 정리 $clientId');
+        } catch (error) {
+          diag.write('이전 GATT 링크 정리 실패 $clientId: $error');
+        }
+      });
 
   Future<void> _releaseGatt(GattConnection connection) async {
     try {
@@ -725,6 +800,29 @@ Future<({String adapter, String state})> waitForGattLink(
 }
 
 /// Retries DiscoverServices; the first call after Connect can fail.
+/// V36: [discoverWithRetry] 가 성공했는데 서비스 UUID 가 하나도 없으면 [emptyDelay] 기다려 다시 검색한다(최대
+/// [emptyRetries] 번). 11-01 Pi 5 실기: 선풍기 링크가 맺어진 직후 DiscoverServices 가 빈 목록으로 성공해, 앱이 그대로
+/// 쓰기를 해 실패했다(램프는 쓸 즈음 BlueZ 가 서비스를 다 읽어 와 성공). 끝까지 비면 예전처럼 빈 목록으로 넘긴다.
+Future<List<DBusValue>> discoverUntilServices(
+    Future<List<DBusValue>> Function() discover,
+    {int attempts = 4,
+    Duration delay = const Duration(seconds: 2),
+    int emptyRetries = 3,
+    Duration emptyDelay = const Duration(seconds: 1),
+    void Function(Object error, int attempt)? onError,
+    void Function(int retry)? onEmpty}) async {
+  var reply = const <DBusValue>[];
+  for (var retry = 0;; retry++) {
+    await discoverWithRetry(() async => reply = await discover(),
+        attempts: attempts, delay: delay, onError: onError);
+    if (gattServiceUuids(reply).isNotEmpty || retry >= emptyRetries) {
+      return reply;
+    }
+    onEmpty?.call(retry + 1);
+    await Future<void>.delayed(emptyDelay);
+  }
+}
+
 Future<void> discoverWithRetry(Future<void> Function() discover,
     {int attempts = 4,
     Duration delay = const Duration(seconds: 2),

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show ProcessSignal, exit;
 
 import 'package:flutter/foundation.dart';
 
@@ -56,9 +57,29 @@ class DeveloperController extends ChangeNotifier {
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       _changed();
       musicReporter.report();
+      // V38: hub 명령 중 새로 맺은 GATT 링크의 clientId 도 남긴다(다음 실행이 시작할 때 정리)
+      btLinks.rememberOpenLinks();
       if (startHardware) unawaited(feedback.reconcileAudioOutput());
     });
-    if (startHardware) unawaited(_restoreHardware());
+    if (startHardware) {
+      unawaited(_restoreHardware());
+      _closeLinksOnStop();
+    }
+  }
+
+  StreamSubscription<ProcessSignal>? _stopSignal;
+
+  /// V38: ATLAS 가 앱을 멈출 때(SIGTERM) 열린 GATT 링크를 끊고 나간다. 끊지 않고 나가면 링크가 bluetooth-service 에
+  /// 남아 다음 실행의 Connect 가 "Already connected" 로 막혔다(11-02 Pi 5). 신호를 못 받는 곳에서는 조용히 넘어간다.
+  void _closeLinksOnStop() {
+    try {
+      _stopSignal = ProcessSignal.sigterm.watch().listen((_) async {
+        try {
+          await bluetooth.close().timeout(const Duration(seconds: 2));
+        } catch (_) {}
+        exit(0);
+      });
+    } catch (_) {}
   }
 
   final _alerts = AtlasAlertSound();
@@ -289,6 +310,7 @@ class DeveloperController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _timer?.cancel();
+    _stopSignal?.cancel();
     _messages?.cancel();
     live.removeListener(_linkChanged);
     btLinks.removeListener(_changed);

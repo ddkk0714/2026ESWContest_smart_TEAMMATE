@@ -7,10 +7,24 @@ import 'dart:io';
 import 'hub_config.dart' show HubStore, normalizeIp;
 
 class SavedBluetoothDevice {
-  const SavedBluetoothDevice({required this.address, required this.name});
+  const SavedBluetoothDevice(
+      {required this.address,
+      required this.name,
+      this.gattAdapter,
+      this.gattClient});
 
   final String address;
   final String name;
+
+  /// V38: 이 앱이 마지막으로 맺은 GATT 링크(Atlas Gatt.Connect 의 clientId 와 어댑터). 앱을 껐다 켜면
+  /// 이전 프로세스의 링크가 bluetooth-service 에 남아 새 Connect 가 "Already connected" 로 막힌다(11-02 Pi 5).
+  /// 시작할 때 이 값으로 먼저 Disconnect 해 본다. GetStatus 에는 clientId 가 없어 다른 길이 없다.
+  final String? gattAdapter;
+  final String? gattClient;
+
+  SavedBluetoothDevice withGatt(String? adapter, String? client) =>
+      SavedBluetoothDevice(
+          address: address, name: name, gattAdapter: adapter, gattClient: client);
 
   static SavedBluetoothDevice? _from(Object? value) {
     if (value is! Map) {
@@ -25,11 +39,20 @@ class SavedBluetoothDevice {
     if (!RegExp(r'^(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$').hasMatch(address)) {
       return null;
     }
+    String? text(Object? v) => v is String && v.trim().isNotEmpty ? v.trim() : null;
     return SavedBluetoothDevice(
-        address: address.toUpperCase(), name: rawName.trim());
+        address: address.toUpperCase(),
+        name: rawName.trim(),
+        gattAdapter: text(value['gatt_adapter']),
+        gattClient: text(value['gatt_client']));
   }
 
-  Map<String, Object?> toJson() => {'address': address, 'name': name};
+  Map<String, Object?> toJson() => {
+        'address': address,
+        'name': name,
+        if (gattAdapter != null) 'gatt_adapter': gattAdapter,
+        if (gattClient != null) 'gatt_client': gattClient,
+      };
 }
 
 class DeskmateSettings {

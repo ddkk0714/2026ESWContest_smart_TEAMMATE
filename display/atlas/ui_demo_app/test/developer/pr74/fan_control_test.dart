@@ -397,7 +397,8 @@ class _FakeBluetooth implements AtlasBluetoothService {
   final List<String> characteristicIds = [];
 
   @override
-  Future<GattConnection> connectLamp(String address) async {
+  Future<GattConnection> connectLamp(String address,
+      {String role = '램프'}) async {
     connects++;
     if (connectFailuresRemaining > 0) {
       connectFailuresRemaining--;

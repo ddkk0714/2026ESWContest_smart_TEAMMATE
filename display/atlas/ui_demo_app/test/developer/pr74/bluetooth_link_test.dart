@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:deskmate_ui_demo/developer/pr74/bluetooth_control_page.dart';
 import 'package:deskmate_ui_demo/developer/pr74/bluetooth_link.dart';
 import 'package:deskmate_ui_demo/developer/pr74/bluetooth_service.dart';
+import 'package:deskmate_ui_demo/developer/pr74/fan_control.dart';
 import 'package:deskmate_ui_demo/developer/pr74/feedback_policy.dart';
 import 'package:deskmate_ui_demo/developer/pr74/link_status.dart';
 import 'package:deskmate_ui_demo/developer/pr74/music_playback.dart';
@@ -33,11 +34,42 @@ class _FakeBluetooth implements AtlasBluetoothService {
     if (speakerFails) throw StateError('A2DP 연결이 완료되지 않았습니다');
   }
 
+  /// 이만큼은 A2dp.Connect 가 실패한다(V38 재시도). [speakerFails] 면 늘 실패.
+  int speakerFailures = 0;
+
   @override
   Future<void> connectSpeakerAddress(String address) async {
     calls.add('connectSpeakerAddress $address');
     if (speakerFails) throw StateError('A2DP 연결이 완료되지 않았습니다');
+    if (speakerFailures > 0) {
+      speakerFailures--;
+      throw StateError('A2DP 연결이 완료되지 않았습니다');
+    }
   }
+
+  @override
+  Future<bool> rediscoverSpeaker(String address,
+      {Duration limit = const Duration(seconds: 6),
+      Duration atLeast = const Duration(seconds: 3)}) async {
+    calls.add('rediscoverSpeaker $address');
+    return true;
+  }
+
+  /// 선풍기 GATT 연결(BleFanControl → connectLamp role '선풍기'). [fanFails] 면 [fanError] 로 실패.
+  bool fanFails = false;
+  String fanError = 'GATT connect failed';
+
+  @override
+  Future<GattConnection> connectLamp(String address,
+      {String role = '램프'}) async {
+    calls.add('connectLamp $address $role');
+    if (fanFails) throw StateError(fanError);
+    return GattConnection(adapter: 'a', clientId: 'c-${calls.length}');
+  }
+
+  @override
+  Future<void> releaseStaleGatt(String adapter, String clientId) async =>
+      calls.add('releaseStaleGatt $adapter $clientId');
 
   bool scanDenied = false;
 
@@ -55,10 +87,14 @@ class _FakeBluetooth implements AtlasBluetoothService {
 
 /// 램프 재시도 규칙은 Codex 쪽(IlinkLampFeedback) 테스트가 지킨다. 여기서는 결과만 흉내 낸다.
 class _FakeLamp extends IlinkLampFeedback {
-  _FakeLamp(super.bluetooth) : super(settleDelay: Duration.zero);
+  _FakeLamp(super.bluetooth, {this.log})
+      : super(settleDelay: Duration.zero, rescanAtLeast: Duration.zero);
   bool connectOk = true;
   String? selected;
   int connects = 0;
+
+  /// 시작 복원 순서를 보려고 연결 시도를 같은 기록에 남긴다.
+  final List<String>? log;
 
   /// 붙어 있다가 끊겨, 백그라운드로 한 번 다시 붙어도 되는 상태(실제 규칙은 feedback_policy_test).
   bool backgroundRetry = false;
@@ -70,6 +106,7 @@ class _FakeLamp extends IlinkLampFeedback {
   @override
   Future<bool> connect() async {
     connects++;
+    log?.add('lamp connect');
     _linked = connectOk;
     return connectOk;
   }
@@ -104,7 +141,10 @@ void main() {
   late FeedbackCoordinator feedback;
 
   BluetoothLinkManager manager() => BluetoothLinkManager(
-      bluetooth: bluetooth, feedback: feedback, settings: store);
+      bluetooth: bluetooth,
+      feedback: feedback,
+      settings: store,
+      speakerRetryDelay: Duration.zero);
 
   setUp(() {
     temp = Directory.systemTemp.createTempSync('bt-link-test-');
@@ -164,10 +204,10 @@ void main() {
     final links = manager();
     addTearDown(links.dispose);
     await links.restore();
-    expect(lamp.connects, 1); // 시작 복원은 한 번
+    expect(lamp.connects, 3); // V38: 시작 복원도 선풍기처럼 최대 3번 — 그 이상은 없다
     links.keepLampConnected(every: const Duration(milliseconds: 10));
     await Future<void>.delayed(const Duration(milliseconds: 80));
-    expect(lamp.connects, 1);
+    expect(lamp.connects, 3);
     expect(links.lampStatus.health, LinkHealth.down);
   });
 
@@ -187,7 +227,7 @@ void main() {
       ..connectOk = true;
     links.keepLampConnected(every: const Duration(milliseconds: 10));
     await Future<void>.delayed(const Duration(milliseconds: 60));
-    expect(lamp.connects, 2);
+    expect(lamp.connects, 4); // 시작 복원 3번 + 끊긴 뒤 한 번
     expect(links.lampStatus.health, LinkHealth.ok);
 
     lamp
@@ -195,7 +235,7 @@ void main() {
       ..connectOk = false;
     links.setFeedbackEnabled(false);
     await Future<void>.delayed(const Duration(milliseconds: 60));
-    expect(lamp.connects, 2);
+    expect(lamp.connects, 4);
   });
 
   test('restore reconnects saved speaker and lamp without scanning', () async {
@@ -232,6 +272,142 @@ void main() {
     expect(links.speakerStatus.cause, LinkCause.disconnected);
     expect(links.speakerStatus.detail, contains('A2DP'));
     expect(links.lampStatus.health, LinkHealth.ok);
+    // V38: 선풍기와 같은 틀 — 3번, 두 번째 실패 뒤 한 번 다시 찾기(페어링 포함)
+    expect(bluetooth.calls, [
+      'connectSpeakerAddress AA:BB:CC:00:00:01',
+      'connectSpeakerAddress AA:BB:CC:00:00:01',
+      'rediscoverSpeaker AA:BB:CC:00:00:01',
+      'connectSpeakerAddress AA:BB:CC:00:00:01',
+    ]);
+  });
+
+  group('V38 same reconnect for speaker, lamp and fan', () {
+    test('an unpaired speaker is found and paired before the last try',
+        () async {
+      store.save(const DeskmateSettings(
+        speaker:
+            SavedBluetoothDevice(address: 'AA:BB:CC:00:00:01', name: 'KLZS-L1'),
+      ));
+      bluetooth.speakerFailures = 2; // paired=false 라 A2dp.Connect 만으로는 실패
+      final links = manager();
+      await links.restore();
+      expect(bluetooth.calls, [
+        'connectSpeakerAddress AA:BB:CC:00:00:01',
+        'connectSpeakerAddress AA:BB:CC:00:00:01',
+        'rediscoverSpeaker AA:BB:CC:00:00:01',
+        'connectSpeakerAddress AA:BB:CC:00:00:01',
+      ]);
+      expect(links.speakerStatus.health, LinkHealth.ok);
+      expect(feedback.speakerAddress, 'AA:BB:CC:00:00:01');
+    });
+
+    test('a speaker that connects first time is not scanned or paired',
+        () async {
+      store.save(const DeskmateSettings(
+        speaker:
+            SavedBluetoothDevice(address: 'AA:BB:CC:00:00:01', name: 'KLZS-L1'),
+      ));
+      final links = manager();
+      await links.restore();
+      expect(bluetooth.calls, ['connectSpeakerAddress AA:BB:CC:00:00:01']);
+    });
+
+    test('start restore goes speaker, lamp, fan one after another, 3 tries each',
+        () async {
+      final log = bluetooth.calls;
+      final orderedLamp = _FakeLamp(bluetooth, log: log)..connectOk = false;
+      final fan = BleFanControl(bluetooth,
+          retryDelay: Duration.zero, rescanAtLeast: Duration.zero);
+      feedback = FeedbackCoordinator(
+          music: _NoMusic(), lamp: orderedLamp, bluetooth: bluetooth, fan: fan);
+      store.save(const DeskmateSettings(
+        speaker:
+            SavedBluetoothDevice(address: 'AA:BB:CC:00:00:01', name: 'KLZS-L1'),
+        lamp: SavedBluetoothDevice(
+            address: 'AA:BB:CC:00:00:02', name: 'KLZS-L1 app'),
+        fan: SavedBluetoothDevice(
+            address: 'AA:BB:CC:00:00:03', name: 'DESKMATE-FAN'),
+      ));
+      bluetooth
+        ..speakerFails = true
+        ..fanFails = true;
+      final links = manager();
+      await links.restore();
+      final speaker = log.indexWhere((c) => c.startsWith('connectSpeaker'));
+      final lampAt = log.indexOf('lamp connect');
+      final fanAt = log.indexWhere((c) => c.startsWith('connectLamp'));
+      expect(speaker < lampAt && lampAt < fanAt, isTrue, reason: '$log');
+      expect(log.where((c) => c.startsWith('connectSpeakerAddress')), hasLength(3));
+      expect(log.where((c) => c == 'lamp connect'), hasLength(3));
+      expect(log.where((c) => c.startsWith('connectLamp')), hasLength(3));
+      // 선풍기 GATT 연결은 진단 로그에 '선풍기' 로 찍힌다
+      expect(log.where((c) => c.startsWith('connectLamp')).first,
+          'connectLamp AA:BB:CC:00:00:03 선풍기');
+      expect(links.speakerStatus.health, LinkHealth.down);
+      expect(links.lampStatus.health, LinkHealth.down);
+      expect(links.fanStatus.health, LinkHealth.down);
+    });
+
+    test('links left by the last run are released before anything connects',
+        () async {
+      final fan = BleFanControl(bluetooth,
+          retryDelay: Duration.zero, rescanAtLeast: Duration.zero);
+      feedback = FeedbackCoordinator(
+          music: _NoMusic(), lamp: lamp, bluetooth: bluetooth, fan: fan);
+      store.save(const DeskmateSettings(
+        lamp: SavedBluetoothDevice(
+            address: 'AA:BB:CC:00:00:02',
+            name: 'KLZS-L1 app',
+            gattAdapter: '88:A2:9E:3C:CC:B5',
+            gattClient: 'old-lamp'),
+        fan: SavedBluetoothDevice(
+            address: 'AA:BB:CC:00:00:03',
+            name: 'DESKMATE-FAN',
+            gattAdapter: '88:A2:9E:3C:CC:B5',
+            gattClient: 'old-fan'),
+      ));
+      final links = manager();
+      await links.restore();
+      expect(bluetooth.calls.take(3), [
+        'releaseStaleGatt 88:A2:9E:3C:CC:B5 old-lamp',
+        'releaseStaleGatt 88:A2:9E:3C:CC:B5 old-fan',
+        'connectLamp AA:BB:CC:00:00:03 선풍기',
+      ]);
+      // 새로 맺은 선풍기 링크의 clientId 가 저장된다(다음 실행이 정리하게). 램프는 가짜라 링크가 없다
+      final saved = store.load();
+      expect(saved.lamp!.gattClient, isNull);
+      expect(saved.fan!.gattClient, isNotNull);
+      expect(saved.fan!.gattClient, isNot('old-fan'));
+      expect(saved.fan!.gattAdapter, 'a');
+      // 다음 실행은 그 id 를 정리한다
+      final calls = bluetooth.calls.length;
+      final next = manager();
+      await next.restore();
+      expect(bluetooth.calls[calls],
+          'releaseStaleGatt a ${saved.fan!.gattClient}');
+    });
+
+    test('a link refused as already connected stops early and says why',
+        () async {
+      final fan = BleFanControl(bluetooth,
+          retryDelay: Duration.zero, rescanAtLeast: Duration.zero);
+      feedback = FeedbackCoordinator(
+          music: _NoMusic(), lamp: lamp, bluetooth: bluetooth, fan: fan);
+      store.save(const DeskmateSettings(
+        fan: SavedBluetoothDevice(
+            address: 'AA:BB:CC:00:00:03', name: 'DESKMATE-FAN'),
+      ));
+      bluetooth
+        ..fanFails = true
+        ..fanError = 'org.freedesktop.DBus.Error.Failed: Already connected';
+      final links = manager();
+      await links.restore();
+      expect(bluetooth.calls.where((c) => c.startsWith('connectLamp')),
+          hasLength(1)); // 검색·재시도로는 안 풀린다 — 팝업만 늘리지 않는다
+      expect(links.fanStatus.health, LinkHealth.down);
+      expect(links.fanStatus.cause, LinkCause.staleLink);
+      expect(linkGuidance(LinkId.fan, LinkCause.staleLink), contains('껐다 켜'));
+    });
   });
 
   test('connecting saves the device and keeps other settings', () async {
