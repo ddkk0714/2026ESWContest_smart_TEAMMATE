@@ -30,6 +30,9 @@ fsm:
 learning:
   keep_floor: 0.60                 # 확정 기준을 넘은 점수는 학습기가 끌어내리지 못함 — PC 리허설 10-25 근거(keep_floor 0.60 → demo-B 첫 깨우기 662/292/102 s → 102/102/102 s). 기본 0.85 = 이 프로파일의 fsm thresholds.fatigue_confirm
 control:
+  absent_off:                       # 11-02 사용자 "시연은 바로 바뀌면" — 기본 60 s 끄기·30 s 되돌림. 시연 전용
+    after_sec: 20                   # 자리 비움 20 s 면 기기 끄기
+    restore_after_sec: 10           # 다시 앉아 10 s 면 되돌림(빈자리 오판 20 s 가 있으면 켜질 수 있음 — 11-02 15:21)
   rest_notice:
     cooldown_sec: 30                # 기본 120. 시연은 REST 가 60 s 라 재진입이 빠르다
     reminder_after_sec: 120         # 기본 600. 휴식(60 s)을 넘겨 계속 쉬면 한 번 더
@@ -43,6 +46,8 @@ personalize:
   gate:
     conf_auto: 0.55                 # 시연 전용 — PC 리허설 10-24 근거. 기본 0.75. FSM gate.conf_auto 와 같은 값으로 맞춘 것 — 다르면 정책이 FSM 자동을 제안(personalize:ask)으로 낮춰 무드등이 자동으로 안 켜진다
 ingest:
+  presence:                         # 11-02 시연 전용 — ToF 가 빈 의자(away_forced)면 mmWave 거리와 상관없이 부재.
+    tof_away_mm_min_cm: 0           # 기본 90(mmWave 가 90 cm 안이면 재실 유지). C1001 은 떠난 뒤에도 30~60 s 재실을 붙든다
   tof:
     # 10-25 PC 시뮬: 자세 몫 0.80 에서 ESP32 0x03 규칙 졸음 플래그·끄덕임(δ 1.0)이 깨어 있는 사람(턱 괴기·타이핑)에게 무드등을
     # 헛켰다(턱 괴기 600 s 플래그 49/60 tick → C 0.81). posture_source: service 라 자세 모델 라벨(face_down·drowsy)은 그대로 1.0,
