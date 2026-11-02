@@ -1296,6 +1296,25 @@ def test_validate_profile_and_personas():
     assert re.fullmatch(r"p[0-9a-f]{16}", dv.new_profile_id())
 
 
+def test_misjudge_logs_moment_and_tells_hub(tmp_path):
+    st = dv.Store()
+    st.publisher = FakePub()
+    st.misjudge_path = str(tmp_path / "mj.jsonl")
+    st.on_mqtt(dv.TOPIC_PHASE, payload({"fsm_state": "FATIGUE_SUSPECT", "c_fatigue": 0.52, "sensor_summary": {
+        "present": True, "presence_source": "mmwave", "personalize": {"active_profile_id": "pabc"}}}))
+    assert st.mark_misjudge("엉뚱함", "")["ok"] is False
+    r = st.mark_misjudge("피로 과다", "바르게 타이핑 중")
+    assert r["ok"] is True and r["hub"] == "보냄"
+    topic, data = st.publisher.sent[-1]
+    assert topic == dv.TOPIC_FEEDBACK and data["kind"] == "misjudge" and data["category"] == "피로 과다"
+    rec = json.loads((tmp_path / "mj.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert rec["fsm_state"] == "FATIGUE_SUSPECT" and rec["c_fatigue"] == 0.52 and rec["profile_id"] == "pabc"
+    assert rec["note"] == "바르게 타이핑 중"
+    assert st.snapshot()["misjudge"]["recent"][0]["category"] == "피로 과다"
+    st.publisher = None                                                  # --read-only: 파일에만
+    assert st.mark_misjudge("기타", "")["hub"].startswith("못 보냄")
+
+
 def test_send_profile_and_hub_ack():
     st = dv.Store()
     st.publisher = FakePub()

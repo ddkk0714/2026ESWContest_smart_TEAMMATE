@@ -238,6 +238,15 @@ body:not([data-mode="virtual"]) #toasts { display: none; }
 #cardBox .ttl { font-size: calc(13px * var(--k)); color: var(--dim); }
 #cardText { font-size: calc(19px * var(--k)); font-weight: 700; margin: calc(4px * var(--k)) 0 calc(8px * var(--k)); }
 #cardBtns { display: flex; gap: calc(8px * var(--k)); align-items: center; flex-wrap: wrap; }
+#mjWrap { margin-top: calc(10px * var(--k)); border-top: 1px solid var(--line); padding-top: calc(8px * var(--k)); }
+#mjRow { display: flex; flex-wrap: wrap; gap: calc(6px * var(--k)); align-items: center; }
+#mjBtns { display: contents; }
+#mjBtns .btn { padding: calc(4px * var(--k)) calc(10px * var(--k)); }
+#mjNote { flex: 1 1 calc(160px * var(--k)); min-width: 0; font: inherit; font-size: calc(14px * var(--k)); padding: calc(4px * var(--k)) calc(8px * var(--k));
+  border-radius: calc(6px * var(--k)); border: 1px solid var(--line); background: #151a24; color: var(--fg); }
+#mjMsg { font-size: calc(13px * var(--k)); color: var(--dim); margin-top: calc(4px * var(--k)); }
+#mjList { font-size: calc(13px * var(--k)); color: var(--dim); margin-top: calc(4px * var(--k)); }
+#mjList div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #cardMsg { font-size: calc(13px * var(--k)); color: var(--dim); margin-top: calc(6px * var(--k)); }
 #vdevs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: calc(10px * var(--k)); }
 .dcard { background: var(--panel); border: 1px solid var(--line); border-radius: calc(12px * var(--k)); padding: calc(12px * var(--k)) calc(14px * var(--k)); position: relative; }
@@ -431,6 +440,9 @@ body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
       <div class="meter"><div class="lab"><span>집중 저하 C_focus</span><span class="num" id="focT">-</span></div><div class="track"><i id="focB"></i></div></div>
     </div>
     <dl class="kv" id="judgeKv"></dl>
+    <div id="mjWrap"><div id="mjRow"><b>오판</b><span id="mjBtns"></span>
+      <input id="mjNote" maxlength="200" placeholder="메모(선택) — 예: 바르게 타이핑 중"></div>
+      <div id="mjMsg"></div><div id="mjList"></div></div>
   </div>
   <div class="panel">
     <div class="ptitle"><span><b>센서 원값</b> · 출처 우선순위: /raw other(ESP32 프레임) → MQTT 센서 토픽 → hub 요약</span><span class="mono" id="rawNote"></span></div>
@@ -664,6 +676,27 @@ function renderJudge(ph, p, profile) {
     ["2단계 피로 관찰", `${esc(ph.stage2)} <span class="empty">(판정 무관)</span>`],
     ["반응 학습", esc(ph.learning)],
   ]);
+}
+
+// "오판" 버튼(11-02): 누른 순간의 판정·자세·재실을 이 노트북 파일에 남기고, hub 는 그때 열린 개입을 개인화 학습에서 뺀다
+let mjCats = "";
+function renderMisjudge(m) {
+  if (!m) return;
+  const cats = m.categories.join("|");
+  if (cats !== mjCats) {
+    mjCats = cats;
+    $("mjBtns").innerHTML = m.categories.map(c => `<button class="btn" data-mj="${esc(c)}">${esc(c)}</button>`).join("");
+    $("mjBtns").querySelectorAll("[data-mj]").forEach(b => b.onclick = () => markMisjudge(b.dataset.mj));
+  }
+  $("mjList").innerHTML = m.recent.length
+    ? m.recent.slice(0, 5).map(r => `<div>${esc(r.t)} · <b>${esc(r.category)}</b>${r.note ? " · " + esc(r.note) : ""}` +
+        ` <span class="empty">— ${esc(r.fsm_state)} · 피로 ${f2(r.c_fatigue)} · 재실 ${esc(r.present)} · 자세 ${esc(r.posture)} · hub ${esc(r.hub)}</span></div>`).join("")
+    : `<span class="empty">판정이 틀리면 종류를 누르세요 — 그 순간을 기록하고 그 개입은 학습에서 뺍니다</span>`;
+}
+async function markMisjudge(category) {
+  const r = await post("/api/misjudge", {category, note: $("mjNote").value}).catch(e => ({ok: false, error: e.message}));
+  $("mjMsg").textContent = r.ok ? `'${category}' 기록함 · hub ${r.hub}` : `기록 실패: ${r.error}`;
+  if (r.ok) $("mjNote").value = "";
 }
 
 function rawCell(v) {
@@ -1237,6 +1270,7 @@ async function tick() {
     renderSvc(d.posture);
     renderFaceDown(d.face_down);
     renderJudge(d.phase, d.posture, d.profile);
+    renderMisjudge(d.misjudge);
     renderRaw(d.sections);
     renderDevices(d.devices);
     renderControl(d.control, d.phase);
