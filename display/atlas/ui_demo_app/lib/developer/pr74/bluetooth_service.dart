@@ -408,6 +408,15 @@ class AtlasBluetoothService {
     return true;
   }
 
+  /// V40: 스피커 A2DP 를 끊는다 — 같은 칩(KLZS-L1)의 램프 GATT 를 먼저 맺으려고 잠깐(바로 다시 붙인다).
+  Future<void> disconnectSpeaker(String address) =>
+      _adapterOperation(() async {
+        final adapter = await adapterAddress();
+        diag.write('스피커 잠깐 끊기 $address (램프 먼저)');
+        await _bluetooth.callMethod(_a2dpInterface, 'Disconnect',
+            [DBusString(adapter), DBusString(address)]);
+      });
+
   Future<void> _confirmSpeakerConnected(String address) async {
     // Connecting is asynchronous in Bluetooth1. Do not claim success or start
     // feedback music until the A2DP profile reports an actual connection.
@@ -557,6 +566,18 @@ class AtlasBluetoothService {
 
   Future<void> disconnectGatt(GattConnection connection) =>
       _adapterOperation(() => _releaseGatt(connection));
+
+  /// V41: [address] 의 GATT 링크가 아직 살아 있나(Gatt.GetStatus 가 connected·discovering). 못 읽으면 false.
+  Future<bool> isGattLinked(String address) async {
+    try {
+      final status = await _gattStatus();
+      if (status == null) return false;
+      final state = gattStateFor(status, address).toLowerCase();
+      return state == 'connected' || state == 'discovering';
+    } catch (_) {
+      return false;
+    }
+  }
 
   /// V38: 이전 실행이 남긴 GATT 링크를 그때 저장한 clientId 로 끊어 본다. 실패는 무시한다(이미 끊겼거나
   /// 다른 프로세스의 id 라 거절될 수 있다 — 그다음 Connect 가 판정한다). 11-02 Pi 5: 앱을 껐다 켜면 이전 링크가

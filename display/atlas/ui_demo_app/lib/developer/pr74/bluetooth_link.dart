@@ -90,7 +90,7 @@ class BluetoothLinkManager extends ChangeNotifier {
   bool get fanBusy => _fanPhase == _Phase.connecting;
 
   /// 앱 시작 때 부른다. 저장된 기기마다 명령·"다시 연결"과 같은 틀(최대 3번, 두 번째 실패 뒤 검색)로 붙는다.
-  /// 기기는 하나씩 순서대로(스피커 → 램프 → 선풍기) — 동시에 GATT Connect 하지 않는다. 던지지 않는다.
+  /// 기기는 하나씩 순서대로(램프 → 선풍기 → 스피커, V40) — 동시에 GATT Connect 하지 않는다. 던지지 않는다.
   Future<void> restore() async {
     final saved = settings.load();
     // 저장값이 없으면 켠 채로 시작한다(ui_env_app 0.1.4~). 꺼진 채로 시작하면 hub 의 램프·선풍기·소리
@@ -102,9 +102,11 @@ class BluetoothLinkManager extends ChangeNotifier {
     _notify();
     // 이전 실행이 남긴 GATT 링크를 먼저 끊어 본다 — 남아 있으면 새 Connect 가 "Already connected" 로 막힌다(11-02).
     await _releaseStaleLinks();
-    if (_speaker != null) await reconnectSpeaker();
+    // V40: 램프 → 선풍기 → 스피커. KLZS-L1 은 한 칩에 스피커(A2DP)와 램프(BLE)가 있어, A2DP 가 먼저 붙어 있으면
+    // 램프 GATT 서비스 검색이 연달아 실패하고 링크가 끊겼다(11-02 Pi 5). 램프 GATT 를 먼저 맺으면 셋 다 함께 붙는다.
     if (_lamp != null) await _restoreLamp();
     if (_fan != null) await _restoreFan();
+    if (_speaker != null) await reconnectSpeaker();
     rememberOpenLinks();
   }
 
@@ -221,10 +223,31 @@ class BluetoothLinkManager extends ChangeNotifier {
     _lampPhase = _Phase.connecting;
     _lampError = null;
     _notify();
-    final ok = (await feedback.lamp.ensureConnected()).ok;
+    var ok = (await feedback.lamp.ensureConnected()).ok;
+    if (!ok) ok = await _lampAfterSpeakerPause();
     _lampPhase = ok ? _Phase.connected : _Phase.failed;
     _lampError = ok ? null : '${feedback.lamp.lastError ?? '램프에 연결하지 못했습니다'}';
     _notify();
+    return ok;
+  }
+
+  /// V40: 스피커가 A2DP 로 붙어 있는 동안 램프 서비스 검색이 실패하면, 스피커를 잠깐 끊고 램프를 먼저 맺은 뒤
+  /// 스피커를 다시 붙인다(음악이 잠깐 끊긴다). KLZS-L1 은 한 칩이라 A2DP 가 먼저면 램프 GATT 가 안 열리고,
+  /// 램프가 먼저면 둘 다 붙는다(11-02 Pi 5). 사람이 누른 "다시 연결"에서만 — hub 명령 중엔 음악을 끊지 않는다.
+  Future<bool> _lampAfterSpeakerPause() async {
+    final speaker = _speaker;
+    if (speaker == null ||
+        !'${feedback.lamp.lastError}'.toLowerCase().contains('discovery')) {
+      return false;
+    }
+    try {
+      if (!await bluetooth.isA2dpConnected(speaker.address)) return false;
+      await bluetooth.disconnectSpeaker(speaker.address);
+    } on Object {
+      return false;
+    }
+    final ok = (await feedback.lamp.ensureConnected()).ok;
+    await reconnectSpeaker();
     return ok;
   }
 
@@ -280,12 +303,14 @@ class BluetoothLinkManager extends ChangeNotifier {
     return reconnectFan();
   }
 
-  /// 일체형의 스피커와 램프를 한 번에. 스피커가 실패하면 램프는 시도하지 않는다 —
-  /// 한쪽만 붙은 어중간한 상태보다 원인을 보고 다시 누르는 편이 낫다.
+  /// 일체형의 스피커와 램프를 한 번에 — 램프 먼저, 스피커 나중(V40). 램프가 실패해도 스피커는 붙이고
+  /// false 를 돌려준다(램프 줄이 끊김으로 보인다). 스피커가 실패하면 던진다(램프는 이미 저장됨).
   Future<bool> connectPair(
       BluetoothDeviceInfo speaker, BluetoothDeviceInfo lamp) async {
+    // V40: 램프 GATT 를 먼저 — A2DP 가 먼저 붙으면 같은 칩의 램프 서비스 검색이 실패한다(11-02 Pi 5).
+    final lampOk = await selectLamp(lamp);
     await connectSpeaker(speaker);
-    return selectLamp(lamp);
+    return lampOk;
   }
 
   /// 저장된 기기를 잊는다. 다음 시작부터 자동 연결하지 않는다.
