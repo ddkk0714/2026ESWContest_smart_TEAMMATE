@@ -310,6 +310,17 @@ void main() {
       expect(again?['previous'], {'power': 'off', 'speed': 0, 'level': 0});
     });
 
+    test('V46: 판을 C 로 잘못 알고 상태도 못 읽어도 켜 둔 속도가 previous 가 된다', () async {
+      fan.select(_fanAddress);
+      bluetooth.microState = null; // 서비스 목록 비고 두 상태 특성 모두 읽기 실패 → C 로 본다
+      final on = await coordinator.handleControlCommand(_command('c4'));
+      expect(fan.firmware, FanFirmware.c);
+      expect(on?['status'], 'succeeded');
+      final off = await coordinator.handleControlCommand(
+          {..._command('c5'), 'operation': 'set_power', 'value': 'off'});
+      expect(off?['previous'], {'power': 'on', 'speed': 45, 'level': 1});
+    });
+
     test('서비스 목록이 비어도 상태 특성을 읽어 구분한다(C 8바이트 실패 → 1바이트)', () async {
       fan.select(_fanAddress);
       bluetooth.microState = [0];
