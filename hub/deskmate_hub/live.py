@@ -310,6 +310,11 @@ class LiveHub:
             if feedback.get("kind") == "personalization":
                 self.privacy.handle(feedback)
                 continue
+            if feedback.get("kind") == "misjudge":
+                # PC devview "오판" 버튼(11-02) — 판정이 틀렸다는 표시. 개인화 학습에서만 뺀다(FSM·제어·ESM 아님)
+                if self.personalize_recorder is not None:
+                    self.personalize_recorder.on_misjudge(feedback, ts=now if received is None else min(now, received))
+                continue
             if feedback.get("kind") == "manual_adjust":
                 # 앱에서 사용자가 직접 조명을 바꿨다는 보고 — 개인화 암묵 신호 전용(ESM·제어 승인 아님, personalize/signals.py)
                 if self.personalize_recorder is not None:
