@@ -2471,6 +2471,13 @@ def progress_words(r: dict[str, Any], latency: Any) -> dict[str, Any]:
         notes.append(ERROR_KO.get(str(r["error_code"]), f"오류 {r['error_code']}"))
     if r.get("previous") is not None and r.get("actual") is not None and r.get("target_id") == "desk_lamp":
         notes.append(f"밝기 {r['previous']} → {r['actual']} 확인")
+    if r.get("effect") == "improved":
+        after = _num(r.get("effect_after_sec"))
+        notes.insert(0, (r.get("effect_text") or "바른 자세로 돌아옴") + (f" ({after:.0f}초 뒤)" if after is not None else ""))
+        if r.get("status") in ("timeout", "failed"):
+            notes.append("기기 확인 응답은 못 받음")
+    elif r.get("effect") == "none":
+        notes.append(r.get("effect_text") or "자세 그대로")
     if undo:
         notes.append("사용자가 거절해 직전 조치를 되돌림")
     if r.get("undone_by"):
@@ -2480,9 +2487,14 @@ def progress_words(r: dict[str, Any], latency: Any) -> dict[str, Any]:
             "why_sub_ko": " · ".join(why_sub), "mode_ko": MODE_KO["undo"] if undo else MODE_KO.get(str(r.get("gate")), ""),
             "device_ko": DEVICE_SHORT.get(str(r.get("target_id")), r.get("target_id") or "?"),
             "action_ko": _action_ko(op, r.get("value"), undo), "notes_ko": notes,
-            "status_ko": STATUS_KO.get(str(r.get("status")), r.get("status") or "?"),
+            "status_ko": STATUS_KO.get(_outcome(r), _outcome(r)),
             # 응답 없음의 latency 는 '포기할 때까지 기다린 시간'이라 응답 시간 칸에 두지 않는다
             "latency_ko": "" if r.get("status") == "timeout" else _latency_ko(latency)}
+
+
+def _outcome(r: dict[str, Any]) -> str:
+    """표의 결과: hub 가 효과를 'improved'(사람이 바른 자세로 돌아옴)로 판정했으면 기기 응답과 상관없이 성공(11-02 사용자 기준)."""
+    return "succeeded" if r.get("effect") == "improved" else (r.get("status") or "?")
 
 
 def _row_latency(r: dict[str, Any]) -> Any:
@@ -2497,7 +2509,7 @@ def progress_summary(rows: list[dict[str, Any]], ok_latencies: list[Any]) -> dic
     """표 위 요약: 전체·성공·실패(응답 없음 포함)·생략·진행 중, 성공률(끝난 것 중), 성공한 명령의 평균 응답."""
     c: dict[str, int] = {}
     for r in rows:
-        c[r.get("status") or "?"] = c.get(r.get("status") or "?", 0) + 1
+        c[_outcome(r)] = c.get(_outcome(r), 0) + 1
     ok, bad = c.get("succeeded", 0), c.get("failed", 0) + c.get("timeout", 0)
     lat = [x for x in (_num(v) for v in ok_latencies) if x is not None]
     return {"total": len(rows), "succeeded": ok, "failed": bad,
@@ -2582,7 +2594,8 @@ class ControlProgress:
                 "id": str(r["command_id"]), "t": _clock_text(r.get("created_ts")), "source": r.get("source") or source,
                 "state": r.get("state"), "cause": r.get("cause"), "gate": r.get("gate"), "arm": r.get("arm"),
                 "target": r.get("target_id"), "op": op, "value": value,
-                "status": r.get("status") or "?", "reason": r.get("reason"), "error": r.get("error_code"),
+                "status": _outcome(r), "device_status": r.get("status") or "?", "effect": r.get("effect"),
+                "reason": r.get("reason"), "error": r.get("error_code"),
                 "latency_ms": latency, "previous": r.get("previous"), "actual": r.get("actual"),
                 "node": r.get("node"), "undo": bool(r.get("undo")), "undo_of": _short(r.get("undo_of")) if r.get("undo_of") else None,
                 "undone_by": _short(r.get("undone_by")) if r.get("undone_by") else None,

@@ -1649,6 +1649,25 @@ def test_progress_prefers_fresh_hub_log():
     assert "progress" in snap and snap["progress"]["hub_link"]["ok"] is False
 
 
+def test_progress_posture_effect_counts_as_success():
+    """11-02 사용자 기준: 사람이 바른 자세로 돌아오면(hub effect=improved) 기기 응답이 없어도 성공."""
+    st = dv.Store()
+    rows = [{"command_id": "p1", "source": "dispatcher", "created_ts": 40.0, "state": "ACTION_POSTURE", "cause": "posture",
+             "gate": "auto", "target_id": "desk_lamp", "operation": "adjust_brightness", "value": {"percent": 60},
+             "status": "timeout", "reason": "no_result", "sent_ts": 40.0, "completed_ts": 55.0, "latency_ms": 15000,
+             "effect": "improved", "effect_text": "바른 자세로 돌아옴", "effect_after_sec": 3.0},
+            {"command_id": "p2", "source": "dispatcher", "created_ts": 45.0, "state": "ACTION_POSTURE", "cause": "posture",
+             "gate": "auto", "target_id": "desk_lamp", "operation": "adjust_brightness", "value": {"percent": 60},
+             "status": "succeeded", "latency_ms": 400, "effect": "none", "effect_text": "자세 그대로"}]
+    st.set_control_log(rows, at=60.0)
+    v = st.progress.view(now=61.0)
+    by = {r["id"]: r for r in v["rows"]}
+    assert by["p1"]["status"] == "succeeded" and by["p1"]["status_ko"] == "성공" and by["p1"]["device_status"] == "timeout"
+    assert by["p1"]["notes_ko"][0] == "바른 자세로 돌아옴 (3초 뒤)" and "기기 확인 응답은 못 받음" in by["p1"]["notes_ko"]
+    assert by["p2"]["status_ko"] == "성공" and "자세 그대로" in by["p2"]["notes_ko"]      # 기기는 성공, 효과는 없음 — 그대로 표시
+    assert v["summary"]["succeeded"] == 2 and v["summary"]["failed"] == 0 and v["summary"]["success_rate"] == 100
+
+
 def test_demo_mode_button_publishes_and_phase_shows_speed():
     """빠른 시연(hub demo_mode.py, 10-31): 버튼 → deskmate/demo/mode {"speed"}, 지금 모드는 state/phase sensor_summary.demo_mode."""
     st = dv.Store()
