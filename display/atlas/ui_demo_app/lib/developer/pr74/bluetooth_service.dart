@@ -567,6 +567,18 @@ class AtlasBluetoothService {
   Future<void> disconnectGatt(GattConnection connection) =>
       _adapterOperation(() => _releaseGatt(connection));
 
+  /// V41: [address] 의 GATT 링크가 아직 살아 있나(Gatt.GetStatus 가 connected·discovering). 못 읽으면 false.
+  Future<bool> isGattLinked(String address) async {
+    try {
+      final status = await _gattStatus();
+      if (status == null) return false;
+      final state = gattStateFor(status, address).toLowerCase();
+      return state == 'connected' || state == 'discovering';
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// V38: 이전 실행이 남긴 GATT 링크를 그때 저장한 clientId 로 끊어 본다. 실패는 무시한다(이미 끊겼거나
   /// 다른 프로세스의 id 라 거절될 수 있다 — 그다음 Connect 가 판정한다). 11-02 Pi 5: 앱을 껐다 켜면 이전 링크가
   /// bluetooth-service 에 남아 새 Connect 가 "Already connected" 로 막혔고, GetStatus 에는 clientId 가 없다.

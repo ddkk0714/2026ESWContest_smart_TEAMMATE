@@ -256,6 +256,46 @@ void main() {
     expect(lamp.lastOkAt, isNotNull);
   });
 
+  group('V41 a live link is not dropped on a failed write', () {
+    test('the same link is written again and the lamp stays connected',
+        () async {
+      // 11-02 Pi 5(V40): 국면 조명 쓰기가 같은 칩 스피커 A2DP 가 붙는 순간 실패 → 앱이 램프 링크를 끊었다
+      final bluetooth = _FakeBluetooth()
+        ..writeFailuresRemaining = 1
+        ..gattLinked = true;
+      final lamp = IlinkLampFeedback(bluetooth, writeRetryDelay: Duration.zero)
+        ..select(firstAddress);
+      await lamp.apply('focus');
+      expect(bluetooth.connectedAddresses, [firstAddress]); // 새로 붙지 않았다
+      expect(bluetooth.released, 0); // 끊지 않았다
+      expect(lamp.connected, isTrue);
+      expect(lamp.lastError, isNull);
+    });
+
+    test('two failures on a live link keep it for the next write', () async {
+      final bluetooth = _FakeBluetooth()
+        ..writeFailuresRemaining = 2
+        ..gattLinked = true;
+      final lamp = IlinkLampFeedback(bluetooth, writeRetryDelay: Duration.zero)
+        ..select(firstAddress);
+      expect(await lamp.writeFrames(ilinkFramesForPhase('focus')), isFalse);
+      expect(bluetooth.released, 0);
+      expect(lamp.connected, isTrue); // 링크는 그대로 — 다음 국면 쓰기가 같은 링크로
+      expect(await lamp.writeFrames(ilinkFramesForPhase('focus')), isTrue);
+      expect(bluetooth.connectedAddresses, [firstAddress]);
+    });
+
+    test('a link that is really gone is released and reconnected as before',
+        () async {
+      final bluetooth = _FakeBluetooth()..writeFailuresRemaining = 1;
+      final lamp = IlinkLampFeedback(bluetooth, writeRetryDelay: Duration.zero)
+        ..select(firstAddress);
+      await lamp.apply('focus');
+      expect(bluetooth.released, 1);
+      expect(bluetooth.connectedAddresses, [firstAddress, firstAddress]);
+    });
+  });
+
   test('two failed writes leave no cached connection and next phase retries',
       () async {
     final bluetooth = _FakeBluetooth()..writeFailuresRemaining = 2;
@@ -900,6 +940,16 @@ class _FakeBluetooth implements AtlasBluetoothService {
   Duration connectDelay = Duration.zero;
   final List<String> connectedAddresses = [];
   final List<List<int>> frames = [];
+
+  /// V41: 쓰기가 실패했을 때 GATT 링크가 아직 살아 있다고 답할지. 끊은 링크 수는 [released].
+  bool gattLinked = false;
+  int released = 0;
+
+  @override
+  Future<bool> isGattLinked(String address) async => gattLinked;
+
+  @override
+  Future<void> disconnectGatt(GattConnection connection) async => released++;
 
   /// 고른 스피커의 A2DP 연결 여부(V32 음악 명령).
   bool a2dpConnected = true;

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' show min;
 
 import 'bluetooth_service.dart';
+import 'diag.dart';
 import 'display_state.dart';
 import 'fan_control.dart';
 import 'lamp_defaults.dart';
@@ -66,8 +67,12 @@ class IlinkLampFeedback {
       this.rescanAtLeast = const Duration(seconds: 3),
       this.settleDelay = const Duration(seconds: 3),
       this.rescanEvery = const Duration(seconds: 30),
-      this.connectAttempts = 3});
+      this.connectAttempts = 3,
+      this.writeRetryDelay = const Duration(seconds: 1)});
   final AtlasBluetoothService _bluetooth;
+
+  /// V41: 쓰기가 실패했는데 링크가 살아 있을 때, 같은 링크로 다시 쓰기 전에 기다리는 시간.
+  final Duration writeRetryDelay;
 
   /// V38: 선풍기([BleFanControl.connectAttempts])와 같은 시도 수 — [ensureConnected] 가 최대 이만큼 붙어 본다.
   final int connectAttempts;
@@ -341,9 +346,23 @@ class IlinkLampFeedback {
         return (ok: true, rediscovered: rediscovered);
       } catch (error) {
         if (generation != _generation) return failed();
+        _lastError = error;
+        // V41: 쓰기가 실패해도 링크가 살아 있으면 끊지 않는다 — 잠깐 뒤 같은 링크로 한 번 더 쓴다.
+        // 11-02 Pi 5(V40): 시작 복원 직후 국면 조명 쓰기가 같은 칩 스피커(A2DP)가 붙는 순간 실패했고, 그때 앱이
+        // 방금 맺은 램프 링크를 Disconnect 해 버렸다. A2DP 가 붙은 뒤 램프는 광고를 멈춰 다시 붙지 못했다.
+        // 13:10·13:27 처럼 링크를 유지하면 그 뒤 쓰기는 됐다. 링크가 정말 사라졌을 때만 정리하고 새로 붙는다.
+        final address = _address!;
+        final linked = await _bluetooth.isGattLinked(address);
+        if (generation != _generation) return failed();
+        diag.write('램프 쓰기 실패 $address (${linked ? '링크 유지' : '링크 없음'}): $error');
+        if (linked) {
+          if (writeRetryDelay > Duration.zero) {
+            await Future<void>.delayed(writeRetryDelay);
+          }
+          continue;
+        }
         final old = _connection;
         _connection = null;
-        _lastError = error;
         await _release(old);
       }
     }

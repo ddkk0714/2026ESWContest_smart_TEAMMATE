@@ -33,6 +33,8 @@ class LeaseService extends Fake implements AtlasBluetoothService {
       ? GattConnection(adapter: 'adapter', clientId: 'lease-${++next}')
       : waiting!.future;
   @override
+  Future<bool> isGattLinked(String address) async => false;
+  @override
   Future<void> disconnectGatt(GattConnection connection) async {
     released.add(connection.clientId);
   }
