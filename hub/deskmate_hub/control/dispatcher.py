@@ -257,6 +257,10 @@ class ControlDispatcher:
                     if c.terminal:
                         c.completed_ts = now
                     self._log(f"[control] {c.target_id}.{c.operation}={c.value!r} → {c.status}")
+                    if not c.terminal:
+                        # 기기 상태 미확인(device_state_unconfirmed → executing)은 중간 상태 — 최종 결과나 시간 초과(tick)가 닫는다
+                        self._record(c, "progress", now)
+                        return True
                     reason = None
                     if c.status == "failed" and reported == "succeeded":
                         reason = c.error_code or "actual_value_mismatch"
