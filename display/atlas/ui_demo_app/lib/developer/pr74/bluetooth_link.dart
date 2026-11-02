@@ -57,7 +57,14 @@ class BluetoothLinkManager extends ChangeNotifier {
     required this.bluetooth,
     required this.feedback,
     required this.settings,
+    this.speakerAttempts = 3,
+    this.speakerRetryDelay = const Duration(seconds: 3),
   });
+
+  /// V38: 스피커도 선풍기·램프와 같은 틀 — 최대 이만큼 붙어 보고, 실패 사이 [speakerRetryDelay],
+  /// 두 번째 실패 뒤엔 검색으로 다시 찾고 페어링이 안 된 채면 페어링한다.
+  final int speakerAttempts;
+  final Duration speakerRetryDelay;
 
   final AtlasBluetoothService bluetooth;
   final FeedbackCoordinator feedback;
@@ -82,7 +89,8 @@ class BluetoothLinkManager extends ChangeNotifier {
   bool get lampBusy => _lampPhase == _Phase.connecting;
   bool get fanBusy => _fanPhase == _Phase.connecting;
 
-  /// 앱 시작 때 부른다. 저장된 기기가 있으면 검색 없이 붙는다. 던지지 않는다.
+  /// 앱 시작 때 부른다. 저장된 기기마다 명령·"다시 연결"과 같은 틀(최대 3번, 두 번째 실패 뒤 검색)로 붙는다.
+  /// 기기는 하나씩 순서대로(스피커 → 램프 → 선풍기) — 동시에 GATT Connect 하지 않는다. 던지지 않는다.
   Future<void> restore() async {
     final saved = settings.load();
     // 저장값이 없으면 켠 채로 시작한다(ui_env_app 0.1.4~). 꺼진 채로 시작하면 hub 의 램프·선풍기·소리
@@ -92,14 +100,52 @@ class BluetoothLinkManager extends ChangeNotifier {
     _lamp = saved.lamp;
     _fan = saved.fan;
     _notify();
+    // 이전 실행이 남긴 GATT 링크를 먼저 끊어 본다 — 남아 있으면 새 Connect 가 "Already connected" 로 막힌다(11-02).
+    await _releaseStaleLinks();
     if (_speaker != null) await reconnectSpeaker();
     if (_lamp != null) await _restoreLamp();
     if (_fan != null) await _restoreFan();
+    rememberOpenLinks();
   }
 
-  /// 시작 복원은 기기마다 한 번만, 검색 없이 붙어 본다. 실패하면 "연결 끊김" 으로 두고 조용히 있는다 —
-  /// 10-26 Pi 5: 실패한 연결마다 시스템 팝업이 떴고, 쌓이면서 화면이 멈췄다. 다시 붙는 길은
-  /// hub 명령과 블루투스 탭의 "다시 연결" 뿐이다(ui_env_app 0.1.12).
+  Future<void> _releaseStaleLinks() async {
+    var changed = false;
+    for (final saved in [_lamp, _fan]) {
+      final adapter = saved?.gattAdapter, client = saved?.gattClient;
+      if (adapter == null || client == null) continue;
+      await bluetooth.releaseStaleGatt(adapter, client);
+      changed = true;
+    }
+    if (!changed) return;
+    _lamp = _lamp?.withGatt(null, null);
+    _fan = _fan?.withGatt(null, null);
+    _persist();
+  }
+
+  /// 지금 열린 램프·선풍기 GATT 링크의 clientId 를 앱 데이터에 남긴다(다음 실행이 [restore] 에서 정리하게).
+  /// 연결은 hub 명령 중에도 새로 맺어지므로 개발자 화면의 1 초 타이머도 부른다. 바뀐 게 없으면 쓰지 않는다.
+  void rememberOpenLinks() {
+    if (_disposed) return;
+    final lampLink = feedback.lamp.connection;
+    final fanLink = feedback.fan?.connection;
+    final lamp = _lamp, fan = _fan;
+    var changed = false;
+    if (lamp != null &&
+        lampLink != null &&
+        lamp.gattClient != lampLink.clientId) {
+      _lamp = lamp.withGatt(lampLink.adapter, lampLink.clientId);
+      changed = true;
+    }
+    if (fan != null && fanLink != null && fan.gattClient != fanLink.clientId) {
+      _fan = fan.withGatt(fanLink.adapter, fanLink.clientId);
+      changed = true;
+    }
+    if (changed) _persist();
+  }
+
+  /// 시작 복원은 기기마다 최대 3번(V38, 전엔 한 번). 그래도 실패하면 "연결 끊김" 으로 두고 조용히 있는다 —
+  /// 10-26 Pi 5: 실패한 연결마다 시스템 팝업이 떴고, 쌓이면서 화면이 멈췄다. 그래서 시도 수에 상한을 두고,
+  /// 그 뒤로 다시 붙는 길은 hub 명령과 블루투스 탭의 "다시 연결" 뿐이다(ui_env_app 0.1.12).
   Future<void> _restoreLamp() async {
     final lamp = _lamp;
     if (lamp == null || lampBusy) return;
@@ -107,7 +153,7 @@ class BluetoothLinkManager extends ChangeNotifier {
     _lampPhase = _Phase.connecting;
     _lampError = null;
     _notify();
-    final ok = await feedback.lamp.connectInBackground();
+    final ok = (await feedback.lamp.ensureConnected()).ok;
     _lampPhase = ok ? _Phase.connected : _Phase.failed;
     _lampError = ok ? null : '${feedback.lamp.lastError ?? '램프에 연결하지 못했습니다'}';
     _notify();
@@ -121,7 +167,7 @@ class BluetoothLinkManager extends ChangeNotifier {
     _fanPhase = _Phase.connecting;
     _fanError = null;
     _notify();
-    final ok = await fan.connectOnce();
+    final ok = await fan.connect();
     _fanPhase = ok ? _Phase.connected : _Phase.failed;
     _fanError = ok ? null : '${fan.lastError ?? '선풍기에 연결하지 못했습니다'}';
     _notify();
@@ -133,26 +179,38 @@ class BluetoothLinkManager extends ChangeNotifier {
     _notify();
   }
 
-  /// 저장된 스피커에 다시 붙는다(검색 없이).
+  /// 저장된 스피커에 다시 붙는다 — 선풍기·램프와 같은 틀([connectWithRetry]): A2dp.Connect 가 두 번 실패하면
+  /// 검색으로 다시 찾고, 페어링이 안 된 채(paired=false)면 페어링한 뒤 마지막으로 붙는다(V38, 11-02 Pi 5).
   Future<bool> reconnectSpeaker() async {
     final speaker = _speaker;
     if (speaker == null || speakerBusy) return false;
     _speakerPhase = _Phase.connecting;
     _speakerError = null;
     _notify();
-    try {
-      await bluetooth.connectSpeakerAddress(speaker.address);
+    Object? lastError;
+    final ok = await connectWithRetry(() async {
+      try {
+        await bluetooth.connectSpeakerAddress(speaker.address);
+        return true;
+      } on Object catch (error) {
+        lastError = error;
+        return false;
+      }
+    },
+        attempts: speakerAttempts,
+        retryDelay: speakerRetryDelay,
+        rediscover: () => bluetooth.rediscoverSpeaker(speaker.address),
+        stop: () => _disposed || _speaker?.address != speaker.address);
+    if (ok) {
       feedback.selectSpeaker(speaker.address);
       _speakerPhase = _Phase.connected;
       _speakerOkAt = DateTime.now();
-      return true;
-    } on Object catch (error) {
+    } else {
       _speakerPhase = _Phase.failed;
-      _speakerError = '$error';
-      return false;
-    } finally {
-      _notify();
+      _speakerError = '${lastError ?? '스피커에 연결하지 못했습니다'}';
     }
+    _notify();
+    return ok;
   }
 
   /// 저장된 램프에 GATT 연결을 미리 맺는다(첫 phase 전환 때 늦지 않게).
@@ -298,7 +356,9 @@ class BluetoothLinkManager extends ChangeNotifier {
       return LinkStatus(
           id: LinkId.lamp,
           health: LinkHealth.down,
-          cause: LinkCause.disconnected,
+          cause: isAlreadyConnectedError(error)
+              ? LinkCause.staleLink
+              : LinkCause.disconnected,
           lastSeen: feedback.lamp.lastOkAt,
           detail: '${error ?? _lampError}');
     }
@@ -332,7 +392,9 @@ class BluetoothLinkManager extends ChangeNotifier {
       return LinkStatus(
           id: LinkId.fan,
           health: LinkHealth.down,
-          cause: LinkCause.disconnected,
+          cause: isAlreadyConnectedError(error)
+              ? LinkCause.staleLink
+              : LinkCause.disconnected,
           lastSeen: fan.lastOkAt,
           detail: '${error ?? _fanError}');
     }

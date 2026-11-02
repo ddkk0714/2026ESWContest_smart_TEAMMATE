@@ -908,7 +908,8 @@ class _FakeBluetooth implements AtlasBluetoothService {
   Future<bool> isA2dpConnected(String address) async => a2dpConnected;
 
   @override
-  Future<GattConnection> connectLamp(String address) async {
+  Future<GattConnection> connectLamp(String address,
+      {String role = '램프'}) async {
     if (connectDelay > Duration.zero) await Future<void>.delayed(connectDelay);
     connectedAddresses.add(address);
     if (forgotten) {

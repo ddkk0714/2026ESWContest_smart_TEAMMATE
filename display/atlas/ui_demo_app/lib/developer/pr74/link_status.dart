@@ -41,6 +41,9 @@ enum LinkCause {
   permissionDenied,
   deviceNotFound,
   disconnected,
+
+  /// V38: 이전 실행이 남긴 블루투스 링크 때문에 다시 붙지 못함(Gatt.Connect "Already connected").
+  staleLink,
 }
 
 class LinkStatus {
@@ -149,6 +152,8 @@ String linkGuidance(LinkId id, LinkCause cause) {
       };
     case LinkCause.disconnected:
       return '연결이 끊겼습니다. 자동으로 다시 연결하는 중입니다.';
+    case LinkCause.staleLink:
+      return '이전 연결이 아직 남아 있어요. 블루투스를 껐다 켜 주세요.';
   }
 }
 

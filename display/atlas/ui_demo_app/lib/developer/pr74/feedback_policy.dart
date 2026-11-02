@@ -65,8 +65,12 @@ class IlinkLampFeedback {
       {this.rescanFor = const Duration(seconds: 6),
       this.rescanAtLeast = const Duration(seconds: 3),
       this.settleDelay = const Duration(seconds: 3),
-      this.rescanEvery = const Duration(seconds: 30)});
+      this.rescanEvery = const Duration(seconds: 30),
+      this.connectAttempts = 3});
   final AtlasBluetoothService _bluetooth;
+
+  /// V38: 선풍기([BleFanControl.connectAttempts])와 같은 시도 수 — [ensureConnected] 가 최대 이만큼 붙어 본다.
+  final int connectAttempts;
 
   /// 다시 찾을 때 주소가 보여도 이만큼은 검색한다([rediscoverDevice], V35).
   final Duration rescanAtLeast;
@@ -122,6 +126,9 @@ class IlinkLampFeedback {
   bool get configured => _address?.isNotEmpty ?? false;
   String? get address => _address;
   bool get connected => _connection != null;
+
+  /// 지금 맺은 GATT 링크(clientId 를 앱 데이터에 남겨 다음 실행이 정리하게, V38). 없으면 null.
+  GattConnection? get connection => _connection;
   DateTime? get lastOkAt => _lastOkAt;
   Object? get lastError => _lastError;
 
@@ -180,7 +187,7 @@ class IlinkLampFeedback {
     final address = _address!;
     _everTried = true;
     try {
-      final connection = await _bluetooth.connectLamp(address);
+      final connection = await _bluetooth.connectLamp(address, role: '램프');
       if (generation != _generation) {
         await _release(connection);
         return false;
@@ -213,43 +220,39 @@ class IlinkLampFeedback {
     return connect();
   }
 
-  /// 붙어 있지 않으면 붙고, 실패하면 주소를 한 번 검색해 다시 보이게 한 뒤 한 번 더 붙는다.
+  /// 붙어 있지 않으면 선풍기와 같은 틀([connectWithRetry], V38)로 붙는다 — 최대 [connectAttempts] 번,
+  /// 실패 사이 [settleDelay], 두 번째 실패 뒤엔 주소를 검색해 다시 보이게 한 다음.
   /// [rediscovered]: null = 검색하지 않음, true = 찾음, false = 못 찾음.
-  /// 검색은 [rescanEvery] 에 한 번까지, 실패 뒤 [settleDelay] 를 기다린 다음에만 한다.
+  /// 검색은 [rescanEvery] 에 한 번까지(그 안이면 검색 없이 다음 시도), 명령 만료 전에 기다리고 다시 붙을
+  /// 시간([settleDelay] + 4 s)이 안 남으면 더 시도하지 않는다.
   Future<({bool ok, bool? rediscovered})> ensureConnected(
       {num? expiresTsMs}) async {
     final generation = _generation;
-    if (await connect()) {
-      return (ok: generation == _generation, rediscovered: null);
-    }
-    if (generation != _generation) return (ok: false, rediscovered: null);
-    final last = _lastRescanAt;
-    if (last != null && DateTime.now().difference(last) < rescanEvery) {
-      return (ok: false, rediscovered: null);
-    }
-    if (!await _settle(expiresTsMs)) return (ok: false, rediscovered: null);
-    if (generation != _generation) return (ok: false, rediscovered: null);
-    final recent = _lastRescanAt;
-    if (recent != null && DateTime.now().difference(recent) < rescanEvery) {
-      return (ok: false, rediscovered: null);
-    }
-    _lastRescanAt = DateTime.now();
-    final found = await _rediscover(expiresTsMs);
-    if (generation != _generation) return (ok: false, rediscovered: found);
-    return (
-      ok: await connect() && generation == _generation,
-      rediscovered: found
-    );
-  }
-
-  /// [settleDelay] 를 기다린다. 명령 만료 전에 검색·연결할 시간(4 s)이 안 남으면 기다리지 않고 false.
-  Future<bool> _settle(num? expiresTsMs) async {
-    if (expiresTsMs != null) {
+    bool? rediscovered;
+    bool noTimeLeft() {
+      if (expiresTsMs == null) return false;
       final left = expiresTsMs - DateTime.now().millisecondsSinceEpoch;
-      if (left < settleDelay.inMilliseconds + 4000) return false;
+      return left < settleDelay.inMilliseconds + 4000;
     }
-    if (settleDelay > Duration.zero) await Future<void>.delayed(settleDelay);
-    return true;
+
+    final ok = await connectWithRetry(connect,
+        attempts: connectAttempts,
+        retryDelay: settleDelay,
+        rediscover: () async {
+          final last = _lastRescanAt;
+          if (last != null && DateTime.now().difference(last) < rescanEvery) {
+            return;
+          }
+          _lastRescanAt = DateTime.now();
+          final found = await _rediscover(expiresTsMs);
+          rediscovered = (rediscovered ?? false) || found;
+        },
+        // 이전 실행의 링크가 남아 거절되면(Already connected) 검색·재시도로는 안 풀린다
+        stop: () =>
+            generation != _generation ||
+            noTimeLeft() ||
+            isAlreadyConnectedError(_lastError));
+    return (ok: ok && generation == _generation, rediscovered: rediscovered);
   }
 
   /// 램프가 보일 때까지 최대 [rescanFor](명령이면 만료 2초 전까지) 검색한다.
