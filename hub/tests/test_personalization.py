@@ -124,7 +124,9 @@ def test_inference_budget_and_nonfinite_input(tmp_path, monkeypatch):
 
 def test_observation_keeps_fsm_and_report(tmp_path):
     cfg = configured(tmp_path)
-    normal = LiveHub(SensorCache(), out=io.StringIO(), control_cfg={"enabled": False})
+    # 기준 hub 는 관찰 모델을 끈다 — 10-25 부터 배포 기본값(personalization.yaml)이 stage2 관찰 모델을 켠 상태라서
+    normal = LiveHub(SensorCache(), out=io.StringIO(), control_cfg={"enabled": False},
+                     personalization_cfg=dict(load_personalization_config(), enabled=False))
     observed = LiveHub(SensorCache(), out=io.StringIO(), control_cfg={"enabled": False},
                        personalization_cfg=cfg, personalization_backend_factory=Backend)
     observed.boot_id = normal.boot_id
@@ -197,6 +199,10 @@ def test_packaged_personalization_config(tmp_path):
         privacy = json.loads(archive.read("deskmate_hub/config/privacy.json"))
         ondevice = json.loads(archive.read("deskmate_hub/config/ondevice.json"))
         assert "deskmate_hub/personalization/runtime.py" in archive.namelist()
+        # 개입 선택 정책(personalize/)도 보드에서 돈다 — 설정 JSON 과 순수 Python 선형대수가 함께 묶여야 한다
+        personalize = json.loads(archive.read("deskmate_hub/config/personalize.json"))
+        assert "deskmate_hub/personalize/linalg.py" in archive.namelist()
     assert packaged == yaml.safe_load((config_dir / "personalization.yaml").read_text(encoding="utf-8"))
+    assert personalize == yaml.safe_load((config_dir / "personalize.yaml").read_text(encoding="utf-8"))
     assert privacy == yaml.safe_load((config_dir / "privacy.yaml").read_text(encoding="utf-8"))
     assert ondevice == yaml.safe_load((config_dir / "ondevice.yaml").read_text(encoding="utf-8"))

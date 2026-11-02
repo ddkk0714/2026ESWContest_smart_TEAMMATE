@@ -1,10 +1,15 @@
-# Enable only after explicit model deployment. Never changes FSM gates.
-enabled: false
+# 2단계 피로 모델(4클래스 1D CNN) 관찰 전용 실행 — FSM 게이트·결정은 절대 바꾸지 않는다(state/phase sensor_summary.personalization 로만).
+# 2026-10-25: 팀 Release pi4-tof-bundle-20261023 의 stage2_portable_v9_20261024.zip(sha256 240c915e…)을 config/stage2/ 에 두고 보드 기본 켜짐.
+#   모델 카드 config/stage2/README_stage2.txt — v9 life_sim 120일(시뮬 데이터만, 실데이터 없음) → tof_mlp.json 선례대로 커밋.
+#   시뮬 정답 기준 정확도 0.78 / macro F1 0.80, 피로 정밀도 0.48(실사용 정확도 아님). Pi 4 실측(board_verified) 전.
+#   ingest normalization 이 baseline 이어야 계약 검사를 통과한다 — demo-b(linear) 에서는 status unavailable 로 꺼진다.
+enabled: true
 mode: observe
 # tflite (legacy PC verification) or portable_cnn (stdlib board learning path).
-backend: tflite
-model_path: ml/models/personalized.tflite
-metadata_path: ml/models/personalized.metadata.json
+backend: portable_cnn
+# 패키지 안 상대 경로 — PC 는 deskmate_hub/ 아래 파일, 보드는 payload zip 에서 pkgutil 로(personalization/assets.py). 절대 경로도 된다.
+model_path: config/stage2/common.portable.json
+metadata_path: config/stage2/common.metadata.json
 window_ticks: 6
 max_period_jitter_sec: 2
 max_inference_ms: 500

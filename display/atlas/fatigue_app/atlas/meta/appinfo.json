@@ -1,0 +1,12 @@
+{
+    "id": "com.atlas.app.deskmate_fatigue",
+    "type": "flutter",
+    "name": "DESKMATE 피로 기록",
+    "description": "DESKMATE fatigue data collection (profiles, KSS prompts)",
+    "entry": "deskmate_fatigue --bundle=./ --fullscreen -a com.atlas.app.deskmate_fatigue",
+    "version": "0.1.0",
+    "required_permissions": {
+        "privileged": [],
+        "user_consent": []
+    }
+}

@@ -1,0 +1,13 @@
+.venv/
+runs/
+tools/rule_replay
+tools/rule_replay.exe
+__pycache__/
+slurm-*.out
+viewer/*.json
+!viewer/device.json
+snaps/
+*.mp4
+person_scene.xml
+models/
+*.step

@@ -1,0 +1,15 @@
+<!-- Review template; render ONLY with verified PackageManager/SSH accounts. -->
+<busconfig>
+  <policy context="default">
+    <deny own="com.deskmate.thinqpoc1"/>
+    <deny send_destination="com.deskmate.thinqpoc1" send_type="method_call"/>
+  </policy>
+  <policy user="@SERVICE_USER@"><allow own="com.deskmate.thinqpoc1"/></policy>
+  <policy user="@UI_USER@">
+    <allow send_destination="com.deskmate.thinqpoc1" send_type="method_call" send_path="/com/deskmate/thinqpoc1" send_interface="com.deskmate.thinqpoc1" send_member="Exchange"/>
+    <allow send_destination="com.deskmate.thinqpoc1" send_type="method_call" send_path="/com/deskmate/thinqpoc1" send_interface="com.deskmate.thinqpoc1" send_member="AuthStatus"/>
+  </policy>
+  <policy user="@OPERATOR_USER@">
+    <allow send_destination="com.deskmate.thinqpoc1" send_type="method_call" send_path="/com/deskmate/thinqpoc1" send_interface="com.deskmate.thinqpoc1" send_member="AuthStatus"/>
+  </policy>
+</busconfig>

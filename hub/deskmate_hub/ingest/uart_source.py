@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from .cache import Sample, SensorCache
 from .uart_frame import (
@@ -43,11 +43,13 @@ def parse_uart_line(line: str) -> Frame | None:
 
 
 def ingest_frame(cache: SensorCache, frame: Frame, stats: UartStats, received: float | None = None,
-                 node: str = "esp32", *, grid: TofGridAssembler | None = None, posture: Any = None) -> str | None:
+                 node: str = "esp32", *, grid: TofGridAssembler | None = None, posture: Any = None,
+                 presence: Callable[[float], bool | None] | None = None) -> str | None:
     """Frame 을 캐시에 반영. 반영된 kind(또는 'heartbeat') 를 돌려주고, 모르는 TYPE 은 None.
 
     0x05 센서 프레임은 `grid` 로 같은 frame_id 끼리 모아 표본이 완성될 때만 `tof_grid` 로 캐시에 넣고(미완성이면 'tof_grid_part'),
-    `posture`(posture.tof_mlp.TofMlpPosture 등 `update(grid, now) -> dict`)가 있으면 그 판정을 `tof_mlp` 로 넣는다.
+    `posture`(posture.tof_mlp.TofMlpPosture 등 `update(grid, now, present) -> dict`)가 있으면 그 판정을 `tof_mlp` 로 넣는다.
+    `presence`(now → mmWave 재실, 모르면 None — ingest.mapping.mmwave_presence_hint)가 있으면 사람이 없을 때 모델을 돌리지 않는다.
     """
     received = time.time() if received is None else received
     try:
@@ -75,7 +77,8 @@ def ingest_frame(cache: SensorCache, frame: Frame, stats: UartStats, received: f
         stats.grids += 1
         stats.frames += 1
         if posture is not None:
-            verdict = posture.update(full, received)
+            hint = presence(received) if presence is not None else None
+            verdict = posture.update(full, received, hint) if hint is not None else posture.update(full, received)
             if verdict is not None:
                 cache.put("tof_mlp", Sample(received=received, ts=received, seq=None, data=verdict))
         return "tof_grid"
@@ -87,22 +90,24 @@ def ingest_frame(cache: SensorCache, frame: Frame, stats: UartStats, received: f
 class UartLineSource:
     """서비스 브리지 stdin 에서 온 라인을 캐시로 흘린다. `posture` 는 선택(없으면 0x03 규칙 판정만 쓴다)."""
 
-    def __init__(self, cache: SensorCache, node: str = "esp32", posture: Any = None) -> None:
+    def __init__(self, cache: SensorCache, node: str = "esp32", posture: Any = None,
+                 presence: Callable[[float], bool | None] | None = None) -> None:
         self.cache, self.node, self.stats = cache, node, UartStats()
-        self.grid, self.posture = TofGridAssembler(), posture
+        self.grid, self.posture, self.presence = TofGridAssembler(), posture, presence
 
     def feed_line(self, line: str) -> str | None:
         frame = parse_uart_line(line.rstrip("\n"))
         return None if frame is None else ingest_frame(self.cache, frame, self.stats, node=self.node,
-                                                       grid=self.grid, posture=self.posture)
+                                                       grid=self.grid, posture=self.posture, presence=self.presence)
 
 
 class RawUartReader:
     """PC 개발용: 시리얼 raw 바이트 → 프레임 → 캐시. C++ 서비스와 같은 규칙(CRC 실패는 폐기)."""
 
-    def __init__(self, cache: SensorCache, node: str = "esp32", posture: Any = None) -> None:
+    def __init__(self, cache: SensorCache, node: str = "esp32", posture: Any = None,
+                 presence: Callable[[float], bool | None] | None = None) -> None:
         self.cache, self.node, self.stats = cache, node, UartStats()
-        self.grid, self.posture = TofGridAssembler(), posture
+        self.grid, self.posture, self.presence = TofGridAssembler(), posture, presence
         self._buf = bytearray()
 
     def feed_bytes(self, chunk: bytes) -> list[str]:
@@ -115,7 +120,7 @@ class RawUartReader:
                 self.stats.dropped += 1
                 continue
             kind = ingest_frame(self.cache, frame, self.stats, node=self.node, grid=self.grid,
-                                posture=self.posture)
+                                posture=self.posture, presence=self.presence)
             if kind:
                 kinds.append(kind)
         return kinds

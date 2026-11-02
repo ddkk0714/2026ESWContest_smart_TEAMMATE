@@ -5,6 +5,35 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('idle clock uses wall time instead of a frozen state timestamp',
+      (tester) async {
+    tester.view.physicalSize = const Size(1024, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    String clock(DateTime value) =>
+        '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
+    final before = DateTime.now();
+    await _pump(tester, _state(phase: 'idle', fsmState: 'IDLE'));
+    final after = DateTime.now();
+    final displayed = tester
+        .widgetList<Text>(find.byType(Text))
+        .map((text) => text.data)
+        .whereType<String>();
+    expect(displayed, anyOf(contains(clock(before)), contains(clock(after))));
+
+    final clockFinder = find.byWidgetPredicate((widget) =>
+        widget is Text && RegExp(r'^\d{2}:\d{2}$').hasMatch(widget.data ?? ''));
+    final firstClock = tester.widget<Text>(clockFinder);
+    await tester.pump(const Duration(seconds: 1));
+    expect(tester.widget<Text>(clockFinder), isNot(same(firstClock)));
+
+    // Disposing the home view must also stop its independent clock timer.
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 2));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('renders the six product views at 1024x600', (tester) async {
     tester.view.physicalSize = const Size(1024, 600);
     tester.view.devicePixelRatio = 1;
@@ -42,8 +71,12 @@ void main() {
       ),
     );
     // 환경 원인의 제목은 env_flags 로 고른다. 플래그가 없으면 일반 문구.
-    expect(find.text('환경을 잠시 조정해볼까요?'), findsOneWidget);
-    expect(find.textContaining('이유: CO₂ 720 ppm'), findsOneWidget);
+    expect(find.text('서버 제어 계획 확인 필요'), findsOneWidget);
+    expect(
+        tester
+            .widget<FilledButton>(find.byKey(const ValueKey('control-accept')))
+            .onPressed,
+        isNull);
 
     await _pump(tester, _state(phase: 'end', fsmState: 'END'));
     expect(find.text('오늘의 집중 리포트'), findsOneWidget);

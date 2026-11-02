@@ -1,0 +1,29 @@
+# Synthetic devices only. This does not enable Hub environment_control.yaml.
+enabled: false
+mode: mock
+automatic_control: false
+broker:
+  profile: localhost
+  host: 127.0.0.1
+  port: 18883
+  username_env: null
+  password_env: null
+  tls_ca: null
+# Required explicit absolute path, e.g. --journal "$HOME/.local/state/deskmate/mock-gateway/commands.db"
+journal: null
+devices:
+  - target_id: mock_lamp
+    roles: [lighting]
+    capabilities:
+      set_brightness: {minimum: 0, maximum: 100}
+    initial_state: {set_brightness: 0}
+  - target_id: mock_vent
+    roles: [outside_air]
+    capabilities:
+      set_power: {values: ['off', 'on']}
+    initial_state: {set_power: 'off'}
+  - target_id: mock_cooling
+    roles: [cooling]
+    capabilities:
+      set_power: {values: ['off', 'on']}
+    initial_state: {set_power: 'off'}

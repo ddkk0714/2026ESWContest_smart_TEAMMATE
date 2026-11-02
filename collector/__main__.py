@@ -10,13 +10,15 @@ import signal
 import time
 
 from .capture import InputCapture
-from .config import Config
+from .config import TARGETS, Config
 from .features import extract
 from .publisher import FeaturePublisher
 
 
 def _parse_args():
     p = argparse.ArgumentParser(prog="collector", description="DESKMATE 키스트로크 수집기")
+    p.add_argument("--target", choices=sorted(TARGETS),
+                   help="Pi 4 브로커 별칭: hotspot=172.20.10.3 · lan=172.16.34.199 (--broker 가 있으면 그쪽이 이긴다)")
     p.add_argument("--broker", help="MQTT 브로커 호스트(Pi4 IP). 미지정 시 localhost")
     p.add_argument("--port", type=int, help="브로커 포트(기본 1883)")
     p.add_argument("--node", help="노드 식별자(기본 pc-collector)")

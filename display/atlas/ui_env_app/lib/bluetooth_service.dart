@@ -309,12 +309,26 @@ class AtlasBluetoothService {
       if (id.contains('bt') ||
           id.contains('bluetooth') ||
           id.contains('a2dp')) {
+        // 10-24 Pi 5: SetActiveOutputDevice is only allowed for perm_audioroute
+        // (privileged.audioroute in appinfo.json). Without it every reconnect of
+        // an already-routed speaker was rejected and reported as a failed link.
+        if (await _activeOutputDevice() == entry.$1) return true;
         await _audio.callMethod(
             _audioManagerInterface, 'SetActiveOutputDevice', [entry.$1]);
         return true;
       }
     }
     return false;
+  }
+
+  Future<DBusObjectPath?> _activeOutputDevice() async {
+    try {
+      final value = await _audio.getProperty(
+          _audioManagerInterface, 'ActiveOutputDevice');
+      return value is DBusObjectPath ? value : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// AudioManager1.OutputDevices is a(oss): (object path, id, name).

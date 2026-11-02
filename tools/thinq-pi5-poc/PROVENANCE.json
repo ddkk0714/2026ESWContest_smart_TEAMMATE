@@ -1,0 +1,14 @@
+{
+  "source_worktree": "${DESKMATE_WORKSPACE}/2026ESWContest_smart_TEAMMATE-thinq-integration",
+  "source_commit": "1ee37c61afad66cc343cd2ca57f05c3611a19922",
+  "remote_collection_commit": "f1831fe08cc91e623e9f46fb3d2e45f8ac32bc3a",
+  "files_sha256": {
+    "tools/thinq_connect/__init__.py": "6d71a95e84329de198b20ba5fbd8ca1544d30858098693d4537dbb286993e5de",
+    "tools/thinq_connect/probe.py": "38d7d7cc09bdf1380a36908d900aa8fa66a96b3d3cdaf8d947b7f1c4472daf01",
+    "tools/thinq_connect/air_quality.py": "aebe3de0394b8a8a23b48b1c1b9ba0bce6399e1644a049e82b75919925f63e8c",
+    "tools/thinq_connect/manual_trial.py": "bdcbe165a9268197615f65920b1208e0c003005a6ff1b67cb17647bdac7df0fe",
+    "tools/thinq_connect/fixtures/as183hwwa_air_quality_observed_20261022.json": "67a68f4311c6720f26883de26aac4fbb30fe32c45a7fc8a5b591005080e04e33",
+    "tools/thinq_connect/fixtures/synthetic_other_appliance_profile.json": "694874cd6e4a751d8d574b5045d9d8cbfb55cd6842dea14d0123be565cd67fde"
+  },
+  "no_uart_hub_ui_or_diagnostic_code_imported": true
+}

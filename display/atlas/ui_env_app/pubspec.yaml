@@ -28,11 +28,47 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  fonts:
+    - family: HadaSans
+      fonts:
+        - asset: assets/fonts/HadaSans-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/HadaSans-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/HadaSans-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/HadaSans-Bold.ttf
+          weight: 700
+    - family: HakgyoansimGeurimilgi
+      fonts:
+        - asset: assets/fonts/HakgyoansimGeurimilgi-Regular.ttf
+          weight: 400
+    - family: High1Wonchuri
+      fonts:
+        - asset: assets/fonts/High1WonchuriBodyB.ttf
+          weight: 700
+    - family: LGEIText
+      fonts:
+        - asset: assets/fonts/LGEITextTTF-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/LGEITextTTF-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/LGEITextTTF-Bold.ttf
+          weight: 700
+    - family: LGEIHeadline
+      fonts:
+        - asset: assets/fonts/LGEIHeadlineVF.ttf
   assets:
+    - assets/brand/deskmate-wordmark.png
+    - assets/mascot/irumae-atlas-soft.png
+    - assets/config/co2_bands.json
     - assets/audio/deskmate_test_music.mp3
     - assets/audio/chopin_nocturne_op9_no2.mp3
     - assets/audio/satie_gymnopedie_no1.mp3
     - assets/audio/beethoven_fur_elise.mp3
     - assets/audio/mozart_sonata_k545_allegro.mp3
     - assets/audio/bach_prelude_bwv846.mp3
+    - assets/audio/chime_single.mp3
+    - assets/audio/chime_soft.mp3
+    - assets/audio/chime_alert.mp3
     - assets/audio/CREDITS.md

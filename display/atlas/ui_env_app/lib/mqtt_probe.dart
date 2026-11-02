@@ -114,7 +114,7 @@ Future<MqttProbeResult> probeMqtt(
         if (!stateSeen.isCompleted) stateSeen.complete();
       } else if (message.topic == _hubHealthTopic) {
         final status = _healthStatus(
-            MqttPublishPayload.bytesToStringAsString(publish.payload.message));
+            utf8.decode(publish.payload.message, allowMalformed: true));
         if (status != null) {
           hubHealth = status;
           if (!healthSeen.isCompleted) healthSeen.complete();

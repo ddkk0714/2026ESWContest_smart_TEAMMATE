@@ -115,3 +115,50 @@ def test_tick_latency_is_far_inside_the_500ms_budget():
     assert percentile([1.0, 2.0, 3.0, 4.0], 0.5) == 2.5
     res = measure(["demo"], [1])
     assert res["ticks"] > 20 and res["within_budget"]
+
+
+# ── 개인화 시연: 되돌리기 한 번에 다음 개입은 자동 대신 묻는다 ───────────────────
+def _personalize_run(tmp_path, undo_at=None):
+    from deskmate_hub.personalize import load_personalize_config, read_records
+    from demo_dryrun import personalize_demo_configs
+
+    pcfg = dict(load_personalize_config(), enabled=True, record=True, profile_id="dryrun")
+    pcfg["bandit"] = dict(pcfg["bandit"], algorithm="greedy")
+    pcfg, ccfg = personalize_demo_configs(pcfg, load_config(DEMO_CONFIG))
+    res = run_dryrun("undo_learn", personalize_cfg=pcfg, control_cfg=ccfg,
+                     personalize_policy_path=str(tmp_path / "policy.json"),
+                     personalize_log_path=str(tmp_path / "personalize.jsonl"),
+                     undo_at_list=[undo_at] if undo_at is not None else None, respond=None)
+    return res, read_records(str(tmp_path / "personalize.jsonl"))
+
+
+def test_undo_learn_baseline_acts_automatically_twice(tmp_path):
+    res, records = _personalize_run(tmp_path)
+    lamp = [c for c in res["commands"] if c["target_id"] == "desk_lamp" and c["gate"] == "auto"]
+    assert len(lamp) == 2 and all(c["value"] == 200 for c in lamp)
+    breaks = [d for d in res["decisions"] if d["state"] == "ACTION_BREAK"]
+    assert [(d["arm"], d["delivered_gate"]) for d in breaks] == [("light_cool_bright", "auto")] * 2
+    assert res["duration_s"] <= 420
+    # 에피소드 로그: 정책이 고른 arm·설명이 그대로 남는다
+    eps = [r for r in records if r["schema_name"] == "personalize_episode"]
+    assert eps and eps[0]["decision"]["arm"] == "light_cool_bright" and eps[0]["decision"]["source"] == "bandit"
+    assert "어두움" in eps[0]["decision"]["explanation"]
+
+
+def test_undo_learn_asks_instead_of_acting_after_one_undo(tmp_path):
+    first_lamp = next(c["t"] for c in _personalize_run(tmp_path / "base")[0]["commands"] if c["target_id"] == "desk_lamp")
+    res, records = _personalize_run(tmp_path / "undo", undo_at=int(first_lamp) + 5)
+    undo = [c for c in res["commands"] if c["gate"] == "undo"]
+    assert [(c["target_id"], c["value"]) for c in undo] == [("desk_lamp", 110)]   # arm 의 undo 값으로 되돌린다
+    breaks = [d for d in res["decisions"] if d["state"] == "ACTION_BREAK"]
+    assert len(breaks) == 2
+    assert breaks[0]["delivered_gate"] == "auto"
+    assert breaks[1]["fsm_gate"] == "auto" and breaks[1]["delivered_gate"] == "suggest"   # FSM 은 자동, 정책이 낮춘다
+    assert "되돌리셔서 이번엔 여쭙니다" in breaks[1]["explanation"]
+    # 두 번째는 자동 조명이 아니라 질문 카드이고, 카드에 설명 한 줄이 실린다
+    assert len([c for c in res["commands"] if c["gate"] == "auto"]) == 1
+    card = next(q for q in res["requests"] if q["kind"] == "break_suggest")
+    assert card["explanation"] == breaks[1]["explanation"] and card["arm"] == breaks[1]["arm"]
+    # 되돌리기는 에피소드 로그에 undo 로, 수용도 보상 −2
+    ep = next(r for r in records if r["schema_name"] == "personalize_episode" and r["feedback"])
+    assert ep["feedback"]["verdict"] == "undo" and ep["outcome"]["reward_accept"] == -2.0

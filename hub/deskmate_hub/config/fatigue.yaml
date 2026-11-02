@@ -1,0 +1,22 @@
+# 공용 피로 모델(KSS 1~9) 라이브 점수 — 관찰 전용. FSM 입력이 아니다(docs/fatigue-dataset.md §6).
+# 모델 JSON 을 못 찾으면 꺼진다(허브는 그대로 돈다).
+enabled: true
+
+# 가중치 JSON(format deskmate-fatigue-linear-1, ml/training/fatigue_train.py --out 결과).
+# 패키지 안 경로 — 이 파일이 있으면 IPK 빌드가 같이 넣는다(학습 모델이라 커밋하지 않는다, .gitignore).
+# 환경변수 DESKMATE_FATIGUE_MODEL=<파일 경로> 가 있으면 그 파일을 먼저 쓴다(보드에서 IPK 재빌드 없이 교체).
+model: config/fatigue_linear.json
+
+# 점수 계산 주기(초). 창 길이(5분)·기준 구간(세션 처음 10분)은 모델 JSON 의 window_sec·baseline_sec 를 따른다.
+period_sec: 60
+# 창 안 tick 이 기대 개수(window_sec / frame_period_sec)의 이 비율 이상이어야 valid.
+min_tick_ratio: 0.8
+# 응답이 늦게 와도(15분 질문은 3분 안 응답, 끊겼다 재전송) 질문 시각의 창을 다시 만들 수 있게 tick 을 더 붙들어 둔다.
+label_slack_sec: 600
+
+# 프로필별 보정(PersonalBias, 개인 head 1단계). 자가보고 KSS 로 배우는 개인 데이터라
+# require_consent 면 privacy.yaml 동의(enabled·consented)가 있을 때만 갱신·저장·적용한다.
+personal:
+  require_consent: true
+  prior_n: 3
+  path: logs/personalization/fatigue_bias.json

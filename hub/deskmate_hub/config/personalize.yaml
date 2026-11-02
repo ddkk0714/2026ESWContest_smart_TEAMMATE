@@ -1,0 +1,211 @@
+# 사용자 맞춤 개입 선택 정책(3층) 설정 — docs/personalization-spec.md
+# 임계값·prior·기기 값은 전부 여기. 코드에는 arm id 와 수식만 둔다.
+
+enabled: true               # Pi 4 배포판(feat/pi4-hub-1023): ACTION_* 진입 tick 마다 policy.decide — 순수 Python 이라 보드에서 돈다
+record: true                # 정책이 꺼져 있어도 결정 tick 마다 에피소드(decision.source fallback)·세션 요약을 JSONL 로 기록
+profile_id: default
+local_utc_offset_hours: 9   # 시각·요일 특징의 지역시 (KST)
+log_dir: logs               # logs/personalize-<boot_id>.jsonl, profiles/<profile_id>/{daily.jsonl,policy.json}
+
+# 정책(밴딧)이 arm 을 고르는 FSM 원인(2026-10-25). 환경(environment)은 여기 없어 control.yaml actions.environment(FSM 고정)만 나간다 —
+# 환기·선풍기·공기청정기 arm 은 정의만 남고 기본으로는 뽑히지 않는다. null 이면 모든 원인. 환경 원인 에피소드도 기록(source fsm_fixed)은 계속.
+policy:
+  causes: [posture, cognitive]
+
+features:
+  posture_window_min: 10        # 자세 분포 창
+  posture_hold_full_min: 30     # 지속 시간 정규화 상한
+  drowsy_count_full: 4          # 30 분 졸음 횟수 정규화 상한
+  co2_base_ppm: 400
+  co2_full_ppm: 2000            # (ppm-400)/(2000-400)
+  lux_dim_low: 100              # 이하 = 완전 어두움(1.0)
+  lux_dim_high: 400             # 이상 = 밝음(0.0)
+  temp_comfort_min: 20
+  temp_comfort_max: 26
+  temp_margin: 4
+  humidity_comfort_min: 40
+  humidity_comfort_max: 60
+  humidity_margin: 20
+  session_full_min: 240
+  since_last_full_min: 60
+  outdoor_temp_diff_full_c: 10
+  slump_labels: [recline, face_down, chin_rest, drowsy]
+
+bandit:
+  algorithm: thompson           # thompson | greedy(검증용: 평균만 사용)
+  prior_precision: 2.0          # λ — 클수록 전역 prior 를 오래 믿는다
+  noise_var: 0.25               # σ² — Thompson 샘플 분산
+  weight_accept: 0.5            # 10-25 통합: 0.2/0.8(시뮬 v13 근거, 실측 전)은 PC 03시 답으로 보류 — 0.5/0.5 유지
+  weight_effect: 0.5
+  effect_window_min: 10
+  effect_full_drop: 0.30        # C_fatigue 가 이만큼 내려가면 효과 +1
+  max_per_session: 6
+  cooldown_sec: 300             # fsm timers.cmd_cooldown_sec 와 맞춤
+  quiet_hours: {start: 23, end: 7}   # 이 사이에는 sound/voice 채널 제외
+
+cold_start:
+  personal_min: 15              # 개인 피드백 이 건수부터 "개인 정책"
+  explore_scale_global: 1.0
+  explore_scale_personal: 0.5
+
+gate:
+  conf_auto: 0.75               # fsm gate.conf_auto 와 같은 값. 개인 문턱 = 이 값 + undo_penalty
+  undo_penalty_step: 0.05
+  undo_penalty_decay: 0.01
+  undo_penalty_max: 0.25
+  undo_blocks_auto_in_session: true   # 이 세션에서 되돌린 arm 은 세션이 끝날 때까지 자동 대신 묻는다 (시연: 되돌리기 한 번에 행동이 바뀜)
+
+sleep:
+  fatigue_min: 0.70             # fsm thresholds.fatigue_confirm
+  drowsy_window_min: 30
+  drowsy_min_count: 2
+  ineffective_min: 2            # 직전 개입 이만큼 연속 무효
+  default_bedtime: "23:30"      # 프로필이 없을 때
+
+weather:                        # 입력 = deskmate/sensor/weather (Pi 5 앱 발행, retain, 30 분 + 시작 1회 — 2026-10-21 최종)
+  stale_sec: 7200               # fetched_at 이 이보다 오래되면 무시하고 계절(월)만 쓴다
+  windy_ms: 4.0                 # 풍속(m/s) 이 이상이면 windy → 선풍기보다 환기 먼저
+  rain_conditions: [rain, snow] # 이 condition 이면 환기 후보 제외
+  outdoor_hotter_margin_c: 2.0  # 바깥이 실내보다 이만큼 더우면 환기 후보 제외
+  windy_bias:                   # 바람 불면 선풍기보다 창문 환기 먼저 (arm → prior 가산)
+    ventilate_suggest: 0.3
+    fan_on: -0.3
+
+ventilation:                    # 창문 환기 권유 길이(분) — 날씨가 정한다(2026-10-23). 날씨가 없거나 낡으면 계절(달)만
+  base_minutes: {spring: 15, summer: 10, autumn: 15, winter: 5}   # 계절 = 날씨 토픽 season, 없으면 달
+  windy_factor: 0.7             # 바람(weather.windy_ms 이상)이면 공기가 빨리 바뀐다 → 짧게
+  calm_ms: 1.0                  # 풍속이 이 이하면 잘 안 바뀐다 → 길게
+  calm_factor: 1.3
+  temp_gap_c: 12                # 실내외 온도 차가 이 이상이면(한겨울·한여름) 짧게
+  temp_gap_factor: 0.6
+  humid_outdoor_pct: 85         # 바깥 습도가 이 이상이면 짧게
+  humid_factor: 0.7
+  min_minutes: 3
+  max_minutes: 20
+
+purifier:                       # LG ThinQ 공기청정기(air_purifier). CO₂ 는 못 내린다 — 평소 PM 운전은 공기청정기 자체 auto 모드
+  when_weather: [rain, pm_bad]  # 바깥 공기 때문에 창문을 못 열 때만 air_fan_up(풍량 high) 후보. 날씨를 모르면 후보 아님
+
+explain:
+  co2_high_ppm: 1000
+  slump_hold_notable_min: 5
+  session_long_min: 120
+
+# 개입 후보. causes 는 FSM cause 키. auto=false 면 FSM 게이트가 auto 여도 suggest 로 낸다.
+arms:
+  - {id: light_cool_bright, label_ko: 조명 밝고 차갑게, causes: [environment, cognitive], channel: lamp, auto: true,
+     device: {target_id: desk_lamp, color_temperature: 1, percent: 50, undo: previous}}   # 10-25: 지금 밝기 +50 %(절대값 200 대체), 되돌림 = 앱 결과 previous
+  - {id: light_warm_dim, label_ko: 조명 따뜻하고 어둡게, causes: [cognitive], channel: lamp, auto: true,
+     device: {target_id: desk_lamp, color_temperature: 5, percent: -50, undo: previous}}  # 10-25: 지금 밝기 −50 %(절대값 60 대체)
+  - {id: air_fan_up, label_ko: 공기청정기 풍량 올리기, causes: [environment], channel: air, auto: true,
+     device: {target_id: air_purifier, operation: set_mode, value: high, undo_value: auto}}
+  - {id: fan_on, label_ko: 환기팬(선풍기) 켜기, causes: [environment], channel: fan, auto: true,
+     device: {target_id: vent_fan, operation: set_power, value: "on", undo_value: "off"}}
+  - {id: ventilate_suggest, label_ko: 창문 환기, causes: [environment], channel: display, auto: false}
+  - {id: posture_card, label_ko: 자세 안내 카드, causes: [posture], channel: display, auto: true}
+  - {id: wake_light, label_ko: 무드등 밝혀 깨우기, causes: [posture], channel: lamp, auto: true,       # 10-25: FSM 기본(actions.posture)과 같은 명령을 밴딧 arm 으로 — "직접 어둡게" 로 배울 수 있게
+     device: {target_id: desk_lamp, operation: adjust_brightness, value: {percent: 60, min_raw: 153}, undo: previous}}   # +60 %, 꺼져 있어도 최소 153/255
+  - {id: posture_voice, label_ko: 자세 음성 안내, causes: [posture], channel: voice, auto: true}
+  - {id: sound_cue, label_ko: 알림음, causes: [posture, cognitive], channel: sound, auto: true}
+  - {id: break_short, label_ko: 5분 휴식, causes: [cognitive], channel: display, auto: false}
+  - {id: break_long, label_ko: 긴 휴식, causes: [cognitive], channel: display, auto: false}
+  - {id: sleep_suggest, label_ko: 취침 권유, causes: [environment, posture, cognitive], channel: display, auto: false, rule_only: true}
+
+# 전역 prior θ⁰ (특징 이름 → 가중치, 적지 않은 특징은 0). 특징 이름은 personalize/features.py FEATURE_NAMES.
+prior:
+  light_cool_bright: {accept: {bias: 0.2, dark: 0.6, after_bedtime: -0.4}, effect: {bias: 0.1, dark: 0.6}}
+  light_warm_dim:    {accept: {bias: 0.1, after_bedtime: 0.4, hour_cos: 0.3}, effect: {bias: 0.1, after_bedtime: 0.3}}
+  fan_on:            {accept: {bias: 0.2, co2: 0.8, temp_dev: 0.3}, effect: {bias: 0.1, co2: 0.8, temp_dev: 0.3}}
+  air_fan_up:        {accept: {bias: 0.1, rain: 0.3}, effect: {bias: 0.1}}
+  ventilate_suggest: {accept: {bias: 0.0, co2: 0.5, windy: 0.5}, effect: {bias: 0.1, co2: 0.6, windy: 0.3}}
+  posture_card:      {accept: {bias: 0.3, slump_hold: 0.3}, effect: {bias: 0.2, slump_hold: 0.2}}
+  wake_light:        {accept: {bias: 0.1, drowsy: 0.3, after_bedtime: -0.3}, effect: {bias: 0.1, drowsy: 0.4}}   # 졸 때만 앞선다(안 졸면 자세 카드가 먼저)
+  posture_voice:     {accept: {bias: 0.1, slump_hold: 0.3}, effect: {bias: 0.3, drowsy: 0.3}}
+  sound_cue:         {accept: {bias: 0.0, drowsy: 0.5}, effect: {bias: 0.2, drowsy: 0.4}}
+  break_short:       {accept: {bias: 0.3}, effect: {bias: 0.3}}
+  break_long:        {accept: {bias: -0.1, elapsed: 0.6, after_bedtime: 0.3}, effect: {bias: 0.2, elapsed: 0.5}}
+
+profile:
+  window_days: 30
+  slump_min_hold_min: 2
+  late_night_hour: 23
+  bedtime_sample_after_hour: 21
+  night_end_hour: 6             # 이 시각 전의 새벽은 전날 밤의 연장으로 본다 (취침 뒤 판정)
+  co2_sensitivity_percentile: 25
+
+# ── 2026-10-25 사용자 설계: "응답은 많이 받지 않고, 첫 설정으로 표준을 잡고, 묻지 않고 얻는 반응으로 맞춰 간다" ──
+# 환기는 FSM 이 맡는다(여기서 다루지 않는다). 코드: personalize/onboarding.py · personalize/signals.py · record.py
+
+onboarding:                     # 첫 설정 → 기준(prior). 입력 = deskmate/profile/user (Pi 5 앱, retain, QoS 1 — docs/mqtt-topics.md)
+  enabled: true                 # 받은 프로필로 전역 prior·후보 제외·취침 시각을 바꾼다 (false 면 토픽을 받아도 무시)
+  per_profile: true             # 다른 profile_id 가 오면 그 사람의 profiles/<profile_id>/policy.json 으로 바꾼다(없으면 전역 prior + 그 프로필)
+  active_file: active_profile.json   # profiles/ 아래 지금 사용자(profile_id 만) — 재시작하면 그 사람으로 이어 간다
+  file: user_profile.json       # profiles/<profile_id>/ 아래(policy.json 옆)에 원자적 JSON 으로 저장 — 재시작·브로커 재시작 뒤에도 유지
+  keep_fields: [profile_id, sleep_hours, bedtime, wake_time, light_pref, sound_pref, wind_pref, focus_help, placement]
+                                # 저장·반영하는 필드. age_band 는 지금 prior 에 안 쓰므로 받자마자 버린다(필요한 것만, CLAUDE.md §2-5)
+  bedtime_from_profile: true    # bedtime 을 취침 규칙·after_bedtime 의 기준으로 (없으면 sleep.default_bedtime)
+  quiet_from_sleep: true        # bedtime~wake_time 을 소리·음성 제외 시간으로 (bandit.quiet_hours 23~7 대신)
+  wake_sets_night_end: true     # wake_time 전 새벽은 전날 밤의 연장 (profile.night_end_hour 6 대신)
+  sleep_short_hours: 6.0        # sleep_hours 가 이보다 적으면 mapping.sleep_short 표를 더한다
+  mapping:                      # 프로필 값 → {prior: {arm: {축: {특징: 가산}}}, disable: [arm], note_ko: 화면 문구}. 전역 prior 에 더한다
+    light_pref:
+      low:  {note_ko: "어두운 조명 선호 → 밝은 조명 덜 고름",
+             prior: {light_cool_bright: {accept: {bias: -0.5}}, light_warm_dim: {accept: {bias: 0.3}},
+                     wake_light: {accept: {bias: -0.3}}}}   # 밝힘 수락 prior −0.5, 어둡게 +0.3, 깨우기 무드등 −0.3
+      mid:  {}
+      high: {note_ko: "밝은 조명 선호 → 밝은 조명 먼저",
+             prior: {light_cool_bright: {accept: {bias: 0.3}}, light_warm_dim: {accept: {bias: -0.3}},
+                     wake_light: {accept: {bias: 0.2}}}}
+    sound_pref:
+      "off": {note_ko: "소리 끔 → 알림음·음성 안내 제외", disable: [sound_cue, posture_voice]}          # 후보에서 아예 뺀다
+      low:  {note_ko: "소리 작게 → 알림음·음성 덜 고름",
+             prior: {sound_cue: {accept: {bias: -0.4}}, posture_voice: {accept: {bias: -0.3}}}}
+      mid:  {}
+      high: {prior: {sound_cue: {accept: {bias: 0.2}}, posture_voice: {accept: {bias: 0.2}}}}
+    wind_pref:
+      "off": {note_ko: "바람 싫음 → 선풍기 거의 안 고름", prior: {fan_on: {accept: {bias: -0.8}}}}   # 환기(CO₂)는 FSM 이 맡으므로 제외 대신 크게 낮춤
+      low:  {prior: {fan_on: {accept: {bias: -0.4}}}}
+      mid:  {}
+      high: {prior: {fan_on: {accept: {bias: 0.2}}}}
+    focus_help:                 # "집중에 도움 되는 것"(복수 선택) — 고른 항목마다 더한다
+      light: {prior: {light_cool_bright: {accept: {bias: 0.2}}, wake_light: {accept: {bias: 0.2}}}}
+      sound: {prior: {sound_cue: {accept: {bias: 0.2}}}}
+      wind:  {prior: {fan_on: {accept: {bias: 0.2}}}}
+      break: {prior: {break_short: {accept: {bias: 0.2}}, break_long: {accept: {bias: 0.1}}}}
+      voice: {prior: {posture_voice: {accept: {bias: 0.2}}}}
+    sleep_short: {note_ko: "수면 부족 → 휴식 먼저",
+                  prior: {break_short: {accept: {bias: 0.2}}, break_long: {accept: {bias: 0.2}}}}
+
+implicit:                       # "무드등을 밝혔는데 사용자가 다시 어둡게 하면 밝음을 싫어하는 것" — 밝힘 뒤 직접 어둡게 함 = 음의 보상
+  enabled: true
+  lamp_target: desk_lamp        # 추적하는 기기
+  dim_window_min: 10            # 허브가 밝힌 뒤 이 시간(분) 안의 직접 어둡게 하기만 그 밝힘의 반응으로 본다
+  brighten_arms: [light_cool_bright, wake_light]   # 갱신할 밝힘 arm. 에피소드 arm 이 이 중 하나면 그것만
+  fsm_default_arms: {posture: [wake_light], environment: [light_cool_bright], cognitive: [light_cool_bright]}   # 밝힘 arm 이 아닌 에피소드(FSM 기본 밝힘 등)면 원인별로 이 arm. 없는 원인은 brighten_arms 전부
+  brighten_unknown_min: 150     # 결과에 previous 가 없는 set_brightness(옛 앱)는 값이 이 이상(0~255)이면 밝힘으로 본다. null = 모르면 밝힘 아님
+  app_report: true              # 증거 (a) 앱 보고 feedback/user kind=manual_adjust
+  app_reward: -1.0              # 앱 보고 보상 — 명시 거절(reject −1)과 같은 급. 명시 되돌리기(undo −2)와는 따로 센다
+  lux_heuristic: true           # 증거 (b) 책상 조도(BH1750) 휴리스틱
+  lux_reward: -0.5              # 조도 휴리스틱 보상 — 추정이라 앱 보고의 절반
+  lux_fresh_sec: 30             # 명령 직전 조도로 인정하는 최대 나이(s)
+  lux_settle_sec: 20            # 명령 뒤 이 시간(s) 동안의 최대 조도를 "밝힌 뒤 조도"로 잡는다
+  lux_rise_min_ratio: 0.15      # 밝힌 뒤 조도가 명령 전보다 15 % 이상 올라야 조도 신호를 믿는다(아니면 로그만)
+  lux_rise_min_lx: 15           # …그리고 15 lx 이상 (어두운 방에서 2→3 lx 같은 잡음 배제)
+  lux_drop_ratio: 0.4           # 밝힌 뒤 조도 대비 40 % 넘게 떨어지면 어둡게 한 후보
+  lux_drop_hold_sec: 30         # 그 하락이 30 s 이어져야 신호 (그 사이 허브 무드등 명령이 오면 새 사건으로 바뀐다)
+  lux_drop_max_factor: 1.5      # 하락폭이 우리 밝힘 상승폭의 1.5 배를 넘으면 방 조명 변화로 보고 무시. null = 이 검사 끔
+
+wake:                           # "잠에서 잘 깨면 그걸 좋은 신호로 본다" — 졸음·엎드림 자세 개입의 효과 축 보상
+  enabled: true
+  trigger_labels: [drowsy, face_down]   # 결정 tick 자세가 이것이면 깨우기 에피소드 (또는 졸음 플래그·아래 fatigue_min)
+  fatigue_min: 0.70             # 자세 원인 라우팅에서 C_fatigue 가 이 이상이어도 깨우기 에피소드 (fsm thresholds.fatigue_confirm). null = 끔
+  awake_labels: [upright, lean_forward, forward_head, recline, chin_rest]   # 깨어 있는 자세
+  window_sec: 120               # 개입 뒤 이 시간(s) 안에 깨야 성공, 넘기면 실패
+  hold_sec: 20                  # 깨어 있는 자세가 이 시간(s) 이어져야 한다
+  fatigue_drop: 0.10            # 활동 재개가 없으면 C_fatigue 가 이만큼 내려가야 성공
+  motion_score_min: 0.2         # 활동 재개: ToF 0x03 motion_score 이 이상
+  motion_mm_min: 8.0            # 활동 재개: 자세 판정 표본 tof_motion_mm 이 이상(mm) — 키 입력도 활동 재개
+  reward_success: 1.0           # 깨우기 성공 효과 보상(최대)
+  reward_fail: -0.5             # 깨우기 실패 효과 보상
+  effect_mode: replace          # replace = 10 분 C_fatigue 추세 대신 깨우기 결과(판정 즉시 갱신) · blend = 닫을 때 섞음
+  blend: 0.5                    # effect_mode blend 일 때 깨우기 결과의 비중

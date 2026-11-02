@@ -35,6 +35,50 @@ class _SpeakerClient extends Fake implements DBusClient {
   }
 }
 
+/// AudioManager with a Bluetooth and an HDMI output; refuses the route change
+/// like the Pi 5 does for an app without perm_audioroute.
+class _AudioClient extends Fake implements DBusClient {
+  _AudioClient(this.active);
+
+  static final bt = DBusObjectPath('/com/atlas/AudioManager1/Device/bt_speaker');
+  static final hdmi =
+      DBusObjectPath('/com/atlas/AudioManager1/Device/hdmi_speaker');
+
+  DBusObjectPath active;
+  int routeChanges = 0;
+
+  @override
+  Future<DBusMethodSuccessResponse> callMethod({
+    String? destination,
+    required DBusObjectPath path,
+    String? interface,
+    required String name,
+    Iterable<DBusValue> values = const [],
+    DBusSignature? replySignature,
+    bool noReplyExpected = false,
+    bool noAutoStart = false,
+    bool allowInteractiveAuthorization = false,
+  }) async {
+    if (name == 'Get') {
+      final property = (values.last as DBusString).value;
+      if (property == 'ActiveOutputDevice') {
+        return DBusMethodSuccessResponse([DBusVariant(active)]);
+      }
+      return DBusMethodSuccessResponse([
+        DBusVariant(DBusArray(DBusSignature('(oss)'), [
+          for (final (device, id) in [(bt, 'bt_speaker'), (hdmi, 'hdmi_speaker')])
+            DBusStruct([device, DBusString(id), DBusString(id)]),
+        ])),
+      ]);
+    }
+    if (name == 'SetActiveOutputDevice') {
+      routeChanges++;
+      throw StateError('org.freedesktop.DBus.Error.AccessDenied');
+    }
+    throw StateError('Unexpected AudioManager call: $name');
+  }
+}
+
 class _SpeakerService extends AtlasBluetoothService {
   _SpeakerService(_SpeakerClient client) : super(client: client);
 
@@ -91,6 +135,26 @@ void main() {
       expect(service.outputSelections, 1);
     });
   }
+
+  test('speaker already on the Bluetooth output needs no route change',
+      () async {
+    // 10-24 Pi 5: dbus refused SetActiveOutputDevice from the app, so every
+    // reconnect of the working speaker ended as "연결 끊김".
+    final client = _AudioClient(_AudioClient.bt);
+
+    expect(await AtlasBluetoothService(client: client).selectBluetoothOutput(),
+        isTrue);
+    expect(client.routeChanges, 0);
+  });
+
+  test('speaker on another output asks AudioManager to switch', () async {
+    final client = _AudioClient(_AudioClient.hdmi);
+
+    await expectLater(
+        AtlasBluetoothService(client: client).selectBluetoothOutput(),
+        throwsStateError);
+    expect(client.routeChanges, 1);
+  });
 
   test('GATT write payload carries the frame under "bytes"', () {
     // 10-12 Pi 5: Atlas rejected {"value": ...} with "Invalid value input for

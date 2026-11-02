@@ -18,7 +18,8 @@ const _fanInfo = BluetoothDeviceInfo(
     connected: false);
 
 /// Firmware state bytes: [version, power, speed, level, mode, dir, timer lo, hi].
-List<int> _state({bool power = true, int speed = 60, int level = 2, int timer = 0}) =>
+List<int> _state(
+        {bool power = true, int speed = 60, int level = 2, int timer = 0}) =>
     [1, power ? 1 : 0, speed, level, 0, 0, timer & 0xff, timer >> 8];
 
 void main() {
@@ -114,6 +115,20 @@ void main() {
       expect(fan.lastState?.level, 2);
     });
 
+    test('a fan found again by a scan reports recovery rediscovered', () async {
+      fan.select(_fanAddress);
+      bluetooth.state = _state();
+      bluetooth.connectFailuresRemaining = 2; // 두 번 실패 → 검색 → 세 번째에 붙음
+      final result = await coordinator.handleControlCommand(_command('c1r'));
+      expect(bluetooth.scans, 1);
+      expect(result?['status'], 'succeeded');
+      expect(result?['recovery'], 'rediscovered');
+      expect(fan.lastRediscovered, isTrue);
+      // 이미 붙어 있으면 다음 명령엔 recovery 가 없다.
+      final next = await coordinator.handleControlCommand(_command('c1s'));
+      expect(next?.containsKey('recovery'), isFalse);
+    });
+
     test('level change reports the level the fan is at', () async {
       fan.select(_fanAddress);
       bluetooth.state = _state(speed: 100, level: 3);
@@ -133,12 +148,117 @@ void main() {
       expect(result?['actual_value'], 'off');
     });
 
-    test('an unreadable state still counts the write, like the lamp', () async {
+    test('unreadable state is transport only and never fabricates actual state',
+        () async {
       fan.select(_fanAddress);
       bluetooth.state = null; // read throws
       final result = await coordinator.handleControlCommand(_command('c4'));
+      expect(result?['status'], 'executing');
+      expect(result?['confirmation'], 'transport_only');
+      expect(result?['error_code'], 'device_state_unconfirmed');
+      expect(result?['completed_ts_ms'], isNull);
+      expect(result?.containsKey('actual_value'), isFalse);
+      expect(bluetooth.frames, [
+        [1, 1]
+      ]);
+    });
+
+    test('valid readback explicitly identifies reported state confirmation',
+        () async {
+      fan.select(_fanAddress);
+      bluetooth.state = _state();
+      final result =
+          await coordinator.handleControlCommand(_command('readback'));
+      expect(result?['confirmation'], 'state_readback');
       expect(result?['status'], 'succeeded');
       expect(result?['actual_value'], 'on');
+    });
+
+    test('malformed state cannot become a confirmed power-off', () async {
+      fan.select(_fanAddress);
+      bluetooth.state = [1, 2, 0, 0, 0, 0, 0, 0];
+      final result = await coordinator
+          .handleControlCommand({..._command('malformed'), 'value': 'off'});
+      expect(result?['status'], 'executing');
+      expect(result?.containsKey('actual_value'), isFalse);
+    });
+
+    test('Mock and stale undo never reach the selected fan', () async {
+      fan.select(_fanAddress);
+      bluetooth.state = _state();
+      final mock = await coordinator.handleControlCommand(
+          {..._command('mock-fan'), 'execution_mode': 'mock'});
+      final undo = await coordinator.handleControlCommand({
+        ..._command('undo-old'),
+        'gate': 'undo',
+        'undo_of_command_id': 'unknown'
+      });
+      expect(mock?['error_code'], 'mock_command_blocked');
+      expect(undo?['error_code'], 'superseded_command');
+      expect(bluetooth.frames, isEmpty);
+    });
+
+    test('matching fan undo is bound to its own latest command', () async {
+      fan.select(_fanAddress);
+      bluetooth.state = _state();
+      await coordinator.handleControlCommand(_command('fan-parent'));
+      bluetooth.state = _state(power: false, level: 0);
+      final undo = await coordinator.handleControlCommand({
+        ..._command('fan-undo'),
+        'gate': 'undo',
+        'undo_of_command_id': 'fan-parent',
+        'value': 'off'
+      });
+      expect(undo?['status'], 'succeeded');
+      expect(bluetooth.frames.length, 2);
+    });
+
+    test('countdown reports the read value rather than requested seconds',
+        () async {
+      fan.select(_fanAddress);
+      bluetooth.state = _state(timer: 599);
+      final result = await coordinator.handleControlCommand(
+          {..._command('timer'), 'operation': 'set_timer', 'value': 600});
+      expect(result?['status'], 'succeeded');
+      expect(result?['actual_value'], 599);
+      expect(result?['confirmation'], 'state_readback');
+    });
+
+    test('disabled feedback during connect cancels the pending fan write',
+        () async {
+      fan.select(_fanAddress);
+      bluetooth.connectDelay = const Duration(milliseconds: 40);
+      final pending =
+          coordinator.handleControlCommand(_command('disable-race'));
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      coordinator.enabled = false;
+      expect((await pending)?['error_code'], 'feedback_disabled');
+      expect(bluetooth.frames, isEmpty);
+    });
+
+    test('expiry while connecting is rechecked immediately before writing',
+        () async {
+      fan.select(_fanAddress);
+      bluetooth.connectDelay = const Duration(milliseconds: 40);
+      final result = await coordinator.handleControlCommand({
+        ..._command('expiry-race'),
+        'expires_ts_ms': DateTime.now()
+            .add(const Duration(milliseconds: 10))
+            .millisecondsSinceEpoch
+      });
+      expect(result?['error_code'], 'expired');
+      expect(bluetooth.frames, isEmpty);
+    });
+
+    test('selecting another fan invalidates the pending write', () async {
+      fan.select(_fanAddress);
+      bluetooth.connectDelay = const Duration(milliseconds: 40);
+      final pending =
+          coordinator.handleControlCommand(_command('selection-race'));
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      fan.select('AA:BB:CC:00:00:FB');
+      await pending;
+      expect(bluetooth.frames, isEmpty);
     });
 
     test('a dropped connection is retried once on a new session', () async {
@@ -152,7 +272,7 @@ void main() {
       expect(bluetooth.connects, 2);
     });
 
-    test('a link that fails to come up is retried after a short scan',
+    test('a link that fails to come up is retried, rescanning every other try',
         () async {
       // 10-24 Pi 5: about half the GATT connects to the Pico 2 W fail at once.
       fan.select(_fanAddress);
@@ -162,7 +282,8 @@ void main() {
       final result = await coordinator.handleControlCommand(_command('c6'));
       expect(result?['status'], 'succeeded');
       expect(bluetooth.connects, 4);
-      expect(bluetooth.scans, 3);
+      // A scan right after a failed Connect aborts the link BlueZ is still making: every other try only.
+      expect(bluetooth.scans, 1);
     });
 
     test('gives up after the configured attempts', () async {
@@ -251,6 +372,23 @@ void main() {
       expect(restored.savedFan?.name, 'DESKMATE-FAN');
     });
 
+    test('restore connects the lamp and the fan one after the other', () async {
+      // 10-24 Pi 5: connecting speaker, lamp and fan at once left only the speaker up.
+      store.save(const DeskmateSettings(
+        lamp: SavedBluetoothDevice(
+            address: 'AA:BB:CC:00:00:02', name: 'KLZS-L1 app'),
+        fan: SavedBluetoothDevice(address: _fanAddress, name: 'DESKMATE-FAN'),
+      ));
+      bluetooth.connectDelay = const Duration(milliseconds: 20);
+      final links = manager();
+      addTearDown(links.dispose);
+      await links.restore();
+      expect(bluetooth.connects, 2);
+      expect(bluetooth.maxInFlight, 1);
+      expect(links.lampStatus.health, LinkHealth.ok);
+      expect(links.fanStatus.health, LinkHealth.ok);
+    });
+
     test('forgetting the fan hands vent_fan back to other adapters', () async {
       final links = manager();
       addTearDown(links.dispose);
@@ -281,6 +419,9 @@ class _FakeBluetooth implements AtlasBluetoothService {
   int connects = 0;
   int connectFailuresRemaining = 0;
   int scans = 0;
+  Duration connectDelay = Duration.zero;
+  int _inFlight = 0;
+  int maxInFlight = 0;
   int writeFailuresRemaining = 0;
   List<int>? state;
   final List<List<int>> frames = [];
@@ -289,11 +430,22 @@ class _FakeBluetooth implements AtlasBluetoothService {
   @override
   Future<GattConnection> connectLamp(String address) async {
     connects++;
+    if (connectDelay != Duration.zero) await Future<void>.delayed(connectDelay);
+    _inFlight++;
+    if (_inFlight > maxInFlight) maxInFlight = _inFlight;
+    try {
+      if (connectDelay > Duration.zero) {
+        await Future<void>.delayed(connectDelay);
+      }
+    } finally {
+      _inFlight--;
+    }
     if (connectFailuresRemaining > 0) {
       connectFailuresRemaining--;
       throw StateError('Failed to connect with remote device');
     }
-    return GattConnection(adapter: 'test-adapter', clientId: 'client-$connects');
+    return GattConnection(
+        adapter: 'test-adapter', clientId: 'client-$connects');
   }
 
   @override

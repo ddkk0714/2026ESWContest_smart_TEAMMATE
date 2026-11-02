@@ -35,13 +35,16 @@ def state_envelope(
     seq: int,
     ts: float | None = None,
     sensor_summary: dict[str, Any] | None = None,
+    present: bool = True,
 ) -> dict[str, Any]:
     """`deskmate/state/phase`와 같은 JSON envelope를 만든다.
 
     sensor_summary는 UI 시연용 선택 필드다. 센서 원본은 넣지 않는다.
+    present false(자리 비움)면 c_focus·c_fatigue·confidence 를 0.0 으로 싣고 `scores_valid: false` 를 붙인다 — 부재면 자세·키 입력·경과가
+    빠져 환경 하나만 남고 재정규화가 어두운 방을 피로 1.0 으로 만든다(10-26 보드). 엔진 점수는 그대로(판정은 점수를 안 쓴다).
     """
-    focus = _unit(result.scores.c_focus)
-    fatigue = _unit(result.scores.c_fatigue)
+    focus = _unit(result.scores.c_focus) if present else 0.0
+    fatigue = _unit(result.scores.c_fatigue) if present else 0.0
     return {
         "schema_version": "1.0",
         "ts": time.time() if ts is None else ts,
@@ -55,6 +58,8 @@ def state_envelope(
             "c_focus": round(focus, 4),
             "c_fatigue": round(fatigue, 4),
             "confidence": round(max(focus, fatigue), 4),
+            "present": bool(present),
+            "scores_valid": bool(present),       # false 면 앱·devview 는 숫자 대신 '자리 비움'
             "source": "fsm",
             "gate": result.gate.value,
             "cause": result.cause,

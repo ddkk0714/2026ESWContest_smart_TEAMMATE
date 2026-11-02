@@ -37,10 +37,15 @@ class SensorCache:
     tof_posture: Sample | None = None    # UART 0x04 자세 요약 (1 Hz)
     tof_grid: Sample | None = None       # UART 0x05 원본 8×8 센서 프레임 묶음(표본 하나, 5 Hz). 메모리 전용 — 발행·기록 금지
     tof_mlp: Sample | None = None        # posture/tof_mlp 가 격자마다 낸 자세 판정 (1 s 다수결)
+    tof_service: Sample | None = None    # 별도 자세 서비스 deskmate_tofposture(GRU, HTTP 8771 /api/state) 의 판정 (1 s 폴링, 2026-10-23)
+    weather: Sample | None = None        # deskmate/sensor/weather (Pi 5 앱, retain, 30 분). FSM 입력 아님 — personalize 만 읽는다
+    user_profile: Sample | None = None   # deskmate/profile/user (Pi 5 앱 첫 설정, retain). FSM 입력 아님 — personalize 만 읽는다
     feedback: deque = field(default_factory=lambda: deque(maxlen=16))
     control_results: deque = field(default_factory=lambda: deque(maxlen=64))
     feedback_received: deque = field(default_factory=lambda: deque(maxlen=16))
     control_received: deque = field(default_factory=lambda: deque(maxlen=64))
+    fatigue_labels: deque = field(default_factory=lambda: deque(maxlen=64))   # deskmate/fatigue/label data (QoS 1)
+    fatigue_received: deque = field(default_factory=lambda: deque(maxlen=64))
     keystroke_history: deque = field(default_factory=lambda: deque(maxlen=1800))
     seq_gaps: dict[str, int] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -78,6 +83,18 @@ class SensorCache:
     def pop_control_results(self) -> list[dict[str, Any]]:
         return [payload for payload, _ in self.pop_control_result_events()]
 
+    def put_fatigue_label(self, payload: dict[str, Any], *, received: float | None = None) -> None:
+        with self._lock:
+            self.fatigue_labels.append(payload)
+            self.fatigue_received.append(received)
+
+    def pop_fatigue_label_events(self) -> list[tuple[dict[str, Any], float | None]]:
+        with self._lock:
+            items = list(zip(self.fatigue_labels, self.fatigue_received))
+            self.fatigue_labels.clear()
+            self.fatigue_received.clear()
+            return items
+
     # ---- 읽기 (프레임 빌더) ----
     def snapshot(self) -> "CacheView":
         with self._lock:
@@ -89,6 +106,9 @@ class SensorCache:
                 tof_posture=self.tof_posture,
                 tof_grid=self.tof_grid,
                 tof_mlp=self.tof_mlp,
+                tof_service=self.tof_service,
+                weather=self.weather,
+                user_profile=self.user_profile,
                 keystroke_history=list(self.keystroke_history),
                 feedback=list(self.feedback),
             )
@@ -122,6 +142,9 @@ class CacheView:
     tof_posture: Sample | None = None
     tof_grid: Sample | None = None
     tof_mlp: Sample | None = None
+    tof_service: Sample | None = None
+    weather: Sample | None = None
+    user_profile: Sample | None = None
 
     def fresh(self, kind: str, now: float, max_age: float) -> Sample | None:
         sample: Sample | None = getattr(self, kind)

@@ -1,0 +1,65 @@
+# 사용자 반응으로 배우는 피로 판단(deskmate_hub/learning/reaction.py). 꺼져 있으면 hub 는 규칙 FSM 그대로다.
+# 처음엔 FSM 판단(α = 0)으로 시작하고, 개입·앱 KSS 응답에 대한 반응이 라벨로 쌓이면 사람마다 배운 모델이 판단을 넘겨받는다.
+# FSM 은 "지나친 개인화"만 막는 울타리: 모델이 바꿀 수 있는 폭(up_max·down_max)과 강한 증거 보호(keep_floor).
+# 숫자는 전부 시뮬 근거, 실측 전(feat/reaction-ai life_sim learn). 시뮬 v13: 24 명 × 14 일, 8~14 일차 AI vs FSM —
+# 헛개입 5.8 → 4.5 /일, 강제 휴식 44.9 → 38.1 분, 놓침 49.0 → 54.3 % (down_max 0.05 중간 실행에서 놓침 50.4 % vs FSM 51.6 %).
+#
+# Pi 4 배포판(feat/port-reaction-ai): 켬. 울타리 안에서만 FSM 점수를 보정하고, 임계값·유지 시간·게이트는 fsm.yaml 그대로 걸린다.
+# 보드에는 PyYAML 이 없어 atlas/tools/build_payload.py 가 이 파일을 config/learning.json 으로 payload 에 넣는다.
+enabled: true
+profile_id: default         # 사람마다 상태 파일 하나 — 아래 경로의 {profile_id}
+# 상태(JSON: 가중치·AdaGrad 누적·라벨 수·최근 맞힘 기록·특징 이름). null 이면 저장하지 않는다(세션이 끝나면 잊음).
+# 상대 경로 = 서비스 작업 디렉터리(보드: /data/share/usr/atlas/services/com.deskmate.hub1/, personalize 의 logs/ 와 같은 곳).
+# 라벨마다 tmp → rename 으로 쓰고, 시작할 때 읽는다. 깨졌거나 특징 이름·순서가 다르면 로그 한 줄 + FSM 에서 다시 시작.
+# IPK 재설치로 서비스 디렉터리가 지워지면 personalize policy.json 처럼 함께 사라진다.
+state_path: logs/profiles/{profile_id}/reaction.json
+# 공통 출발 모델(시뮬 여러 사람으로 학습, "common": true). 위 상태 파일이 없을 때만 읽어 첫 상태로 복사한다("공통 모델 출발").
+# 배포 단계가 이 경로에 놓는다(저장소에 넣지 않음). 없으면 FSM(α = 0)에서 출발한다.
+common_path: logs/learning/learner_common_v1.json
+local_utc_offset_hours: 9   # 하루 중 시각 특징(hour_sin·cos)을 KST 로 — 보드 시계 TZ 가 UTC 여도 시뮬(KST)과 같게. null = 기기 지역시
+
+# 모델(순수 Python 온라인 로지스틱 회귀)
+residual: true              # p = σ(logit(c_fsm) + w·x): 처음엔 FSM 그대로, 라벨이 FSM 과 다를 때만 배운다(false = 0 에서 배움)
+lr: 0.3                     # AdaGrad 학습률 — 시뮬 근거, 실측 전
+l2: 0.001
+
+# 판단 넘겨받기: c = c_fsm + clip(α·(p − c_fsm), −down_max, +up_max)
+alpha_max: 0.8              # 다 배웠을 때 모델 몫의 상한 — 시뮬 근거, 실측 전
+n_min: 8                    # 라벨이 이만큼 쌓이기 전에는 α = 0 (FSM 그대로). 공통 모델 출발이면 아래 common_alpha
+n_full: 40                  # 이만큼이면 라벨 수로 인한 제한이 풀린다
+common_alpha: 0.3           # 공통모델에서 출발하면 라벨 전에도 이만큼 쓴다. 이 사람 라벨에서 FSM 보다 못하면 걷는다
+                            # (10-24 PC 합성 공통 v0: 0.5 면 수험생 놓침 12/64 → 17/70 — 공통 데이터가 적을 때 너무 컸다)
+acc_window: 40              # 최근 라벨 이만큼으로 모델·FSM 맞힘을 비교
+acc_scale: 0.2              # 모델이 FSM 보다 이만큼 더 맞히면 몫이 최대(같으면 절반)
+fsm_hat_at: 0.5             # FSM 이 "피로"라고 본 것으로 치는 C_fatigue
+# 울타리(FSM 이 바깥 틀) — 시뮬 근거, 실측 전
+up_max: 0.25                # 모델이 FSM 보다 높일 수 있는 폭
+down_max: 0.05              # 낮출 수 있는 폭 — 졸음을 놓치는 쪽이 더 위험해 올리는 폭보다 좁게. 원본 0.10 → 보드 0.05
+                            # (10-23 learnfix: 0.25 면 놓침 30 → 49 %, v13 중간 실행 0.05 면 놓침 50.4 % vs FSM 51.6 %)
+keep_floor: 0.85            # FSM 이 이만큼 이상이면(엎드림·강한 졸음) 모델이 낮추지 못한다
+
+# 라벨(사람 반응) — 무게는 시뮬 근거, 실측 전
+kss_label: true             # 피로 기록 앱 KSS 응답(deskmate/fatigue/label, 15 분마다)을 라벨로 — FSM 상태와 상관없이 들어온다
+kss_label_at: 7             # KSS ≥ 이 값이면 1(졸림), 아니면 0
+kss_weight: 1.0
+label_max_age_s: 900        # 보드: 앱이 끊긴 동안 쌓았다 다시 보내는 옛 응답(응답 시각 기준)은 지금 특징에 붙이지 않는다 — 앱 질문 주기
+pos_weight: 2.0             # 졸림(1) 라벨에 곱하는 무게. v10·v11 시뮬에서 1 이면 AI 가 놓침을 늘려서(라벨 74 % 가 '괜찮음') v13 의 2
+missed_label: true          # 앱 질문 무응답(prompt_missed) + 자리에 있음 + 타이핑 안 함 = 1 — 졸 때는 답을 못 하니 KSS 응답만 쓰면 깨어 있을 때로 치우친다
+missed_weight: 0.5          # 안 봤을 뿐일 수도 있어 KSS 응답보다 약하게
+effect_weight: 0.0          # 아래 effect·no_effect_awake 라벨(C_fsm 이 떨어졌나로 정함 = FSM 점수로 만든 정답). 0 이면 안 씀
+effect_s: 180               # 개입 뒤 이 안에 C_fsm 이 recover_drop 이상 떨어지면 1(깨어남·자세 회복)
+recover_drop: 0.25
+resolve_s: 600              # 이 시간까지 결과가 없으면: 개입 때 타이핑 중·C_fsm < awake_c_max 였으면 0(필요 없던 개입), 아니면 버림
+awake_c_max: 0.75
+undo_s: 120                 # 자동 실행 뒤 이 안의 거절 = 되돌리기 = 0
+undo_weight: 1.0            # 되돌리기 라벨 무게 — 기기가 싫어서 끈 것과 안 피곤한 것을 못 가른다. 기기 선택을 정책이 따로 배우면 0
+
+# 확인 카드(interaction/request kind checkin_suggest "지금 피곤하세요?") — FSM 이 개입하지 않는 순간의 라벨.
+# 10-25 켬: Pi 5 앱(7bef8a0)·제품 UI 가 checkin_suggest 카드를 띄운다. 카드는 한 번에 하나 — 우선순위 FSM ACTION 카드 >
+# CO₂ vent_suggest > checkin_suggest (live.py: 개입·환기 카드가 떠 있으면 확인 카드를 안 내고, 확인 카드가 떠 있으면 환기 카드를 안 낸다).
+probe: true
+probe_band: 0.25            # 모델이 애매할 때만(|p − 0.5| < 이 값)
+probe_gap_s: 900            # 카드·개입 사이 최소 간격
+probe_max: 6                # 세션당 상한
+probe_expires_s: 120
+probe_weight: 1.0

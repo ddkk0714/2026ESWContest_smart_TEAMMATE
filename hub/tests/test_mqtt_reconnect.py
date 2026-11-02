@@ -63,8 +63,8 @@ class BrokerThread:
 
 
 def _wait(cond, timeout: float = 20.0) -> bool:
-    end = time.time() + timeout
-    while time.time() < end:
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
         if cond():
             return True
         time.sleep(0.1)

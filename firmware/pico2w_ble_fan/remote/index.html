@@ -214,7 +214,19 @@ async function connect() {
       $('status').textContent = '연결이 끊겼습니다. 다시 연결하세요.';
     });
     say('연결 중…');
-    const service = await (await device.gatt.connect()).getPrimaryService(SERVICE);
+    // 10-27 Windows Chrome: the first try failed with "GATT Server is disconnected" while
+    // the fan itself stayed connected, so try the same device again before giving up.
+    let service;
+    for (let tries = 1; ; tries++) {
+      try {
+        service = await (await device.gatt.connect()).getPrimaryService(SERVICE);
+        break;
+      } catch (e) {
+        if (tries >= 3) { device.gatt.disconnect(); throw e; }
+        say(`다시 연결 중… (${tries + 1}/3)`);
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
     command = await service.getCharacteristic(COMMAND);
     const stateChar = await service.getCharacteristic(STATE);
     stateChar.addEventListener('characteristicvaluechanged', (e) => setState(decode(e.target.value)));

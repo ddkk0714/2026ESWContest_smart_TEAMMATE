@@ -116,6 +116,8 @@ class InterventionTracker {
   DateTime? _shownAt;
   DateTime? _expiresAt;
   bool _timeoutSent = false;
+  String? _requestKey;
+  String? get requestKey => _requestKey;
 
   /// 화면에 띄울 자동 실행 알림. 없거나 사람이 확인했으면 null.
   AutoNotice? get autoNotice =>
@@ -126,9 +128,12 @@ class InterventionTracker {
     DisplayState state, {
     required bool hasPendingRequest,
     int? expiresInS,
+    String? requestKey,
     required DateTime now,
   }) {
-    final inAuto = state.fsmState.startsWith('ACTION_') && state.gate == 'auto';
+    final inAuto = state.fsmState.startsWith('ACTION_') &&
+        state.fsmState != 'ACTION_ENV' &&
+        state.gate == 'auto';
     final current = _auto;
     if (inAuto) {
       final key = '${state.fsmState}:${state.cause}';
@@ -144,7 +149,8 @@ class InterventionTracker {
     }
 
     if (hasPendingRequest) {
-      if (_shownAt == null) {
+      if (_shownAt == null || requestKey != _requestKey) {
+        _requestKey = requestKey;
         _shownAt = now;
         _expiresAt = now.add(
             expiresInS != null ? Duration(seconds: expiresInS) : defaultExpiry);

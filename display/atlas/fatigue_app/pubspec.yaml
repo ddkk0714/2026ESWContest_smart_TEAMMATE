@@ -1,0 +1,26 @@
+name: deskmate_fatigue
+description: DESKMATE 피로 데이터 수집 앱 (프로필·작업 세션·15분 KSS 응답).
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.6.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # 브로커 주소 숫자 키패드(showHubSetup)·IP 검사를 기본 앱과 같이 쓴다. 이 보드엔 화면 키보드가 없다.
+  camtest:
+    path: ../camtest
+  # Atlas toolchain Dart 3.6.2 호환 상한 — ui_env_app 과 같은 버전.
+  mqtt_client: 10.5.1
+  # 종료 때 Atlas 홈을 다시 띄운다(atlas_home.dart, ui_env_app 과 같은 방식).
+  dbus: ^0.7.12
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

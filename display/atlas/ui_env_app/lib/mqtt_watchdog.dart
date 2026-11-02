@@ -8,6 +8,16 @@
 /// 계획: docs/plan/app-connection-robustness-plan.md §4 "자동 복구 규칙".
 library;
 
+/// 이번 fetch 결과를 "새 상태를 받았다"로 칠지.
+///
+/// MQTT 의 fetch() 는 마지막으로 받은 상태를 계속 돌려준다. 성공만 세면 메시지가
+/// 끊긴 연결도 늘 신선해 보여서 이 감시가 한 번도 안 걸렸다(10-26 Pi 5). 그래서
+/// MQTT 는 허브의 seq 가 바뀐 상태만 센다 — 허브는 10 초마다 seq 를 올려 낸다.
+/// 다시 붙을 때 오는 retain 상태는 seq 가 같아 세지 않는다.
+bool isFreshState(
+        {required bool mqtt, required int? previousSequence, required int sequence}) =>
+    !mqtt || previousSequence != sequence;
+
 class MqttWatchdog {
   MqttWatchdog({
     this.staleAfter = const Duration(seconds: 15),
