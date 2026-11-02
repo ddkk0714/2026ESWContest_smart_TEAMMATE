@@ -124,6 +124,11 @@ class FanState {
     );
   }
 
+  /// V43: control/result 의 `previous` — 명령 직전 상태. hub 가 자리 비움(absent)에 끈 선풍기를 다시 앉았을 때
+  /// 그대로 되돌린다(set_power "on" + set_speed speed).
+  Map<String, Object> get asPrevious =>
+      {'power': power ? 'on' : 'off', 'speed': speed, 'level': level};
+
   /// control/result 의 actual_value — 명령한 operation 이 바꾸는 값.
   Object? actualFor(Object? operation) => switch (operation) {
         'set_power' => power ? 'on' : 'off',
@@ -179,6 +184,10 @@ class BleFanControl {
   int _generation = 0;
   bool? _lastRediscovered;
   bool? get lastRediscovered => _lastRediscovered;
+
+  /// V43: 마지막 [send] 가 쓰기 직전에 본 상태(control/result 의 previous). 연결도 못 했거나 못 읽었으면 null.
+  FanState? _stateBeforeSend;
+  FanState? get stateBeforeSend => _stateBeforeSend;
 
   Future<void> _release(GattConnection? connection) async {
     if (connection == null) return;
@@ -291,6 +300,7 @@ class BleFanControl {
     const notSent = (written: false, state: null);
     if (generation != _generation) return notSent;
     _lastRediscovered = null;
+    _stateBeforeSend = null;
     if (!configured) return notSent;
     bool expired() =>
         expiresTsMs != null &&
@@ -304,6 +314,11 @@ class BleFanControl {
       final micro = firmware == FanFirmware.micropython;
       final payload =
           micro ? microFanCommand(frame, lastOnSpeed: _lastOnSpeed) : frame;
+      // V43: 쓰기 전 상태 — 마지막으로 읽은 상태가 있으면 그것, 없으면 같은 연결로 한 번 읽는다(못 읽으면 null).
+      _stateBeforeSend ??= _lastState ?? await _readState();
+      if (generation != _generation) return notSent;
+      final writtenSpeed =
+          micro ? payload : microFanCommand(frame, lastOnSpeed: _lastOnSpeed);
       if (payload == null) {
         _lastError = UnsupportedError(
             'MicroPython 선풍기는 이 명령(${frame.first})을 받지 않습니다 — 켜기·끄기·단계·속도만');
@@ -325,7 +340,19 @@ class BleFanControl {
       if (generation != _generation) return (written: true, state: null);
       _lastOkAt = DateTime.now();
       _lastError = null;
-      return (written: true, state: await _readState());
+      final state = await _readState();
+      // V45: 11-02 Pi 5 — MicroPython 선풍기 상태를 못 읽어 자리 비움 끄기 결과에 previous 가 없었고, 복귀 때
+      // 선풍기만 다시 켜지지 않았다. 못 읽었으면 방금 쓴 속도 1바이트를 마지막 상태로 둔다(다음 쓰기의 previous).
+      // V46: 15:19 V45 실기에도 previous 가 없었다 — 서비스 목록이 비어 판(펌웨어)을 C 로 잘못 알았을 수 있어
+      // 판과 상관없이 쓴 명령의 속도(켜기·끄기·단계·속도)로 둔다. 자연풍·타이머는 상태를 바꾸지 않는다.
+      if (state == null && writtenSpeed != null && generation == _generation) {
+        final written = FanState.decodeMicro(writtenSpeed);
+        if (written != null) {
+          _lastState = written;
+          if (written.power && written.speed > 0) _lastOnSpeed = written.speed;
+        }
+      }
+      return (written: true, state: state);
     }
     return notSent;
   }

@@ -114,6 +114,42 @@ void main() {
       expect(fan.lastState?.level, 2);
     });
 
+    test('V43: turning off reports the state just before as previous',
+        () async {
+      fan.select(_fanAddress);
+      bluetooth
+        ..state = _state(power: true, speed: 60, level: 2)
+        ..onWrite = (_) => bluetooth.state = _state(power: false, speed: 0, level: 0);
+      final result = await coordinator.handleControlCommand(
+          {..._command('p1'), 'value': 'off', 'origin_state': 'ABSENT'});
+      expect(result?['status'], 'succeeded');
+      expect(result?['actual_value'], 'off');
+      expect(result?['previous'], {'power': 'on', 'speed': 60, 'level': 2});
+    });
+
+    test('V43: a known state is used as previous without another read',
+        () async {
+      fan.select(_fanAddress);
+      bluetooth.state = _state(power: true, speed: 100, level: 3);
+      await coordinator.handleControlCommand(_command('p2')); // 상태를 한 번 알게 됨
+      final reads = bluetooth.reads;
+      bluetooth.onWrite =
+          (_) => bluetooth.state = _state(power: false, speed: 0, level: 0);
+      final result = await coordinator.handleControlCommand(
+          {..._command('p3'), 'value': 'off'});
+      expect(result?['previous'], {'power': 'on', 'speed': 100, 'level': 3});
+      expect(bluetooth.reads, reads + 1); // 쓰기 뒤 확인 읽기 한 번뿐
+    });
+
+    test('V43: an unreadable fan leaves previous out', () async {
+      fan.select(_fanAddress);
+      bluetooth.state = null; // 상태 읽기가 실패한다
+      final result = await coordinator.handleControlCommand(
+          {..._command('p4'), 'value': 'off'});
+      expect(result?['status'], 'succeeded');
+      expect(result!.containsKey('previous'), isFalse);
+    });
+
     test('level change reports the level the fan is at', () async {
       fan.select(_fanAddress);
       bluetooth.state = _state(speed: 100, level: 3);
@@ -256,6 +292,33 @@ void main() {
       expect(bluetooth.characteristicIds.single, fanMicroCommandUuid);
       expect(result?['status'], 'succeeded');
       expect(result?['actual_value'], 3);
+    });
+
+    test('V45: 상태를 못 읽어도 방금 켠 속도가 다음 끄기의 previous 가 된다', () async {
+      fan.select(_fanAddress);
+      bluetooth.services = {fanMicroServiceUuid, fanMicroCommandUuid};
+      bluetooth.microState = null; // 11-02 Pi 5: 상태 특성 읽기 실패
+      final on = await coordinator.handleControlCommand(_command('m4'));
+      expect(on?['status'], 'succeeded');
+      expect(on?.containsKey('previous'), isFalse); // 처음엔 아무것도 모른다
+      final off = await coordinator.handleControlCommand(
+          {..._command('m5'), 'operation': 'set_power', 'value': 'off'});
+      expect(off?['status'], 'succeeded');
+      expect(off?['previous'], {'power': 'on', 'speed': 45, 'level': 1});
+      final again = await coordinator.handleControlCommand(
+          {..._command('m6'), 'operation': 'set_power', 'value': 'off'});
+      expect(again?['previous'], {'power': 'off', 'speed': 0, 'level': 0});
+    });
+
+    test('V46: 판을 C 로 잘못 알고 상태도 못 읽어도 켜 둔 속도가 previous 가 된다', () async {
+      fan.select(_fanAddress);
+      bluetooth.microState = null; // 서비스 목록 비고 두 상태 특성 모두 읽기 실패 → C 로 본다
+      final on = await coordinator.handleControlCommand(_command('c4'));
+      expect(fan.firmware, FanFirmware.c);
+      expect(on?['status'], 'succeeded');
+      final off = await coordinator.handleControlCommand(
+          {..._command('c5'), 'operation': 'set_power', 'value': 'off'});
+      expect(off?['previous'], {'power': 'on', 'speed': 45, 'level': 1});
     });
 
     test('서비스 목록이 비어도 상태 특성을 읽어 구분한다(C 8바이트 실패 → 1바이트)', () async {
@@ -422,7 +485,12 @@ class _FakeBluetooth implements AtlasBluetoothService {
     frames.add(List.of(value));
     serviceIds.add(serviceId);
     characteristicIds.add(characteristicId);
+    onWrite?.call(value);
   }
+
+  /// 쓰기 뒤 선풍기 상태를 바꾸는 흉내(V43 previous 시험).
+  void Function(List<int> value)? onWrite;
+  int reads = 0;
 
   @override
   Stream<List<BluetoothDeviceInfo>> scanProgressive(
@@ -438,6 +506,7 @@ class _FakeBluetooth implements AtlasBluetoothService {
     required String serviceId,
     required String characteristicId,
   }) async {
+    reads++;
     final value =
         characteristicId == fanMicroStatusUuid ? microState : state;
     if (value == null) throw StateError('read not supported');
