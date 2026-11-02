@@ -278,79 +278,87 @@ class _MemoryOutputVolume implements MusicOutputVolume {
   Future<void> dispose() => _changes.close();
 }
 
+/// V39: AudioManager 의 출력 기기·볼륨을 다루는 D-Bus 경계. 기기 경로는 객체 경로 문자열이다.
+/// 시험은 가짜로 바꿔 끼운다([AtlasOutputDeviceVolume.new] 의 `bus`).
+abstract interface class AudioDeviceBus {
+  /// 예전 판이 media 스트림 게인을 건드렸다 — 출력 기기 볼륨 하나만 기준이 되게 100 으로 둔다.
+  Future<void> neutralizeMediaStream();
+
+  /// 지금 소리가 나가는 기기(AudioManager1.ActiveOutputDevice).
+  Future<String> activeOutputDevice();
+  Future<({int min, int max})> volumeRange(String device);
+  Future<int> volume(String device);
+  Future<void> setVolume(String device, int raw);
+
+  /// 그 기기의 Volume 이 바뀌었다는 신호(받으면 다시 읽는다). 신호가 없는 환경이면 빈 스트림.
+  Stream<void> volumeChanges(String device);
+  Future<void> close();
+}
+
 /// Uses Atlas AudioManager so the UI and Bluetooth speaker buttons share the
 /// active output device volume. No Bluetooth address or PulseAudio sink ID is
 /// stored in the application.
+///
+/// V39(11-02 Pi 5): 앱 시작 때의 출력 기기(hdmi_speaker)에 묶인 채, 나중에 스피커가 붙어
+/// ActiveOutputDevice 가 bt_speaker 로 바뀌어도 슬라이더가 hdmi_speaker 만 바꿔 소리가 줄지 않았다
+/// (hdmi 20 · bt 100). 이제 0.5 초 확인과 볼륨 설정 때마다 지금 기기를 다시 읽고, 바뀌었으면 그 기기로
+/// 갈아 끼운 뒤 **그 기기의 현재 볼륨을 슬라이더에 보여 준다**(사용자가 정한 값을 새 기기에 덮어쓰지 않는다 —
+/// 스피커 버튼으로 맞춘 볼륨이 갑자기 바뀌지 않게).
 class AtlasOutputDeviceVolume implements MusicOutputVolume {
-  static const _busName = 'com.atlas.AudioManager1';
-  static const _managerPath = '/com/atlas/AudioManager1';
-  static const _managerInterface = 'com.atlas.AudioManager1';
-  static const _deviceInterface = 'com.atlas.AudioManager1.Device';
-  static const _streamInterface = 'com.atlas.AudioManager1.Stream';
-  static const _mediaPath = '/com/atlas/AudioManager1/Stream/media';
+  AtlasOutputDeviceVolume(
+      {AudioDeviceBus? bus,
+      this.pollEvery = const Duration(milliseconds: 500)})
+      : _bus = bus ?? DbusAudioDeviceBus();
 
-  AtlasOutputDeviceVolume() : _client = DBusClient.system();
+  final AudioDeviceBus _bus;
 
-  final DBusClient _client;
+  /// Bluetooth AVRCP changes are reflected in Device.Volume, but this Atlas
+  /// release does not emit PropertiesChanged for every speaker-button press.
+  final Duration pollEvery;
   final _changes = StreamController<double>.broadcast();
-  DBusRemoteObject? _device;
-  StreamSubscription<DBusPropertiesChangedSignal>? _deviceSubscription;
+  String? _device;
+  StreamSubscription<void>? _deviceSubscription;
   Timer? _pollTimer;
   double? _lastVolume;
   bool _reading = false;
+  bool _closed = false;
   int _minimum = 0;
   int _maximum = 100;
+
+  /// 지금 볼륨을 맞추는 기기(객체 경로). 시작 전이면 null.
+  String? get device => _device;
 
   @override
   Stream<double> get changes => _changes.stream;
 
-  DBusRemoteObject _remote(DBusObjectPath path) => DBusRemoteObject(
-        _client,
-        name: _busName,
-        path: path,
-      );
-
   @override
   Future<double> initialize() async {
-    // Earlier builds controlled the media stream gain. Keep it neutral so the
-    // active output device is the single source of truth.
-    await _remote(DBusObjectPath(_mediaPath)).setProperty(
-      _streamInterface,
-      'Volume',
-      const DBusUint32(100),
-    );
-
-    final manager = _remote(DBusObjectPath(_managerPath));
-    final path = (await manager.getProperty(
-      _managerInterface,
-      'ActiveOutputDevice',
-      signature: DBusSignature('o'),
-    ))
-        .asObjectPath();
-    final device = _remote(path);
-    _device = device;
-    _minimum = (await device.getProperty(
-      _deviceInterface,
-      'VolumeMin',
-      signature: DBusSignature('u'),
-    ))
-        .asUint32();
-    _maximum = (await device.getProperty(
-      _deviceInterface,
-      'VolumeMax',
-      signature: DBusSignature('u'),
-    ))
-        .asUint32();
-    _deviceSubscription = device.propertiesChanged.listen(_onDeviceChanged);
+    await _bus.neutralizeMediaStream();
+    await _bind(await _bus.activeOutputDevice());
     final volume = await _readVolume();
     _lastVolume = volume;
-    // Bluetooth AVRCP changes are reflected in Device.Volume, but this Atlas
-    // release does not emit PropertiesChanged for every speaker-button press.
-    _pollTimer = Timer.periodic(
-      const Duration(milliseconds: 500),
-      (_) => unawaited(_refreshVolume()),
-    );
+    _pollTimer = Timer.periodic(pollEvery, (_) => unawaited(_refreshVolume()));
     return volume;
+  }
+
+  /// [device] 로 갈아 끼운다: 범위를 읽고 그 기기의 변경 신호만 듣는다.
+  Future<void> _bind(String device) async {
+    final range = await _bus.volumeRange(device);
+    await _deviceSubscription?.cancel();
+    _device = device;
+    _minimum = range.min;
+    _maximum = range.max;
+    _deviceSubscription = _bus.volumeChanges(device).listen(
+        (_) => unawaited(_refreshVolume()),
+        onError: (Object _, StackTrace __) {});
+  }
+
+  /// 지금 소리가 나가는 기기가 바뀌었으면 갈아 끼운다. 바뀌었으면 true.
+  Future<bool> _followActiveDevice() async {
+    final active = await _bus.activeOutputDevice();
+    if (active == _device) return false;
+    await _bind(active);
+    return true;
   }
 
   double _normalize(int value) {
@@ -358,30 +366,13 @@ class AtlasOutputDeviceVolume implements MusicOutputVolume {
     return ((value - _minimum) / (_maximum - _minimum)).clamp(0.0, 1.0);
   }
 
-  Future<double> _readVolume() async {
-    final value = (await _device!.getProperty(
-      _deviceInterface,
-      'Volume',
-      signature: DBusSignature('u'),
-    ))
-        .asUint32();
-    return _normalize(value);
-  }
-
-  void _onDeviceChanged(DBusPropertiesChangedSignal signal) {
-    if (signal.propertiesInterface != _deviceInterface) return;
-    final volume = signal.changedProperties['Volume'];
-    if (volume != null) {
-      _publish(_normalize(volume.asUint32()));
-    } else if (signal.invalidatedProperties.contains('Volume')) {
-      unawaited(_refreshVolume());
-    }
-  }
+  Future<double> _readVolume() async => _normalize(await _bus.volume(_device!));
 
   Future<void> _refreshVolume() async {
-    if (_reading) return;
+    if (_reading || _closed || _device == null) return;
     _reading = true;
     try {
+      await _followActiveDevice();
       _publish(await _readVolume());
     } catch (_) {
       // Keep the last known value while the output device is unavailable.
@@ -398,22 +389,79 @@ class AtlasOutputDeviceVolume implements MusicOutputVolume {
 
   @override
   Future<void> setVolume(double value) async {
+    // 마지막 확인 뒤에 스피커가 붙었을 수 있다 — 바꾸기 전에 지금 기기를 따른다
+    try {
+      await _followActiveDevice();
+    } catch (_) {}
     final raw = (_minimum + ((_maximum - _minimum) * value)).round();
-    await _device!.callMethod(
-      _deviceInterface,
-      'SetVolume',
-      [DBusUint32(raw)],
-    );
+    await _bus.setVolume(_device!, raw);
     _publish(value);
   }
 
   @override
   Future<void> dispose() async {
+    _closed = true;
     _pollTimer?.cancel();
     await _deviceSubscription?.cancel();
     await _changes.close();
-    await _client.close();
+    await _bus.close();
   }
+}
+
+/// [AudioDeviceBus] 의 실제 Atlas D-Bus 구현(com.atlas.AudioManager1).
+class DbusAudioDeviceBus implements AudioDeviceBus {
+  DbusAudioDeviceBus({DBusClient? client})
+      : _client = client ?? DBusClient.system();
+
+  static const _busName = 'com.atlas.AudioManager1';
+  static const _managerPath = '/com/atlas/AudioManager1';
+  static const _managerInterface = 'com.atlas.AudioManager1';
+  static const _deviceInterface = 'com.atlas.AudioManager1.Device';
+  static const _streamInterface = 'com.atlas.AudioManager1.Stream';
+  static const _mediaPath = '/com/atlas/AudioManager1/Stream/media';
+
+  final DBusClient _client;
+
+  DBusRemoteObject _remote(String path) =>
+      DBusRemoteObject(_client, name: _busName, path: DBusObjectPath(path));
+
+  Future<int> _uint(String path, String name) async => (await _remote(path)
+          .getProperty(_deviceInterface, name, signature: DBusSignature('u')))
+      .asUint32();
+
+  @override
+  Future<void> neutralizeMediaStream() => _remote(_mediaPath)
+      .setProperty(_streamInterface, 'Volume', const DBusUint32(100));
+
+  @override
+  Future<String> activeOutputDevice() async => (await _remote(_managerPath)
+          .getProperty(_managerInterface, 'ActiveOutputDevice',
+              signature: DBusSignature('o')))
+      .asObjectPath()
+      .value;
+
+  @override
+  Future<({int min, int max})> volumeRange(String device) async =>
+      (min: await _uint(device, 'VolumeMin'), max: await _uint(device, 'VolumeMax'));
+
+  @override
+  Future<int> volume(String device) => _uint(device, 'Volume');
+
+  @override
+  Future<void> setVolume(String device, int raw) => _remote(device)
+      .callMethod(_deviceInterface, 'SetVolume', [DBusUint32(raw)]);
+
+  @override
+  Stream<void> volumeChanges(String device) => _remote(device)
+      .propertiesChanged
+      .where((s) =>
+          s.propertiesInterface == _deviceInterface &&
+          (s.changedProperties.containsKey('Volume') ||
+              s.invalidatedProperties.contains('Volume')))
+      .map((_) {});
+
+  @override
+  Future<void> close() => _client.close();
 }
 
 /// Requests only the Atlas user-consent permission needed by the local MP3
