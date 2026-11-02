@@ -265,6 +265,7 @@ class LiveHub:
             load_learning_config() if load_learning_config is not None else {})
         # 프로파일의 learning: 절(keep_floor 등) — 시연에서 공통모델 학습기(α 0.3)가 점수를 0.05 낮춰 첫 깨우기가 늦어지던 것(PC 리허설 10-25)
         self.learning_cfg = apply_section(self.learning_cfg, "learning", self.profile or "")
+        self._learning_on_cfg = bool(self.learning_cfg.get("enabled"))     # 개인화 버튼으로 다시 켤 때의 원래 값
         if self.personalize_off:
             self.learning_cfg = dict(self.learning_cfg, enabled=False)
         # 프로필 id 는 identity.active_profile_id 한 곳에서 — 개인화 정책·반응 학습 상태 파일이 같은 사람을 가리킨다
@@ -317,6 +318,11 @@ class LiveHub:
         for feedback, received in self.cache.pop_feedback_events():
             if feedback.get("kind") == "personalization":
                 self.privacy.handle(feedback)
+                continue
+            if feedback.get("kind") == "personalize_switch":
+                # devview "개인화 켜기·끄기" 버튼(11-02) — 재시작 없이. 허브가 다시 켜지면 hub.env DESKMATE_PERSONALIZE 로 돌아간다
+                if isinstance(feedback.get("on"), bool):
+                    self.set_personalize(feedback["on"])
                 continue
             if feedback.get("kind") == "misjudge":
                 # PC devview "오판" 버튼(11-02) — 판정이 틀렸다는 표시. 개인화 학습에서만 뺀다(FSM·제어·ESM 아님)
@@ -465,6 +471,7 @@ class LiveHub:
                 specs_arm = getattr(decision, "arm", None) if specs else None
             if self.personalize_recorder.last_view is not None:
                 summary["personalize"] = self.personalize_recorder.last_view
+            summary["personalize_switch"] = "off" if self.personalize_off else "on"   # devview 개인화 버튼(11-02)
         if self.control is not None:
             # 제어 에피소드: ACTION_ENV 는 control.yaml 기본 명령으로, 다른 ACTION_* 는 정책이 기기 arm(조명 등)을
             # 골랐을 때만(specs 비어 있지 않음). ACTION_POSTURE 는 정책 결정이 아예 없을 때(specs None: 정책 꺼짐·fallback·
@@ -602,6 +609,24 @@ class LiveHub:
             print(f"[control] 자리 비움 {now - self._absent_off_since:.0f}s → 기기 끄기", file=self.out, flush=True)
             self._absent_off_ep = self.control.on_enter_action("ABSENT", "absent", GateMode.AUTO, now,
                                                                specs=list(cfg["commands"]))
+
+    def set_personalize(self, on: bool) -> None:
+        """개인화(개입 선택 정책 + 카드 응답 반응 학습)를 지금 켜거나 끈다. DESKMATE_PERSONALIZE=off 와 같은 뜻을 재시작 없이."""
+        rec = self.personalize_recorder
+        changed = rec.set_policy_enabled(on) if rec is not None else False
+        if on and self.learner is None and self._learning_on_cfg and ReactionLearner is not None:
+            self.learner = ReactionLearner(dict(self.learning_cfg, enabled=True, profile_id=self.profile_id), self.fsm_cfg,
+                                           state_path=self._learning_state_path,
+                                           on_log=lambda m: print(m, file=self.out, flush=True))
+            self.engine.score_adjust = self.learner.adjust
+            changed = True
+        elif not on and self.learner is not None:
+            self.learner = None
+            self.engine.score_adjust = None
+            changed = True
+        self.personalize_off = not on
+        print(f"[personalize] 개인화 {'켜기' if on else '끄기'} — 개입 선택 정책·반응 학습"
+              + ("" if changed else "(이미 그 상태)"), file=self.out, flush=True)
 
     def _follow_active_profile(self) -> None:
         """프로필 메시지로 사람이 바뀌었으면(personalize/record.py 사람별 정책) 반응 학습도 그 사람의 상태 파일로 갈아 끼운다.

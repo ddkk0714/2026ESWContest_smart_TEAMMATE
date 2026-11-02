@@ -105,3 +105,25 @@ def test_personalize_off_env_switch(tmp_path, monkeypatch):
     hub2 = LiveHub(SensorCache(), out=io.StringIO(), personalize_cfg=pcfg,
                    personalize_log_path=str(tmp_path / "p2.jsonl"))
     assert hub2.personalize_recorder.policy is not None
+
+
+def test_personalize_switch_at_runtime(tmp_path, monkeypatch):
+    """devview 버튼(feedback/user kind personalize_switch) — 재시작 없이 켜고 끈다."""
+    import io
+
+    from deskmate_hub.ingest import SensorCache
+    from deskmate_hub.live import LiveHub
+    from deskmate_hub.personalize import load_personalize_config
+
+    monkeypatch.setenv("DESKMATE_PERSONALIZE", "off")
+    pcfg = dict(load_personalize_config(), enabled=True, log_dir=str(tmp_path))
+    cache = SensorCache()
+    hub = LiveHub(cache, out=io.StringIO(), personalize_cfg=pcfg, personalize_log_path=str(tmp_path / "p.jsonl"))
+    assert hub.personalize_recorder.policy is None
+    cache.put_feedback({"kind": "personalize_switch", "on": True})
+    hub.tick_once(1000.0)
+    assert hub.personalize_recorder.policy is not None and not hub.personalize_off
+    assert hub.engine.score_adjust is not None or not hub._learning_on_cfg
+    cache.put_feedback({"kind": "personalize_switch", "on": False})
+    hub.tick_once(1010.0)
+    assert hub.personalize_recorder.policy is None and hub.learner is None and hub.engine.score_adjust is None

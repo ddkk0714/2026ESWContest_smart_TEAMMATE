@@ -541,6 +541,27 @@ class EpisodeRecorder:
         spec = self.policy.arms.get(decision.arm)
         return arm_commands(spec.device if spec else None)
 
+    def set_policy_enabled(self, on: bool) -> bool:
+        """개인화 켜기·끄기(11-02, devview 버튼 → feedback/user kind personalize_switch). 끄면 지금 사람 정책을 저장하고 내려
+        놓는다 — 결정은 FSM 기본(fallback)·학습 없음, 기록은 계속. 켜면 지금 사람의 policy.json 을 다시 읽고 첫 설정 프로필을
+        얹는다. 바뀌었으면 True."""
+        if not on:
+            if self.policy is None:
+                return False
+            self._save_policy()
+            self.policy = None
+            return True
+        if self.policy is not None:
+            return False
+        from .policy import InterventionPolicy
+
+        self.policy_path = os.path.join(self.profiles_root, self.active_profile_id, "policy.json")
+        self.policy = InterventionPolicy.load(self.policy_path, self.cfg)
+        prof, self.user_profile = self.user_profile, None
+        if prof:
+            self._apply_profile(prof, now=None, save=False)
+        return True
+
     def _save_policy(self) -> None:
         if self.policy is not None and self.policy_path:
             try:
