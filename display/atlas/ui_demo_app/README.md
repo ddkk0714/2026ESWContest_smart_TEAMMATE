@@ -1,4 +1,11 @@
-# DESKMATE V41
+# DESKMATE V42
+
+> **V42(0.42.0, 2026-11-02)** = V41 + **한 가지**: 개발자 화면 "제어 진행" 탭의 결과를 "사람이 바른 자세로 돌아오면 성공"으로.
+> hub control_log(feat/profile-rank-prior 544a103)가 자세 원인 명령에 `effect` 를 붙인다 — improved(바른 자세로 돌아옴,
+> effect_after_sec) · none(120 s 안에 못 돌아옴, 자세 그대로). effect=improved 면 기기 결과(시간 초과·실패)와 상관없이 배지가 "성공"이고
+> 그 아래 "바른 자세로 돌아옴 (n초 뒤)", 기기가 timeout·failed 였으면 "· 기기 확인 응답은 못 받음". effect=none 은 결과를 바꾸지 않고
+> "자세 그대로" 메모. 응답 없음의 대기 시간(ms)은 보이지 않는다. MQTT 추정 경로(hub 기록 없음)는 effect 가 없어 그대로.
+> 노트북 devview(feat/devview-names 03c8cdf `_outcome`)와 같은 규칙. `lib/developer/control_progress.dart`(outcome·effectKo).
 
 > **V41(0.41.0, 2026-11-02)** = V40 + **한 가지**: 램프 쓰기가 실패해도 살아 있는 링크는 끊지 않는다.
 > V40 실기(11-02 13:35 Pi 5): 시작 복원으로 램프가 붙은 직후 국면 조명 쓰기가 같은 칩 스피커(A2DP)가 붙는 순간 실패했고,

@@ -64,7 +64,31 @@ class ControlRecord {
     return v == null || (v is String && v.isEmpty) ? null : v.toString();
   }
 
+  /// 기기 결과(hub 레코드의 status 그대로 — 시간 초과·실패 등).
   String get status => _s('status') ?? '-';
+
+  /// V42: hub 가 판정한 효과(11-02 hub control_log effect). improved = 사람이 바른 자세로 돌아옴, none = 자세 그대로.
+  /// MQTT 추정 경로에는 없다.
+  String? get effect => _s('effect');
+
+  /// 표의 결과 — 사람이 바른 자세로 돌아왔으면(effect improved) 기기 응답과 상관없이 성공(11-02 사용자 기준,
+  /// devview `_outcome` 과 같은 규칙). 아니면 기기 결과.
+  String get outcome => effect == 'improved' ? 'succeeded' : status;
+
+  /// 결과 아래 메모 한 줄: 효과와, 효과는 있었는데 기기 확인이 없었는지. 없으면 null.
+  String? get effectKo {
+    if (effect == 'improved') {
+      final after = fields['effect_after_sec'];
+      final text = (_s('effect_text') ?? '바른 자세로 돌아옴') +
+          (after is num ? ' (${after.round()}초 뒤)' : '');
+      return const {'timeout', 'failed'}.contains(status)
+          ? '$text · 기기 확인 응답은 못 받음'
+          : text;
+    }
+    if (effect == 'none') return _s('effect_text') ?? '자세 그대로';
+    return null;
+  }
+
   String? get errorCode => _s('error_code');
   bool get isUndo => fields['undo'] == true;
 
@@ -92,8 +116,8 @@ class ControlRecord {
     return '${_s('target_id') ?? '?'} ${_s('operation') ?? '?'}$shown';
   }
 
-  /// 결과 한 마디(배지).
-  String get statusKo => switch (status) {
+  /// 결과 한 마디(배지). [outcome] 기준 — 바른 자세로 돌아왔으면 '성공'.
+  String get statusKo => switch (outcome) {
         'succeeded' => '성공',
         'failed' => '실패${errorCode == null ? '' : ' · $errorCode'}',
         'timeout' => '시간 초과',

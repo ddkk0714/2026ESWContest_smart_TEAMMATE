@@ -118,8 +118,10 @@ class _ControlProgressPageState extends State<ControlProgressPage> {
 
   Widget _row(ControlRecord r) {
     final open = _open.contains(r.commandId);
-    final latency = r.latencyMs;
+    // 응답 없음(timeout)의 latency 는 '포기할 때까지 기다린 시간'이라 보이지 않는다(devview 와 같게)
+    final latency = r.status == 'timeout' ? null : r.latencyMs;
     final undo = r.undoKo;
+    final effect = r.effectKo;
     return InkWell(
         key: ValueKey('progress-row-${r.commandId}'),
         onTap: () => setState(() =>
@@ -151,7 +153,7 @@ class _ControlProgressPageState extends State<ControlProgressPage> {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: _mono.copyWith(
-                                color: _statusColor(r.status),
+                                color: _statusColor(r.outcome),
                                 fontWeight: FontWeight.w700))),
                     SizedBox(
                         width: 64,
@@ -165,6 +167,17 @@ class _ControlProgressPageState extends State<ControlProgressPage> {
                             overflow: TextOverflow.ellipsis,
                             style: _mono)),
                   ]),
+                  // V42: 사람이 바른 자세로 돌아왔는지(hub effect) — 결과 판정의 근거
+                  if (effect != null)
+                    Padding(
+                        padding: const EdgeInsets.only(left: 64, top: 2),
+                        child: Text(effect,
+                            key: ValueKey('progress-effect-${r.commandId}'),
+                            style: _mono.copyWith(
+                                fontSize: 11,
+                                color: r.effect == 'improved'
+                                    ? const Color(0xFF1E7A3C)
+                                    : const Color(0xFF6B6B6B)))),
                   if (open)
                     Padding(
                         padding: const EdgeInsets.only(left: 64, top: 4),
