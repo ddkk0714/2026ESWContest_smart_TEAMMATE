@@ -1,6 +1,7 @@
 """collector 엔트리포인트.
 
   python -m collector --broker <pi4-ip>
+  python -m collector --broker auto      # 같은 Wi-Fi 에서 Pi 4 hub 브로커를 스스로 찾는다
 브로커 미지정/미연결 시에도 로컬 로깅으로 단독 동작한다. 종료는 Ctrl+C.
 """
 from __future__ import annotations
@@ -10,7 +11,8 @@ import signal
 import time
 
 from .capture import InputCapture
-from .config import TARGETS, Config
+from .config import AUTO, TARGETS, Config
+from .discover import AutoBroker
 from .features import extract
 from .publisher import FeaturePublisher
 
@@ -19,7 +21,7 @@ def _parse_args():
     p = argparse.ArgumentParser(prog="collector", description="DESKMATE 키스트로크 수집기")
     p.add_argument("--target", choices=sorted(TARGETS),
                    help="Pi 4 브로커 별칭: hotspot=172.20.10.3 · lan=172.16.34.199 (--broker 가 있으면 그쪽이 이긴다)")
-    p.add_argument("--broker", help="MQTT 브로커 호스트(Pi4 IP). 미지정 시 localhost")
+    p.add_argument("--broker", help="MQTT 브로커 호스트(Pi4 IP). 'auto' 면 같은 Wi-Fi 에서 hub 를 찾는다. 미지정 시 localhost")
     p.add_argument("--port", type=int, help="브로커 포트(기본 1883)")
     p.add_argument("--node", help="노드 식별자(기본 pc-collector)")
     p.add_argument("--window", type=int, help="특징 윈도 길이(초, 기본 60)")
@@ -40,15 +42,19 @@ def main():
 
     cap = InputCapture()
     pub = FeaturePublisher(cfg)
+    auto = AutoBroker(cfg.broker_port, TARGETS.values()) if cfg.broker_host == AUTO else None
     running = {"on": True}
     signal.signal(signal.SIGINT, lambda *_: running.__setitem__("on", False))
 
     cap.start()
-    pub.start()
+    if auto is None:
+        pub.start()          # auto 는 찾은 뒤 AutoBroker 가 retarget 으로 시작한다
     try:
         while running["on"]:
             time.sleep(cfg.publish_period_s)
             now = time.monotonic()
+            if auto is not None:
+                auto.tick(pub, now)
             since = now - cfg.window_s
             feats = extract(
                 cap.snapshot(since_t=since),

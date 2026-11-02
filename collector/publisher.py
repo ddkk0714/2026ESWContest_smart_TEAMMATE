@@ -25,16 +25,19 @@ class FeaturePublisher:
 
         os.makedirs(cfg.log_dir, exist_ok=True)
         self._log_path = os.path.join(cfg.log_dir, "keystroke.jsonl")
+        self._c = self._make_client()
 
-        self._c = mqtt.Client(
+    def _make_client(self):
+        c = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
-            client_id=f"{cfg.node}-{int(time.time())}",
+            client_id=f"{self.cfg.node}-{int(time.time())}",
         )
-        self._c.on_connect = self._on_connect
-        self._c.on_disconnect = self._on_disconnect
-        self._c.reconnect_delay_set(min_delay=1, max_delay=30)
-        self._c.will_set(cfg.health_topic, json.dumps({"node": cfg.node, "status": "offline"}),
-                         qos=1, retain=True)
+        c.on_connect = self._on_connect
+        c.on_disconnect = self._on_disconnect
+        c.reconnect_delay_set(min_delay=1, max_delay=30)
+        c.will_set(self.cfg.health_topic, json.dumps({"node": self.cfg.node, "status": "offline"}),
+                   qos=1, retain=True)
+        return c
 
     def _on_connect(self, client, userdata, flags, reason_code, properties):
         if reason_code == 0:
@@ -61,6 +64,19 @@ class FeaturePublisher:
             self._c.loop_start()
         except Exception as e:
             print(f"[mqtt] start error ({e}); 로컬 로깅으로 계속")
+
+    def retarget(self, host: str):
+        """다른 브로커로 옮긴다(`--broker auto` 가 Pi 4 를 새로 찾았을 때). 옛 연결은 정리한다."""
+        old = self._c
+        self.connected = False
+        try:
+            old.loop_stop()
+            old.disconnect()
+        except Exception:
+            pass
+        self.cfg.broker_host = host
+        self._c = self._make_client()
+        self.start()
 
     def publish(self, payload: dict):
         self._sequence += 1
