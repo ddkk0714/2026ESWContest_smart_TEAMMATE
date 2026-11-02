@@ -137,21 +137,6 @@ python hub/atlas-tof/pc/devview/devview.py --pi4 172.20.10.3 --hub-profile demo-
 - **사용자가 직접 바꾼 밝기**는 5 초마다 읽어 타임라인에 "사용자(또는 Windows)가 노트북 화면 밝기를 바꿈 69 → 40 % — hub 에 보고하지 않음"
   으로만 적는다(자동 밝기·전원 설정이 바꾼 것과 구별할 수 없어 manual_adjust 로 보내지 않음).
 - 화면 '가상 기기' 위에 상태(원래·지금 밝기·볼륨), 타임라인에 "노트북 화면 밝기 43 % → 69 % (무드등 …)".
-- **깨우기 = 노트북에서 틀어 둔 음악을 키운다** (블루투스 스피커 대신, `--wake-volume 80` 기본 · `--wake-max-min 5`):
-  - 깨우기로 보는 것: 자동 자세 개입(state/phase ACTION_POSTURE 의 음악, control/cmd 무드등 `adjust_brightness`·`set_brightness`
-    origin ACTION_POSTURE 또는 cause posture), 자세·휴식(origin REST)에서 온 `speak`·`chime`.
-  - 노트북 음량을 **max(지금, 80 %)** 로 올린다. 첫 설정 소리 '작게'여도 올린다('끔'이면 안 올림). 타임라인 "깨우기: 노트북 음량 27 % → 80 % (자세 개입)".
-  - 깨우는 동안 다시 와도 쌓지 않는다(올리기 전 음량은 처음 것, 시한만 5분 연장). 첫 설정 음량으로 내리지도 않는다.
-  - 음악 위에 winsound 소리를 얹지 않는다("깨우는 중 — 알림음 생략"). 말하기(TTS)는 그대로 하고, TTS 가 실패해도 삑 소리는 생략.
-  - FSM 이 회복·집중·대기·종료로 가거나(깨우는 동안 다른 상태를 한 번 본 뒤) 5분이 지나면 올리기 전 음량으로 —
-    "깨우기 끝: 노트북 음량 80 % → 27 % (회복)". 깨우기가 아닌 알림음은 지금 음량으로 울린다. 밝기는 그대로, 끝낼 때 둘 다 원래 값으로.
-  - `--wake-volume 0` 이면 예전처럼 첫 설정 소리 구간대로.
-
-### 자리 비움 — 점수 없음
-
-hub 가 state/phase 에 `scores_valid: false` 를 싣거나 `sensor_summary.present` 가 false 면(아무도 없음) c_fatigue·c_focus 는 점수가 아니다
-(예전엔 환경 신호만으로 재정규화돼 1.0, 새 hub 는 0.0). 판정 패널·영상 모드는 숫자 대신 "자리 비움 — 점수 없음",
-무드등 시점 패널은 그 tick 을 15 분 그래프와 유지 판정에서 빼고 한 줄 결론에 "자리 비움 — 점수 없음 — N 초째" 를 적는다.
 
 ### 휴식(REST) 알림
 
@@ -167,14 +152,12 @@ hub 가 REST 에 들어가면 가상 기기 화면 위와 영상 모드에 큰 �
 - 구버전 hub(rest_notice 없음): state/phase 가 REST 로 들어가면 배너만, 라벨 "hub 알림 없음 (구버전)", 시간은 hub 설정 `rest_min_sec`. 말하지 않는다.
 - 시험: `--fake --fake-scenario rest`(새 동작) · `--fake-scenario rest_old`(구버전).
 
-### 자동 안내·알림음 (hub ad76ff0)
+### 자동 안내·알림음 (hub 예정)
 
-- 기기 없는 arm 을 AUTO 로 고르면 hub 가 보내는 안내 카드: `kind` posture|break|env_suggest + `auto: true`, options `[dismiss]`,
-  `expires_in_s` 180, arm·arm_label·channel(display|sound|voice)·explanation·text. 답하지 않는 띠(가상 기기 화면 위, 시한 뒤 사라짐) + 팝업,
-  닫기 = dismiss. 제안 카드·제어 결론으로는 안 본다.
-- `operation: chime`(value `{pattern: single|double|triple, volume: low|mid|high}`, gate `notice`) → 가상 스피커 알림음.
-  `--act-laptop` 이면 노트북이 볼륨을 잠깐 그 값(low 20 % · mid 50 % · high 80 %)으로 바꿔 그 패턴으로 울리고 원래 볼륨으로 되돌린다.
-  posture_voice arm 은 `speak` 로 와서 노트북이 말한다.
+- 기기 없는 arm 을 AUTO 로 고르면 hub 가 보내는 안내 카드(`auto: true`, options `[dismiss]`, arm·arm_label·channel·explanation·text)는
+  답하지 않는 띠로(가상 기기 화면 위, 시한 `expires_in_s` 또는 60 s 뒤 사라짐) + 팝업. 제안 카드·제어 결론으로는 안 본다.
+- `operation: chime`(value `{pattern}`, gate `notice`) → 가상 스피커 알림음, `--act-laptop` 이면 노트북 알림음(패턴 alert·voice·soft·triple,
+  모르는 이름은 한 음). posture_voice arm 은 `speak` 로 와서 노트북이 말한다.
 
 ### 강제 종료에도 원래 밝기·볼륨
 
@@ -203,9 +186,6 @@ natural 모드는 세기가 출렁인다. 켠 이유(원인·자동/제안·arm�
   hub 가 센 자세(min_confidence·라벨 하한 → posture_delta) · 주원인 = 자세(가중치 × δ, 추정) · 게이트(conf_auto 자동 / conf_suggest 카드) · 무드등 쿨다운(cooldown_sec).
 - hub 는 유지 타이머를 state/phase 에 싣지 않는다. 그래서 '남은 초'는 state/phase tick(10 s)으로 engine.py 규칙(단계 진입 tick 은 판정 안 함,
   지난 hold 초 기록 중 frac 이상)을 앞으로 굴려 **추정**한다. 가짜 hub 로 재 보면 엎드림을 처음 본 tick 부터 예측 시각이 실제 명령 시각과 같다.
-- hub ad76ff0 부터 자세 개입에서 실제로 무엇을 할지는 **개입 선택 개인화(밴딧)가 고른 arm** 이다 — 무드등은 `wake_light` 일 때만, 정책 결정이 없으면 기본 무드등.
-  그래서 한 줄 결론은 "자세 개입 — 개인화가 고름(무드등·음성 안내·알림음·자세 카드 중, 결정 없으면 무드등 +60 %)"이고, 결정이 보이면(personalize.arm,
-  state/phase `arm_notice.last`) "개인화가 고른 것: 알림음(무드등 아님)". `arm_notice.last` 는 "개인화가 고른 것: 알림음 (sound) → 카드, 알림음"으로 그래프·목록에.
 - 그래프: 지난 15 분 C_fatigue(흰 선), 의심·확정·회복 선, FSM 상태 배경, 세로선(💡 무드등 명령 · 자세 카드 · 피로 확정 · 개입 자동/제안).
 - 신호별 몫: C_fatigue = Σ w·δ / Σw 를 자세(라벨·끄덕임·졸음 플래그 중 큰 것, 추정)·키 입력·환경·경과·호흡으로, 학습기 c_fsm → c_adj(= 화면 값).
   hub 는 자세 말고는 δ 를 싣지 않아서 나머지는 'c_fsm − 자세 몫'과 각 신호의 상한(w/Σw), 단서(env_flags·타이핑)로만 보인다.

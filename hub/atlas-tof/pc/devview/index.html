@@ -548,9 +548,7 @@ function renderSvc(p) {
   // hub 하한(demo-b: 졸음 0.80 · 엎드림 0.99) 아래면 화면엔 떠도 hub 는 세지 않는다 — 그 사실을 라벨 옆에
   const floor = p.floors ? p.floors[p.posture] : undefined;
   $("svcLabel").innerHTML = esc(p.valid ? p.label : `${p.label} (입력 없음)`) +
-    (p.hub_note ? ` <span class="hubIgnore">${esc(p.hub_note)}</span>` : floor != null && p.valid ? ` <span class="hubCount">hub 셈 (≥ ${floor.toFixed(2)})</span>` : "") +
-    (p.away_masked ? ` <span class="hubCount">자리 비움 가림 (아랫줄 &lt; 70 cm)</span>` : "") +
-    (p.away_forced ? ` <span class="hubCount">아랫줄 전부 ≥ 70 cm → 자리 비움</span>` : "");
+    (p.hub_note ? ` <span class="hubIgnore">${esc(p.hub_note)}</span>` : floor != null && p.valid ? ` <span class="hubCount">hub 셈 (≥ ${floor.toFixed(2)})</span>` : "");
   const r = p.rules;
   $("svcRules").innerHTML = r ? (r.model_raw ? `<div class="raw">모델 원 출력(게이트·규칙 전): ${esc(r.model_raw)}</div>` : "") +
     r.lines.map(x => `<div class="${/켜짐 →|적용 중|막음/.test(x) ? "on" : ""}">${esc(x)}</div>`).join("") : "";
@@ -601,7 +599,6 @@ function renderJudge(ph, p, profile) {
   const meter = (v, t, b, color) => { $(t).textContent = f2(v); $(b).style.width = v == null ? "0" : (v * 100).toFixed(1) + "%"; $(b).style.background = color; };
   meter(ph.fatigue, "fatT", "fatB", ph.fatigue >= 0.7 ? "var(--bad)" : ph.fatigue >= 0.45 ? "var(--warn)" : "var(--ok)");
   meter(ph.focus, "focT", "focB", "var(--accent)");
-  if (ph.away) { $("fatT").textContent = "자리 비움 — 점수 없음"; $("focT").textContent = "자리 비움 — 점수 없음"; }
   $("judgeKv").innerHTML = kv([
     ["원인·게이트", `${esc(ph.cause)} · ${esc(ph.gate)}` + (ph.reasons !== "-" ? ` <span class="empty">· ${esc(ph.reasons)}</span>` : "")],
     ["자세(hub)", esc(ph.hub_posture)],
@@ -692,7 +689,7 @@ function renderVideo(d) {
     (d.posture && d.posture.hub_note ? ` · ${d.posture.hub_note}` : "");
   $("vChips").innerHTML = v.chips.map(c => `<span>${esc(c)}</span>`).join("");
   const f = v.fatigue;
-  $("vFatT").textContent = v.away ? "자리 비움 — 점수 없음" : f == null ? "-" : f.toFixed(2);
+  $("vFatT").textContent = f == null ? "-" : f.toFixed(2);
   $("vFatB").style.width = f == null ? "0" : (f * 100).toFixed(1) + "%";
   $("vFatB").style.background = f >= 0.7 ? "var(--bad)" : f >= 0.45 ? "var(--warn)" : "var(--ok)";
   $("vEnv").textContent = v.env;
@@ -869,12 +866,11 @@ function trigChart(tr) {
   });
   for (let v = 0; v <= 1.001; v += 0.5) g += `<text x="4" y="${y(v) + 4}" fill="#5d6578" font-size="11">${v.toFixed(1)}</text>`;
   if (sr.length) g += `<polyline fill="none" stroke="#f3f5f8" stroke-width="2.2" points="${sr.filter(p => p.at >= now - span).map(p => `${x(p.at).toFixed(1)},${y(p.c).toFixed(1)}`).join(" ")}"/>`;
-  const MC = {lamp: "#4cc38a", card: "#f5b93a", confirm: "#f06a6a", action_auto: "#4cc38a", action_suggest: "#f5b93a", action_none: "#9aa3b5",
-    arm: "#8f9cff", prior: "#5d6578"};
+  const MC = {lamp: "#4cc38a", card: "#f5b93a", confirm: "#f06a6a", action_auto: "#4cc38a", action_suggest: "#f5b93a", action_none: "#9aa3b5"};
   (tr.marks || []).forEach(m => {
     const xx = x(m.at).toFixed(1), col = MC[m.kind] || "#8f9cff";
     g += `<line x1="${xx}" x2="${xx}" y1="${T}" y2="${H - B}" stroke="${col}" stroke-width="${m.kind === "lamp" ? 3 : 1.5}"/>` +
-      `<text x="${xx}" y="${H - 6}" fill="${col}" font-size="11" text-anchor="middle">${m.kind === "lamp" ? "💡" : m.kind === "card" ? "카드" : m.kind === "confirm" ? "확정" : m.kind === "arm" ? "개인화" : m.kind === "prior" ? "첫설정" : "개입"}</text>`;
+      `<text x="${xx}" y="${H - 6}" fill="${col}" font-size="11" text-anchor="middle">${m.kind === "lamp" ? "💡" : m.kind === "card" ? "카드" : m.kind === "confirm" ? "확정" : "개입"}</text>`;
   });
   const mm = sec => sec >= 60 ? `-${(sec / 60).toFixed(sec % 60 ? 1 : 0)}분` : `-${Math.round(sec)}초`;
   [[span, mm(span)], [span / 2, mm(span / 2)], [0, "지금"]].forEach(([ago, lab]) =>
@@ -903,10 +899,8 @@ function renderTrigger(el, tr) {
     `<div class="chk">${(tr.checks || []).map(c => `<div class="r"><span class="${c.ok ? "y" : "n"}">${c.ok ? "✓" : "·"}</span><span>${esc(c.name)}</span><span class="v">${esc(c.value)}</span>` +
       (c.progress != null ? `<div class="pb"><i style="width:${(c.progress * 100).toFixed(0)}%"></i></div>` : "") + `</div>`).join("")}</div>` +
     (tr.breakdown ? breakdownHtml(tr.breakdown) : "") +
-    `<div>${trigChart(tr)}<div class="lg">흰 선 = C_fatigue · 배경 = FSM(초록 집중·노랑 의심·빨강 피로/개입) · 세로선: 💡 무드등 명령 · 카드 · 확정 · 개입(자동/제안) · 개인화가 고른 것</div></div>` +
+    `<div>${trigChart(tr)}<div class="lg">흰 선 = C_fatigue · 배경 = FSM(초록 집중·노랑 의심·빨강 피로/개입) · 세로선: 💡 무드등 명령 · 카드 · 확정 · 개입(자동/제안)</div></div>` +
     (tr.prior ? `<div class="prior">개입 선택 개인화 기준(첫 설정): ${esc(tr.prior)}</div>` : "") +
-    (tr.last_arm && tr.last_arm.text ? `<div class="prior">${esc(tr.last_arm.text)}</div>` : "") +
-    (tr.arm_counts ? `<div class="src">hub 개인화 안내 집계: ${esc(tr.arm_counts)}</div>` : "") +
     `<div class="src">설정: ${esc(tr.source)} · 프로파일 ${esc(tr.profile || "-")} · hub 는 유지 타이머를 싣지 않아 '남은 초'는 state/phase tick 으로 추정(engine.py 규칙)</div>`;
 }
 
@@ -978,10 +972,7 @@ function renderVirtual(d) {
   renderFan($("fanV"), v.fan); renderFan($("fanF"), v.fan);
   const L = d.laptop;
   $("lapStat").innerHTML = L && L.enabled
-    ? `💻 노트북 대역 <span class="on">켜짐</span> · 화면 <b>${L.cur.brightness ?? "-"} %</b> · 볼륨 <b>${L.cur.volume == null ? "-" : Math.round(L.cur.volume * 100) + " %"}</b> · 원래 ${L.orig.brightness ?? "-"} % / ${L.orig.volume == null ? "-" : Math.round(L.orig.volume * 100) + " %"}` +
-      (L.wake ? ` · <span class="on">깨우는 중</span> ${esc(L.wake.why)} (올리기 전 ${L.wake.before == null ? "-" : Math.round(L.wake.before * 100) + " %"}, ${L.wake.left_s} s 뒤 되돌림)`
-       : L.wake_volume != null ? ` · 깨우기 ${Math.round(L.wake_volume * 100)} %` : "") +
-      ` · ${esc(L.result_policy)}${L.error ? ` · <span class="bad">${esc(L.error)}</span>` : ""}`
+    ? `💻 노트북 대역 <span class="on">켜짐</span> · 화면 <b>${L.cur.brightness ?? "-"} %</b> · 볼륨 <b>${L.cur.volume == null ? "-" : Math.round(L.cur.volume * 100) + " %"}</b> · 원래 ${L.orig.brightness ?? "-"} % / ${L.orig.volume == null ? "-" : Math.round(L.orig.volume * 100) + " %"} · ${esc(L.result_policy)}${L.error ? ` · <span class="bad">${esc(L.error)}</span>` : ""}`
     : `💻 노트북 대역 <span class="off">꺼짐</span>(--act-laptop 으로 켬)`;
   $("pPrior").textContent = P.prior ? `hub 가 반영한 첫 설정(개입 선택 개인화 기준): ${P.prior}` : "";
   $("vFake2").style.display = d.mode === "fake" ? "inline" : "none";
