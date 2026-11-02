@@ -75,6 +75,10 @@ rest_notice:
 absent_off:
   enabled: true
   after_sec: 60
+  # 다시 앉아 재실이 이만큼 끊김 없이 이어져야 끄기 직전 상태로 되돌린다. 11-02 15:21 실기: 빈자리인데 재실이 10~20 s
+  # 튀어(15:21:15 한 tick, 15:21:35~45 두 tick — 빈 의자를 ToF 모델은 바로 앉음·뒤로 젖힘으로 보고 mmWave 가 잠깐 잡음)
+  # 10 s 기준으로 무드등·음악이 빈자리에서 켜졌다. 그날 튄 재실은 모두 2 tick(20 s) 이하.
+  restore_after_sec: 30
   commands:
     - {target_id: vent_fan, operation: set_power, value: "off", ignore_cooldown: true}
     - {target_id: desk_lamp, operation: set_power, value: "off", ignore_cooldown: true}

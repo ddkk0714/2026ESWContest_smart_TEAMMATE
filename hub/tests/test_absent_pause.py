@@ -143,3 +143,48 @@ def test_music_off_already_off_is_success():
         d.on_result({"command_id": c["command_id"], "status": "succeeded", "actual_value": state, "previous": state})
     done = {repr(c.value): c.status for c in d.episode.commands}
     assert done == {repr({"on": False}): "succeeded", repr({"on": True, "volume": 0.4}): "failed"}
+
+
+def test_restore_needs_presence_for_restore_after_sec(tmp_path):
+    """11-02 15:21 실기: 빈자리에서 재실이 20 s 튀어 무드등·음악이 켜졌다 — 30 s 끊김 없는 재실에만 되돌린다."""
+    import copy
+    import io
+
+    from deskmate_hub.ingest import SensorCache
+    from deskmate_hub.live import LiveHub
+    from deskmate_hub.personalize import load_personalize_config
+    from test_ingest_mapping import env, mm
+    from test_posture_actions import CFG as CONTROL_CFG
+
+    cfg = copy.deepcopy(CONTROL_CFG)
+    cfg["adapter"] = "mqtt"
+    cfg["absent_off"] = {"enabled": True, "after_sec": 60, "restore_after_sec": 30, "commands": [
+        {"target_id": "desk_lamp", "operation": "set_power", "value": "off", "ignore_cooldown": True}]}
+    cache, cmds = SensorCache(), []
+    pcfg = dict(load_personalize_config(), enabled=False, log_dir=str(tmp_path))
+    hub = LiveHub(cache, control_cfg=cfg, publish_control=cmds.append, out=io.StringIO(),
+                  personalize_cfg=pcfg, personalize_log_path=str(tmp_path / "p.jsonl"))
+
+    def ticks(n, present):
+        nonlocal t
+        for _ in range(n):
+            cache.put("mmwave", mm(t, present=present, level=40 if present else 0))
+            cache.put("env", env(t, co2=700)); hub.tick_once(t)
+            for c in cmds:                                               # 앱처럼 곧바로 결과(끄기 직전 밝기)를 준다
+                if c.get("cause") == "absent" and c["command_id"] not in answered:
+                    answered.add(c["command_id"])
+                    hub.control.on_result({"command_id": c["command_id"], "status": "succeeded",
+                                           "actual_value": "off", "previous": 110}, t)
+            t += 10
+
+    t, answered = 0.0, set()
+    ticks(3, True)
+    ticks(8, False)
+    off = [c for c in cmds if c.get("cause") == "absent"]
+    assert len(off) == 1
+    ticks(3, True)                                                       # 20 s 튄 재실 — 되돌리지 않는다
+    ticks(1, False)
+    assert not [c for c in cmds if c.get("cause") == "return"]
+    ticks(4, True)                                                       # 30 s 이어진 재실 — 되돌린다
+    back = [(c["target_id"], c["operation"], c["value"]) for c in cmds if c.get("cause") == "return"]
+    assert back == [("desk_lamp", "set_brightness", 110)]
