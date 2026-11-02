@@ -294,6 +294,13 @@ def resolve_presence(mm: Sample | None, tof: Sample | None, cfg: dict[str, Any])
     tof_present = bool(tof.data.get("present", False)) if tof else False
     if str(pcfg.get("source", "mmwave")) == "either":
         return mm_present or tof_present, "either"
+    # 11-02 실기: 방을 나가 있었는데 C1001 이 119 cm 의 정지 물체를 사람으로 잡아(desk_max_cm 130 안) 재실로 봤다. 그동안 ToF 는
+    # 격자 아랫줄이 전부 멀어 away_forced(빈 의자) 였다. ToF 가 빈 의자라고 하고 mmWave 도 책상 가까이(tof_away_mm_min_cm 안)가
+    # 아니면 부재 — 등을 기대 ToF 가 멀어져도 mmWave 가 가까우면 재실로 남는다.
+    if pcfg.get("tof_away_overrides") and tof is not None and tof.data.get("away_forced"):
+        dist = mm.data.get("distance_cm") if mm is not None and mm_present else None
+        if dist is None or float(dist) >= float(pcfg.get("tof_away_mm_min_cm", 90)):
+            return False, "tof_away"
     mm = _usable_mmwave(mm)
     if mm is not None:
         at_desk = _mmwave_at_desk(mm, pcfg)

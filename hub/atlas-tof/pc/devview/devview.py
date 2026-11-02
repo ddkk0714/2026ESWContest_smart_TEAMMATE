@@ -3526,6 +3526,7 @@ def main(argv: list[str] | None = None) -> None:
                     help=f"가짜 각본을 S 초부터(0–{FAKE_PERIOD:.0f}, 예: 26 = 졸음→무드등 직전)")
     ap.add_argument("--names-file", default=os.path.join(os.environ.get("LOCALAPPDATA", HERE), "deskmate-devview", "profile_names.json"),
                     metavar="PATH", help="profile_id → 부르는 이름(이 노트북에만, MQTT 로 안 보냄)")
+    ap.add_argument("--bind", choices=("127.0.0.1", "0.0.0.0"), default="127.0.0.1")
     args = ap.parse_args(argv)
 
     store = Store()
@@ -3576,7 +3577,7 @@ def main(argv: list[str] | None = None) -> None:
                   " (Ctrl+C 로 끝내면 되돌림)" + (f" — {store.laptop.error}" if store.laptop.error else ""))
     for t in threads:
         t.start()
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(store))
+    server = ThreadingHTTPServer((args.bind, args.port), make_handler(store))
     print(f"개발자 화면: http://127.0.0.1:{args.port}/  ({'가짜 각본' if args.fake else 'Pi 4 ' + args.pi4})  Ctrl+C 로 끝")
     try:
         server.serve_forever()

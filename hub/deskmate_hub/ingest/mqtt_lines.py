@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .cache import Sample, SensorCache
-from .protocol import TOPIC_FATIGUE_LABEL, TOPIC_FEEDBACK, TOPIC_PROFILE, parse_sensor_message
+from .protocol import TOPIC_DEMO_MODE, TOPIC_FATIGUE_LABEL, TOPIC_FEEDBACK, TOPIC_PROFILE, parse_sensor_message
 
 TOPIC_CONTROL_CMD = "deskmate/control/cmd"
 TOPIC_CONTROL_RESULT = "deskmate/control/result"
@@ -23,9 +23,20 @@ LINE_PREFIX = "MQTT\t"
 
 
 def route_mqtt_message(cache: SensorCache, topic: str, payload: bytes, now: float | None = None) -> str | None:
-    """토픽별로 cache 에 반영하고 종류("mmwave"/"env"/"keystroke"/"feedback"/"control_result"/"fatigue_label"/"user_profile")를
+    """토픽별로 cache 에 반영하고 종류("mmwave"/"env"/"keystroke"/"feedback"/"control_result"/"fatigue_label"/"user_profile"/"demo_mode")를
     돌려준다. 계약 밖이면 None."""
     now = time.time() if now is None else now
+    if topic == TOPIC_DEMO_MODE:
+        # 화면 '빠른 시연' 버튼(demo_mode.py). envelope 이든 맨 data 든 받는다 — speed 검사는 DemoSpeed 가 한다
+        try:
+            body = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        data = body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), dict) else body
+        if not isinstance(data, dict):
+            return None
+        cache.put("demo_mode", Sample(received=now, ts=now, seq=None, data=dict(data)))
+        return "demo_mode"
     if topic == TOPIC_PROFILE:
         # 첫 설정 프로필(retain). 검증·필드 거르기는 personalize/onboarding.parse_profile 이 한다 — 여기선 envelope 만 벗긴다
         try:

@@ -417,13 +417,29 @@ def test_wake_success_with_activity_and_with_fatigue_drop():
         done += w.observe(t, label, 0.84, active)
     (watch, reward), = done
     assert watch.result == "success" and reward == 1.0
-    assert watch.detail["to_awake_sec"] == 20.0 and watch.detail["hold_sec"] == 20.0
+    # 11-02: 바른 자세(upright)는 success_hold_sec(5 s)만 이어져도 성공 — 1030 관측에서 이미 10 s
+    assert watch.detail["to_awake_sec"] == 20.0 and watch.detail["hold_sec"] == 10.0 and watch.detail["rule"] == "upright"
     assert WakeTracker.text_ko(watch) == "깨우기 성공 (엎드림→바른 자세 20 s)"
     w.start("e2", 2000.0, "drowsy", 0.85)                               # 활동 없이 C_fatigue 하락
     done = []
     for t in (2010.0, 2020.0, 2030.0):
         done += w.observe(t, "lean_forward", 0.70, False)
     assert done and done[0][0].result == "success" and done[0][0].detail["fatigue_drop"] == pytest.approx(0.15)
+
+
+def test_wake_upright_alone_is_success():
+    """11-02 사용자 기준: 바른 자세로 돌아가면 활동·피로 하락 없이도 피드백 성공(success_labels·success_hold_sec)."""
+    w = _wake()
+    w.start("e1", 1000.0, "face_down", 0.85)
+    done = []
+    for t, label in [(1002.0, "face_down"), (1004.0, "upright"), (1007.0, "upright"), (1009.0, "upright")]:
+        done += w.observe(t, label, 0.85, False)
+    (watch, reward), = done
+    assert watch.result == "success" and reward == 1.0
+    assert watch.detail["rule"] == "upright" and watch.detail["to_awake_sec"] == 4.0 and watch.detail["hold_sec"] == 5.0
+    off = _wake(success_labels=[])                                      # 표를 비우면 예전 규칙
+    off.start("e2", 1000.0, "face_down", 0.85)
+    assert not [d for t in (1004.0, 1010.0, 1030.0) for d in off.observe(t, "upright", 0.85, False)]
 
 
 def test_wake_failure_cases():
@@ -440,8 +456,8 @@ def test_wake_failure_cases():
     w.start("e2", 2000.0, "drowsy", 0.85)
     done = []
     for t in range(2010, 2131, 10):
-        done += w.observe(float(t), "upright", 0.84, False)
-    assert done[0][0].result == "fail"
+        done += w.observe(float(t), "lean_forward", 0.84, False)
+    assert done[0][0].result == "fail"          # 바른 자세(upright)가 아닌 깬 자세는 예전처럼 활동·피로 하락이 있어야 성공
     # 깼다가 다시 엎드림(20 s 못 버팀) → 실패
     w.start("e3", 3000.0, "face_down", 0.85)
     done = []
@@ -588,7 +604,8 @@ def test_profile_mapping_moves_wake_light():
     p.apply_user_profile({"light_pref": "low"})
     assert _mean(p, "wake_light") == pytest.approx(base - 0.3)
     p.apply_user_profile({"light_pref": "high", "focus_help": ["light"]})
-    assert _mean(p, "wake_light") == pytest.approx(base + 0.4)
+    rank1 = p.cfg["onboarding"]["focus_help_rank_weights"][0]       # 도움 1순위 배율(11-01)
+    assert _mean(p, "wake_light") == pytest.approx(base + 0.2 + rank1 * 0.2)
 
 
 def _drive_drowsy(hub, cache, *, until):

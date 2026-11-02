@@ -10,6 +10,8 @@ TARGETS = {
     "hotspot": "172.20.10.3",
     "lan": "172.16.34.199",
 }
+# --broker auto(또는 DESKMATE_BROKER=auto): 같은 Wi-Fi 에서 hub 브로커를 찾는다(discover.py, 11-02). 위 별칭은 먼저 시도할 후보.
+AUTO = "auto"
 
 
 @dataclass

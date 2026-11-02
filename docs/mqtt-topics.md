@@ -37,6 +37,8 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 | `deskmate/sensor/weather` | Pi 5 앱 | hub(personalize) | 30 분 + 시작 시 1회(retain, QoS 0) | 바깥 날씨·계절. FSM 입력이 아니라 개입 선택(환기 vs 공기청정기, 겨울 짧은 환기)에만 쓴다 |
 | `deskmate/state/phase` | hub | display, control | 10 s 주기(retain) | 추론 결과 + 신뢰도. `python -m deskmate_hub run` 이 발행 |
 | `deskmate/display/message` | Node-RED/debug | display | 이벤트 | Pi 5 화면에 일회성 텍스트 표시 |
+| `deskmate/display/audio` | Pi 5 앱(V32) | hub | 바뀔 때·연결 직후(retain, QoS 1) | 지금 음악 상태 `{on, volume, track, track_id, profile_id, last_command_id}`. 이름 없음 |
+| `deskmate/profile/user` | Pi 5 앱 · devview | hub, Pi 5 앱(V34) | 바뀔 때·연결 직후(retain, QoS 1) | 첫 설정(이름 없음, `profile_id` 난수). V34 부터 앱도 다른 노드가 보낸 같은 id 를 받아 저장 |
 | `deskmate/session/report` | hub | display | 10 s 주기 스냅샷(retain) + 세션 종료 시 | 화면용 세션 요약. 개별 행동 로그 없음 |
 | `deskmate/interaction/request` | hub | display | 이벤트 | 불확실한 판정의 사용자 확인 질문 |
 | `deskmate/control/cmd` | hub | control 어댑터, Pi 5 앱(조명) | 이벤트, QoS 1, retain 없음 | 기기 제어 명령 (`control_command`, data-spec §10) |
@@ -44,6 +46,7 @@ broker는 Raspberry Pi 4 에 두고, 페이로드는 JSON (UTF-8) 을 사용한�
 | `deskmate/feedback/user` | display | hub | 이벤트 | 사용자 수락 · 정정 · 조명 직접 조절 보고(`kind: manual_adjust`) |
 | `deskmate/profile/user` | Pi 5 앱 | hub(personalize) | 온보딩·설정 변경 시(retain, QoS 1) | 첫 설정 프로필. FSM 입력이 아니라 개입 선택의 기준(prior)·취침 시각에만 쓴다 |
 | `deskmate/fatigue/label` | Pi 5 피로 기록 앱(`display/atlas/fatigue_app`) | PC `tools/fatigue_logger.py`, hub | 이벤트, QoS 1 | 피로 데이터 수집: 작업 시작·끝, 15분 KSS 응답. hub 는 피로 점수 문맥·프로필 보정에만 씀, FSM 입력 아님 ([fatigue-dataset.md](fatigue-dataset.md)) |
+| `deskmate/demo/mode` | Pi 5 앱 개발자 화면·devview | hub | 버튼을 누를 때(QoS 1, **retain 없음**) | 빠른 시연 켜기·끄기 `{"speed": "fast"\|"normal"}`. `demo_fast.enabled` 가 true 인 설정에서만 반영(기본값상 demo-* 프로파일) |
 | `deskmate/health/<node>` | 전 장치 | hub | LWT/retain | `{ts,node,status:online|offline,reconnects}`. hub 는 `deskmate/health/hub` |
 
 ## 페이로드 예시
@@ -220,6 +223,11 @@ Pi 5의 **PC 키스트로크** 탭은 앱에 설정된 동일 MQTT 브로커에�
       "flight_mean_ms": 148.2, "flight_std_ms": 63.5,
       "idle_ratio": 0.18, "correction_rate": 0.07,
       "valid": true
+    },
+    "demo_mode": {              // 빠른 시연 상태(2026-10-31). 아래 deskmate/demo/mode 참고
+      "speed": "fast", "enabled": true,
+      "since": 1769000000.0, "remaining_s": 1790,
+      "timers": {"fatigue_elevated_hold_sec": 0.0, "fatigue_confirm_hold_sec": 0.0}
     }
   }
   }
@@ -253,6 +261,29 @@ envelope를 사용하므로 최종 전송 어댑터를 바꿔도 display 모델�
 collector 규약 추가분(`typing_active` · `flight_cv` · `mouse_event_rate`)은 오면 쓰고 없으면
 비운다. `flight_cv`가 없으면 display가 `flight_std_ms / flight_mean_ms`로 만들어 쓴다.
 
+`sensor_summary.demo_mode` 는 빠른 시연 상태다(hub `demo_mode.py`, 2026-10-31). 항상 `speed`(`normal`|`fast`)와
+`enabled`(이 hub 설정에서 fast 를 받아 주는지 = `demo_fast.enabled`)를 싣는다. `fast` 일 때만 `since`(켠 시각, hub 시계),
+`timers`(지금 덮어쓴 FSM 타이머 값), `remaining_s`(자동 해제까지 남은 초, `max_on_sec` 이 0 이면 생략)를 더한다.
+화면은 `speed` 가 `fast` 면 "빠른 시연" 배지를 띄운다.
+
+### `deskmate/demo/mode`
+
+```json
+{ "schema_version": "1.0", "ts": 1769000000.0, "node": "atlas-display", "data": { "speed": "fast" } }
+```
+
+빠른 시연 켜기·끄기(2026-10-31). 판정 경로는 그대로 두고 `fsm.yaml demo_fast.timers` 에 적은 FSM 유지 타이머만
+실행 중에 바꾼다(기본: `fatigue_elevated_hold_sec`·`fatigue_confirm_hold_sec` 를 0 으로 → 엎드림부터 무드등 명령까지 약 60 s → 약 30 s).
+
+- **payload**: `{"speed": "fast"|"normal"}`. 공통 envelope 이든 `data` 만이든 받는다. 다른 값은 로그만 남기고 무시한다.
+- **기본값·재시작**: hub 는 항상 `normal` 로 시작한다. 재시작하면 `fast` 였어도 `normal` 이다.
+- **적용 범위**: 허용 여부는 프로파일 이름이 아니라 최종 설정의 `demo_fast.enabled` 로 정한다. `fsm.yaml` 기본은 `false`(운영),
+  저장소 기본 설정에서는 demo-a·demo-b·demo-b-study 프로파일의 `fsm:` 절이 `true` 로 덮는다. `false` 면 `fast` 를 받아도 무시한다.
+- **자동 복원**: `fast` 로 둔 채 잊어도 `demo_fast.max_on_sec`(기본 1800 s = 30 분) 뒤 `normal` 로 돌아간다. `normal` 로 돌아가면
+  켜기 전 타이머 값으로 되돌린다.
+- **retain 없음**: 버튼 한 번이 한 번의 전환이다. retain 하면 hub 재시작 뒤 지난 `fast` 가 되살아나므로 발행 측은 retain 을 켜지 않는다.
+- 지금 상태는 이 토픽이 아니라 `state/phase` 의 `sensor_summary.demo_mode` 로 읽는다.
+
 ### `deskmate/display/message`
 
 Node-RED에서 Pi 5 화면을 확인할 때 쓰는 일회성 안내 문구다. 키 내용·센서 원본·자격증명은
@@ -265,6 +296,61 @@ Node-RED에서 Pi 5 화면을 확인할 때 쓰는 일회성 안내 문구다. �
   "data": { "text": "잠시 스트레칭해 볼까요?" }
 }
 ```
+
+### `deskmate/display/audio`
+
+V32(0.32.0, 2026-11-01). Pi 5 앱이 지금 음악 상태를 hub 에 알린다 — hub 의 "집중이 잘 된 환경 기억"(사람별)이 쓴다.
+
+```json
+{
+  "schema_version": "1.0", "ts": 1793530000.0, "node": "pi5-ui", "seq": 4,
+  "data": {
+    "on": true,                      // 재생 중
+    "volume": 0.45,                  // 출력 장치 볼륨 0~1, 소수 둘째 자리
+    "track": 2,                      // 앱 재생 목록 순번(0~5)
+    "track_id": "satie_gymnopedie_no1",   // 앱에 든 음원 파일 이름(곡 제목 아님)
+    "profile_id": "p266eb9c0c514d18c",    // 지금 프로필(profile/user 와 같은 난수). 없으면 생략
+    "last_command_id": "296582093851"     // 마지막으로 실행한 hub 음악 명령. 없으면 생략
+  }
+}
+```
+
+- **retain**, QoS 1. 바뀔 때마다(볼륨 슬라이더처럼 잇따르면 0.4 s 모아 마지막 값 한 번), MQTT 연결 직후, 프로필이 바뀔 때 보낸다.
+  곡만 바꾼 것은 1 s 안에 따라간다. 직전과 같은 상태는 다시 보내지 않는다.
+- 이름·곡 제목·스피커 주소는 싣지 않는다. hub 는 `last_command_id` 이후의 변화를 사용자가 직접 바꾼 것으로 볼 수 있다.
+
+**hub → 앱 음악 명령** (`control/cmd`, V32): `target_id: "music"`, `operation: "set_music"`,
+`value: {"on": true|false, "volume": 0~1(선택), "track": 0~5(선택)}`. 다른 대상과 같은 문을 거친다(자동 피드백 스위치 · gate
+auto|suggest|undo|notice · `requires_confirmation` false · 만료 · retain 무시 · `command_id` 중복 무시). 결과(`control/result`):
+
+```json
+{ "command_id": "296582093851", "status": "succeeded",
+  "actual_value": {"on": true, "volume": 0.8, "track": 2, "track_id": "satie_gymnopedie_no1"},
+  "previous":     {"on": false, "volume": 0.3, "track": 0, "track_id": "deskmate_test_music"},
+  "actual":       {"on": true, "volume": 0.8, "track": 2, "track_id": "satie_gymnopedie_no1"},
+  "completed_ts_ms": 1793530001200 }
+```
+
+- **되돌리기**: hub 는 결과의 `previous` 를 그대로 `value` 로 실어 `gate: "undo"` 의 `set_music` 을 보낸다(램프 `undo: previous` 와 같은 뜻).
+- 실패 `error_code`: `unsupported_operation_or_value`(on 없음·볼륨 0~1 밖·없는 곡·다른 operation) · `speaker_not_connected`
+  (블루투스 스피커를 골랐는데 A2DP 가 끊김 — 켜지 않는다) · `audio_failed`(재생기 오류, `previous`·현재 `actual_value` 동봉) ·
+  `state_mismatch` · `feedback_disabled` · `invalid_command` · `expired`.
+- 명령을 실행한 국면(phase) 동안은 앱 자체의 졸음 음악 켜기·회복 때 끄기가 hub 의 결정을 덮지 않는다. 국면이 바뀌면 원래대로.
+
+### `deskmate/profile/user` 주고받기 (V34)
+
+V34(0.34.0, 2026-11-01). 첫 설정 프로필은 Pi 5 앱(`node: pi5-ui`)과 devview(`node: laptop-devview`)가 **같은 사람이면 같은
+`profile_id`** 로 보낸다(devview 는 hub 의 `active_profile_id` 와 같은 retain 프로필을 "지금 사람"으로 불러와 고친다).
+Pi 5 앱은 이 토픽을 구독해, `node` 가 자기가 아니고 `profile_id` 가 저장된 프로필 중 하나면 그 프로필을 고쳐 `profiles.json` 에 남긴다.
+
+- 모르는 `profile_id` 는 무시한다(새 프로필을 만들지 않는다). retain 으로 온 것도 받는다.
+- 거꾸로 옮기기: `light_pref` low·mid·high → 밝기 0.3·0.55·0.85(조명 켬), `sound_pref` off → 음악 끔 · low·mid·high → 볼륨
+  0.2·0.5·0.85(소리 종류가 "무음"이면 기본 "백색 소음"으로), `wind_pref` off → 선풍기 끔 · low·mid·high → 켬 + 1·2·3단,
+  `sleep_hours`·`bedtime`·`placement` 그대로, `focus_help` 순서 → 도움 순서(light 조명 · wind 선풍기 · sound 알림, voice·break 는
+  앱 항목이 없어 버리고 빠진 항목은 원래 순서로 뒤에), `age_band` 는 지금 나이가 그 대역이면 그대로 아니면 대역 가운데(15·25·35·45·55).
+  **받은 대역이 지금 값의 대역과 같으면 값을 바꾸지 않는다**(사람이 맞춘 밝기·볼륨을 지킨다).
+- 고친 뒤 앱이 보낼 값이 받은 값과 같으면 다시 보내지 않는다. 다르면(앱에 없는 항목을 버린 경우 등) **지금 고른 사람일 때만**
+  앱의 값으로 한 번 다시 보낸다 — 다른 사람 프로필을 보내면 hub 의 지금 사람이 바뀌기 때문이다.
 
 ### `deskmate/session/report`
 
@@ -446,6 +532,7 @@ ESM·제어 승인에 쓰지 않고, 허브가 밝힌 뒤 `implicit.dim_window_m
 - `sensor/weather` 는 QoS 0 + retain (주기가 길어 재시작 시 마지막 값을 바로 받는다. stale 판정은 hub 가 `fetched_at` 으로)
 - `state/phase` · `display/message` · `session/report` · `interaction/request` · `control/cmd` · `feedback/user`: QoS 1
 - `state/phase` 는 retain 을 켜서 디스플레이 재시작 시 즉시 현재 상태를 받는다
+- `demo/mode` 는 QoS 1, retain 을 끈다(재시작하면 normal 로 시작해야 한다).
 - `display/message` 는 retain 을 끈다. 이전 문구가 재시작 뒤 다시 표시되거나 broker에 남지 않게 한다.
 - 노드는 재연결 시 지수 백오프(1s → 최대 30s)
 
@@ -493,6 +580,16 @@ ESM·제어 승인에 쓰지 않고, 허브가 밝힌 뒤 `implicit.dim_window_m
 실행 중인 학습 job이 있고 실제 상태가 IDLE/END 밖이면 status=paused로 표시한다. 입력·판단·제어는 유지하고, 다시 유휴 상태가 되면 training으로 재개한다. Pi 5는 이 snapshot을 표시하며 연결 끊김이나 동의 철회 때 이전 개인 모델 상태를 현재처럼 표시하지 않는다. 서비스 시작 self-check는 stderr 진단만 사용하며 MQTT 명령·개인 표본을 새로 만들지 않는다.
 
 ondevice.yaml이 활성화된 경우에만 `state/phase.data.sensor_summary.ondevice_learning`을 추가한다. `execution: local`, `decision_source: fsm`, `head_source: common|personal`, `samples`, `sessions`, `training_step`(job이 없으면 null)을 제공한다. status는 disabled, unavailable, awaiting_consent, awaiting_portable_model, collecting, training, paused, accepted, rejected, storage_error, head_load_failed이다. embedding·개인 head·표본·파일 경로는 MQTT로 보내지 않는다. 기본 비활성에서는 기존 출력과 FSM을 유지한다. [실행·학습 계약](ondevice-personalization.md)을 따른다.
+
+## Pi5 알림 및 기기 복구 응답 (PR83 0.1.10 통합)
+
+기존 envelope/topic을 유지한다. display는 control/cmd target_id=speaker의 operation=speak 또는 chime을 실행한다. 기존 gate 외 notice를 허용하며 feedback_enabled, requires_confirmation=false, expires_ts_ms 검사를 동일하게 적용한다. speak.value는 text와 선택 lang(기본 ko), chime.value는 pattern(single/double/triple, 과거 alert/warning/urgent는 triple)과 volume(low/mid/high)을 사용한다. 음량 배율은 각각 0.35/0.65/1.0이며 미지정은 1.0이다.
+
+TTS 성공 결과는 succeeded와 actual_value.mode=tts다. TTS를 사용할 수 없으면 알림음/화면 문구로 대신하고 failed, error_code=tts_unavailable, fallback=chime_text 또는 text를 보고한다. 실제 TTS 성공으로 보고하지 않는다. chime 재생 실패는 audio_failed다. speaker 명령도 command_id 중복 실행을 막는다.
+
+interaction/request의 kind=rest_notice, auto=true, 또는 options=[dismiss]는 닫기 전용 알림으로 처리한다. text/explanation, arm_label, rest_min_sec, expires_in_s를 사용하며 retain으로 온 지난 알림은 표시하지 않는다. 사용자가 닫으면 feedback/user에 request_id, verdict=dismiss, response_ms를 보낸다. 수락·거절 제안 카드와 자동 실행 승인을 만들지 않는다.
+
+램프/선풍기 control/result에는 검색을 시도한 경우 recovery=rediscovered|not_found가 추가된다. 찾지 못하면 error_code=device_not_found, 명령이 만료됐으면 expired다. 검색하지 않은 경우 recovery를 생략하며 성공/실패 status의 의미는 유지한다.
 
 ### 환경 제안/결과의 표시 및 수락 바인딩 (2026-10-19)
 
