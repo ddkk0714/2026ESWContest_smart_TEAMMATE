@@ -373,6 +373,8 @@ class LiveHub:
                 frame, result, prev_state, view, now, retry=bool(getattr(self.engine, "_retry", False)),
                 env_flags=summary.get("env_flags") or (), fsm_action=request_kind[1] if request_kind else None)
             self._follow_active_profile()
+            if self.control_log is not None:                     # 자세 원인 명령의 효과(바른 자세로 돌아왔나, 11-02)
+                self.control_log.observe_posture(self.personalize_recorder.last_posture_label, now)
             decision = self.personalize_recorder.last_decision
             if decision is not None:
                 if decision.delivered_gate == "suggest" and result.gate is GateMode.AUTO:

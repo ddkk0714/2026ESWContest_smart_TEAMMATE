@@ -309,3 +309,34 @@ def test_live_rest_entry_logs_speaker(tmp_path):
     hub.tick_once(t + 1)
     speaks = [r for r in hub.control_log.recent() if r["operation"] == "speak"]
     assert len(speaks) == 1 and speaks[0]["source"] == "rest_notice" and speaks[0]["status"] == "succeeded"
+
+
+# ── 효과: 사람이 바른 자세로 돌아오면 성공(11-02) ─────────────────────────────
+
+def test_posture_command_effect_improved_even_without_device_result(tmp_path):
+    d, log, sent, sunk, t = make(tmp_path)
+    d.on_enter_action("ACTION_POSTURE", "posture", GateMode.AUTO, arm="wake_light")
+    cid = sent[0]["command_id"]
+    for dt, label in [(1, "face_down"), (3, "upright"), (5, "upright"), (8, "upright")]:
+        t["now"] = 1000.0 + dt
+        log.observe_posture(label)
+    t["now"] = 1020.0
+    d.tick(1020.0)                                                   # 기기 결과 없음 → 시간 초과
+    [rec] = log.recent()
+    assert rec["command_id"] == cid and rec["status"] == "timeout"   # 기기 확인은 못 받았지만
+    assert rec["effect"] == "improved" and rec["effect_text"] == "바른 자세로 돌아옴"   # 사람은 바른 자세로 돌아왔다
+    assert rec["effect_after_sec"] == 3.0 and rec["effect_label"] == "upright"
+    assert "effect" in [r["event"] for r in lines(tmp_path)]
+    assert not any(k.startswith("_") for r in lines(tmp_path) for k in r)    # 판정용 내부 키는 밖으로 안 나간다
+
+
+def test_posture_command_effect_none_after_window_and_skips_others(tmp_path):
+    d, log, sent, _, t = make(tmp_path)
+    d.on_enter_action("ACTION_POSTURE", "posture", GateMode.AUTO)
+    d.on_enter_action("ACTION_ENV", "environment", GateMode.AUTO)     # 환경 원인은 자세 효과를 재지 않는다
+    for dt in range(0, 125, 5):
+        t["now"] = 1000.0 + dt
+        log.observe_posture("face_down" if dt % 10 else "upright")   # 바른 자세가 5 s 이어지지 않는다
+    recs = {r["cause"]: r for r in log.recent()}
+    assert recs["posture"]["effect"] == "none" and recs["posture"]["effect_text"] == "자세 그대로"
+    assert "effect" not in recs["environment"]

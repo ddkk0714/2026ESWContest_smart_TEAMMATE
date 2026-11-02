@@ -38,11 +38,20 @@ DEFAULTS: dict[str, Any] = {
     "enabled": True,
     "path": None,            # None = <DEFAULT_DIR>/control-<boot_id>.jsonl
     "max_records": 200,      # 메모리(recent)에 둘 명령 수. C++ 링버퍼도 200
+    # 효과(11-02 사용자 기준 "사람이 바른 자세로 바꾸면 성공"): 자세 원인 명령 뒤 window_sec 안에 labels 자세가 hold_sec 이어지면
+    # effect=improved, 못 넘기면 effect=none. 기기 결과(status)와 따로 싣는다 — 기기가 확인을 못 보내도 효과는 성공일 수 있다.
+    "effect": {"enabled": True, "causes": ["posture"], "labels": ["upright"], "window_sec": 120, "hold_sec": 5},
 }
+EFFECT_TEXT = {"improved": "바른 자세로 돌아옴", "none": "자세 그대로"}
 
 TERMINAL = ("succeeded", "failed", "timeout", "cancelled", "skipped")
 # control/result 에서 레코드로 옮기는 필드
 _RESULT_FIELDS = ("error_code", "node", "previous", "actual", "actual_value", "recovery")
+
+
+def _public(rec: dict[str, Any]) -> dict[str, Any]:
+    """밖으로 내는 사본 — 판정용 내부 키(_ 로 시작)는 뺀다."""
+    return {k: v for k, v in rec.items() if not k.startswith("_")}
 
 
 class ControlLog:
@@ -50,6 +59,7 @@ class ControlLog:
                  sink: Sink | None = None, on_log: Callable[[str], None] | None = None,
                  clock: Callable[[], float] = time.time) -> None:
         self.c = dict(DEFAULTS, **(cfg or {}))
+        self.effect = dict(DEFAULTS["effect"], **(self.c.get("effect") or {}))
         self.enabled = bool(self.c.get("enabled", True))
         self.path = self.c.get("path") or os.path.join(DEFAULT_DIR, f"control-{boot_id}.jsonl")
         self.max_records = max(1, int(self.c.get("max_records") or DEFAULTS["max_records"]))
@@ -138,10 +148,47 @@ class ControlLog:
                 rec["reason"] = "no_result"
                 self._emit(rec, "timeout", now)
 
+    # ---------------------------------------------------------------- 효과
+    def observe_posture(self, label: str | None, now: float | None = None) -> None:
+        """tick 마다 지금 자세 라벨. 자세 원인으로 실제로 보낸 명령(되돌리기 제외)의 효과를 판정한다."""
+        e = self.effect
+        if not self.enabled or not e.get("enabled", True):
+            return
+        now = self._clock() if now is None else now
+        good = label in tuple(e.get("labels") or ())
+        for rec in list(self._records.values()):
+            if (rec.get("effect") is not None or rec.get("undo") or rec.get("sent_ts") is None
+                    or rec.get("cause") not in tuple(e.get("causes") or ())):
+                continue
+            since = rec.get("_good_since")
+            if good and now >= rec["sent_ts"]:
+                if since is None:
+                    rec["_good_since"] = since = now
+                if now - since >= float(e.get("hold_sec", 5)):
+                    rec.pop("_good_since", None)
+                    self._set_effect(rec, "improved", now, to_sec=round(since - rec["sent_ts"], 1), label=label)
+                    continue
+            else:
+                rec.pop("_good_since", None)
+            if now - rec["sent_ts"] >= float(e.get("window_sec", 120)):
+                rec.pop("_good_since", None)
+                self._set_effect(rec, "none", now, label=label)
+
+    def _set_effect(self, rec: dict[str, Any], effect: str, now: float, *, to_sec: float | None = None,
+                    label: str | None = None) -> None:
+        rec["effect"] = effect
+        rec["effect_text"] = EFFECT_TEXT[effect]
+        rec["effect_ts"] = now
+        if to_sec is not None:
+            rec["effect_after_sec"] = to_sec
+        if label:
+            rec["effect_label"] = label
+        self._emit(rec, "effect", now)
+
     # ---------------------------------------------------------------- 조회
     def recent(self, limit: int | None = None) -> list[dict[str, Any]]:
         items = list(self._records.values())
-        return [dict(r) for r in (items[-limit:] if limit else items)]
+        return [_public(r) for r in (items[-limit:] if limit else items)]
 
     def snapshot(self) -> dict[str, Any]:
         """session/report 용 요약 — 상태별 개수와 마지막 실패."""
@@ -178,7 +225,7 @@ class ControlLog:
         rec["event"] = event
         sent, done = rec.get("sent_ts"), rec.get("completed_ts")
         rec["latency_ms"] = int(round((done - sent) * 1000)) if sent is not None and done is not None else None
-        out = dict(rec)
+        out = _public(rec)
         self._write(out)
         if self.sink is not None:
             try:

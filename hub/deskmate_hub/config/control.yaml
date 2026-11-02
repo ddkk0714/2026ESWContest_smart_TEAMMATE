@@ -18,6 +18,12 @@ control_log:
   enabled: true
   path: null                # null = logs/control-<boot_id>.jsonl (esm 로그와 같은 폴더)
   max_records: 200          # hub 메모리에 둘 최근 명령 수
+  effect:                   # 11-02 사용자 기준 "사람이 바른 자세로 바꾸면 성공" — 기기 결과(status)와 따로 effect·effect_text 로 싣는다
+    enabled: true
+    causes: [posture]       # 이 원인으로 실제로 보낸 명령만(되돌리기·생략 제외)
+    labels: [upright]       # 이 자세가
+    hold_sec: 5             # 이 시간(s) 이어지면 effect=improved("바른 자세로 돌아옴")
+    window_sec: 120         # 보낸 뒤 이 시간 안에 못 돌아오면 effect=none("자세 그대로")
 
 # REST 진입 알림(deskmate_hub/rest_notice.py, 2026-10-26) — FSM 이 어떤 길(휴식 제안 수락·개입 실패 뒤 강제·졸음 재시도)로든 REST 에
 # 들어가면 interaction/request kind rest_notice(닫기만 있는 안내 카드) + control/cmd target speaker operation speak {text, lang}.
