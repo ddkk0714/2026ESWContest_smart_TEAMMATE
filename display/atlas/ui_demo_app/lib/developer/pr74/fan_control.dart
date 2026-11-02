@@ -338,7 +338,17 @@ class BleFanControl {
       if (generation != _generation) return (written: true, state: null);
       _lastOkAt = DateTime.now();
       _lastError = null;
-      return (written: true, state: await _readState());
+      final state = await _readState();
+      // V45: 11-02 Pi 5 — MicroPython 선풍기 상태를 못 읽어 자리 비움 끄기 결과에 previous 가 없었고, 복귀 때
+      // 선풍기만 다시 켜지지 않았다. 못 읽었으면 방금 쓴 속도 1바이트를 마지막 상태로 둔다(다음 쓰기의 previous).
+      if (state == null && micro && generation == _generation) {
+        final written = FanState.decodeMicro(payload);
+        if (written != null) {
+          _lastState = written;
+          if (written.power && written.speed > 0) _lastOnSpeed = written.speed;
+        }
+      }
+      return (written: true, state: state);
     }
     return notSent;
   }

@@ -294,6 +294,22 @@ void main() {
       expect(result?['actual_value'], 3);
     });
 
+    test('V45: 상태를 못 읽어도 방금 켠 속도가 다음 끄기의 previous 가 된다', () async {
+      fan.select(_fanAddress);
+      bluetooth.services = {fanMicroServiceUuid, fanMicroCommandUuid};
+      bluetooth.microState = null; // 11-02 Pi 5: 상태 특성 읽기 실패
+      final on = await coordinator.handleControlCommand(_command('m4'));
+      expect(on?['status'], 'succeeded');
+      expect(on?.containsKey('previous'), isFalse); // 처음엔 아무것도 모른다
+      final off = await coordinator.handleControlCommand(
+          {..._command('m5'), 'operation': 'set_power', 'value': 'off'});
+      expect(off?['status'], 'succeeded');
+      expect(off?['previous'], {'power': 'on', 'speed': 45, 'level': 1});
+      final again = await coordinator.handleControlCommand(
+          {..._command('m6'), 'operation': 'set_power', 'value': 'off'});
+      expect(again?['previous'], {'power': 'off', 'speed': 0, 'level': 0});
+    });
+
     test('서비스 목록이 비어도 상태 특성을 읽어 구분한다(C 8바이트 실패 → 1바이트)', () async {
       fan.select(_fanAddress);
       bluetooth.microState = [0];
