@@ -2406,9 +2406,10 @@ def _clock_text(ts: Any) -> str:
 # 제어 진행 표를 심사·시연에서 바로 읽게 — 원인·동작·사유를 사람 말로. 원값(state·op·reason·error_code)은 행에 그대로 두고
 # 화면은 아래 말만 쓴다(마우스를 올리면 원값).
 CAUSE_WHY = {"posture": "자세 — 졸음·엎드림 신호", "environment": "환경 — CO₂·온습도", "cognitive": "인지 — 오래 집중함",
-             "respiration": "호흡 신호", "elapsed": "작업 시간이 길어짐", "keystroke": "타이핑 리듬 흐트러짐"}
+             "respiration": "호흡 신호", "elapsed": "작업 시간이 길어짐", "keystroke": "타이핑 리듬 흐트러짐",
+             "absent": "자리 비움 — 기기 끄기"}   # hub absent_off(11-02): 재실이었다가 1분 부재면 선풍기·무드등·음악 끄기
 MODE_KO = {"auto": "자동", "suggest": "제안 → 수락", "notice": "알림", "undo": "되돌리기", "none": "기록만"}
-DEVICE_SHORT = {"desk_lamp": "무드등", "vent_fan": "선풍기", "speaker": "스피커", "air_purifier": "공기청정기",
+DEVICE_SHORT = {"desk_lamp": "무드등", "vent_fan": "선풍기", "speaker": "스피커", "air_purifier": "공기청정기", "music": "음악",
                 "plug_1": "스마트 플러그"}
 ERROR_KO = {"ble_not_connected": "블루투스 연결 안 됨", "device_not_found": "기기를 찾지 못함",
             "device_state_unconfirmed": "기기 상태 확인 안 됨", "lamp_not_configured": "무드등 미설정",
