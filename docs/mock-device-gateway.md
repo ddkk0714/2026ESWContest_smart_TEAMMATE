@@ -195,7 +195,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.:hub:hub/tests \
 ```
 
 마지막 명령은 기존 개발 컨테이너의 명시적 `/tmp` 앱 사본을 요구한다. 자동 Pi5 배포나
-새 컨테이너 생성은 하지 않는다. 사본은 ui_env_app과 pubspec의 경로 의존 camtest 소스로 준비하고
+새 컨테이너 생성은 하지 않는다. 사본은 ui_env_app 과 pubspec 의 경로 의존 패키지(`atlas_common`) 소스로 준비하고
 그 사본에서 `flutter pub get --offline`을 수행한다. 시험 후 이번 `/tmp` 앱 사본을 정리했다.
 
 ### 확인 결과와 대체 요소

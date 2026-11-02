@@ -92,7 +92,7 @@ String linkLabel(LinkId id) => switch (id) {
       LinkId.mmwave => 'mmWave 센서',
       LinkId.environment => '환경 센서',
       LinkId.keystroke => '키스트로크',
-      LinkId.posture => '자세(카메라)',
+      LinkId.posture => '자세',
       LinkId.speaker => '스피커',
       LinkId.lamp => '램프',
       LinkId.fan => '선풍기',
@@ -128,7 +128,7 @@ String linkGuidance(LinkId id, LinkCause cause) {
           'ESP32 값이 들어오지 않습니다. ESP32 전원과 UART 배선을 확인하세요.',
         LinkId.keystroke =>
           'PC 수집기 값이 끊겼습니다. PC 에서 python -m collector 가 돌고 있는지 확인하세요.',
-        LinkId.posture => '자세 판정이 멈췄습니다. 카메라와 판정 서비스를 확인하세요.',
+        LinkId.posture => '자세 판정이 멈췄습니다. ToF와 판정 서비스를 확인하세요.',
         LinkId.speaker || LinkId.lamp || LinkId.fan => '기기 응답이 없습니다. 전원을 확인하세요.',
       };
     case LinkCause.parseError:
@@ -141,7 +141,7 @@ String linkGuidance(LinkId id, LinkCause cause) {
       };
     case LinkCause.deviceNotFound:
       return switch (id) {
-        LinkId.posture => '카메라를 찾지 못했습니다. 판정 서비스(camsvc)와 ESP32-CAM 연결을 확인하세요.',
+        LinkId.posture => '자세 서비스에 닿지 못했습니다. Pi 4 자세 서비스 주소와 ToF 센서 연결을 확인하세요.',
         _ => '기기를 찾지 못했습니다. 전원과 페어링 모드를 확인하세요.',
       };
     case LinkCause.disconnected:

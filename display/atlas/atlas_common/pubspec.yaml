@@ -1,0 +1,19 @@
+name: atlas_common
+description: DESKMATE Atlas 앱들이 함께 쓰는 작은 조각 — 진단 로그·허브 주소 저장·허브 설정 화면·색.
+publish_to: none
+version: 1.0.0+1
+
+environment:
+  # Atlas Flutter 3.27.4 가 쓰는 Dart 는 3.6.x 다.
+  sdk: ^3.6.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:

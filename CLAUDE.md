@@ -70,7 +70,7 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 | `firmware/esp32_sensor_node` | 이민혁·김태환 | ✅ | VL53L8CX ×2(UART `0x05`)·C1001 mmWave·SCD41/BH1750/DHT22, USB 직결 COBS+CRC-16. 10-24 실기 rx 527·crc 0 |
 | `firmware/pico2w_ble_fan` | 박소연 | 🟡 | BLE 선풍기 1·2·3단·자연풍·꺼짐 타이머(PR #66·#68·#69·#70). 주소·광고·본딩 수정 PR #91·#93 은 **실기 미검증** |
 | `display/` Atlas UI | 최민경 | ✅ | DESKMATE 앱 V46 — 위젯 홈·제안/자동 실행 카드·되돌리기·리포트·개발자 모드·제어 진행 탭, 블루투스 세 기기(램프·선풍기·스피커) 연결(PR #95·#97). 재부팅 자동 시작 없음 |
-| `display/atlas/camsvc`·`camtest` | 박소연 | 개발용 | ToF 도착 전 자세 판정을 확인하려고 만든 **별도 개발 앱**. 제품 앱(`ui_demo_app`)에는 카메라 기능이 없고, 제품 자세 판정은 ToF 다. 시연·제출 빌드에 넣지 않는다 |
+| `display/atlas/atlas_common` | 공통 | ✅ | Atlas 앱들이 같이 쓰는 조각(진단 로그·허브 주소·설정 화면·색). 지운 `camtest` 에서 카메라와 무관한 네 파일만 옮긴 것 |
 | `collector/` 키스트로크 | 최민경 | ✅ | 키 값 미수집 타이밍 특징, Pi 4 브로커 자동 찾기·로그인 자동 시작(PR #98) |
 | `tools/` | 공통 | ✅ | 노트북 개발자 화면 devview(제어 진행·빠른 시연)·시나리오 sim·로컬 리허설·복구 설치기·Node-RED·ThinQ 수집기 |
 | `dataset/` | 김태환·박소연 | ✅ | MuJoCo·SMPL-X ToF 시뮬(`tof_sim_v5`), 실측 녹화·벽 잡음 도구, 깊이 카메라 교사 라벨(`depth_teacher`, **오프라인 라벨링 전용·제품 경로 아님**) |
@@ -124,10 +124,9 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 - **[해소 10-23] 자세 모델의 Pi 4 배치** — 별도 서비스 `deskmate_tofposture`(CNN+GRU, `hub/atlas-tof`). `ingest.yaml tof.posture_source: service`, 없으면 MLP → 0x03 규칙 폴백. 실측 채점(macro-F1 0.456, 후보 17개 중 1위)으로 골랐다.
 - **[해소] UART 프레임 TYPE** — 0x20 mmWave · 0x10 env · 0x03 자세 규칙 · 0x05 ToF 원본 8×8 · 0xF0 heartbeat. 구현·실수신 기준으로 확정(`data-spec.md` §13.1). 운영 경로는 **USB 직결**, GPIO UART2 는 대체 경로.
 - **[해소] 제어 기기** — 스마트 플러그는 **채택하지 않는다**. iLink BLE 무드등 · Pico 2 W BLE 선풍기 · A2DP 스피커로 가고, LG ThinQ 공기청정기는 API 확인까지(FSM 연동은 예정).
-- **[해소 11-02] 카메라 자세 판정(I7)** — **제품 경로에 카메라는 없다.** 제품 앱(`ui_demo_app`)에 카메라 기능이 없고 자세는 ToF 가 판정한다. `camsvc`·`camtest` 는 ToF 도착 전에 쓴 별도 개발 앱, `dataset/depth_teacher` 는 오프라인 라벨링 도구다. 보고서 v17 도 같은 기준으로 서술. (레포에서 개발용 코드를 지울지는 아래 열린 항목.)
+- **[해소 11-02] 카메라 자세 판정(I7) — 코드까지 제거** — 제품 경로에 카메라는 없고 자세는 ToF 가 판정한다. ToF 도착 전에 쓴 `display/atlas/camsvc`(ESP32-CAM 판정 서비스)·`camtest`(개발 앱)와 옛 통합 앱의 카메라 자세 탭을 **지웠다**. 카메라와 무관한 공용 파일 네 개는 `display/atlas/atlas_common` 으로 옮겼다. 학습용 깊이 카메라 라벨 도구(`dataset/depth_teacher`)는 **오프라인 전용**으로 남긴다. 제품 앱의 로그·설정 **파일 경로 이름**(`camtest.log` 등)은 보드 설치본이 읽고 있어 그대로 둔다.
 
 ### 열려 있는 항목
-0. **[팀] 개발용 카메라 코드를 레포에서 지울지** — 제품 경로가 아닌 것은 위에서 정리됐다. 남은 선택은 `display/atlas/camsvc`(29파일)·`camtest`(48파일)를 지울지, 개발 기록으로 남길지다. 지워도 git 이력에는 남고, 제품 앱의 로그·설정 파일 경로 이름이 `camtest` 라 **경로 이름은 건드리면 안 된다**(보드 설치본이 그 경로를 읽는다).
 4. **[팀] 새 디스플레이 기록** — 모델명·인터페이스(DSI/HDMI)·전원 경로를 `hardware.md`에 적기.
 5. **[기본값] `C_focus` 부호** — 현재 "큰 값 = 집중 저하 증거". 바꾸려면 알려주기.
 6. **[기본값] 개인화 저장소** — 로컬 파일(JSONL). opt-in·삭제 정책은 `privacy.yaml`·`docs/personalization-privacy-flow.md`.

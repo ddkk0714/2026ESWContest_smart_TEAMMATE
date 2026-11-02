@@ -184,14 +184,13 @@ flutter-atlas build atlas --ipk --release \
 ```
 
 자세 탭이 볼 Pi 4 자세 노드 주소는 **`DESKMATE_POSTURE_URL`**(배포 스크립트 `ATLAS_POSTURE_URL`)로 따로 준다.
-보통은 비워 둔다 — 비어 있어야 같은 보드의 camsvc(127.0.0.1:8770) → ESP32-CAM 보드 직결 → 데모 순으로 내려간다.
-예전처럼 `DESKMATE_HUB_URL` 을 읽으면 허브 주소로 빌드했을 때 자세 탭이 camsvc·보드 직결을 건너뛴다.
+보통은 비워 둔다 — 비어 있으면 같은 보드의 자세 판정 서비스로 내려간다.
 보드 직결에는 `appinfo.json` 의 `privileged.peripheral` 권한과 UART D-Bus 정책
 (`ui_env_app/atlas/meta/com.atlas.app.deskmate_display.conf` → 보드 `/data/share/usr/share/dbus-1/system.d/`, `systemctl reload dbus`)이 필요하다.
 앱은 연결 선택과 첫 성공·실패를 진단 로그 파일(`<앱 설치 경로>/camtest.log`)에 남긴다 — 이 보드는 앱 표준출력이 journal 에 남지 않는다.
+파일 이름은 보드 설치본이 그 경로를 읽고 있어 그대로 둔다(옛 개발 앱에서 물려받은 이름).
 
-**카메라 탭은 개발용, 프리뷰 모드는 ToF 뷰.** 개발 도구(**설정 → 개발자 화면**)의 헤더에서 카메라 '자세'(ESP32-CAM/camsvc) 탭은
-숨겨 두고(`main.dart` 의 `kShowCameraPostureTab`, 코드는 그대로) 그 자리에 **프리뷰** 탭을 둔다 — 정식 기능이 아니라 "프리뷰 · 정식 기능 아님" 배지가 붙고
+**프리뷰 탭은 ToF 뷰다.** 개발 도구(**설정 → 개발자 화면**)의 헤더에 **프리뷰** 탭을 둔다 — 정식 기능이 아니라 "프리뷰 · 정식 기능 아님" 배지가 붙고
 사용자 화면(워크스페이스)에는 나오지 않는다. 프리뷰 탭은 Pi 4 중계기 `:8772/raw`(센서별 ToF 8×8 거리·상태, 이미 방향이 적용된 배열이라 다시 뒤집지 않는다)와
 자세 서비스 `:8771` 을 직접 폴링해 **열지도 두 장(A=왼쪽, B)과 ToF 자세 라벨**을 그리고(얼굴·영상 없음, 64칸 깊이값만), mmWave·환경·키스트로크·FSM·마지막 개입
 설명(`state/phase` 의 `sensor_summary`)을 한 화면에 모은다. 아래 "지금 판정이 맞나요?" 는 기존 `feedback/user` 경로로 수락·거절·정정(+짧은 메모 `data.note`)을 보낸다.

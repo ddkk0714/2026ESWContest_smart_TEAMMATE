@@ -35,8 +35,8 @@ void main() {
     for (final t in _tabs) {
       expect(find.byTooltip(t), findsOneWidget, reason: t);
     }
+    // 카메라 자세 탭은 코드째로 지웠다(11-02). 다시 생기면 이 줄이 먼저 깨진다.
     expect(find.byTooltip('자세'), findsNothing);
-    expect(kShowCameraPostureTab, isFalse);
 
     await tester.tap(find.byTooltip('프리뷰'));
     await tester.pumpAndSettle();

@@ -7,7 +7,7 @@ library;
 
 import 'dart:async';
 
-import 'package:camtest/hub_setup.dart' show showHubSetup;
+import 'package:atlas_common/hub_setup.dart' show showHubSetup;
 import 'package:flutter/material.dart';
 
 import 'atlas_home.dart';

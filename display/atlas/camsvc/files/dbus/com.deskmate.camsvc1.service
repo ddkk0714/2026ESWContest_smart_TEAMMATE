@@ -1,3 +1,0 @@
-[D-BUS Service]
-Name=com.deskmate.camsvc1
-Exec=/data/share/usr/atlas/services/com.deskmate.camsvc1/deskmate_camsvc

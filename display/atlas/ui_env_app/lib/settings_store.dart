@@ -4,7 +4,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:camtest/hub_config.dart' show HubStore, normalizeIp;
+import 'package:atlas_common/hub_config.dart' show HubStore, normalizeIp;
 
 class SavedBluetoothDevice {
   const SavedBluetoothDevice({required this.address, required this.name});

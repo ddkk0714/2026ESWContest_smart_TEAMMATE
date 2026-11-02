@@ -2,8 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:camtest/diag.dart';
-import 'package:camtest/hub_setup.dart' show showHubSetup;
+import 'package:atlas_common/diag.dart';
+import 'package:atlas_common/hub_setup.dart' show showHubSetup;
 
 import 'atlas_home.dart';
 import 'bluetooth_control_page.dart';
@@ -25,7 +25,6 @@ import 'link_status.dart';
 import 'music_playback.dart';
 import 'mqtt_watchdog.dart';
 import 'notice_banner.dart';
-import 'posture_screen.dart';
 import 'preview_page.dart';
 import 'command_log.dart';
 import 'dev_mode_page.dart';
@@ -164,9 +163,6 @@ class _DashboardPageState extends State<DashboardPage> {
   final _statusBar = StatusBarDismissal();
   LinkSnapshot _links = LinkSnapshot(const []);
   DateTime? _mqttConnectedAt;
-  // 자세 탭이 알려 주는 연결 상태와, 전체 리로드 때 자세 탭에 보내는 신호.
-  LinkStatus? _postureStatus;
-  int _postureReloadToken = 0;
 
   // 보드에 꽂힌 키보드를 앱이 직접 잡는다. hub 가 주는 collector 지표보다 이걸 우선한다.
   final _capture = KeystrokeCapture();
@@ -671,10 +667,9 @@ class _DashboardPageState extends State<DashboardPage> {
         keepState: true);
   }
 
-  /// 앱을 재시작하지 않고 연결을 전부 다시 만든다: 상태 소스·시작 점검·자세 탐색.
+  /// 앱을 재시작하지 않고 연결을 전부 다시 만든다: 상태 소스·시작 점검.
   void _reloadAll() {
     final source = _source;
-    setState(() => _postureReloadToken++);
     switch (source) {
       case MqttStateSource():
         _replaceSource(_mqttSource(source.host, port: source.port),
@@ -698,8 +693,8 @@ class _DashboardPageState extends State<DashboardPage> {
           unawaited(_changeMqttAddress());
         }
       case LinkId.posture:
-        setState(() => _postureReloadToken++);
-        _notify('자세 카메라를 다시 찾습니다.');
+        // 이 앱에는 자세 소스가 없다(카메라 자세 탭 제거, 11-02). 자세는 Pi 4 가 판정한다.
+        _notify('자세는 Pi 4 자세 서비스가 판정합니다. 이 화면에서는 다시 찾을 수 없습니다.');
       case LinkId.speaker || LinkId.lamp || LinkId.fan:
         // 저장된 기기가 있으면 그 자리에서 다시 붙이고, 없으면 검색하러 보낸다.
         final saved = switch (id) {
@@ -760,7 +755,8 @@ class _DashboardPageState extends State<DashboardPage> {
           : _localKeystroke != null
               ? now
               : state?.keystroke?.timestamp,
-      posture: _postureStatus,
+      // 이 앱에는 자세 소스가 없다(11-02). 자세 줄은 '미설정' 으로 둔다.
+      posture: null,
       speaker: _btLinks.speakerStatus,
       lamp: _btLinks.lampStatus,
       fan: _btLinks.fanStatus,
@@ -1129,17 +1125,6 @@ class _DashboardPageState extends State<DashboardPage> {
                               onClear: _clearDev,
                               preview: _buildDashboard(state),
                             ),
-                          // 카메라 자세 탭(ESP32-CAM/camsvc)은 개발용. 탭은 숨겨 두고(kShowCameraPostureTab)
-                          // 그 자리에 ToF 프리뷰가 온다 — 카메라 미사용 원칙(열린 결정 I7). 코드는 남긴다.
-                          _AppView.posture => PostureScreen(
-                              // 전체 리로드·연결 탭의 '다시 찾기' 가 이 값을 올린다.
-                              reconnectSignal: _postureReloadToken,
-                              onLinkStatus: (status) {
-                                if (mounted) {
-                                  setState(() => _postureStatus = status);
-                                }
-                              },
-                            ),
                           _AppView.preview => _buildPreview(state),
                           _AppView.devMode => _buildDevMode(state),
                           _AppView.fsmGraph =>
@@ -1313,22 +1298,16 @@ enum _AppView {
   sensorOverview,
   keystroke,
   sensorTest,
-  posture,
   fsmGraph,
   bluetooth,
   sessionReport,
   privacy,
   connection,
-  // 개발 도구의 프리뷰 탭(ToF 열지도·전 센서·피드백). posture(카메라) 탭 자리에 온다.
+  // 개발 도구의 프리뷰 탭(ToF 열지도·전 센서·피드백).
   preview,
   // 개발자 모드: 열지도 두 장 + hub 판정 + 명령 로그를 한 화면에(설정 dev_mode_default 로 시작 화면).
   devMode,
 }
-
-/// 카메라 자세 탭(ESP32-CAM/camsvc, `posture_screen.dart`)을 개발 도구 헤더에 보일지.
-/// "카메라 미사용" 원칙과 충돌하는 열린 결정(I7)이라 탭만 숨기고 코드는 지우지 않는다 —
-/// 팀이 채택하면 true 로.
-const kShowCameraPostureTab = false;
 
 class _Header extends StatelessWidget {
   const _Header(
@@ -1452,12 +1431,6 @@ class _Header extends StatelessWidget {
               icon: Icons.terminal_rounded,
               label: '개발자 모드',
               onTap: () => onViewChanged(_AppView.devMode)),
-          if (kShowCameraPostureTab)
-            _HeaderNav(
-                selected: view == _AppView.posture,
-                icon: Icons.chair_alt,
-                label: '\uC790\uC138',
-                onTap: () => onViewChanged(_AppView.posture)),
           _HeaderNav(
               selected: view == _AppView.fsmGraph,
               icon: Icons.account_tree_outlined,

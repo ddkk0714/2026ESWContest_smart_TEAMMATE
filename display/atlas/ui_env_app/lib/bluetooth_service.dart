@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:camtest/diag.dart';
+import 'package:atlas_common/diag.dart';
 import 'package:dbus/dbus.dart';
 
 const _bluetoothBusName = 'com.atlas.Bluetooth1';

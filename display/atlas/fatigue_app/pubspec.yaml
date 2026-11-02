@@ -10,8 +10,8 @@ dependencies:
   flutter:
     sdk: flutter
   # 브로커 주소 숫자 키패드(showHubSetup)·IP 검사를 기본 앱과 같이 쓴다. 이 보드엔 화면 키보드가 없다.
-  camtest:
-    path: ../camtest
+  atlas_common:
+    path: ../atlas_common
   # Atlas toolchain Dart 3.6.2 호환 상한 — ui_env_app 과 같은 버전.
   mqtt_client: 10.5.1
   # 종료 때 Atlas 홈을 다시 띄운다(atlas_home.dart, ui_env_app 과 같은 방식).

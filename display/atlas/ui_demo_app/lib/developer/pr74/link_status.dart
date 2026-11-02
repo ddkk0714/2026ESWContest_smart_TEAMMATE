@@ -147,7 +147,7 @@ String linkGuidance(LinkId id, LinkCause cause) {
       };
     case LinkCause.deviceNotFound:
       return switch (id) {
-        LinkId.posture => '카메라를 찾지 못했습니다. 판정 서비스(camsvc)와 ESP32-CAM 연결을 확인하세요.',
+        LinkId.posture => '자세 서비스에 닿지 못했습니다. Pi 4 자세 서비스 주소와 ToF 센서 연결을 확인하세요.',
         _ => '기기를 찾지 못했습니다. 전원과 페어링 모드를 확인하세요.',
       };
     case LinkCause.disconnected:

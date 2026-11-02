@@ -13,11 +13,11 @@ import 'dart:io';
 /// 노드의 기본 HTTP 포트(`--port-http` 기본값).
 const kHubPort = 8765;
 
-/// 같은 보드에서 도는 스켈레톤 판정 서비스(`display/atlas/camsvc`).
+/// 비워 두면 같은 보드의 자세 판정 서비스로 내려간다.
 ///
 /// 판정이 보드 안에 있는 이유는 ATLAS 에 파이썬이 없고 Dart 로 TFLite 를 돌릴
 /// 길도 없어서다. 8765 가 아닌 이유는 그 번호를 이미 쓰는 것이 보드에 있어서다
-/// (`camsvc/src/service_api.h`).
+/// (Pi 4 ToF 자세 서비스 `hub/atlas-tof`).
 const kCamsvcPort = 8770;
 const kCamsvcUrl = 'http://127.0.0.1:$kCamsvcPort';
 

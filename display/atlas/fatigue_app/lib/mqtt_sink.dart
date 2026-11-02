@@ -4,7 +4,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:camtest/hub_config.dart' show normalizeIp;
+import 'package:atlas_common/hub_config.dart' show normalizeIp;
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 
