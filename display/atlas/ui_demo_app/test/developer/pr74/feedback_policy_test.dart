@@ -296,6 +296,89 @@ void main() {
     });
   });
 
+  group('V44 a write the link cannot resolve rediscovers, then reconnects', () {
+    // 11-02 14:41 Pi 5(V43): 링크는 connected 인데 검색이 "응답에 UUID 없음" 으로 끝나 쓰기마다 InvalidArgs.
+    test('rediscovering services on the same link lets the write through',
+        () async {
+      final bluetooth = _FakeBluetooth()
+        ..unknownClients.add('client-1')
+        ..refreshFixes = true
+        ..gattLinked = true;
+      final lamp = IlinkLampFeedback(bluetooth, writeRetryDelay: Duration.zero)
+        ..select(firstAddress);
+      expect(await lamp.writeFrames(ilinkFramesForPhase('focus')), isTrue);
+      expect(bluetooth.refreshes, 1);
+      expect(bluetooth.released, 0);
+      expect(bluetooth.connectedAddresses, [firstAddress]);
+      expect(lamp.connection?.services, {ilinkServiceUuid});
+    });
+
+    test('if rediscovery does not help, the link is dropped and reconnected',
+        () async {
+      final bluetooth = _FakeBluetooth()
+        ..unknownClients.add('client-1')
+        ..gattLinked = true;
+      final lamp = IlinkLampFeedback(bluetooth, writeRetryDelay: Duration.zero)
+        ..select(firstAddress);
+      expect(await lamp.writeFrames(ilinkFramesForPhase('focus')), isTrue);
+      expect(bluetooth.refreshes, 1);
+      expect(bluetooth.released, 1); // V41 예외: 이때만 살아 있는 링크를 끊는다
+      expect(bluetooth.connectedAddresses, [firstAddress, firstAddress]);
+      expect(lamp.connection?.clientId, 'client-2');
+    });
+
+    test('a new link that still cannot write is kept, and not churned again',
+        () async {
+      final bluetooth = _FakeBluetooth()
+        ..unknownClients.addAll(['client-1', 'client-2'])
+        ..gattLinked = true;
+      final lamp = IlinkLampFeedback(bluetooth, writeRetryDelay: Duration.zero)
+        ..select(firstAddress);
+      expect(await lamp.writeFrames(ilinkFramesForPhase('focus')), isFalse);
+      expect(bluetooth.released, 1);
+      expect(lamp.connected, isTrue);
+      // 바로 다음 국면 쓰기: 다시 검색은 하되 rescanEvery 안이라 또 끊지 않는다
+      expect(await lamp.writeFrames(ilinkFramesForPhase('focus')), isFalse);
+      expect(bluetooth.refreshes, 2);
+      expect(bluetooth.released, 1);
+      expect(bluetooth.connectedAddresses, [firstAddress, firstAddress]);
+    });
+
+    test('a disconnected link is still handled as before (no rediscovery)',
+        () async {
+      final bluetooth = _FakeBluetooth()..writeFailuresRemaining = 1;
+      final lamp = IlinkLampFeedback(bluetooth, writeRetryDelay: Duration.zero)
+        ..select(firstAddress);
+      expect(await lamp.writeFrames(ilinkFramesForPhase('focus')), isTrue);
+      expect(bluetooth.refreshes, 0);
+      expect(bluetooth.released, 1);
+    });
+
+    test('phase lighting stops after three failed rounds until the phase changes',
+        () async {
+      final bluetooth = _FakeBluetooth()
+        ..writeFailuresRemaining = 1000
+        ..gattLinked = true;
+      final coordinator = FeedbackCoordinator(
+        music: _FakeMusic(),
+        lamp: IlinkLampFeedback(bluetooth, writeRetryDelay: Duration.zero)
+          ..select(firstAddress),
+        bluetooth: bluetooth,
+      )..enabled = true;
+      final focus = _state('FOCUS_PC', phase: 'focus');
+      for (var i = 0; i < 6; i++) {
+        await coordinator.apply(focus);
+      }
+      expect(bluetooth.writeCount, 3 * 2); // 상태마다 2번(V41) × 3번에서 멈춤
+      await coordinator.apply(_state('MONITOR', phase: 'idle'));
+      expect(bluetooth.writeCount, 4 * 2); // 국면이 바뀌면 다시 해 본다
+      bluetooth.writeFailuresRemaining = 0;
+      await coordinator.lamp.setBrightness(120); // 다른 쓰기가 성공하면
+      await coordinator.apply(focus); // 멈췄던 국면도 다시 써 본다
+      expect(bluetooth.frames.last, ilinkFramesForPhase('focus').last);
+    });
+  });
+
   test('two failed writes leave no cached connection and next phase retries',
       () async {
     final bluetooth = _FakeBluetooth()..writeFailuresRemaining = 2;
@@ -980,6 +1063,25 @@ class _FakeBluetooth implements AtlasBluetoothService {
   @override
   Future<bool> isGattLinked(String address) async => gattLinked;
 
+  /// V44: 이 clientId 링크로 쓰면 "Invalid GATT characteristic"(BlueZ 가 특성을 모름).
+  final Set<String> unknownClients = {};
+
+  /// 같은 링크로 서비스를 다시 검색하면 특성을 찾는지. 검색 횟수는 [refreshes].
+  bool refreshFixes = false;
+  int refreshes = 0;
+
+  @override
+  Future<GattConnection> refreshGattServices(String address,
+      {String role = '램프'}) async {
+    refreshes++;
+    final client = 'client-${connectedAddresses.length}';
+    if (refreshFixes) unknownClients.remove(client);
+    return GattConnection(
+        adapter: 'test-adapter',
+        clientId: client,
+        services: refreshFixes ? {ilinkServiceUuid} : const {});
+  }
+
   @override
   Future<void> disconnectGatt(GattConnection connection) async => released++;
 
@@ -1016,6 +1118,10 @@ class _FakeBluetooth implements AtlasBluetoothService {
   }) async {
     writeCount++;
     frames.add(List.of(value));
+    if (unknownClients.contains(connection.clientId)) {
+      throw StateError('org.freedesktop.DBus.Error.InvalidArgs: '
+          'Invalid GATT characteristic for the given service');
+    }
     if (writeFailuresRemaining > 0) {
       writeFailuresRemaining--;
       throw StateError('GATT write failed');

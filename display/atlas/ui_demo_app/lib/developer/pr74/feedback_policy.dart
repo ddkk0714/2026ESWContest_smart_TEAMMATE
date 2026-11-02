@@ -90,6 +90,9 @@ class IlinkLampFeedback {
 
   DateTime? _lastRescanAt;
 
+  /// V44: 특성을 몰라 링크를 끊고 새로 붙은 때. 국면 조명은 [rescanEvery] 안에 다시 끊지 않는다.
+  DateTime? _unknownReconnectAt;
+
   // 백그라운드 연결 규칙([connectInBackground])에 쓰는 이번 실행의 기록.
   bool _everTried = false;
   bool _everConnected = false;
@@ -158,6 +161,7 @@ class IlinkLampFeedback {
     _lastBrightness = null;
     _poweredOn = null;
     _lastRescanAt = null;
+    _unknownReconnectAt = null;
     _everTried = _everConnected = _dropRetryUsed = false;
     unawaited(_release(old));
   }
@@ -319,52 +323,106 @@ class IlinkLampFeedback {
     bool expired() =>
         expiresTsMs != null &&
         DateTime.now().millisecondsSinceEpoch >= expiresTsMs;
+    // false = 만료·기기 바뀜으로 그만둠. 실패는 던진다.
+    Future<bool> send() async {
+      for (final frame in frames) {
+        if (expired() || generation != _generation) return false;
+        await _bluetooth.writeCharacteristic(_connection!,
+            serviceId: ilinkServiceUuid,
+            characteristicId: ilinkWriteUuid,
+            value: frame);
+        if (generation != _generation) return false;
+        _track(frame);
+      }
+      _lastOkAt = DateTime.now();
+      _lastError = null;
+      return true;
+    }
+
+    // V44: 이 호출에서 같은 링크로 서비스를 다시 검색했나, 우리가 링크를 끊어 새로 붙여야 하나.
+    var servicesRefreshed = false;
+    var reconnect = false;
     // 끊긴 GATT 세션은 재사용하지 않고 한 번만 새 세션으로 되풀이한다. 검색은 처음 한 번만.
-    for (var attempt = 0; attempt < 2; attempt++) {
+    var attempts = 2;
+    for (var attempt = 0; attempt < attempts; attempt++) {
       if (expired() || generation != _generation) return failed();
       if (rediscover && attempt == 0) {
         final link = await ensureConnected(expiresTsMs: expiresTsMs);
         rediscovered = link.rediscovered;
         if (!link.ok) return failed();
-      } else if (!await (rediscover ? connect() : connectInBackground())) {
+      } else if (!await (rediscover || reconnect
+          ? connect()
+          : connectInBackground())) {
         if (!rediscover) return failed();
         continue;
       }
       if (generation != _generation) return failed();
+      Object error;
       try {
-        for (final frame in frames) {
-          if (expired() || generation != _generation) return failed();
-          await _bluetooth.writeCharacteristic(_connection!,
-              serviceId: ilinkServiceUuid,
-              characteristicId: ilinkWriteUuid,
-              value: frame);
-          if (generation != _generation) return failed();
-          _track(frame);
-        }
-        _lastOkAt = DateTime.now();
-        _lastError = null;
+        if (!await send()) return failed();
         return (ok: true, rediscovered: rediscovered);
-      } catch (error) {
-        if (generation != _generation) return failed();
-        _lastError = error;
-        // V41: 쓰기가 실패해도 링크가 살아 있으면 끊지 않는다 — 잠깐 뒤 같은 링크로 한 번 더 쓴다.
-        // 11-02 Pi 5(V40): 시작 복원 직후 국면 조명 쓰기가 같은 칩 스피커(A2DP)가 붙는 순간 실패했고, 그때 앱이
-        // 방금 맺은 램프 링크를 Disconnect 해 버렸다. A2DP 가 붙은 뒤 램프는 광고를 멈춰 다시 붙지 못했다.
-        // 13:10·13:27 처럼 링크를 유지하면 그 뒤 쓰기는 됐다. 링크가 정말 사라졌을 때만 정리하고 새로 붙는다.
-        final address = _address!;
-        final linked = await _bluetooth.isGattLinked(address);
-        if (generation != _generation) return failed();
-        diag.write('램프 쓰기 실패 $address (${linked ? '링크 유지' : '링크 없음'}): $error');
-        if (linked) {
-          if (writeRetryDelay > Duration.zero) {
-            await Future<void>.delayed(writeRetryDelay);
-          }
-          continue;
+      } catch (e) {
+        error = e;
+      }
+      if (generation != _generation) return failed();
+      _lastError = error;
+      final address = _address!;
+      // V44: 링크는 살아 있는데 BlueZ 가 특성을 모른다(11-02 14:41 Pi 5, V43). V41 처럼 같은 링크로 다시 써도
+      // 10 s 마다 같은 InvalidArgs 만 되풀이했다. 같은 링크로 서비스를 다시 검색해 한 번 더 쓰고, 그래도 모르면 이때만
+      // 링크를 끊고 새로 붙는다(새 Connect 가 서비스 검색부터 다시 한다).
+      if (isUnknownCharacteristicError(error) && !servicesRefreshed) {
+        servicesRefreshed = true;
+        diag.write('램프 쓰기 실패 $address (특성 모름): $error → 같은 링크로 서비스 다시 검색');
+        try {
+          final refreshed = await _bluetooth.refreshGattServices(address);
+          if (generation != _generation) return failed();
+          _connection = refreshed;
+          if (!await send()) return failed();
+          return (ok: true, rediscovered: rediscovered);
+        } catch (e) {
+          if (generation != _generation) return failed();
+          error = e;
+          _lastError = e;
         }
+      }
+      if (isUnknownCharacteristicError(error)) {
+        if (reconnect) {
+          // 새 링크도 모르면 더 끊지 않는다 — 끊을 때마다 시스템 창이 뜬다(10-26).
+          diag.write('램프 쓰기 실패 $address (새로 붙은 링크도 특성 모름): $error');
+          return failed();
+        }
+        final now = DateTime.now();
+        final last = _unknownReconnectAt;
+        if (!rediscover && last != null && now.difference(last) < rescanEvery) {
+          diag.write('램프 쓰기 실패 $address (다시 검색해도 특성 모름): $error → '
+              '방금 새로 붙었으니 이번엔 그만둠');
+          return failed();
+        }
+        _unknownReconnectAt = now;
+        diag.write('램프 쓰기 실패 $address (다시 검색해도 특성 모름): $error → 링크 끊고 새로 붙기');
+        reconnect = true;
+        attempts = attempt + 2; // 새로 붙어 쓰기 한 번은 남긴다
         final old = _connection;
         _connection = null;
         await _release(old);
+        continue;
       }
+      // V41: 쓰기가 실패해도 링크가 살아 있으면 끊지 않는다 — 잠깐 뒤 같은 링크로 한 번 더 쓴다.
+      // 11-02 Pi 5(V40): 시작 복원 직후 국면 조명 쓰기가 같은 칩 스피커(A2DP)가 붙는 순간 실패했고, 그때 앱이
+      // 방금 맺은 램프 링크를 Disconnect 해 버렸다. A2DP 가 붙은 뒤 램프는 광고를 멈춰 다시 붙지 못했다.
+      // 13:10·13:27 처럼 링크를 유지하면 그 뒤 쓰기는 됐다. 링크가 정말 사라졌을 때만 정리하고 새로 붙는다.
+      final linked = await _bluetooth.isGattLinked(address);
+      if (generation != _generation) return failed();
+      diag.write('램프 쓰기 실패 $address (${linked ? '링크 유지' : '링크 없음'}): $error');
+      if (linked) {
+        if (writeRetryDelay > Duration.zero) {
+          await Future<void>.delayed(writeRetryDelay);
+        }
+        continue;
+      }
+      final old = _connection;
+      _connection = null;
+      await _release(old);
     }
     return failed();
   }
@@ -432,9 +490,40 @@ class FeedbackCoordinator {
     _lastLampKey = null;
     _lastMusicKey = null;
     _acceptedAction = null;
+    _lampFailKey = null;
   }
 
+  /// V44: 같은 국면 조명이 이만큼 잇달아 실패하면 국면이 바뀌거나 램프에 다른 쓰기가 성공할 때까지 쉰다.
+  /// 11-02 14:41 Pi 5(V43): 상태가 올 때마다(10 s) 같은 쓰기를 되풀이해 실패 로그가 끝없이 쌓였다.
+  static const phaseLampAttempts = 3;
+
   String? _lastLampKey;
+  String? _lampFailKey;
+  int _lampFailures = 0;
+  DateTime? _lampGaveUpAt;
+
+  bool _phaseLampAllowed(String key) {
+    if (key != _lampFailKey || _lampFailures < phaseLampAttempts) {
+      return true;
+    }
+    final ok = lamp.lastOkAt;
+    if (ok != null && ok.isAfter(_lampGaveUpAt!)) {
+      _lampFailKey = null;
+      return true;
+    }
+    return false;
+  }
+
+  void _phaseLampFailed(String key) {
+    if (key != _lampFailKey) {
+      _lampFailKey = key;
+      _lampFailures = 0;
+    }
+    if (++_lampFailures == phaseLampAttempts) {
+      _lampGaveUpAt = DateTime.now();
+      diag.write('국면 조명 램프 쓰기 $phaseLampAttempts번 실패 — 국면이 바뀌거나 램프에 다시 써질 때까지 쉼');
+    }
+  }
   String? _lastMusicKey;
   String? _acceptedAction;
   bool _applying = false;
@@ -496,9 +585,13 @@ class FeedbackCoordinator {
     _applying = true;
     try {
       final key = '${state.phase}:${lamp.address}';
-      if (key != _lastLampKey &&
-          await lamp.writeFrames(ilinkFramesForPhase(state.phase))) {
-        _lastLampKey = key;
+      if (key != _lastLampKey && _phaseLampAllowed(key)) {
+        if (await lamp.writeFrames(ilinkFramesForPhase(state.phase))) {
+          _lastLampKey = key;
+          _lampFailKey = null;
+        } else {
+          _phaseLampFailed(key);
+        }
       }
       if (state.phase == 'fatigue') {
         await _playFatigueMusic();

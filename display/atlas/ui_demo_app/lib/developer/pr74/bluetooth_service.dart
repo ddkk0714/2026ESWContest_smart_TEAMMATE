@@ -97,6 +97,12 @@ Future<bool> rediscoverDevice(AtlasBluetoothService bluetooth, String address,
 bool isAlreadyConnectedError(Object? error) =>
     error != null && '$error'.toLowerCase().contains('already connected');
 
+/// V44: 쓰기가 "Invalid GATT characteristic for the given service"(InvalidArgs)로 거절됐나 — 링크는 살아 있는데
+/// 이 링크의 서비스 목록에 특성이 없다(11-02 14:41 Pi 5: 검색이 실패 1 → "응답에 UUID 없음" 으로 끝난 링크).
+bool isUnknownCharacteristicError(Object? error) =>
+    error != null &&
+    '$error'.toLowerCase().contains('invalid gatt characteristic');
+
 /// V38: 저장된 블루투스 기기에 다시 붙는 공통 틀 — 선풍기(BleFanControl, 10-24)의 방식을 램프·스피커도 쓴다.
 /// 최대 [attempts] 번 [attempt] 해 보고, 실패 사이에 [retryDelay] 를 기다리며, 짝수 번째 실패 뒤에는
 /// [rediscover] 로 기기를 다시 찾은 다음 붙는다. 실패 뒤마다 [stop] 을 보고 true 면 그만둔다(기기를 바꿈·명령 만료).
@@ -555,6 +561,39 @@ class AtlasBluetoothService {
     _gattConnections[address] = connection;
     return connection;
   }
+
+  /// V44: 이미 맺은 [address] 링크로 DiscoverServices 를 다시 해 서비스 목록을 새로 받는다(clientId 는 그대로).
+  /// 돌려준 연결이 앱이 들고 있을 연결이다 — 옛 객체로 [disconnectGatt] 하면 목록에서 빠지지 않는다.
+  /// 이 앱이 맺은 링크가 없거나 검색이 끝내 실패하면 던진다.
+  Future<GattConnection> refreshGattServices(String address,
+          {String role = '램프'}) =>
+      _adapterOperation(() async {
+        final key = address.toUpperCase();
+        final existing = _gattConnections[key];
+        if (existing == null) {
+          throw StateError('$role GATT 링크가 없습니다 ($key)');
+        }
+        final discovered = await discoverUntilServices(
+            () async => (await _bluetooth.callMethod(
+                  _gattInterface,
+                  'DiscoverServices',
+                  [DBusString(existing.adapter), DBusString(key)],
+                ))
+                    .returnValues,
+            onError: (error, attempt) => diag.write(
+                '$role 서비스 다시 검색 실패 $attempt ($key, ${existing.clientId}): $error'),
+            onEmpty: (retry) =>
+                diag.write('$role GATT 서비스 $key: 빈 목록 — 다시 검색 $retry'));
+        final services = gattServiceUuids(discovered);
+        diag.write(
+            '$role GATT 서비스 다시 검색 $key: ${services.isEmpty ? '응답에 UUID 없음' : services.join(', ')}');
+        final refreshed = GattConnection(
+            adapter: existing.adapter,
+            clientId: existing.clientId,
+            services: services);
+        _gattConnections[key] = refreshed;
+        return refreshed;
+      });
 
   Future<DBusArray?> _gattStatus() async {
     final status = await _bluetooth.callMethod(_gattInterface, 'GetStatus', []);
