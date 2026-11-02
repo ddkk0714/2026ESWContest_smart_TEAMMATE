@@ -219,6 +219,12 @@ class LiveHub:
             load_personalize_config() if load_personalize_config is not None else {})
         # 프로파일의 personalize: 절(정책 gate.conf_auto 등) — FSM 만 낮추고 정책이 0.75 로 남아 자동이 제안으로 깎이던 결함(10-24 PC 리허설)
         self.personalize_cfg = apply_section(self.personalize_cfg, "personalize", self.profile or "")
+        # 11-02 사용자 "지금은 개인화 하지 말아봐" — hub.env DESKMATE_PERSONALIZE=off 면 사람별로 고르고 배우는 것을 끈다:
+        # 개입 선택 정책(밴딧, 기록은 계속 — FSM 기본 개입이 나간다)과 카드 응답 반응 학습. 다시 켜려면 줄을 지우고 허브만 재시작.
+        self.personalize_off = os.environ.get("DESKMATE_PERSONALIZE", "").strip().lower() in ("off", "0", "false")
+        if self.personalize_off:
+            self.personalize_cfg = dict(self.personalize_cfg, enabled=False)
+            print("[personalize] DESKMATE_PERSONALIZE=off — 개입 선택 정책·반응 학습 끔(기록만)", file=self.out, flush=True)
         # `enabled: true` 면 3층 정책(InterventionPolicy, 순수 Python — Pi 4 에서도 돈다)도 켜서 결정 tick 에
         # arm·전달 게이트를 고르고 profiles/<profile_id>/policy.json 에 학습 상태를 저장한다.
         self.personalize_recorder: EpisodeRecorder | None = None
@@ -259,6 +265,8 @@ class LiveHub:
             load_learning_config() if load_learning_config is not None else {})
         # 프로파일의 learning: 절(keep_floor 등) — 시연에서 공통모델 학습기(α 0.3)가 점수를 0.05 낮춰 첫 깨우기가 늦어지던 것(PC 리허설 10-25)
         self.learning_cfg = apply_section(self.learning_cfg, "learning", self.profile or "")
+        if self.personalize_off:
+            self.learning_cfg = dict(self.learning_cfg, enabled=False)
         # 프로필 id 는 identity.active_profile_id 한 곳에서 — 개인화 정책·반응 학습 상태 파일이 같은 사람을 가리킨다
         self.profile_id = active_profile_id(self.learning_cfg, self.personalize_cfg)
         rec = self.personalize_recorder
