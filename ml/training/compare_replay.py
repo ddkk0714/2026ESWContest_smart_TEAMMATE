@@ -95,7 +95,9 @@ def run(frame_paths, bundle, output, *, fsm_config=None, ingest_config=None, pol
     if output.exists() and any(output.iterdir()):
         raise ValueError("output must be fresh")
     cfg = load_personalization_config()
-    cfg.update(enabled=True, model_path=str(bundle/"selected.tflite"), metadata_path=str(bundle/"selected.metadata.json"))
+    # 이 도구는 TFLite 번들을 비교한다. 보드 기본값(backend: portable_cnn, 3fa0bb3)을 그대로 쓰면
+    # .tflite 를 못 읽어 전 구간 unavailable 인 보고서가 조용히 나온다.
+    cfg.update(enabled=True, backend="tflite", model_path=str(bundle/"selected.tflite"), metadata_path=str(bundle/"selected.metadata.json"))
     ingest = load_ingest_config(ingest_config)
     fsm = load_config(fsm_config)
     with open(policy_path,encoding="utf-8") as source:
