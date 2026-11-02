@@ -114,6 +114,42 @@ void main() {
       expect(fan.lastState?.level, 2);
     });
 
+    test('V43: turning off reports the state just before as previous',
+        () async {
+      fan.select(_fanAddress);
+      bluetooth
+        ..state = _state(power: true, speed: 60, level: 2)
+        ..onWrite = (_) => bluetooth.state = _state(power: false, speed: 0, level: 0);
+      final result = await coordinator.handleControlCommand(
+          {..._command('p1'), 'value': 'off', 'origin_state': 'ABSENT'});
+      expect(result?['status'], 'succeeded');
+      expect(result?['actual_value'], 'off');
+      expect(result?['previous'], {'power': 'on', 'speed': 60, 'level': 2});
+    });
+
+    test('V43: a known state is used as previous without another read',
+        () async {
+      fan.select(_fanAddress);
+      bluetooth.state = _state(power: true, speed: 100, level: 3);
+      await coordinator.handleControlCommand(_command('p2')); // 상태를 한 번 알게 됨
+      final reads = bluetooth.reads;
+      bluetooth.onWrite =
+          (_) => bluetooth.state = _state(power: false, speed: 0, level: 0);
+      final result = await coordinator.handleControlCommand(
+          {..._command('p3'), 'value': 'off'});
+      expect(result?['previous'], {'power': 'on', 'speed': 100, 'level': 3});
+      expect(bluetooth.reads, reads + 1); // 쓰기 뒤 확인 읽기 한 번뿐
+    });
+
+    test('V43: an unreadable fan leaves previous out', () async {
+      fan.select(_fanAddress);
+      bluetooth.state = null; // 상태 읽기가 실패한다
+      final result = await coordinator.handleControlCommand(
+          {..._command('p4'), 'value': 'off'});
+      expect(result?['status'], 'succeeded');
+      expect(result!.containsKey('previous'), isFalse);
+    });
+
     test('level change reports the level the fan is at', () async {
       fan.select(_fanAddress);
       bluetooth.state = _state(speed: 100, level: 3);
@@ -422,7 +458,12 @@ class _FakeBluetooth implements AtlasBluetoothService {
     frames.add(List.of(value));
     serviceIds.add(serviceId);
     characteristicIds.add(characteristicId);
+    onWrite?.call(value);
   }
+
+  /// 쓰기 뒤 선풍기 상태를 바꾸는 흉내(V43 previous 시험).
+  void Function(List<int> value)? onWrite;
+  int reads = 0;
 
   @override
   Stream<List<BluetoothDeviceInfo>> scanProgressive(
@@ -438,6 +479,7 @@ class _FakeBluetooth implements AtlasBluetoothService {
     required String serviceId,
     required String characteristicId,
   }) async {
+    reads++;
     final value =
         characteristicId == fanMicroStatusUuid ? microState : state;
     if (value == null) throw StateError('read not supported');

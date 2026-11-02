@@ -1,4 +1,10 @@
-# DESKMATE V42
+# DESKMATE V43
+
+> **V43(0.43.0, 2026-11-02)** = V42 + **한 가지**: 끄기 결과에 끄기 직전 상태(`previous`)를 싣는다.
+> hub(feat/profile-rank-prior 84aea1f)는 1분 자리 비움이면 선풍기·무드등·음악을 끄고(cause absent), 다시 앉아 10 s 재실이면
+> 그 결과의 previous 로 되돌린다(cause return). 무드등 `set_power` 결과의 previous = 바꾸기 전 원시 밝기(꺼져 있었으면 0, 모르면 생략,
+> adjust_brightness 와 같은 뜻), 선풍기 명령 결과의 previous = 쓰기 직전 상태 {"power":"on"|"off","speed":0~100,"level":0~3}
+> (마지막으로 읽은 상태, 없으면 같은 연결로 한 번 읽음, 못 읽으면 생략). 음악은 V32 부터 previous 를 보낸다. 동작·화면 문구는 그대로.
 
 > **V42(0.42.0, 2026-11-02)** = V41 + **한 가지**: 개발자 화면 "제어 진행" 탭의 결과를 "사람이 바른 자세로 돌아오면 성공"으로.
 > hub control_log(feat/profile-rank-prior 544a103)가 자세 원인 명령에 `effect` 를 붙인다 — improved(바른 자세로 돌아옴,

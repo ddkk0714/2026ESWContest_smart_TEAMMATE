@@ -124,6 +124,11 @@ class FanState {
     );
   }
 
+  /// V43: control/result 의 `previous` — 명령 직전 상태. hub 가 자리 비움(absent)에 끈 선풍기를 다시 앉았을 때
+  /// 그대로 되돌린다(set_power "on" + set_speed speed).
+  Map<String, Object> get asPrevious =>
+      {'power': power ? 'on' : 'off', 'speed': speed, 'level': level};
+
   /// control/result 의 actual_value — 명령한 operation 이 바꾸는 값.
   Object? actualFor(Object? operation) => switch (operation) {
         'set_power' => power ? 'on' : 'off',
@@ -179,6 +184,10 @@ class BleFanControl {
   int _generation = 0;
   bool? _lastRediscovered;
   bool? get lastRediscovered => _lastRediscovered;
+
+  /// V43: 마지막 [send] 가 쓰기 직전에 본 상태(control/result 의 previous). 연결도 못 했거나 못 읽었으면 null.
+  FanState? _stateBeforeSend;
+  FanState? get stateBeforeSend => _stateBeforeSend;
 
   Future<void> _release(GattConnection? connection) async {
     if (connection == null) return;
@@ -291,6 +300,7 @@ class BleFanControl {
     const notSent = (written: false, state: null);
     if (generation != _generation) return notSent;
     _lastRediscovered = null;
+    _stateBeforeSend = null;
     if (!configured) return notSent;
     bool expired() =>
         expiresTsMs != null &&
@@ -304,6 +314,9 @@ class BleFanControl {
       final micro = firmware == FanFirmware.micropython;
       final payload =
           micro ? microFanCommand(frame, lastOnSpeed: _lastOnSpeed) : frame;
+      // V43: 쓰기 전 상태 — 마지막으로 읽은 상태가 있으면 그것, 없으면 같은 연결로 한 번 읽는다(못 읽으면 null).
+      _stateBeforeSend ??= _lastState ?? await _readState();
+      if (generation != _generation) return notSent;
       if (payload == null) {
         _lastError = UnsupportedError(
             'MicroPython 선풍기는 이 명령(${frame.first})을 받지 않습니다 — 켜기·끄기·단계·속도만');

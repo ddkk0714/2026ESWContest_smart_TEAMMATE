@@ -687,6 +687,38 @@ void main() {
     });
   });
 
+  group('V43 lamp set_power previous', () {
+    Map<String, dynamic> power(String id, String value) =>
+        {..._command(id), 'operation': 'set_power', 'value': value};
+
+    test('turning off reports the brightness just before', () async {
+      final bluetooth = _FakeBluetooth();
+      final c = FeedbackCoordinator(
+          music: _FakeMusic(),
+          lamp: IlinkLampFeedback(bluetooth)..select(firstAddress),
+          bluetooth: bluetooth)
+        ..enabled = true;
+      await c.handleControlCommand(_command('b1')); // set_brightness 70
+      final off = await c.handleControlCommand(power('o1', 'off'));
+      expect(off?['status'], 'succeeded');
+      expect(off?['previous'], 70);
+      final on = await c.handleControlCommand(power('o2', 'on'));
+      expect(on?['previous'], 0); // 꺼져 있었으면 0
+    });
+
+    test('an unknown brightness leaves previous out', () async {
+      final bluetooth = _FakeBluetooth();
+      final c = FeedbackCoordinator(
+          music: _FakeMusic(),
+          lamp: IlinkLampFeedback(bluetooth)..select(firstAddress),
+          bluetooth: bluetooth)
+        ..enabled = true;
+      final off = await c.handleControlCommand(power('o3', 'off'));
+      expect(off?['status'], 'succeeded');
+      expect(off!.containsKey('previous'), isFalse);
+    });
+  });
+
   group('music commands (V32)', () {
     Map<String, dynamic> musicCommand(String id, Object? value,
             {String gate = 'auto', String operation = 'set_music'}) =>

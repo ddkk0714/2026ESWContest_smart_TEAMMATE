@@ -640,6 +640,10 @@ class FeedbackCoordinator {
       ];
     } else if (command['operation'] == 'set_power' &&
         (value == 'on' || value == 'off')) {
+      // V43: 끄기 직전 밝기(꺼져 있었으면 0, 모르면 생략) — hub 가 자리 비움에 끈 무드등을 다시 앉았을 때
+      // set_brightness previous 로 되돌린다. adjust_brightness 의 previous 와 같은 뜻.
+      final previous = lamp.previousBrightness;
+      if (previous != null) extra = {'previous': previous};
       frames = [
         ilinkFrame([0x01, 0x08, 0x05, value == 'on' ? 1 : 0])
       ];
@@ -685,7 +689,13 @@ class FeedbackCoordinator {
           error: 'unsupported_operation_or_value');
     }
     final sent = await fan!.send(frame, expiresTsMs: expires);
-    final recovery = _recovery(fan!.lastRediscovered);
+    // V43: 쓰기 전 상태 {power, speed, level} — hub 가 자리 비움에 끈 선풍기를 다시 앉았을 때 되돌린다.
+    // send 가 같은 연결로 쓰기 직전에 본 것(마지막 상태가 없으면 한 번 읽음). 못 읽었으면 싣지 않는다.
+    final before = fan!.stateBeforeSend;
+    final recovery = {
+      ..._recovery(fan!.lastRediscovered),
+      if (before != null) 'previous': before.asPrevious,
+    };
     if (!sent.written) {
       return _result(command, 'failed',
           error: expires <= DateTime.now().millisecondsSinceEpoch
