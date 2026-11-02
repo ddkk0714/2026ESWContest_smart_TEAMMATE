@@ -1315,6 +1315,16 @@ def test_misjudge_logs_moment_and_tells_hub(tmp_path):
     assert st.mark_misjudge("기타", "")["hub"].startswith("못 보냄")
 
 
+def test_personalize_switch_button():
+    st = dv.Store()
+    st.publisher = FakePub()
+    assert st.send_personalize("yes")["ok"] is False
+    assert st.send_personalize(False)["ok"] is True
+    assert st.publisher.sent[-1] == (dv.TOPIC_FEEDBACK, {"kind": "personalize_switch", "on": False})
+    assert dv.phase_view(env({"fsm_state": "FOCUS_PC", "sensor_summary": {"personalize_switch": "off"}}))[
+        "personalize_switch"] == "off"
+
+
 def test_send_profile_and_hub_ack():
     st = dv.Store()
     st.publisher = FakePub()

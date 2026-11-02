@@ -189,6 +189,7 @@ def phase_view(envelope: Any) -> dict[str, Any]:
         "prior": prior or DASH,
         # hub 빠른 시연 모드(demo_mode.py): fast·normal, 옛 hub 면 ""
         "demo_speed": str(_map(ss.get("demo_mode")).get("speed") or ""),
+        "personalize_switch": str(ss.get("personalize_switch") or ""),   # on|off — 옛 hub 면 빈 값(버튼 없음 표시)
     }
 
 
@@ -2773,6 +2774,13 @@ class Store:
                                       {"posture": snap["posture_service"].get("posture")})
         return {"ok": err is None, "error": err, "hub": rec["hub"]}
 
+    def send_personalize(self, on: Any) -> dict[str, Any]:
+        """개인화 켜기·끄기(11-02) — hub 가 재시작 없이 개입 선택 정책·반응 학습을 켜거나 끈다(feedback/user kind
+        personalize_switch). 지금 상태는 다음 state/phase 의 sensor_summary.personalize_switch."""
+        if not isinstance(on, bool):
+            return {"ok": False, "error": "on 은 true|false"}
+        return self._send(TOPIC_FEEDBACK, {"kind": "personalize_switch", "on": on}, f"개인화 {'켜기' if on else '끄기'}")
+
     def send_demo_mode(self, speed: Any) -> dict[str, Any]:
         """빠른 시연 켜기·끄기 — Pi 5 앱 개발자 모드 스위치와 같은 data {"speed"}. hub 가 시연 프로파일이 아니면 무시한다."""
         if speed not in ("fast", "normal"):
@@ -3533,6 +3541,8 @@ def make_handler(store: Store) -> type[BaseHTTPRequestHandler]:
                 res = store.send_profile(_map(body).get("data"), str(_map(body).get("label") or "")[:20])
             elif path == "/api/feedback":
                 res = store.send_feedback(_map(body).get("request_id"), _map(body).get("verdict"))
+            elif path == "/api/personalize":
+                res = store.send_personalize(_map(body).get("on"))
             elif path == "/api/misjudge":
                 res = store.mark_misjudge(_map(body).get("category"), _map(body).get("note"))
             elif path == "/api/demo-mode":
