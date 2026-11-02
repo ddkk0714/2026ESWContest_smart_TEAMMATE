@@ -1,4 +1,11 @@
-# DESKMATE V38
+# DESKMATE V39
+
+> **V39(0.39.0, 2026-11-02)** = V38 + **한 가지**: 볼륨이 "지금 소리 나는 기기"를 따라간다.
+> V38 까지는 앱 시작 때의 출력 기기(hdmi_speaker)에 볼륨이 묶여, 나중에 블루투스 스피커가 붙어 소리가 bt_speaker 로
+> 나가도 슬라이더가 hdmi_speaker 만 바꿨다(11-02 Pi 5: hdmi 20 · bt 100 — "앱에서 소리를 줄여도 안 줄어든다").
+> 이제 0.5 초 확인과 볼륨 설정 때마다 AudioManager1.ActiveOutputDevice 를 다시 읽어 바뀌었으면 그 기기로 갈아 끼운다.
+> **기기가 바뀌면 슬라이더에는 새 기기의 지금 볼륨을 보여 준다**(사용자가 정한 값을 새 기기에 덮어쓰지 않음 — 스피커 버튼으로
+> 맞춘 볼륨이 갑자기 바뀌지 않게). D-Bus 는 `AudioDeviceBus`(`DbusAudioDeviceBus`)로 분리해 시험한다. `lib/developer/pr74/music_playback.dart`.
 
 > **V38(0.38.0, 2026-11-02)** = V37 + **한 가지**: 저장된 세 기기(램프·선풍기·스피커)를 같은 방식으로 다시 붙는다.
 > 선풍기의 틀(최대 3번, 실패 사이 3초, 두 번째 실패 뒤 3초 이상 검색해 다시 찾기)을 `connectWithRetry`(bluetooth_service.dart)로 빼서
