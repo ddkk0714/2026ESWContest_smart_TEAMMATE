@@ -1,7 +1,7 @@
 # DESKMATE 개발 브리핑
 
-> 기준일: 2026-09-29 (이전 09-14). 이 문서는 작업을 시작할 때 읽는 프로젝트 요약이다.
-> 현재 상태·브랜치 현황은 [`roadmap.md`](roadmap.md) §2·§2-1 이 기준이다.
+> 기준일: 2026-11-02 (이전 09-29). 이 문서는 작업을 시작할 때 읽는 프로젝트 요약이다.
+> 모듈 현황·결정사항은 [`../CLAUDE.md`](../CLAUDE.md) §3·§5 가 기준이고, 서술 수준의 기준은 개발완료보고서 v17 이다.
 > 세부 계약은 아래의 원본 명세를 우선한다.
 
 ## 1. 현재 제품과 구성
@@ -10,12 +10,13 @@ DESKMATE는 카메라·상시 음성·키 내용 수집 없이, 로컬 센서 �
 집중·피로 상태를 추정하고 제안 또는 가역 제어를 제공하는 시스템이다.
 
 ```text
-ESP32 (mmWave·환경) ── UART2 / COBS + CRC-16 ──> Pi 4 Hub
+ESP32 (ToF L8 ×2 · mmWave · 환경) ── USB 시리얼 / COBS + CRC-16 ──> Pi 4 Hub
                                                       │ MQTT (LAN, TCP 1883)
 PC 키스트로크 특징 ─────────────── MQTT ─────────────┤
                                                       └────────────> Pi 5 Atlas UI
-ToF VL53L9CX ── 경로 결정 전 (Pi 4 CSI-2 또는 ESP32 I2C) — 미연결
-(임시·결정 필요) ESP32-CAM ─USB─> Pi 5 camsvc 자세 판정  ※ §3 참고
+                                                                     └─ BLE·A2DP ─> 무드등 · 선풍기 · 스피커
+ToF 자세: ESP32 가 센서별 원본 8×8 을 UART 0x05 로 Pi 4 에만 → Pi 4 CNN+GRU 추론 (hub/atlas-tof)
+카메라는 제품 경로에 없다. camsvc·camtest 는 개발 앱, depth_teacher 는 오프라인 라벨링 도구다.
 ```
 
 | 계층 | 장치 | 책임 | 저장소 |
@@ -56,17 +57,21 @@ Docker는 개발 PC의 빌드 환경일 뿐 보드에서 실행하지 않는다.
   `typing_active=false`, `idle_ratio=1.0`으로 표현한다.
 - 환경값은 SCD41(CO₂), DHT22(온습도), BH1750(조도)의 단일 센서 측정값이며 보정값을
   만들어 넣지 않는다.
-- Pi 5 디스플레이는 교체 후 터치가 정상이다. 앱 자동 시작과 실기 release 재검증은 남았다.
-- 임시 제어 기기로 iLink 블루투스 램프(`hub/deskmate_hub/control/ilink_light.py`)를 쓸 수 있다.
+- Pi 5 디스플레이는 교체 후 터치가 정상이다. 앱 자동 시작은 아직 없다.
+- **제어 기기는 iLink BLE 무드등 · Pico 2 W BLE 선풍기 · A2DP 스피커**다(스마트 플러그는 채택하지 않았다).
+  LG ThinQ 공기청정기는 API 로 풍량 제어·공기질 읽기를 확인했고 FSM 연동은 예정이다.
+- **블루투스 연결 규칙**: 스피커는 페어링하고, **램프·선풍기는 페어링하지 않는다**(설정 앱에서 연결해 두면 앱 Connect 가 거절된다).
+  복원 순서는 램프 → 선풍기 → 스피커. 근거와 판별 기록은 `display/atlas/ui_demo_app/README.md` 맨 위.
+- **UART TYPE 은 구현 기준으로 확정**: 0x20 mmWave · 0x10 env · 0x03 자세 규칙 · 0x05 ToF 원본 8×8 · 0xF0 heartbeat(`data-spec.md` §13.1).
+  운영 경로는 ESP32 → Pi 4 **USB 직결**이고 GPIO UART2 는 대체 경로다.
+- **부팅 자동 시작은 현재 ATLAS 이미지에서 불가**하다. 부팅마다 `install.sh pi4|pi5 --runtime-only` 를 한 번 돌린다(`docs/reboot-recovery.md`).
 
 ## 3. 아직 결정하지 말아야 할 사항
 
 | 항목 | 현재 상태 |
 |---|---|
-| **카메라 기반 자세 판정** (09-18 main 반영, `display/atlas/camsvc`·`camtest`) | §4 비협상 제약(카메라 영상 미수집)과 충돌. ToF 대역 개발용으로만 둘지, 제품 기능으로 채택하고 포스터 서술을 바꿀지 **팀 결정 전**. 결정 전에는 카메라 경로를 확장하거나 시연·제출 빌드의 기본값으로 만들지 않는다 (`roadmap.md` §3 I7) |
-| UART TYPE·mmWave payload·CRC test vector | **잠정안 기록됨**(`data-spec.md` §13.1, 2026-09-15): mmWave 0x20 · env 0x10 · heartbeat 0xF0, CRC-16/CCITT-FALSE, COBS. 팀이 다른 값을 원하면 `uart_frame.py` 상수와 펌웨어 `frame_types.h` 만 바꾼다. MVP 는 PC USB 브리지로 우회 |
-| `C_focus`의 부호 | 현재 구현의 “큰 값 = 집중 증거”를 임의 변경하지 않음 |
-| ToF 연결 경로 | Pi 4 CSI-2(Path A) / ESP32 I2C binning(Path B). 09-19 spike 마감 경과, 결정 기록 없음 — 규칙상 Path B, 팀 확인 필요 |
+| **카메라 코드** (`display/atlas/camsvc`·`camtest`) | **제품 경로에는 카메라가 없다**(제품 앱에 카메라 기능 없음, 자세는 ToF). 둘은 ToF 도착 전에 쓴 개발 앱이다. 카메라 경로를 확장하거나 시연·제출 빌드에 넣지 않는다. 레포에서 지울지는 팀 결정(`CLAUDE.md` §5 열린 항목 0) |
+| `C_focus`의 부호 | 현재 구현의 “큰 값 = 집중 저하 증거”를 임의 변경하지 않음 |
 | 개인화 저장소·동의 | 로컬 opt-in 정책과 저장 방식을 결정 전에는 확장하지 않음 |
 | 스마트 플러그·ThinQ 제어 모델 | 기본은 스마트 플러그 기반 가역 제어, 실기기 모델은 미선정(09-28 마감 경과). 제어 디스패처·mock 플러그는 `feat/edge-hub-port` 에 있음 |
 

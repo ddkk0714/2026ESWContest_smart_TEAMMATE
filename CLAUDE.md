@@ -8,7 +8,8 @@
 > 조명·환기·자세·휴식을 자동 실행/제안하는 비침습 워크스페이스 가전.
 > **카메라·마이크 미사용. 센싱·추론·제어 모두 로컬.**
 
-이 문서는 팀 전체가 보는 **러프 개발 로드맵 + 모듈 현황 + 결정사항**이다. 기준일 **2026-10-01**(모듈 현황 갱신, 이전 09-29). 브랜치별 미반영 작업은 `docs/roadmap.md` §2-1, 실기 없이 하는 다음 계획은 `docs/plan/next-development-plan.md`(W1~W7). 아래 "(DI)" = `feat/display-intervention`(로컬 커밋, PR 예정).
+이 문서는 팀 전체가 보는 **러프 개발 로드맵 + 모듈 현황 + 결정사항**이다. 기준일 **2026-11-02**(main `7e7289e`, PR #103 까지. 이전 10-01).
+서술 수준의 기준은 **개발완료보고서 v17** 이고, 숫자·실측은 노션이 원본이다. 아래 "(DI)" 표기는 PR #33 으로 머지돼 더 이상 쓰지 않는다.
 상세 설계와 현재 계획은 `docs/README.md`의 문서 지도를 참조한다.
 
 > **개발 방식은 각자 자유다.** 어떤 CLI 로 어떻게 작업하든 상관없다. 다만 push 나 파괴적 Git 작업은 명시적으로 요청할 때만 하게 해두는 편이 안전하다.
@@ -19,12 +20,13 @@
 
 ```
 [ 센싱 ]                                   [ 추론 ]                    [ 출력·제어 ]
-ESP32 (mmWave C1001·CO₂·온습도·조도) ─UART2─┐
-VL53L9CX ToF (경로 미결: Pi4 CSI-2 / ESP32 I2C)┼─► Raspberry Pi 4 hub ─MQTT(이더넷 직결)─► Raspberry Pi 5
-PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘   FSM(1단계)+TFLite(2단계)   Atlas Flutter 7" 터치 UI
-                                                        │                    수락·거절·정정 피드백 ↩
-                                                        ▼
-                                               스마트 플러그 / ThinQ (조명·환기)
+ESP32 (ToF L8 ×2·mmWave C1001·CO₂·온습도·조도)┐
+            └ USB 시리얼(COBS+CRC-16, 115200)─┼─► Raspberry Pi 4 hub ─MQTT(이더넷 직결)─► Raspberry Pi 5
+PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘   ToF 자세(CNN+GRU)            Atlas Flutter 7" 터치 UI
+                                                 FSM 18상태 + 개인화          수락·거절·되돌리기 ↩
+                                                        │                            │ BLE·A2DP
+                                                        ▼                            ▼
+                                               ThinQ 공기청정기(연동 예정)   무드등·선풍기·스피커
 ```
 
 | 계층 | 장치 | 디렉터리 | 담당 |
@@ -57,55 +59,45 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 
 | 모듈 | 담당 | 상태 | 메모 |
 |---|---|---|---|
-| `hub/inference/` FSM 1단계 | 박소연 | ✅ | 18상태 엔진·`report.py`·리플레이·데모 main. 재시도 원인은 제안까지만(`gate.retry_max`)·ESM 지표(`session/report.metrics`)는 (DI). hub 테스트 155 통과·1 xfail(DI) |
-| `hub/atlas/` Pi 4 native service | 공통 | 🟡 | IPK 로 제한 Python FSM 실행, C++ `uart_rx`(09-16 실수신 rx=132·crc 0), C++ 네이티브 MQTT 브리지. 재부팅·재설치 후 `pi4-hub-activate.sh` 필요(`feat/edge-mvp-nodered`). 자동 시작 없음 |
-| `hub/ingest/` + `live.py` | 이민혁·공통 | ✅ | MQTT·`UART	` 라인 → `SensorCache` → 10 s `SensorFrame` → FSM → `state/phase`·`interaction/request`·`health/hub`. 환경 특징 확장(CO₂ 상승·온습도·조도, `env_flags`)·feedback 4종·ESM 기록(`esm.py`)은 (DI). `config/ingest.yaml` 임시 스케일 |
-| `hub/features/` baseline 정규화 | 김태환 | 🟡 | 중앙값·MAD Modified z `baseline.py`(세션 보정 창·시간대 버킷·opt-in 저장), ingest 기본 `normalization: baseline` — main(PR #27). z_full·mad_floor 실측 튜닝 남음 |
-| `hub/control/` 플러그·ThinQ | 조명희 | 🟡 | iLink 블루투스 램프 어댑터(main, PR #22) + ACTION_ENV 디스패처·mock 플러그·`config/control.yaml`(main, 보드에서는 `CMD	` 라인 → C++ 가 `control/cmd` 발행). 되돌리기 60 s 창·화면 카드 만료 처리는 (DI). **스마트 플러그 미선정** |
-| `hub/inference/` TFLite 2단계 | 조명희 | ⬜ | 선택적 의존. 라벨 축적 후 |
-| `ml/` 학습→TFLite | 조명희 | 🟡 | 학습 창·증강·증거 리포트 파이프라인(DI, W5) — 합성 180세션, `docs/ml-augmentation-evidence.md`(결측 내성 +2.7%p). 공개 데이터셋 조사 `docs/dataset-survey.md`. 1D CNN·TFLite 는 미착수 |
-| `firmware/` ESP32 | 이민혁·김태환 | 🟡 | C1001 + DrowsyDetector, 환경 센서(SCD41·BH1750·DHT22) 드라이버, USB JSON + UART2 COBS/CRC. 실보드 플래시 09-16. C1001 무응답·재시도·SCD41 수정 5커밋은 `feat/edge-mvp-nodered` |
-| `display/` Atlas UI | 최민경 | 🟡 | 통합 앱 + 연결 탭·연결 배지·MQTT 감시·BT 자동 재연결(PR #30~#32). 자동 실행 알림·되돌리기·제안 카드 이유/남은 시간·정정 입력·대기 위젯(DI). 실기 확인·자동 시작 없음 |
-| `display/atlas/camsvc`·`camtest` 카메라 자세 | 박소연 | ⚠ | ESP32-CAM + MediaPipe 스켈레톤 판정(PR #20). 통합 앱 자세 탭은 `base/camera-zone-views`(PR #25). **"카메라 미사용" 원칙과 충돌 — 팀 결정 필요**(`docs/roadmap.md` §3 I7) |
-| `collector/` 키스트로크 | 최민경 | ✅ | main 진입(PR #15). 공통 envelope 발행·이식성 설정 문서는 `feat/edge-hub-port`(테스트 10) |
-| `tools/` | 공통 | ✅ | `uart_mqtt_bridge.py`, Node-RED 대시보드, Pi 4 정적 Mosquitto·핫스팟 스크립트(PR #18), 시나리오 sim·로컬 리허설. 5분 시연(`--scenario demo`·`demo_dryrun.py`)·판정 주기 측정·ESM 집계는 (DI) |
-| ToF 파이프라인 | 김태환 | 🚧 | **미연결, Path A/B 미결(09-19 마감 경과).** 기하 특징 7종 → 자세 분류 알고리즘·호스트 테스트는 `feat/tof-posture`(`firmware/esp32_sensor_node/src/preprocess/tof/`, 격자 무관). 센서 드라이버·UART 0x03/0x04·hub 매핑 남음 |
+| `hub/inference/` FSM 1단계 | 박소연 | ✅ | 18상태 엔진·이중 신뢰도·원인 라우팅·게이트(0.45/0.75+α)·조합 조건 guard(PR #46)·빠른 시연 모드(`demo_fast`). `report.py`·리플레이·데모 하네스 |
+| `hub/atlas/` Pi 4 native service | 공통 | ✅ | IPK 로 제한 Python FSM 실행, C++ USB/UART 디코더·네이티브 MQTT·ToF 0x05 중계·제어 로그 API(8765). **부팅 자동 시작은 ATLAS 제약으로 불가** — 부팅마다 `install.sh pi4 --runtime-only` |
+| `hub/atlas-tof/` ToF 자세 서비스 | 김태환 | ✅ | 센서별 8×8 → CNN+GRU → log-softmax 융합(9라벨), 장치 위치별 모델 전환·GRU 리셋(PR #52·#55·#72). 벽 잡음 실측 σ 2 mm — 오판 원인 아님(PR #67·#76) |
+| `hub/ingest/` + `live.py` | 이민혁·공통 | ✅ | USB 직결(PR #61)·MQTT → `SensorCache` → 10 s `SensorFrame` → FSM → `state/phase`·`interaction/request`·`health/hub`. 환경 특징(CO₂ 상승·온습도·조도 `env_flags`)·ESM 기록 |
+| `hub/features/` baseline 정규화 | 김태환 | ✅ | 중앙값·MAD Modified z(세션 보정 창·시간대 버킷·opt-in 저장), ingest 기본 `normalization: baseline` |
+| `hub/control/` 제어 | 조명희 | ✅ | ACTION_* → `control/cmd`/`control/result`, % 밝기·쿨다운 300 s·되돌리기·비가역 자동 금지, CO₂ 창문 환기(`co2_window.yaml`), 자리 비움 끄기/복귀, **제어 진행 로그**(PR #101·#103). 가전 제어 플랫폼·Mock Gateway(PR #57·#80) |
+| 개인화 (`personalize/` `learning/` `personalization/`) | 조명희·박소연 | ✅ | 보드에서 도는 프로필 prior·암묵 신호·반응학습(PR #73). 2단계 공용 1D CNN 은 **관찰 전용**(FSM 판정 불변) |
+| `ml/` 학습·변환 | 조명희 | 🟡 | 공용 CNN 학습·증강·portable/TFLite 변환·리플레이 비교. **실사용 ESM 라벨로 재학습은 결선 이후** |
+| `firmware/esp32_sensor_node` | 이민혁·김태환 | ✅ | VL53L8CX ×2(UART `0x05`)·C1001 mmWave·SCD41/BH1750/DHT22, USB 직결 COBS+CRC-16. 10-24 실기 rx 527·crc 0 |
+| `firmware/pico2w_ble_fan` | 박소연 | 🟡 | BLE 선풍기 1·2·3단·자연풍·꺼짐 타이머(PR #66·#68·#69·#70). 주소·광고·본딩 수정 PR #91·#93 은 **실기 미검증** |
+| `display/` Atlas UI | 최민경 | ✅ | DESKMATE 앱 V46 — 위젯 홈·제안/자동 실행 카드·되돌리기·리포트·개발자 모드·제어 진행 탭, 블루투스 세 기기(램프·선풍기·스피커) 연결(PR #95·#97). 재부팅 자동 시작 없음 |
+| `display/atlas/camsvc`·`camtest` | 박소연 | 개발용 | ToF 도착 전 자세 판정을 확인하려고 만든 **별도 개발 앱**. 제품 앱(`ui_demo_app`)에는 카메라 기능이 없고, 제품 자세 판정은 ToF 다. 시연·제출 빌드에 넣지 않는다 |
+| `collector/` 키스트로크 | 최민경 | ✅ | 키 값 미수집 타이밍 특징, Pi 4 브로커 자동 찾기·로그인 자동 시작(PR #98) |
+| `tools/` | 공통 | ✅ | 노트북 개발자 화면 devview(제어 진행·빠른 시연)·시나리오 sim·로컬 리허설·복구 설치기·Node-RED·ThinQ 수집기 |
+| `dataset/` | 김태환·박소연 | ✅ | MuJoCo·SMPL-X ToF 시뮬(`tof_sim_v5`), 실측 녹화·벽 잡음 도구, 깊이 카메라 교사 라벨(`depth_teacher`, **오프라인 라벨링 전용·제품 경로 아님**) |
 ---
 
-## 4. 실행 계획 (2026-09-14 재기준)
+## 4. 개발계획서 11항목 — 최종 상태 (2026-11-02)
 
-주차 표는 두지 않는다. 계획은 [docs/roadmap.md](docs/roadmap.md) §4 의 **체크리스트**가 유일한 기준이다.
+서류 제출 10-28 · 발표 심사 11-06. 상세 이력은 [docs/roadmap.md](docs/roadmap.md).
 
-**4-A. 이번 주 MVP — 마감 09-18(금).** 실센서 값이 MQTT 로 들어와 **Node-RED 에서 시각화**되고, **FSM 을 통과한 결과(상태·C_fatigue·C_focus)가 표시**된다.
-제어·개입·개인화는 범위 밖. 지름길 두 개(ESP32→PC USB 브리지, hub 를 PC Python 으로 실행)를 쓰되 계약은 제품 경로와 같게 지킨다.
+| # | 개발계획서 항목 | 상태 |
+|---|---|---|
+| 1 | 요구사항 분석·시스템 구조 설계 | ✅ 3종 보드·USB 직결·MQTT·ToF 경로 전부 확정 |
+| 2 | HW 구성·센서 인터페이스 | ✅ ToF L8 ×2·mmWave·환경 3종 배선·실수신. 하우징은 조립 수준 |
+| 3 | MQTT 통신·로깅 파이프라인 | ✅ Pi 4 Mosquitto·C++ 네이티브 MQTT·USB 디코더·ESM/제어 로그. **부팅 자동 시작만 불가**(ATLAS 제약) |
+| 4 | ToF·환경·키스트로크 특징 추출 | ✅ 4종 신호 → 10 s `SensorFrame`, 개인 기준선 정규화 |
+| 5 | 작업 모드 판단·규칙 FSM 엔진 | ✅ 18상태·guard·게이트. 실센서 경로 10-24 확인 |
+| 6 | 디스플레이 UI·제안 카드·리포트 | ✅ 앱 V46. 재부팅 자동 시작 없음 |
+| 7 | 조명·환기팬·제어 | ✅ BLE 무드등·선풍기·스피커 + 되돌리기·쿨다운·제어 진행 로그. ThinQ 공기청정기는 API 확인까지(FSM 연동 예정) |
+| 8 | 데이터 수집·ESM 라벨링·임계값 보정 | 🟡 ESM·KSS 수집 도구·시뮬 보정 완료. **실사용 로그 기반 보정은 결선 이후** |
+| 9 | 통합 MVP | ✅ 실센서 → FSM → 제어 → 되돌리기 경로 실기 확인(10-24 · 11-02) |
+| 10 | 시험 평가·최적화 | 🟡 결측·유실·판정 주기·시연 시나리오 완료. **2시간 연속 구동 미측정** |
+| 11 | 보고서·소개서·시연 영상 | 🟡 보고서 v17·소개서 제출. **시연 영상 링크 미정** |
 
-| 요일 | 목표 |
-|---|---|
-| 화 09-15 | ESP32 코드 이관 + USB 1 Hz JSON 라인 → `tools/uart_mqtt_bridge.py` → broker. `feat/merge-pending` 머지 후 키스트로크 토픽 확인 |
-| 수 09-16 | Node-RED 대시보드(mmWave·환경·키스트로크 차트, seq 갭, JSONL 로거) |
-| 목 09-17 | `hub/ingest/mqtt_source.py` → 10 s `SensorFrame` → FSM → `state/phase` 발행, Node-RED FSM 패널 (보너스: Pi 5 MQTT 빌드) |
-| 금 09-18 | 시나리오 1회 통과(착석→타이핑→정적→이탈), 리플레이 재현, 노션 기록, PR |
-
-**4-B. 11월 완전 개발 — 개발계획서 11항목 체크리스트.** 마감은 결선 역산: 통합 MVP 10-05 · 시험 평가 10-19 · 서류 10-30 · 발표 11-06.
-
-| # | 개발계획서 항목 | 마감 | 상태 |
-|---|---|---|---|
-| 1 | 요구사항 분석·시스템 구조 설계 | 09-19 | 🟡 **마감 경과** — ToF 경로·UART TYPE 확정·플러그 모델 남음 |
-| 2 | HW 구성·센서 인터페이스 | 09-28 | 🟡 **마감 경과** — mmWave·환경·화면 완료, ToF·플러그 남음 |
-| 3 | MQTT 통신·로깅 파이프라인 | 09-28 | 🟡 Pi 4 broker·UART 디코더·ingest·hub 발행 완료. frames 로그 = 리플레이 형식 확인, 브로커 재시작 재연결 시험(DI). 자동 시작 남음 |
-| 4 | ToF·환경·키스트로크 특징 추출 | 10-05 | 🟡 키스트로크·mmWave·baseline 완료, 환경 특징 확장(DI). ToF 7종 남음 |
-| 5 | 작업 모드 판단·규칙 FSM 엔진 | 10-12 | ✅ 엔진 완료, 합성 채터링 시험, 재시도 게이트(DI). 실센서 검증·충돌 확인 남음 |
-| 6 | 디스플레이 UI·제안 카드·리포트 | 10-12 | 🟡 통합 앱·리포트 MQTT·연결 안정화 main, 자동 알림·제안 카드·정정·대기 위젯(DI). 실기 확인·자동 시작 남음 |
-| 7 | 조명·환기팬·플러그 제어 | 10-05 | 🟡 iLink 램프·디스패처 main, 되돌리기 창(DI). 스마트 플러그 미선정 |
-| 8 | 데이터 수집·ESM 라벨링·임계값 보정 | 10-19 | 🟡 ESM 스키마·기록·지표(DI), 증강 파이프라인·증거 리포트(DI, W5). 실사용 로그·보정 남음 |
-| 9 | 통합 MVP | 10-05 | 🟡 합성 센서로 피로→제안→수락→팬·조명→회복 1사이클 리허설 통과(DI). 실센서·실기 제어 미재현 |
-| 10 | 시험 평가·최적화 | 10-19 | 🟡 결측·유실 시나리오·판정 주기(PC)·5분 시연 시나리오(DI). Pi 4 실측·연속 구동·정확도 산출 남음 |
-| 11 | 보고서·소개서·시연 영상 | 10-30 | 🟡 보안·프라이버시 절 초안 `docs/security-privacy.md`, 시연 동선 `docs/demo-scenario.md`(DI) |
-
-**병목·의존성**
-- UART 프레임 계약(mmWave TYPE·스키마·CRC test vector)이 Pi 4 디코더·`ingest`·`firmware` 착수의 선행조건. MVP 는 PC 브리지로 우회.
-- ToF Path A/B 결정(09-19)이 항목 2·4 의 게이트. 실패 시 Path B 자동 확정.
-- 스마트 플러그 모델 선정이 항목 7·9 의 게이트.
+**남은 것 (11-02 기준)**
+- 시연 영상 업로드 → README·보고서·노션에 링크
+- 부팅 자동 시작: ATLAS 이미지에서 불가 → 부팅마다 `install.sh pi4|pi5 --runtime-only`. 영구 등록 방법은 LG 측 확인
+- 선풍기 펌웨어 PR #91·#93 실기 확인, 2시간 연속 구동, 실사용 효과 측정
 
 ---
 
@@ -127,27 +119,27 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 - **[해소 09-18] 브로커 위치** — Pi 4 정적 Mosquitto(PR #18). 보드 제한 Python 에 `_socket` 이 없어 hub MQTT 는 C++ 네이티브.
 - **[해소 10-12] ToF 센서** — VL53L9CX 는 LDD 폴트로 포기, **VL53L8CX(8×8) 두 개**를 ESP32 I2C(Path B)에 붙인다. 10-16 실물 연결(펌웨어 `TofArray`, 실기 미검증).
 - **[해소 10-17] ToF 데이터 단위 = 센서 하나의 8×8** — 두 센서는 바깥 8° 조준이라 시야가 대부분 겹쳐 16×8 스티칭은 한 장면이 아니다. ESP32 는 원본 8×8 을 센서별 UART `0x05` 프레임으로 Pi 4 에 보내고(같은 frame_id·TS, 5 Hz), Pi 4 모델은 **센서별 추론 → log-softmax 합 융합**. 16×8 은 노드 규칙 추정기(0x03)·수집기 표시 내부 근사. `docs/data-spec.md` §6.1·§13.1.
-- **[해소 10-17] 자세 모델은 Pi 4 에서** — ESP32 는 원본 전달만. Pi 4 안의 배치는 아래 열린 항목 11.
+- **[해소 10-17] 자세 모델은 Pi 4 에서** — ESP32 는 원본 전달만.
+- **[해소 10-16] ToF 연결 경로** — **Path B**(ESP32 I2C `Wire1` 1 MHz). L8 두 개 실물 연결, 주소는 LPn 으로 분리.
+- **[해소 10-23] 자세 모델의 Pi 4 배치** — 별도 서비스 `deskmate_tofposture`(CNN+GRU, `hub/atlas-tof`). `ingest.yaml tof.posture_source: service`, 없으면 MLP → 0x03 규칙 폴백. 실측 채점(macro-F1 0.456, 후보 17개 중 1위)으로 골랐다.
+- **[해소] UART 프레임 TYPE** — 0x20 mmWave · 0x10 env · 0x03 자세 규칙 · 0x05 ToF 원본 8×8 · 0xF0 heartbeat. 구현·실수신 기준으로 확정(`data-spec.md` §13.1). 운영 경로는 **USB 직결**, GPIO UART2 는 대체 경로.
+- **[해소] 제어 기기** — 스마트 플러그는 **채택하지 않는다**. iLink BLE 무드등 · Pico 2 W BLE 선풍기 · A2DP 스피커로 가고, LG ThinQ 공기청정기는 API 확인까지(FSM 연동은 예정).
+- **[해소 11-02] 카메라 자세 판정(I7)** — **제품 경로에 카메라는 없다.** 제품 앱(`ui_demo_app`)에 카메라 기능이 없고 자세는 ToF 가 판정한다. `camsvc`·`camtest` 는 ToF 도착 전에 쓴 별도 개발 앱, `dataset/depth_teacher` 는 오프라인 라벨링 도구다. 보고서 v17 도 같은 기준으로 서술. (레포에서 개발용 코드를 지울지는 아래 열린 항목.)
 
 ### 열려 있는 항목
-0. **[팀·긴급] 카메라 자세 판정(I7)** — main 의 ESP32-CAM 판정을 개발용 대역으로 한정할지, 제품 기능으로 채택하고 "카메라 미사용" 서술을 바꿀지.
-1. **[팀·09-19 마감 경과] ToF 연결 경로** — Path A(Pi 4 MIPI CSI-2 풀해상도) vs Path B(ESP32 I2C binning). 결정 기록 없음, 규칙상 B.
-2. **[팀] UART 프레임 TYPE·스키마** — 잠정안(0x20 mmWave·0x10 env·0xF0 heartbeat, `data-spec.md` §13.1)으로 구현·실수신 중. 팀 확정만 남음. 목표 속도 460,800+ 실측.
-3. **[팀·09-28 마감 경과] 스마트 플러그 모델** — 로컬 제어 가능 모델 선정·구매. 통합 MVP(10-05) 제어 1사이클의 게이트.
-9. **[팀] 미머지 작업 PR** — PR #27~#32 머지 완료(10-01). 다음은 `feat/display-intervention`(W1~W7) 한 PR. `inference/engine.py` 변경(재시도 게이트)은 박소연 님 리뷰.
-10. **[기본값 10-01] 재시도 원인 게이트** — 첫 원인이 효과 없어 다른 원인을 시도할 땐 자동 대신 제안(`gate.retry_max: suggest`). 포스터 값 0.45/0.75 유지. 이유: 게이트 입력 C_fatigue 가 FATIGUE 확정(≥0.70) 뒤라 제안 구간이 사실상 없었다(`docs/demo-scenario.md` §4). 바꾸려면 알려주기.
+0. **[팀] 개발용 카메라 코드를 레포에서 지울지** — 제품 경로가 아닌 것은 위에서 정리됐다. 남은 선택은 `display/atlas/camsvc`(29파일)·`camtest`(48파일)를 지울지, 개발 기록으로 남길지다. 지워도 git 이력에는 남고, 제품 앱의 로그·설정 파일 경로 이름이 `camtest` 라 **경로 이름은 건드리면 안 된다**(보드 설치본이 그 경로를 읽는다).
 4. **[팀] 새 디스플레이 기록** — 모델명·인터페이스(DSI/HDMI)·전원 경로를 `hardware.md`에 적기.
 5. **[기본값] `C_focus` 부호** — 현재 "큰 값 = 집중 저하 증거". 바꾸려면 알려주기.
-6. **[기본값] 개인화 저장소** — 로컬 파일(JSONL) 잠정. opt-in·삭제 정책은 10-19 전.
-7. **[기본값] RL 정책** — 고정 규칙. 로그 축적 후 활성, 세션당 개입 상한.
-8. **[사무국] 소스 공개 범위** — 전체 Public, 시크릿·라벨만 분리(기본값).
-11. **[팀·10-17] 자세 모델의 Pi 4 배치** — 후보 A: hub Python `posture/tof_mlp.py`(순수 Python MLP, 지금 가중치 `mlp_sim60` 은 PR #39 단일 L8 시뮬 기준선) / 후보 B: 별도 서비스 `deskmate_tofposture`(HTTP 8771, `dataset/tof_sim_v5` PostureNet CNN+GRU, `hub/atlas` 가 0x05 를 tcp:9100 으로 중계 — 이 저장소에 아직 없음). **실측 지시 자세 세션 정확도가 좋은 쪽을 따른다.** 둘 다 센서별 8×8 추론 + 융합이 전제.
+6. **[기본값] 개인화 저장소** — 로컬 파일(JSONL). opt-in·삭제 정책은 `privacy.yaml`·`docs/personalization-privacy-flow.md`.
+7. **[기본값] RL 정책** — 맥락 밴딧 + 울타리. 세션당 개입 상한 6회·쿨다운 300 s.
+8. **[사무국] 소스 공개 범위** — 전체 Public, 시크릿·라벨만 분리(기본값). 11-02 시크릿 스캔: 추적 파일·이력에 토큰·키·비밀번호 리터럴 없음.
+10. **[기본값 10-01] 재시도 원인 게이트** — 첫 원인이 효과 없어 다른 원인을 시도할 땐 자동 대신 제안(`gate.retry_max: suggest`). 포스터 값 0.45/0.75 유지. 바꾸려면 알려주기.
 
 ---
 
 ## 6. FSM 추론 엔진(inference/) 개발 현황 — 박소연
 
-**상태: ✅ 1단계 코어 동작 · `main` 머지됨** (10-01: 재시도 게이트·ESM 기록은 `feat/display-intervention`)
+**상태: ✅ 1단계 완료 · `main`** (11-02: hub 테스트 803 통과 · 9 skip · 1 xfail)
 
 기준 설계: `docs/fsm-spec.md` (VER5, 5계층 18상태, C_fatigue/C_focus 이중 모니터링).
 
@@ -155,21 +147,19 @@ PC (키스트로크 타이밍) ──────────Wi-Fi/MQTT──┘
 - `config/fsm.yaml` — 임계값·컨텍스트 가중치·타이머(`score_period_sec: 10`)·게이트(0.45/0.75)·라우팅 전부 외부화.
 - `inference/` — states(18상태) · types(SensorFrame/Signal 계약) · scoring(이중 신뢰도+재정규화) ·
   context(PC/MIXED/비PC + blend) · cause(dominant 라우팅) · engine(tick 루프·타이머·게이트).
-- `tests/` — 전이 15 · 자세 시나리오(엎드림·노딩) 9 · 표시 9 · 리플레이 11 — **46개(45 통과 · 1 xfail)**, `pytest tests/ -q` 1초.
+- `tests/` — 전이·자세 시나리오·표시·리플레이·guard·개인화·제어까지 **803 통과 · 9 skip · 1 xfail**(11-02, Linux).
 - 리플레이·데모 하네스 — `python -m deskmate_hub --replay <log.jsonl>` / `--demo`.
 - Atlas 미리보기 API(`demo` 서브커맨드, HTTP 8765)와 `bridge` 서브커맨드(`hub/atlas` native service 용 라인 프로토콜).
 - 실행: `cd hub && pip install -r requirements.txt && pytest tests/`
 
 진행/예정
-- 🟡 실센서 `SensorFrame` 연결 — `ingest/` 완료, UART 실수신 확인. 실센서 대표 경로 재현 기록은 아직 없음. baseline 은 `feat/edge-hub-port`.
+- ✅ 실센서 `SensorFrame` 연결 — USB 직결로 ToF·mmWave·환경 수신, 10-24 실기에서 IDLE → START 확인.
 - ✅ hub 측 MQTT 발행(`state/phase` retain, `interaction/request`, `feedback/user` 구독).
-- ✅ `report.py` 세션 리포트·`session/report` 10 s 스냅샷 main. 정량 지표 `metrics`(수용률·무응답률·되돌림률·정정률·회복 시간)는 (DI).
-- 🟡 `control/` ACTION_* → 실제 제어 — iLink 램프(main), 디스패처(`feat/edge-hub-port`), 스마트 플러그 미선정. 10-05.
-- ⬜ 2단계 TFLite 확신도 → 게이트 융합 — 10-19, 선택적.
-- 🚧 조합 조건(guard) — 가중합이 못 쓰는 다신호 AND 규칙(`docs/guard-spec.md`, 브랜치 `feat/fsm-guard`).
-  `config/fsm.yaml` 의 `guards:` 에 선언. `features` 가 `Signal.reasons` 를 채워야 동작한다
-  → guard-spec §4 가 요청 어휘 목록. 팀 승인 대기(E-1).
-- 🚧 MONITOR 의 RL 정책 — 고정 규칙 유지. 로그 축적 후.
+- ✅ 세션 리포트·`session/report` 10 s 스냅샷·정량 지표(수용률·무응답률·되돌림률·정정률·회복 시간).
+- ✅ `control/` ACTION_* → 실제 제어 — BLE 무드등·선풍기·스피커, 제어 진행 로그.
+- ✅ 조합 조건(guard) — 다신호 AND 규칙(`docs/guard-spec.md`, PR #46). `config/fsm.yaml` `guards:` 에 선언.
+- 🟡 2단계 모델 → 게이트 융합 — 지금은 **관찰 전용**. 융합은 실사용 라벨 축적 후.
+- 🟡 MONITOR 의 개입 선택 — 맥락 밴딧 + 울타리(PR #73). 실사용 보상 축적은 결선 이후.
 
 ---
 

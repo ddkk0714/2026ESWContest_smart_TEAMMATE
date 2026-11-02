@@ -110,7 +110,9 @@
 
 - Pi 4 FSM → `control/cmd` → Pi 5 앱이 BLE 로 실행 → `control/result`(QoS 1, 15 s 안에 결과). 명령 · 실행 · 결과를 한 계약으로 묶었다.
 - 결과에 `previous` · `actual` 이 있어 되돌리기는 이전 상태로 복원한다. 사용자가 직접 조작한 값이 자동 명령보다 우선한다.
-- 연결 실패는 재시도 · 차례 · 조용히. 실패마다 시스템 팝업이 쌓여 화면이 멈추던 문제를 고쳐, 자동 연결은 처음과 끊긴 뒤 한 번만 한다.
+- **자리를 1분 비우면** 무드등 · 선풍기 · 음악을 끄고, 다시 앉아 10 s 재실이면 끄기 직전 상태로 되돌린다.
+- 연결 실패는 재시도 · 차례 · 조용히. 세 기기(램프 · 선풍기 · 스피커)를 기기당 3번까지 순서대로 복원하고, 링크가 살아 있으면 끊지 않는다.
+- 명령 하나당 **"왜 → 무엇을 → 결과 → 걸린 시간 → 되돌림"** 을 제어 진행 로그로 남긴다. 자세 개입은 사람이 바른 자세로 돌아오면 성공으로 센다.
 
 ### 6. Pi 5 터치 앱과 개발자 화면
 
@@ -172,7 +174,8 @@ Pi 5 는 `sh /data/share/deskmate/recovery/install.sh pi5 --runtime-only`. 전�
 | 수락 → 무드등 실행 | 0.4 s |
 | 브로커 재시작 뒤 앱 수신 | 재구독 · 상태 감시로 3/3 수신 |
 | ToF 자세 (실측 리플레이, 10-26) | 엎드림 단계 검출 100 % · 오검출 0, 위치 이상 오판 76 → 0 %, 실측 macro-F1 0.456 |
-| 자동 테스트 (10-26 보드 배포판 기준) | hub pytest 604 · Flutter 572 · 펌웨어 unity 61 · ToF 로거 · 시뮬 32 |
+| 세 기기 동시 제어 (11-02 실기) | 램프 · 선풍기 · 스피커를 한 앱에서 함께 제어, A2DP 가 먼저 붙은 최악 조건에서도 셋 다 연결 |
+| 자동 테스트 (11-02, main 기준) | hub pytest **803** 통과 · 9 skip · 1 xfail / Flutter 앱 **332 · 467 · 77 · 9** 통과(analyze 문제 0) / 노트북 개발자 화면 108 통과 / ml 36 통과 |
 
 시뮬 수치는 실측이 아니다. 개입 효과(환기 · 조명 · 휴식 · 자세 안내)는 선행 연구 근거이며, DESKMATE 실사용 측정은 결선 이후 진행한다.
 출처와 조건은 [`docs/sim-results/`](docs/sim-results) · [`docs/ondevice-field-validation.md`](docs/ondevice-field-validation.md) 에 있다.
@@ -226,7 +229,7 @@ Pi 5 는 `sh /data/share/deskmate/recovery/install.sh pi5 --runtime-only`. 전�
 | [`docs/mqtt-topics.md`](docs/mqtt-topics.md) | Pi 4 ↔ Pi 5 MQTT 토픽 · payload |
 | [`docs/hardware.md`](docs/hardware.md) | 배선 · 센서 · 통신 |
 | [`docs/personalization-spec.md`](docs/personalization-spec.md) · [`docs/ondevice-personalization.md`](docs/ondevice-personalization.md) | 개인화 · 온디바이스 학습 |
-| [`docs/demo-scenario.md`](docs/demo-scenario.md) | 시연 동선 |
+| [`docs/demo-scenario.md`](docs/demo-scenario.md) · [`docs/demo-day-runbook.md`](docs/demo-day-runbook.md) | 시연 동선 · 당일 켜는 순서 |
 | [`docs/security-privacy.md`](docs/security-privacy.md) | 보안 · 프라이버시 |
 
 ---

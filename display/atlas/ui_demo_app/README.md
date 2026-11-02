@@ -1,5 +1,19 @@
 # DESKMATE V46
 
+## 블루투스 연결 규칙 (11-02 실기 기준)
+
+세 기기를 한 보드에서 같이 쓰기 때문에 순서와 페어링 여부가 다르다. 아래가 지금 기준이고, 판별 기록은 각 판 메모에 있다.
+
+| 기기 | 페어링 | 연결 |
+|---|---|---|
+| 스피커 `KLZS-L1` (A2DP) | **한다.** 앱이 `Adapter.Pair` 를 부르고, ATLAS 설정 앱에서 Paired 로 둔 상태로 확인했다(V38, 11-02 13:07) | 앱이 A2DP 로 |
+| 램프 `KLZS-L1 app` (BLE GATT) | **하지 않는다.** SMP 미지원이라 설정 앱 페어링은 connected → timeout 으로 끝난다(10-12) | 앱이 GATT 로 |
+| 선풍기 `DESKMATE-FAN` (BLE GATT) | **하지 않는다.** 페어링 없이 붙고, 잊히면 다시 찾아 붙는다(V35 `rediscoverDevice`) | 앱이 GATT 로 |
+
+- **램프·선풍기를 설정 앱에서 연결해 두지 않는다.** 시스템이 GATT 링크를 잡으면 앱 `Connect` 가 `Already connected` 로 거절된다(V38 에서 원인 확인).
+- **복원 순서는 램프 → 선풍기 → 스피커**(V40). 같은 칩의 A2DP 가 먼저 붙으면 램프 GATT 서비스 검색이 연달아 실패할 수 있다(11-02 13:22~13:25).
+- 앱을 다시 켜면 이전 프로세스의 GATT 링크를 먼저 끊는다(V38). 그래도 `Already connected` 가 나오면 Pi 5 를 재부팅한다.
+
 > **V46(0.46.0, 2026-11-02)** = V45 + **한 가지**: 선풍기 상태를 못 읽었을 때 마지막 상태로 두는 것을 펌웨어 판과 상관없이 한다.
 > 15:19 V45 실기에도 끄기 결과에 previous 가 없었다 — 서비스 목록이 비어 판을 C 로 잘못 알면 V45 가 건너뛰었다. 화면 문구는 그대로.
 
@@ -64,8 +78,7 @@
 > Atlas `GetDiscoverableDevices` 는 검색 시작 직후 예전에 알던 기기도 돌려줘서, 첫 결과에 주소가 있다고 바로 끝내면 BlueZ 는 30 초 전에
 > 잊은 기기를 그대로 잊은 채라 `Gatt.Connect` 가 곧바로 취소됐다(11-01 Pi 5 실기, 램프 명령 bluetooth_write_failed). 이제 주소를 봤어도
 > 최소 3 초(`rescanAtLeast`)는 검색을 이어 BlueZ 가 광고를 다시 받게 한다. 명령 만료가 가까우면 그때까지 본 결과로. `bluetooth_service.dart`
-> `rediscoverDevice` 를 램프(`IlinkLampFeedback`)·선풍기(`BleFanControl`)가 같이 쓴다. ATLAS 설정 앱에서 램프·선풍기를 연결해 두면
-> 시스템이 링크를 잡아 앱 연결이 거절되므로 설정 앱에서는 연결하지 않는다.
+> `rediscoverDevice` 를 램프(`IlinkLampFeedback`)·선풍기(`BleFanControl`)가 같이 쓴다. (연결 규칙은 맨 위 블록이 지금 기준이다.)
 
 > **V34(0.34.0, 2026-11-01)** = V33 + **한 가지**: 다른 화면(devview)이 같은 사람 프로필을 고치면 여기에도 남긴다(화면·문구 변경 없음).
 > 앱이 `deskmate/profile/user` 를 구독해, 내가 보낸 게 아니고(`node` ≠ pi5-ui) `profile_id` 가 저장된 프로필이면 그 값을 거꾸로 옮겨
