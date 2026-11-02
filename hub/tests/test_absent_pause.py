@@ -127,3 +127,19 @@ def test_tof_empty_chair_overrides_far_mmwave():
     assert resolve_presence(mm(55), away, cfg)[0] is True                        # 등 기대 ToF 가 멀어도 mmWave 가 가까우면 재실
     assert resolve_presence(mm(119), seated, cfg)[0] is True                     # ToF 가 사람을 보면 예전 규칙
     assert resolve_presence(mm(119), away, {"presence": dict(cfg["presence"], tof_away_overrides=False)})[0] is True
+
+
+def test_music_off_already_off_is_success():
+    """11-02 15:00 실기: 이미 꺼진 음악에 {on: false} — 앱이 전체 상태로 답해도 보낸 항목이 맞으면 성공."""
+    sent = []
+    cfg = {"result_timeout_sec": 15, "suggest_timeout_sec": 180, "undo_window_sec": 60, "cooldown_sec": 300,
+           "irreversible_operations": [], "actions": {}}
+    d = ControlDispatcher(cfg, publish_cmd=sent.append, clock=lambda: 1000.0)
+    d.on_enter_action("ABSENT", "absent", GateMode.AUTO,
+                      specs=[{"target_id": "music", "operation": "set_music", "value": {"on": False}, "ignore_cooldown": True},
+                             {"target_id": "music", "operation": "set_music", "value": {"on": True, "volume": 0.4}, "ignore_cooldown": True}])
+    state = {"on": False, "volume": 0.54, "track": 0, "track_id": "deskmate_test_music"}
+    for c in sent:
+        d.on_result({"command_id": c["command_id"], "status": "succeeded", "actual_value": state, "previous": state})
+    done = {repr(c.value): c.status for c in d.episode.commands}
+    assert done == {repr({"on": False}): "succeeded", repr({"on": True, "volume": 0.4}): "failed"}

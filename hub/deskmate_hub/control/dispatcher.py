@@ -205,7 +205,12 @@ class ControlDispatcher:
                         return True
                     if status == "succeeded" and "actual_value" in payload:
                         av = payload["actual_value"]
-                        if isinstance(c.value, dict):
+                        if isinstance(c.value, dict) and isinstance(av, dict):
+                            # 상태 묶음(set_music {on, volume, track}): 보낸 항목만 맞으면 된다 — 11-02 실기: 이미 꺼진 음악에
+                            # {on: false} 를 보내자 앱이 전체 상태 {on, volume, track, track_id} 로 답해 실패로 잘못 닫혔다
+                            if any(av.get(k) != v for k, v in c.value.items()):
+                                status = "failed"
+                        elif isinstance(c.value, dict):
                             # 상대 명령({percent}): actual_value 는 앱이 계산한 원시 밝기여야 하고, actual 이 함께 오면 같아야 한다
                             numeric = isinstance(av, (int, float)) and not isinstance(av, bool)
                             if not numeric or ("actual" in payload and av != payload["actual"]):
