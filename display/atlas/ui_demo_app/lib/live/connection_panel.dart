@@ -44,8 +44,10 @@ class _ConnectionPanelState extends State<ConnectionPanel> {
       final hub = live.hubHealth == 'offline' ? ' · 보드 응답을 기다려요' : '';
       return '보드와 이어졌어요 · $seconds초 전 상태$hub';
     }
-    if (live.status == LinkStatus.connected) return '이어졌어요. 책상 상태를 기다리는 중이에요.';
-    return '보드를 찾는 중이에요. 그동안은 이 화면만으로 움직여요.';
+    if (live.bringupRunning) return 'Pi 4 를 깨우는 중이에요(재부팅 뒤 자동 실행, 30초쯤).';
+    final bringup = live.bringupSummary == null ? '' : ' · ${live.bringupSummary}';
+    if (live.status == LinkStatus.connected) return '이어졌어요. 책상 상태를 기다리는 중이에요.$bringup';
+    return '보드를 찾는 중이에요. 그동안은 이 화면만으로 움직여요.$bringup';
   }
 
   Widget _field(String id, String label, String value, String hint) => InkWell(

@@ -10,6 +10,8 @@ dependencies:
   # V18 보드 연결. ui_env_app 과 같은 버전으로 고정한다(Atlas Dart 3.6.2 호환 상한, 10.8.1+ 는 Dart 3.8 요구).
   mqtt_client: 10.5.1
   dbus: ^0.7.12
+  # V47 재부팅한 Pi 4 깨우기(live/pi4_bringup.dart). 앱 AppArmor 가 외부 실행을 막아 순수 Dart SSH.
+  dartssh2: ^2.11.0
   audioplayers: ^6.0.0
   audioplayers_atlas:
     path: /opt/flutter-atlas-plugins/packages/flutter-plugin-atlas-audioplayers
