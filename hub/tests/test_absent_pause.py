@@ -188,3 +188,25 @@ def test_restore_needs_presence_for_restore_after_sec(tmp_path):
     ticks(4, True)                                                       # 30 s 이어진 재실 — 되돌린다
     back = [(c["target_id"], c["operation"], c["value"]) for c in cmds if c.get("cause") == "return"]
     assert back == [("desk_lamp", "set_brightness", 110)]
+
+
+def test_typing_keeps_presence_when_tof_says_empty_chair():
+    """11-02 16:38 실기: 턱 괴고 타이핑하는데 ToF 아랫줄이 비어 시연 설정에서 부재로 봤다 — 방금 친 키가 있으면 재실."""
+    from deskmate_hub.ingest import SensorCache
+    from deskmate_hub.ingest.cache import Sample
+    from deskmate_hub.ingest.mapping import resolve_presence, typed_recently
+    cfg = {"presence": {"source": "mmwave", "desk_max_cm": 130, "tof_away_overrides": True, "tof_away_mm_min_cm": 0}}
+    away = Sample(received=1.0, ts=1.0, seq=None, data={"present": False, "away_forced": True, "posture": "away"})
+    assert resolve_presence(None, away, cfg) == (False, "tof_away")
+    assert resolve_presence(None, away, cfg, typing=True) == (True, "keystroke")
+
+    cache = SensorCache()
+    for t, n in [(100.0, 5), (101.0, 5), (102.0, 9)]:                   # 102 s 에 4 타 더 침
+        cache.put("keystroke", Sample(received=t, ts=t, seq=None, data={"input_active": True, "event_count": n}))
+    view = cache.snapshot()
+    assert typed_recently(view, 110.0, 15) is True
+    assert typed_recently(view, 120.0, 15) is False                     # 18 s 전 — 창 밖(input_active 는 아직 참이어도)
+    still = SensorCache()
+    for t in (100.0, 101.0, 102.0):                                     # 창 안 타건 수 그대로 = 새로 안 침
+        still.put("keystroke", Sample(received=t, ts=t, seq=None, data={"input_active": True, "event_count": 5}))
+    assert typed_recently(still.snapshot(), 103.0, 15) is False
