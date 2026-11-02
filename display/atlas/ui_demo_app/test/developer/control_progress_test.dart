@@ -232,4 +232,75 @@ void main() {
     await tester.pumpWidget(const SizedBox()); // 탭이 닫히면 폴링 멈춤
     p.dispose();
   });
+
+  group('V42 사람이 바른 자세로 돌아오면 성공', () {
+    test('효과 improved 면 기기 시간 초과여도 성공 + 메모', () {
+      final r = ControlRecord.fromHub(hubRecord('e1', 100, status: 'timeout', extra: {
+        'effect': 'improved',
+        'effect_text': '바른 자세로 돌아옴',
+        'effect_after_sec': 42.4,
+        'effect_label': 'upright',
+      }))!;
+      expect(r.status, 'timeout'); // 기기 결과는 그대로
+      expect(r.outcome, 'succeeded');
+      expect(r.statusKo, '성공');
+      expect(r.effectKo, '바른 자세로 돌아옴 (42초 뒤) · 기기 확인 응답은 못 받음');
+    });
+
+    test('기기도 성공이면 확인 응답 메모는 없다', () {
+      final r = ControlRecord.fromHub(hubRecord('e2', 100,
+          extra: {'effect': 'improved', 'effect_after_sec': 8}))!;
+      expect(r.statusKo, '성공');
+      expect(r.effectKo, '바른 자세로 돌아옴 (8초 뒤)');
+    });
+
+    test('효과 none 은 결과를 바꾸지 않고 자세 그대로 메모', () {
+      final r = ControlRecord.fromHub(hubRecord('e3', 100,
+          status: 'timeout',
+          extra: {'effect': 'none', 'effect_text': '자세 그대로'}))!;
+      expect(r.outcome, 'timeout');
+      expect(r.statusKo, '시간 초과');
+      expect(r.effectKo, '자세 그대로');
+    });
+
+    test('효과가 없는 기록(MQTT 추정·옛 hub)은 예전 그대로', () {
+      final r = ControlRecord.fromHub(hubRecord('e4', 100, status: 'failed'))!;
+      expect(r.outcome, 'failed');
+      expect(r.effectKo, isNull);
+    });
+
+    testWidgets('화면: 성공 배지·바른 자세 메모·시간 초과의 대기 시간은 숨김',
+        (tester) async {
+      final fetcher = FakeFetcher();
+      fetcher.records = [
+        hubRecord('w1', 1769000000, status: 'timeout', extra: {
+          'effect': 'improved',
+          'effect_after_sec': 30,
+          'latency_ms': 15000,
+        })
+      ];
+      final p = ControlProgress(
+          fetcherFactory: (host) => fetcher..host = host,
+          interval: const Duration(hours: 1));
+      await tester.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: ControlProgressPage(progress: p, host: '172.16.34.199'))));
+      await tester.pump();
+      await tester.pump();
+      expect(
+          tester
+              .widget<Text>(find.byKey(const ValueKey('progress-status-w1')))
+              .data,
+          '성공');
+      expect(
+          tester
+              .widget<Text>(find.byKey(const ValueKey('progress-effect-w1')))
+              .data,
+          '바른 자세로 돌아옴 (30초 뒤) · 기기 확인 응답은 못 받음');
+      expect(find.text('15000 ms'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      p.dispose();
+    });
+  });
 }
