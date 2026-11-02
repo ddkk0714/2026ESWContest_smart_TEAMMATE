@@ -71,6 +71,20 @@ class _FakeBluetooth implements AtlasBluetoothService {
   Future<void> releaseStaleGatt(String adapter, String clientId) async =>
       calls.add('releaseStaleGatt $adapter $clientId');
 
+  /// 스피커 A2DP 가 붙어 있나(V40 램프 되살리기). 끊으면 [onSpeakerPaused] 를 부른다.
+  bool a2dp = false;
+  void Function()? onSpeakerPaused;
+
+  @override
+  Future<bool> isA2dpConnected(String address) async => a2dp;
+
+  @override
+  Future<void> disconnectSpeaker(String address) async {
+    calls.add('disconnectSpeaker $address');
+    a2dp = false;
+    onSpeakerPaused?.call();
+  }
+
   bool scanDenied = false;
 
   @override
@@ -121,8 +135,11 @@ class _FakeLamp extends IlinkLampFeedback {
   @override
   bool get connected => _linked;
 
+  /// 실패할 때의 오류 문구(V40: 서비스 검색 실패를 흉내).
+  String failText = 'GATT 연결 실패';
+
   @override
-  Object? get lastError => connectOk ? null : 'GATT 연결 실패';
+  Object? get lastError => connectOk ? null : failText;
 }
 
 class _NoMusic implements MusicPlayback {
@@ -312,7 +329,7 @@ void main() {
       expect(bluetooth.calls, ['connectSpeakerAddress AA:BB:CC:00:00:01']);
     });
 
-    test('start restore goes speaker, lamp, fan one after another, 3 tries each',
+    test('start restore goes lamp, fan, speaker one after another, 3 tries each',
         () async {
       final log = bluetooth.calls;
       final orderedLamp = _FakeLamp(bluetooth, log: log)..connectOk = false;
@@ -336,7 +353,8 @@ void main() {
       final speaker = log.indexWhere((c) => c.startsWith('connectSpeaker'));
       final lampAt = log.indexOf('lamp connect');
       final fanAt = log.indexWhere((c) => c.startsWith('connectLamp'));
-      expect(speaker < lampAt && lampAt < fanAt, isTrue, reason: '$log');
+      // V40: 램프 GATT 를 A2DP 보다 먼저(한 칩 KLZS-L1 — A2DP 가 먼저면 램프 서비스 검색이 실패)
+      expect(lampAt < fanAt && fanAt < speaker, isTrue, reason: '$log');
       expect(log.where((c) => c.startsWith('connectSpeakerAddress')), hasLength(3));
       expect(log.where((c) => c == 'lamp connect'), hasLength(3));
       expect(log.where((c) => c.startsWith('connectLamp')), hasLength(3));
@@ -423,12 +441,73 @@ void main() {
     expect(saved.lamp?.address, 'AA:BB:CC:00:00:02');
   });
 
-  test('pair connect stops before the lamp if the speaker fails', () async {
+  test('pair connect does the lamp first, then the speaker', () async {
+    final log = bluetooth.calls;
+    lamp = _FakeLamp(bluetooth, log: log);
+    feedback = FeedbackCoordinator(
+        music: _NoMusic(), lamp: lamp, bluetooth: bluetooth);
+    final links = manager();
+    expect(await links.connectPair(_speakerInfo, _lampInfo), isTrue);
+    expect(log, ['lamp connect', 'connectSpeaker ${_speakerInfo.address}']);
+  });
+
+  group('V40 lamp before the speaker', () {
+    setUp(() => store.save(const DeskmateSettings(
+          speaker: SavedBluetoothDevice(
+              address: 'AA:BB:CC:00:00:01', name: 'KLZS-L1'),
+          lamp: SavedBluetoothDevice(
+              address: 'AA:BB:CC:00:00:02', name: 'KLZS-L1 app'),
+        )));
+
+    test('a lamp blocked by the connected speaker is opened first, then the speaker returns',
+        () async {
+      final links = manager();
+      await links.restore();
+      bluetooth.calls.clear();
+      lamp
+        ..connectOk = false
+        ..failText = 'org.freedesktop.DBus.Error.Failed: GATT service discovery failed';
+      bluetooth
+        ..a2dp = true
+        ..onSpeakerPaused = () => lamp.connectOk = true;
+      expect(await links.reconnectLamp(), isTrue);
+      expect(bluetooth.calls, [
+        'disconnectSpeaker AA:BB:CC:00:00:01',
+        'connectSpeakerAddress AA:BB:CC:00:00:01', // 램프를 연 뒤 스피커를 다시
+      ]);
+      expect(links.lampStatus.health, LinkHealth.ok);
+      expect(links.speakerStatus.health, LinkHealth.ok);
+    });
+
+    test('other lamp failures do not interrupt the music', () async {
+      final links = manager();
+      await links.restore();
+      bluetooth.calls.clear();
+      lamp.connectOk = false; // 'GATT 연결 실패' — 서비스 검색 단계가 아니다
+      bluetooth.a2dp = true;
+      expect(await links.reconnectLamp(), isFalse);
+      expect(bluetooth.calls, isEmpty);
+    });
+
+    test('no speaker on A2DP means nothing to pause', () async {
+      final links = manager();
+      await links.restore();
+      bluetooth.calls.clear();
+      lamp
+        ..connectOk = false
+        ..failText = 'GATT service discovery failed';
+      expect(await links.reconnectLamp(), isFalse);
+      expect(bluetooth.calls, isEmpty);
+    });
+  });
+
+  test('pair connect keeps the lamp when the speaker then fails', () async {
     bluetooth.speakerFails = true;
     final links = manager();
     await expectLater(
         links.connectPair(_speakerInfo, _lampInfo), throwsStateError);
-    expect(lamp.selected, isNull);
+    expect(lamp.selected, 'AA:BB:CC:00:00:02'); // 램프는 먼저 붙고 저장됐다
+    expect(store.load().lamp?.address, 'AA:BB:CC:00:00:02');
     expect(store.load().speaker, isNull);
   });
 

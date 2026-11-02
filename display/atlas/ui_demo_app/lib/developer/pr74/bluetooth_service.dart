@@ -408,6 +408,15 @@ class AtlasBluetoothService {
     return true;
   }
 
+  /// V40: 스피커 A2DP 를 끊는다 — 같은 칩(KLZS-L1)의 램프 GATT 를 먼저 맺으려고 잠깐(바로 다시 붙인다).
+  Future<void> disconnectSpeaker(String address) =>
+      _adapterOperation(() async {
+        final adapter = await adapterAddress();
+        diag.write('스피커 잠깐 끊기 $address (램프 먼저)');
+        await _bluetooth.callMethod(_a2dpInterface, 'Disconnect',
+            [DBusString(adapter), DBusString(address)]);
+      });
+
   Future<void> _confirmSpeakerConnected(String address) async {
     // Connecting is asynchronous in Bluetooth1. Do not claim success or start
     // feedback music until the A2DP profile reports an actual connection.
