@@ -227,6 +227,7 @@ class WakeWatch:
     c_before: float
     awake_since: float | None = None
     awake_label: str | None = None
+    success_since: float | None = None  # success_labels(바른 자세) 가 이어진 시작 시각
     activity: bool = False
     result: str | None = None           # success | fail
     detail: dict[str, Any] = field(default_factory=dict)
@@ -242,6 +243,9 @@ class WakeTracker:
         self.hold = float(c.get("hold_sec", 20))
         self.trigger_labels = tuple(c.get("trigger_labels") or ("drowsy", "face_down"))
         self.awake_labels = tuple(c.get("awake_labels") or ("upright", "lean_forward", "forward_head", "recline", "chin_rest"))
+        # 11-02 사용자 기준 "바른 자세로 돌아가면 피드백 성공": 이 라벨이 success_hold_sec 이어지면 활동·피로 하락 없이도 성공
+        self.success_labels = tuple(c.get("success_labels") or ())
+        self.success_hold = float(c.get("success_hold_sec", 5))
         self.fatigue_min = c.get("fatigue_min", 0.70)
         self.fatigue_drop = float(c.get("fatigue_drop", 0.10))
         self.reward_success = float(c.get("reward_success", 1.0))
@@ -277,12 +281,20 @@ class WakeTracker:
                     w.awake_since, w.awake_label = now, label
             else:
                 w.awake_since, w.awake_label = None, None
+            if label in self.success_labels:
+                if w.success_since is None:
+                    w.success_since = now
+            else:
+                w.success_since = None
             drop = w.c_before - float(c_fatigue)
             held = w.awake_since is not None and now - w.awake_since >= self.hold
-            if held and (w.activity or drop >= self.fatigue_drop):
+            upright = w.success_since is not None and now - w.success_since >= self.success_hold
+            if upright or (held and (w.activity or drop >= self.fatigue_drop)):
                 w.result = "success"
-                w.detail = {"to_awake_sec": round(w.awake_since - w.started, 1), "hold_sec": round(now - w.awake_since, 1),
-                            "awake_label": w.awake_label, "activity": w.activity, "fatigue_drop": round(drop, 4)}
+                since = w.success_since if upright else w.awake_since
+                w.detail = {"to_awake_sec": round(since - w.started, 1), "hold_sec": round(now - since, 1),
+                            "awake_label": label if upright else w.awake_label, "activity": w.activity,
+                            "fatigue_drop": round(drop, 4), "rule": "upright" if upright else "awake_activity"}
                 done.append((w, self.reward_success))
             elif now - w.started >= self.window:
                 w.result = "fail"

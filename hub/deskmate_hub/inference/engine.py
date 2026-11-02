@@ -86,6 +86,8 @@ class FSMEngine:
     def _hold_ok(self, name: str, now: float, key: str) -> bool:
         """이 단계에 hold 초 이상 머물렀고, 지난 hold 초 tick 중 fatigue_hold_min_frac 이상이 임계 위."""
         w, hold = self._hold_win[name], float(self.tm[key])
+        if hold <= 0:                                    # 0 = 이번 tick 이 임계 위면 바로(_held 의 0 과 같은 뜻, 빠른 시연 demo_mode.py)
+            return bool(w["hist"]) and w["hist"][-1] == (now, True)
         w["hist"] = [(t, a) for t, a in w["hist"] if t > now - hold]
         return (w["t0"] is not None and now - w["t0"] >= hold and bool(w["hist"])
                 and sum(1 for _, a in w["hist"] if a) / len(w["hist"]) >= self._hold_frac)
@@ -120,10 +122,16 @@ class FSMEngine:
     # ── 메인 tick ─────────────────────────────────────────────
     def tick(self, frame: SensorFrame) -> TickResult:
         now = frame.now
-        self.context = detect_context(frame.pc_ratio, self.cfg)
-        self.scores = compute_scores(frame, self.context, self.cfg)
-        if self.score_adjust is not None:
-            self.scores = self.score_adjust(self.scores, frame)
+        # 11-02 사용자 기준 "부재 중 피로도는 쓰면 안 된다": 사람 신호가 빠진 점수(환경·경과만으로 재정규화돼 0.3→0.69 로 튐)로
+        # 상태를 옮기지 않는다. 부재가 absent_pause_sec 이어지면 점수는 재실 때 마지막 값을 두고 상태도 그 자리에서 멈춘다.
+        absent_since = None if frame.present else (self._absent_since if self._absent_since is not None else now)
+        absent_paused = (absent_since is not None and self.state not in (State.IDLE, State.END)
+                         and "absent_pause_sec" in self.tm and now - absent_since >= self.tm["absent_pause_sec"])
+        if not absent_paused:
+            self.context = detect_context(frame.pc_ratio, self.cfg)
+            self.scores = compute_scores(frame, self.context, self.cfg)
+            if self.score_adjust is not None:
+                self.scores = self.score_adjust(self.scores, frame)
         actions: list[str] = []
         gate = GateMode.NONE
         cause: str | None = None
@@ -145,6 +153,10 @@ class FSMEngine:
         ):
             self._goto(State.IDLE, now)
             return self._result(actions=["absent_timeout"], gate=gate, cause=cause)
+
+        # 부재 중 멈춤(위 absent_paused, 11-02): 피로·원인·개입으로 넘어가지 않는다. 돌아오면 그 상태에서 이어 간다.
+        if absent_paused:
+            return self._result(actions=["absent_pause"], gate=gate, cause=cause)
 
         s, c, th = self.state, self.scores, self.th
 

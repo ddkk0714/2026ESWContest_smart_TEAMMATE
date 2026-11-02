@@ -16,7 +16,7 @@ from typing import Any, TextIO
 
 from .inference import (FSMEngine, GateMode, SensorFrame, SessionRecorder, State,
                         load_config, report_envelope)
-from .control import ControlDispatcher, MockPlugAdapter, load_control_config
+from .control import ControlDispatcher, ControlLog, MockPlugAdapter, load_control_config
 from .control.devices import DeviceRegistry
 from .control.environment_policy import EnvironmentControlPolicy, MockControlTransport, load_environment_control_config
 from .features import BaselineStore
@@ -30,6 +30,7 @@ from .co2_window import CARD_KIND as CO2_CARD_KIND, PROMPT_CODE as CO2_PROMPT, A
 from .co2_window import Co2WindowRule, load_co2_window_config
 from .rest_notice import RestNotifier
 from .arm_notice import ArmDeliverer
+from .demo_mode import DemoSpeed
 from .personalization import PersonalizationRuntime, load_personalization_config
 from .personalization.privacy import PersonalizationPrivacy, load_privacy_config
 from .personalization.ondevice import OnDeviceLearner, load_ondevice_config
@@ -56,6 +57,27 @@ def frame_to_dict(frame: SensorFrame) -> dict[str, Any]:
     return d
 
 
+def restore_specs(commands: list[Any]) -> list[dict[str, Any]]:
+    """부재 끄기 명령들의 결과 previous(끄기 직전 상태, Pi 5 앱 V43~) → 자리 복귀 때 되돌릴 명령. 꺼져 있던 기기·previous 가 없는 기기는 건드리지 않는다.
+    desk_lamp: previous 밝기(0~255) > 0 이면 set_brightness. vent_fan: previous {power on, speed} 이면 set_power on(+ set_speed).
+    music: previous {on true, volume, track} 이면 set_music 그대로."""
+    out: list[dict[str, Any]] = []
+    for c in commands:
+        prev = (c.result or {}).get("previous") if c.status == "succeeded" else None
+        if prev is None:
+            continue
+        if c.target_id == "desk_lamp" and isinstance(prev, (int, float)) and not isinstance(prev, bool) and prev > 0:
+            out.append({"target_id": "desk_lamp", "operation": "set_brightness", "value": int(prev), "ignore_cooldown": True})
+        elif c.target_id == "vent_fan" and isinstance(prev, dict) and str(prev.get("power")) == "on":
+            out.append({"target_id": "vent_fan", "operation": "set_power", "value": "on", "ignore_cooldown": True})
+            if isinstance(prev.get("speed"), int) and prev["speed"] > 0:
+                out.append({"target_id": "vent_fan", "operation": "set_speed", "value": prev["speed"], "ignore_cooldown": True})
+        elif c.target_id == "music" and isinstance(prev, dict) and prev.get("on") is True:
+            value = {k: prev[k] for k in ("on", "volume", "track") if k in prev}   # V32 set_music 계약 키만
+            out.append({"target_id": "music", "operation": "set_music", "value": value, "ignore_cooldown": True})
+    return out
+
+
 class LiveHub:
     """전송 계층과 무관한 라이브 루프. 테스트에서는 source 없이 tick_once 만 호출한다."""
 
@@ -68,6 +90,7 @@ class LiveHub:
         publish=None,
         publish_request=None,
         publish_control=None,
+        publish_control_log=None,
         control_cfg: dict[str, Any] | None = None,
         environment_control_cfg: dict[str, Any] | None = None,
         device_registry: DeviceRegistry | None = None,
@@ -96,6 +119,9 @@ class LiveHub:
         self.fsm_cfg, self.ingest_cfg, self.profile = apply_profile(
             self.fsm_cfg, self.ingest_cfg, profile, log=lambda m: print(m, file=out, flush=True))
         self.engine = FSMEngine(self.fsm_cfg)
+        # 빠른 시연(demo_mode.py, fsm.yaml demo_fast:): 화면 버튼 토픽으로 엔진 피로 유지 타이머를 줄였다 되돌린다
+        self.demo_speed = DemoSpeed(self.fsm_cfg.get("demo_fast"), self.engine.tm,
+                                    on_log=lambda m: print(m, file=out, flush=True))
         self.tracker = SessionTracker(
             elapsed_reset_on_rest=bool((self.ingest_cfg.get("elapsed") or {}).get("reset_on_rest", False)))
         self.privacy_cfg = privacy_cfg if privacy_cfg is not None else load_privacy_config()
@@ -126,6 +152,7 @@ class LiveHub:
         self._publish_control = publish_control
         self.control: ControlDispatcher | None = None
         self.mock_plug: MockPlugAdapter | None = None
+        self.control_log: ControlLog | None = None
         self.environment_policy = EnvironmentControlPolicy(
             environment_control_cfg if environment_control_cfg is not None else load_environment_control_config(),
             device_registry if device_registry is not None else DeviceRegistry(),
@@ -153,13 +180,25 @@ class LiveHub:
             )
         elif self.control_cfg.get("enabled"):
             log = lambda m: print(m, file=self.out, flush=True)  # noqa: E731
+            # 명령 단계 변화 → 제어 진행 로그(control_log.py). 로그는 boot_id 를 알아야 해서 아래에서 만든다(기록은 tick 에서만).
+            record = lambda *a, **k: self.control_log.record_command(*a, **k) if self.control_log else None  # noqa: E731
             if str(self.control_cfg.get("adapter", "mqtt")) == "mock" or publish_control is None:
                 self.mock_plug = MockPlugAdapter(self.cache.put_control_result)
-                self.control = ControlDispatcher(self.control_cfg, publish_cmd=self.mock_plug.handle_command, on_log=log)
+                self.control = ControlDispatcher(self.control_cfg, publish_cmd=self.mock_plug.handle_command, on_log=log,
+                                                 on_record=record)
             else:
-                self.control = ControlDispatcher(self.control_cfg, publish_cmd=publish_control, on_log=log)
+                self.control = ControlDispatcher(self.control_cfg, publish_cmd=publish_control, on_log=log,
+                                                 on_record=record)
         self.frame_log, self.state_log, self.out = frame_log, state_log, out
         self.boot_id = f"{time.time_ns() & 0xFFFFFFFF:08x}"
+        # 제어 진행 로그(control.yaml control_log:, 2026-10-31): 명령 하나마다 원인→기기·동작→결과·소요·되돌림을 JSONL 로,
+        # 보드에서는 publish_control_log(service_bridge 의 CTLLOG 줄)로 C++ 에 넘겨 GET /api/control-log 로 본다.
+        if self.control is not None:
+            self.control_log = ControlLog(
+                self.control_cfg.get("control_log"), boot_id=self.boot_id,
+                result_timeout_sec=float(self.control_cfg.get("result_timeout_sec", 15)), sink=publish_control_log,
+                on_log=lambda m: print(m, file=self.out, flush=True))
+        self._arm_context: str | None = None     # arm_notice 가 speak/chime 을 낼 때 그 arm(제어 로그용)
         self.privacy.boot_id = self.boot_id
         self.seq = 0
         self.period = float(self.ingest_cfg.get("frame_period_sec") or self.fsm_cfg["timers"]["score_period_sec"])
@@ -237,15 +276,27 @@ class LiveHub:
         # 음성은 제어 명령 경로(publish_control; mock 어댑터면 그쪽)로 — 사용자 sound_pref off 면 카드만. 문구 변형은 프로파일 이름(study)으로.
         speak_sink = self._publish_control if self._publish_control is not None else (
             self.mock_plug.handle_command if self.mock_plug is not None else None)
+        arm_sink, rest_sink = self._logged_sink(speak_sink, "arm_notice"), self._logged_sink(speak_sink, "rest_notice")
         # 밴딧이 고른 기기 없는 arm(카드·알림음·음성)의 전달(arm_notice.py, control.yaml arm_notice:) — AUTO 에서도 사람에게 닿게
         self.arm_deliverer = ArmDeliverer(self.control_cfg.get("arm_notice"), boot_id=self.boot_id,
-                                          publish_request=self.publish_request, publish_control=speak_sink,
+                                          publish_request=self.publish_request, publish_control=arm_sink,
                                           on_log=lambda m: print(m, file=self.out, flush=True))
         self.rest_notifier = RestNotifier(
             self.control_cfg.get("rest_notice"), fsm_cfg=self.fsm_cfg, boot_id=self.boot_id,
-            publish_request=self.publish_request, publish_control=speak_sink,
+            publish_request=self.publish_request, publish_control=rest_sink,
             variant="study" if "study" in str(self.profile or "") else "default",
             on_log=lambda m: print(m, file=self.out, flush=True))
+
+    def _logged_sink(self, sink, source: str):
+        """디스패처를 거치지 않는 control/cmd(rest_notice·arm_notice 의 speaker speak/chime)도 제어 진행 로그에 남긴다."""
+        if sink is None:
+            return None
+
+        def publish(command: dict[str, Any]) -> None:
+            sink(command)
+            if self.control_log is not None:
+                self.control_log.record_published(command, source, arm=self._arm_context if source == "arm_notice" else None)
+        return publish
 
     def tick_once(self, now: float | None = None) -> dict[str, Any]:
         now = time.time() if now is None else now
@@ -345,10 +396,15 @@ class LiveHub:
                 self.mock_plug.tick()
             for res, received in self.cache.pop_control_result_events():
                 self.control.on_result(res, now if received is None else min(now, received))
+                if self.control_log is not None:                  # 디스패처 밖 명령(speak·chime)의 결과
+                    self.control_log.on_result(res, now if received is None else min(now, received))
                 if self.personalize_recorder is not None:      # 무드등 결과의 previous·actual → 밝힘 여부
                     self.personalize_recorder.on_control_result(res, now if received is None else min(now, received))
             self.control.tick(now)
+            if self.control_log is not None:
+                self.control_log.tick(now)
 
+        self.demo_speed.observe(view.demo_mode, now)          # 엔진 tick 전에 — 이번 tick 부터 바뀐 유지 시간으로 본다
         frame = build_frame(view, now, self.ingest_cfg, self.tracker, fsm_state=self.engine.state)
         self._last_present = bool(frame.present)            # 발행용: 자리 비움이면 점수 0.0·scores_valid false (_pub_scores)
         request_kind = self._REQUEST_STATES.get(self.engine.state)
@@ -373,21 +429,26 @@ class LiveHub:
         self.recorder.observe(frame, result)
         # tracker 를 넘겨야 세션 시작 대비 CO₂ 상승(co2_rising)도 화면 이유에 실린다.
         summary = sensor_summary(view, now, self.ingest_cfg, self.tracker)
+        summary["demo_mode"] = self.demo_speed.snapshot(now)   # 화면 '빠른 시연' 배지
         # 개인화: 결정 tick(route:<cause>)에 에피소드를 열고, 정책이 켜져 있으면 arm·전달 게이트를 고른다.
         # 정책은 FSM 게이트를 낮추기만 한다(auto → suggest). 제어·질문·발행보다 먼저 돌아야 그 결과가 반영된다.
         specs = None
+        specs_arm = None                                          # specs 를 낸 arm(제어 로그용)
         if self.personalize_recorder is not None:
             request_kind = self._REQUEST_STATES.get(result.state)
             self.personalize_recorder.on_tick(
                 frame, result, prev_state, view, now, retry=bool(getattr(self.engine, "_retry", False)),
                 env_flags=summary.get("env_flags") or (), fsm_action=request_kind[1] if request_kind else None)
             self._follow_active_profile()
+            if self.control_log is not None:                     # 자세 원인 명령의 효과(바른 자세로 돌아왔나, 11-02)
+                self.control_log.observe_posture(self.personalize_recorder.last_posture_label, now)
             decision = self.personalize_recorder.last_decision
             if decision is not None:
                 if decision.delivered_gate == "suggest" and result.gate is GateMode.AUTO:
                     result.gate = GateMode.SUGGEST
                     result.actions.append("personalize:ask")
                 specs = self.personalize_recorder.commands_for(decision)
+                specs_arm = getattr(decision, "arm", None) if specs else None
             if self.personalize_recorder.last_view is not None:
                 summary["personalize"] = self.personalize_recorder.last_view
         if self.control is not None:
@@ -400,10 +461,11 @@ class LiveHub:
                     and self.control.has_default_actions(result.state.value, result.cause)):
                 self.control.on_enter_action(result.state.value, result.cause, result.gate, now, specs=None)
             elif entered and (result.state is State.ACTION_ENV or specs):
-                self.control.on_enter_action(result.state.value, result.cause, result.gate, now, specs=specs)
+                self.control.on_enter_action(result.state.value, result.cause, result.gate, now, specs=specs, arm=specs_arm)
             elif (prev_state in self._REQUEST_STATES and result.state is not prev_state
                   and self.control.episode is not None):
                 self.control.close_episode()
+            self._absent_off(bool(frame.present), now)
         if self.control is not None:
             summary["control"] = self.control.summary()
             summary["control"]["execution_mode"] = ("mock" if self.environment_policy.enabled or self.mock_plug is not None else "live")
@@ -496,6 +558,37 @@ class LiveHub:
         return envelope
 
 
+    def _absent_off(self, present: bool, now: float) -> None:
+        """부재 끄기(control.yaml absent_off, 11-02): 재실이었다가 재실 없음이 after_sec 이어지면 기기 끄기를 한 번 보낸다.
+        끄기 결과의 previous(끄기 직전 상태)를 두었다가, 다시 앉아 restore_after_sec 재실이 이어지면 켜져 있던 기기만 그 상태로 되돌린다."""
+        cfg = self.control_cfg.get("absent_off") or {}
+        if not cfg.get("enabled", True) or not cfg.get("commands"):
+            return
+        if present:                                   # 재실을 봐야 다음 부재를 센다(처음부터 없던 자리는 끄지 않음)
+            self._absent_off_since, self._absent_off_armed = None, True
+            ep = getattr(self, "_absent_off_ep", None)
+            if ep is not None and cfg.get("restore", True):
+                back = getattr(self, "_absent_back_since", None)
+                if back is None:
+                    self._absent_back_since = back = now
+                if now - back >= float(cfg.get("restore_after_sec", 10)):
+                    self._absent_off_ep, self._absent_back_since = None, None
+                    specs = restore_specs(ep.commands)
+                    if specs:
+                        print(f"[control] 자리 복귀 → 이전 설정으로 {len(specs)}건", file=self.out, flush=True)
+                        self.control.on_enter_action("RETURN", "return", GateMode.AUTO, now, specs=specs)
+            return
+        self._absent_back_since = None
+        if not getattr(self, "_absent_off_armed", False):
+            return
+        if getattr(self, "_absent_off_since", None) is None:
+            self._absent_off_since = now
+        if now - self._absent_off_since >= float(cfg.get("after_sec", 60)):
+            self._absent_off_armed = False
+            print(f"[control] 자리 비움 {now - self._absent_off_since:.0f}s → 기기 끄기", file=self.out, flush=True)
+            self._absent_off_ep = self.control.on_enter_action("ABSENT", "absent", GateMode.AUTO, now,
+                                                               specs=list(cfg["commands"]))
+
     def _follow_active_profile(self) -> None:
         """프로필 메시지로 사람이 바뀌었으면(personalize/record.py 사람별 정책) 반응 학습도 그 사람의 상태 파일로 갈아 끼운다.
         상태 경로에 {profile_id} 가 없으면(시험 등 고정 경로) 학습기는 그대로 두고 id 만 따른다."""
@@ -546,11 +639,15 @@ class LiveHub:
         channel = str(getattr(spec, "channel", "display") or "display")
         kind, prompt = self._REQUEST_STATES[result.state]
         expires = float(self.fsm_cfg["timers"].get("focus_break_poll_sec", 180))
-        emitted = self.arm_deliverer.deliver(
-            state=result.state.value, kind=kind, prompt_code=prompt, gate=result.gate.value, arm=arm,
-            label=str(view.get("arm_label") or arm), channel=channel, explanation=view.get("explanation"),
-            cause=result.cause, now=now, seq=self.seq, sound_pref=sound_pref,
-            c_fatigue=self._pub_scores(result)[0], expires_in_s=expires)
+        self._arm_context = arm
+        try:
+            emitted = self.arm_deliverer.deliver(
+                state=result.state.value, kind=kind, prompt_code=prompt, gate=result.gate.value, arm=arm,
+                label=str(view.get("arm_label") or arm), channel=channel, explanation=view.get("explanation"),
+                cause=result.cause, now=now, seq=self.seq, sound_pref=sound_pref,
+                c_fatigue=self._pub_scores(result)[0], expires_in_s=expires)
+        finally:
+            self._arm_context = None
         for item in emitted:
             if item.get("data", {}).get("auto"):
                 self.seq += 1

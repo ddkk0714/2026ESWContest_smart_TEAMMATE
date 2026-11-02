@@ -3,6 +3,7 @@
 # 왜: 자세 모델 v4 가 책 읽기(고개 숙임)의 59 % 를 거북목(forward_head)으로 봐서 기본 가중치면 독서 중 피로 증거가 쌓인다.
 #   lean_forward 0, forward_head 0.1/0.05, chin_rest 0.3/0.3 = life_sim 수험생 페르소나 값.
 fsm:
+  demo_fast: {enabled: true}      # 화면 "빠른 시연" 버튼 허용(demo_mode.py, 10-31) — 누르기 전엔 이 프로파일 타이머 그대로
   # 10-25 PC 폐루프 시뮬: 엎드림(face_down δ 1.0)만으로는 기본 가중치(npc posture 0.40, 호흡 꺼져 재정규화 → 0.53)가
   # 확정 기준에 못 미쳐 무드등이 안 켜졌다(실측 끄덕임 recall 0.16 이라 시연은 엎드림으로 간다). 자세 몫을 올린다 — 보드 기본(fsm.yaml)은 그대로.
   # 점수(Σw·δ/Σw, 키 입력 없음 → keystroke 제외, 환경 δ 0, 경과 e): face_down 0.80+0.1e · recline/chin_rest(δ 0.6) 0.48+0.1e ·
@@ -29,6 +30,9 @@ fsm:
 learning:
   keep_floor: 0.60                 # 확정 기준을 넘은 점수는 학습기가 끌어내리지 못함 — PC 리허설 10-25 근거(keep_floor 0.60 → demo-B 첫 깨우기 662/292/102 s → 102/102/102 s). 기본 0.85 = 이 프로파일의 fsm thresholds.fatigue_confirm
 control:
+  absent_off:                       # 11-02 사용자 "시연은 바로 바뀌면" — 기본 60 s 끄기·30 s 되돌림. 시연 전용
+    after_sec: 20                   # 자리 비움 20 s 면 기기 끄기
+    restore_after_sec: 10           # 다시 앉아 10 s 면 되돌림(빈자리 오판 20 s 가 있으면 켜질 수 있음 — 11-02 15:21)
   rest_notice:
     cooldown_sec: 30                # 기본 120. 시연은 REST 가 60 s 라 재진입이 빠르다
     reminder_after_sec: 120         # 기본 600. 휴식(60 s)을 넘겨 계속 쉬면 한 번 더
@@ -42,6 +46,8 @@ personalize:
   gate:
     conf_auto: 0.55                 # FSM gate.conf_auto 와 같은 값(다르면 정책이 자동을 제안으로 낮춘다)
 ingest:
+  presence:                         # 11-02 시연 전용 — ToF 가 빈 의자(away_forced)면 mmWave 거리와 상관없이 부재.
+    tof_away_mm_min_cm: 0           # 기본 90(mmWave 가 90 cm 안이면 재실 유지). C1001 은 떠난 뒤에도 30~60 s 재실을 붙든다
   keystroke:
     # 10-26 실측(이 PC collector, 오늘 11:52~19:32 typing_active 창 14 753개): idle_ratio p50 0.83·p90 0.99, flight_cv p50 0.83·p90 1.21·p97 1.38,
     # correction_rate p50 0.09·p90 0.27·p97 0.53. 기본 램프(idle 0.10~0.60·cv 0.25~0.70·정정 0.15)는 baseline 정규화의 폴백이라, 선형 정규화인

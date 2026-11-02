@@ -13,6 +13,7 @@ TOPIC_HEALTH = "deskmate/health/hub"
 TOPIC_CONTROL_CMD = "deskmate/control/cmd"
 TOPIC_CONTROL_RESULT = "deskmate/control/result"
 TOPIC_PROFILE = "deskmate/profile/user"     # 첫 설정 프로필(Pi 5 앱, retain, QoS 1) — personalize/onboarding.py
+TOPIC_DEMO_MODE = "deskmate/demo/mode"       # 화면 '빠른 시연' 버튼 {"speed": "fast"|"normal"} — demo_mode.py, FSM 입력 아님
 TOPIC_FATIGUE_LABEL = "deskmate/fatigue/label"   # Pi 5 피로 기록 앱 KSS 응답 — 피로 점수(fatigue/live.py) 전용, FSM 입력 아님
 
 _KIND_BY_TOPIC = {"mmwave": "mmwave", "env": "env", "keystroke": "keystroke",

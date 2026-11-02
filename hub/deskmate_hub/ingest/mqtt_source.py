@@ -19,7 +19,7 @@ from .mqtt_lines import (
     TOPIC_SESSION_REPORT,
     route_mqtt_message,
 )
-from .protocol import (TOPIC_FATIGUE_LABEL, TOPIC_FEEDBACK, TOPIC_HEALTH, TOPIC_PROFILE, TOPIC_REQUEST,
+from .protocol import (TOPIC_DEMO_MODE, TOPIC_FATIGUE_LABEL, TOPIC_FEEDBACK, TOPIC_HEALTH, TOPIC_PROFILE, TOPIC_REQUEST,
                        TOPIC_SENSOR, TOPIC_STATE)
 
 class MqttSource:
@@ -83,7 +83,8 @@ class MqttSource:
             return
         self.connected = True
         client.subscribe([(TOPIC_SENSOR, 0), (TOPIC_FEEDBACK, 1), (TOPIC_CONTROL_RESULT, 1),
-                          (TOPIC_FATIGUE_LABEL, 1), (TOPIC_PROFILE, 1)])
+                          (TOPIC_FATIGUE_LABEL, 1), (TOPIC_PROFILE, 1),
+                          (TOPIC_DEMO_MODE, 1)])
         client.publish(TOPIC_HEALTH, json.dumps({"ts": round(time.time(), 3), "node": "hub", "status": "online"}),
                        qos=1, retain=True)
         self._log(f"[mqtt] connected {self.host}:{self.port}")
