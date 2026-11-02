@@ -153,6 +153,8 @@ class LiveHub:
         self.control: ControlDispatcher | None = None
         self.mock_plug: MockPlugAdapter | None = None
         self.control_log: ControlLog | None = None
+        # 명령 단계 변화 → 제어 진행 로그(control_log.py). 로그는 boot_id 를 알아야 해서 아래에서 만든다(기록은 tick 에서만).
+        record = lambda *a, **k: self.control_log.record_command(*a, **k) if self.control_log else None  # noqa: E731
         self.environment_policy = EnvironmentControlPolicy(
             environment_control_cfg if environment_control_cfg is not None else load_environment_control_config(),
             device_registry if device_registry is not None else DeviceRegistry(),
@@ -177,11 +179,10 @@ class LiveHub:
                 plan_advice=self.environment_policy.advice,
                 dispatch_guard=self.environment_policy.can_dispatch,
                 on_dispatched=self.environment_policy.dispatched,
+                on_record=record,
             )
         elif self.control_cfg.get("enabled"):
             log = lambda m: print(m, file=self.out, flush=True)  # noqa: E731
-            # 명령 단계 변화 → 제어 진행 로그(control_log.py). 로그는 boot_id 를 알아야 해서 아래에서 만든다(기록은 tick 에서만).
-            record = lambda *a, **k: self.control_log.record_command(*a, **k) if self.control_log else None  # noqa: E731
             if str(self.control_cfg.get("adapter", "mqtt")) == "mock" or publish_control is None:
                 self.mock_plug = MockPlugAdapter(self.cache.put_control_result)
                 self.control = ControlDispatcher(self.control_cfg, publish_cmd=self.mock_plug.handle_command, on_log=log,
