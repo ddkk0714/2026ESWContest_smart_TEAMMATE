@@ -55,6 +55,27 @@ def frame_to_dict(frame: SensorFrame) -> dict[str, Any]:
     return d
 
 
+def restore_specs(commands: list[Any]) -> list[dict[str, Any]]:
+    """부재 끄기 명령들의 결과 previous(끄기 직전 상태, Pi 5 앱 V43~) → 자리 복귀 때 되돌릴 명령. 꺼져 있던 기기·previous 가 없는 기기는 건드리지 않는다.
+    desk_lamp: previous 밝기(0~255) > 0 이면 set_brightness. vent_fan: previous {power on, speed} 이면 set_power on(+ set_speed).
+    music: previous {on true, volume, track} 이면 set_music 그대로."""
+    out: list[dict[str, Any]] = []
+    for c in commands:
+        prev = (c.result or {}).get("previous") if c.status == "succeeded" else None
+        if prev is None:
+            continue
+        if c.target_id == "desk_lamp" and isinstance(prev, (int, float)) and not isinstance(prev, bool) and prev > 0:
+            out.append({"target_id": "desk_lamp", "operation": "set_brightness", "value": int(prev), "ignore_cooldown": True})
+        elif c.target_id == "vent_fan" and isinstance(prev, dict) and str(prev.get("power")) == "on":
+            out.append({"target_id": "vent_fan", "operation": "set_power", "value": "on", "ignore_cooldown": True})
+            if isinstance(prev.get("speed"), int) and prev["speed"] > 0:
+                out.append({"target_id": "vent_fan", "operation": "set_speed", "value": prev["speed"], "ignore_cooldown": True})
+        elif c.target_id == "music" and isinstance(prev, dict) and prev.get("on") is True:
+            value = {k: prev[k] for k in ("on", "volume", "track") if k in prev}   # V32 set_music 계약 키만
+            out.append({"target_id": "music", "operation": "set_music", "value": value, "ignore_cooldown": True})
+    return out
+
+
 class LiveHub:
     """전송 계층과 무관한 라이브 루프. 테스트에서는 source 없이 tick_once 만 호출한다."""
 
@@ -491,13 +512,26 @@ class LiveHub:
 
 
     def _absent_off(self, present: bool, now: float) -> None:
-        """부재 끄기(control.yaml absent_off, 11-02): 재실이었다가 재실 없음이 after_sec 이어지면 기기 끄기를 한 번 보낸다."""
+        """부재 끄기(control.yaml absent_off, 11-02): 재실이었다가 재실 없음이 after_sec 이어지면 기기 끄기를 한 번 보낸다.
+        끄기 결과의 previous(끄기 직전 상태)를 두었다가, 다시 앉아 restore_after_sec 재실이 이어지면 켜져 있던 기기만 그 상태로 되돌린다."""
         cfg = self.control_cfg.get("absent_off") or {}
         if not cfg.get("enabled", True) or not cfg.get("commands"):
             return
         if present:                                   # 재실을 봐야 다음 부재를 센다(처음부터 없던 자리는 끄지 않음)
             self._absent_off_since, self._absent_off_armed = None, True
+            ep = getattr(self, "_absent_off_ep", None)
+            if ep is not None and cfg.get("restore", True):
+                back = getattr(self, "_absent_back_since", None)
+                if back is None:
+                    self._absent_back_since = back = now
+                if now - back >= float(cfg.get("restore_after_sec", 10)):
+                    self._absent_off_ep, self._absent_back_since = None, None
+                    specs = restore_specs(ep.commands)
+                    if specs:
+                        print(f"[control] 자리 복귀 → 이전 설정으로 {len(specs)}건", file=self.out, flush=True)
+                        self.control.on_enter_action("RETURN", "return", GateMode.AUTO, now, specs=specs)
             return
+        self._absent_back_since = None
         if not getattr(self, "_absent_off_armed", False):
             return
         if getattr(self, "_absent_off_since", None) is None:
@@ -505,7 +539,8 @@ class LiveHub:
         if now - self._absent_off_since >= float(cfg.get("after_sec", 60)):
             self._absent_off_armed = False
             print(f"[control] 자리 비움 {now - self._absent_off_since:.0f}s → 기기 끄기", file=self.out, flush=True)
-            self.control.on_enter_action("ABSENT", "absent", GateMode.AUTO, now, specs=list(cfg["commands"]))
+            self._absent_off_ep = self.control.on_enter_action("ABSENT", "absent", GateMode.AUTO, now,
+                                                               specs=list(cfg["commands"]))
 
     def _follow_active_profile(self) -> None:
         """프로필 메시지로 사람이 바뀌었으면(personalize/record.py 사람별 정책) 반응 학습도 그 사람의 상태 파일로 갈아 끼운다.

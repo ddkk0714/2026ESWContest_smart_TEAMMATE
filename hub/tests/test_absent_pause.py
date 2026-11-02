@@ -94,3 +94,36 @@ def test_live_absent_off_once_after_after_sec(tmp_path):
     for _ in range(8):
         cache.put("mmwave", mm(t, present=False, level=0)); cache.put("env", env(t, co2=700)); hub.tick_once(t); t += 10
     assert len([c for c in cmds if c.get("cause") == "absent"]) == 6
+
+
+def test_restore_specs_only_devices_that_were_on():
+    from types import SimpleNamespace as C
+
+    from deskmate_hub.live import restore_specs
+    cmds = [C(target_id="desk_lamp", status="succeeded", result={"previous": 180}),
+            C(target_id="vent_fan", status="succeeded", result={"previous": {"power": "on", "speed": 60, "level": 2}}),
+            C(target_id="music", status="succeeded", result={"previous": {"on": True, "volume": 0.4, "track": 2, "track_id": "x"}})]
+    assert [(s["target_id"], s["operation"], s["value"]) for s in restore_specs(cmds)] == [
+        ("desk_lamp", "set_brightness", 180), ("vent_fan", "set_power", "on"), ("vent_fan", "set_speed", 60),
+        ("music", "set_music", {"on": True, "volume": 0.4, "track": 2})]
+    off = [C(target_id="desk_lamp", status="succeeded", result={"previous": 0}),            # 꺼져 있던 기기는 그대로
+           C(target_id="vent_fan", status="succeeded", result={"previous": {"power": "off", "speed": 0}}),
+           C(target_id="music", status="timeout", result=None),                              # 결과 없음 → 건드리지 않음
+           C(target_id="desk_lamp", status="succeeded", result={})]                          # 옛 앱(previous 없음)
+    assert restore_specs(off) == []
+
+
+def test_tof_empty_chair_overrides_far_mmwave():
+    from deskmate_hub.ingest.cache import Sample
+    from deskmate_hub.ingest.mapping import resolve_presence
+    cfg = {"presence": {"source": "mmwave", "desk_max_cm": 130, "tof_away_overrides": True, "tof_away_mm_min_cm": 90}}
+
+    def mm(dist):
+        return Sample(received=1.0, ts=1.0, seq=None, data={"present": True, "distance_cm": dist, "valid": True,
+                                                             "motion_state": "still", "motion_level": 1})
+    away = Sample(received=1.0, ts=1.0, seq=None, data={"present": False, "away_forced": True, "posture": "away"})
+    seated = Sample(received=1.0, ts=1.0, seq=None, data={"present": True, "posture": "upright"})
+    assert resolve_presence(mm(119), away, cfg) == (False, "tof_away")          # 11-02: 방 나감, mmWave 119 cm 정지 물체
+    assert resolve_presence(mm(55), away, cfg)[0] is True                        # 등 기대 ToF 가 멀어도 mmWave 가 가까우면 재실
+    assert resolve_presence(mm(119), seated, cfg)[0] is True                     # ToF 가 사람을 보면 예전 규칙
+    assert resolve_presence(mm(119), away, {"presence": dict(cfg["presence"], tof_away_overrides=False)})[0] is True
