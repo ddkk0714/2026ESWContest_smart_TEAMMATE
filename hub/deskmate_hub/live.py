@@ -398,6 +398,7 @@ class LiveHub:
             elif (prev_state in self._REQUEST_STATES and result.state is not prev_state
                   and self.control.episode is not None):
                 self.control.close_episode()
+            self._absent_off(bool(frame.present), now)
         if self.control is not None:
             summary["control"] = self.control.summary()
             if self.personalize_recorder is not None:          # 이번 tick 에 나간 무드등 명령 → '밝힘 뒤 직접 어둡게' 추적
@@ -488,6 +489,23 @@ class LiveHub:
         )
         return envelope
 
+
+    def _absent_off(self, present: bool, now: float) -> None:
+        """부재 끄기(control.yaml absent_off, 11-02): 재실이었다가 재실 없음이 after_sec 이어지면 기기 끄기를 한 번 보낸다."""
+        cfg = self.control_cfg.get("absent_off") or {}
+        if not cfg.get("enabled", True) or not cfg.get("commands"):
+            return
+        if present:                                   # 재실을 봐야 다음 부재를 센다(처음부터 없던 자리는 끄지 않음)
+            self._absent_off_since, self._absent_off_armed = None, True
+            return
+        if not getattr(self, "_absent_off_armed", False):
+            return
+        if getattr(self, "_absent_off_since", None) is None:
+            self._absent_off_since = now
+        if now - self._absent_off_since >= float(cfg.get("after_sec", 60)):
+            self._absent_off_armed = False
+            print(f"[control] 자리 비움 {now - self._absent_off_since:.0f}s → 기기 끄기", file=self.out, flush=True)
+            self.control.on_enter_action("ABSENT", "absent", GateMode.AUTO, now, specs=list(cfg["commands"]))
 
     def _follow_active_profile(self) -> None:
         """프로필 메시지로 사람이 바뀌었으면(personalize/record.py 사람별 정책) 반응 학습도 그 사람의 상태 파일로 갈아 끼운다.

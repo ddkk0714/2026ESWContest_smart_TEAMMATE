@@ -69,6 +69,17 @@ rest_notice:
 #     high = 3단계 고정. CO₂ 를 못 내리므로 ACTION_ENV 기본 명령에는 넣지 않고 개인화 arm air_fan_up 만 쓴다).
 # ACTION_ENV 진입 시 원인(cause)별로 내보낼 명령. 가역 동작만 둔다. undo_value 는 자동 실행 후 사용자가 거절했을 때 되돌리는 값.
 # `undo: previous` 는 앱 결과의 previous(바꾸기 전 원시 밝기)로 set_brightness 되돌림 — adjust_brightness 전용.
+# 부재 끄기(11-02 사용자 기준 "부재 중엔 각종 기기를 꺼야지") — 재실이었다가 재실 없음이 after_sec 이어지면 commands 를 한 번 보낸다.
+# 다시 재실이 되면 다음 부재 때 또 보낸다(처음부터 재실이 없으면 보내지 않음). 제어 로그에는 원인 absent("자리 비움")로 남는다.
+# FSM 개입(actions)이 아니라 되돌리기 값이 없다. 쿨다운 무시: 방금 켰어도 끈다. music = Pi 5 앱 V32 계약(set_music {on}).
+absent_off:
+  enabled: true
+  after_sec: 60
+  commands:
+    - {target_id: vent_fan, operation: set_power, value: "off", ignore_cooldown: true}
+    - {target_id: desk_lamp, operation: set_power, value: "off", ignore_cooldown: true}
+    - {target_id: music, operation: set_music, value: {"on": false}, ignore_cooldown: true}
+
 actions:
   environment:
     - {target_id: vent_fan, operation: set_power, value: "on", undo_value: "off"}

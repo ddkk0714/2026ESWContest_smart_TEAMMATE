@@ -42,6 +42,7 @@ timers:
   score_period_sec: 10           # 신뢰도 계산 주기 (2026-09-14 팀 결정: 30→10. ingest 가 이 주기로 SensorFrame 을 만든다)
   baseline_sec: 300              # START Baseline 측정(5~10분, 초안 5분)
   absent_idle_sec: 600           # 재실 없음 10분 → IDLE
+  absent_pause_sec: 0            # 11-02: 재실 없음이 이만큼 이어지면 상태·점수를 멈춘다(부재 중 피로도 미사용). 0 = 첫 부재 tick 부터. 키를 지우면 예전 동작
   fatigue_elevated_hold_sec: 180 # FOCUS→FATIGUE_SUSPECT 진입 유지(3분)
   fatigue_confirm_hold_sec: 180  # FATIGUE_SUSPECT→FATIGUE 유지(3분)
   focus_break_poll_sec: 180      # 집중 재유도 관찰(3분)

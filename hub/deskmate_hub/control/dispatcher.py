@@ -284,7 +284,8 @@ class ControlDispatcher:
                 gate=gate.value, requires_confirmation=irreversible, expires_ts=now + self.timeout, arm=arm,
             )
             last = self._last_sent.get(key)
-            if last is not None and now - last < self.cooldown:
+            # ignore_cooldown(부재 끄기, 11-02): 방금 켠 기기도 자리를 비우면 바로 끈다 — 켜기·끄기가 같은 (기기, 동작) 쿨다운 키를 쓴다
+            if last is not None and now - last < self.cooldown and not spec.get("ignore_cooldown"):
                 self._log(f"[control] {key[0]}.{key[1]} 쿨다운 중({now - last:.0f}s) → 생략")
                 cmd.status = "skipped"
                 self._record(cmd, "skipped", now, reason=f"cooldown {now - last:.0f}s/{self.cooldown:.0f}s")

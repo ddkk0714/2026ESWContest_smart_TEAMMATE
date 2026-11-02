@@ -122,10 +122,16 @@ class FSMEngine:
     # ── 메인 tick ─────────────────────────────────────────────
     def tick(self, frame: SensorFrame) -> TickResult:
         now = frame.now
-        self.context = detect_context(frame.pc_ratio, self.cfg)
-        self.scores = compute_scores(frame, self.context, self.cfg)
-        if self.score_adjust is not None:
-            self.scores = self.score_adjust(self.scores, frame)
+        # 11-02 사용자 기준 "부재 중 피로도는 쓰면 안 된다": 사람 신호가 빠진 점수(환경·경과만으로 재정규화돼 0.3→0.69 로 튐)로
+        # 상태를 옮기지 않는다. 부재가 absent_pause_sec 이어지면 점수는 재실 때 마지막 값을 두고 상태도 그 자리에서 멈춘다.
+        absent_since = None if frame.present else (self._absent_since if self._absent_since is not None else now)
+        absent_paused = (absent_since is not None and self.state not in (State.IDLE, State.END)
+                         and "absent_pause_sec" in self.tm and now - absent_since >= self.tm["absent_pause_sec"])
+        if not absent_paused:
+            self.context = detect_context(frame.pc_ratio, self.cfg)
+            self.scores = compute_scores(frame, self.context, self.cfg)
+            if self.score_adjust is not None:
+                self.scores = self.score_adjust(self.scores, frame)
         actions: list[str] = []
         gate = GateMode.NONE
         cause: str | None = None
@@ -147,6 +153,10 @@ class FSMEngine:
         ):
             self._goto(State.IDLE, now)
             return self._result(actions=["absent_timeout"], gate=gate, cause=cause)
+
+        # 부재 중 멈춤(위 absent_paused, 11-02): 피로·원인·개입으로 넘어가지 않는다. 돌아오면 그 상태에서 이어 간다.
+        if absent_paused:
+            return self._result(actions=["absent_pause"], gate=gate, cause=cause)
 
         s, c, th = self.state, self.scores, self.th
 
