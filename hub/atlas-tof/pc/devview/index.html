@@ -667,7 +667,7 @@ function renderJudge(ph, p, profile) {
   $("demoFast").classList.toggle("warn", fast);
   $("demoFast").dataset.next = fast ? "normal" : "fast";
   const pon = ph.personalize_switch === "on";
-  $("persSwitch").textContent = ph.personalize_switch ? (pon ? "개인화 켜짐 · 끄기" : "개인화 꺼짐 · 켜기") : "개인화(hub 미지원)";
+  $("persSwitch").textContent = ph.personalize_switch ? (pon ? "개인화 켜짐" : "개인화 꺼짐") : "개인화(hub 미지원)";
   $("persSwitch").classList.toggle("warn", ph.personalize_switch === "off");
   $("persSwitch").dataset.next = pon ? "off" : "on";
   const meter = (v, t, b, color) => { $(t).textContent = f2(v); $(b).style.width = v == null ? "0" : (v * 100).toFixed(1) + "%"; $(b).style.background = color; };
