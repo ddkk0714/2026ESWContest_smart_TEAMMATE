@@ -25,6 +25,28 @@ class _ProfilePickerState extends State<ProfilePicker> {
         },
       );
 
+  Future<void> _confirmDelete(int index) async {
+    final name = widget.model.profiles[index].name;
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+              title: Text('$name 프로필을 지울까요?'),
+              content: const Text('지운 프로필은 되돌릴 수 없어요.'),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('취소')),
+                TextButton(
+                    key: const ValueKey('confirm-delete-profile'),
+                    style: TextButton.styleFrom(
+                        foregroundColor: const Color(0xFFB3261E)),
+                    onPressed: () => Navigator.pop(context, true),
+                    child: const Text('지우기')),
+              ],
+            ));
+    if (ok == true && mounted) widget.model.deleteProfile(index);
+  }
+
   Widget _content() {
     final model = widget.model;
     if (creating) {
@@ -100,6 +122,9 @@ class _ProfilePickerState extends State<ProfilePicker> {
                   }
                   final profile = model.profiles[index];
                   final selected = model.profileIndex == index;
+                  // 마지막 하나와 집중 중인 지금 프로필은 지우지 않는다
+                  final deletable =
+                      model.profiles.length > 1 && !(selected && model.active);
                   return Tooltip(
                       message: managing
                           ? '${profile.name} 이미지 변경'
@@ -110,7 +135,10 @@ class _ProfilePickerState extends State<ProfilePicker> {
                           onTap: () async {
                             if (managing) {
                               final avatar = await pickProfileAvatar(
-                                  context, profile.avatar);
+                                  context, profile.avatar,
+                                  onDelete: deletable
+                                      ? () => _confirmDelete(index)
+                                      : null);
                               if (avatar != null && mounted) {
                                 model.setAvatar(index, avatar);
                               }
@@ -124,37 +152,83 @@ class _ProfilePickerState extends State<ProfilePicker> {
                           child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Container(
-                                    padding: const EdgeInsets.all(3),
-                                    decoration: BoxDecoration(
-                                        borderRadius: BorderRadius.circular(
-                                            avatarSize * .34 + 4),
-                                        border: Border.all(
-                                            color: selected
-                                                ? green
-                                                : Colors.transparent,
-                                            width: 1)),
-                                    child: Stack(
-                                        alignment: Alignment.center,
-                                        children: [
-                                          ProfileAvatar(
-                                              id: profile.avatar,
-                                              size: avatarSize),
-                                          if (managing)
-                                            Container(
-                                                width: avatarSize,
-                                                height: avatarSize,
-                                                decoration: BoxDecoration(
-                                                    color: Colors.black
-                                                        .withValues(alpha: .25),
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                            avatarSize * .34)),
-                                                child: const Icon(
-                                                    Icons.edit_outlined,
-                                                    color: Colors.white,
-                                                    size: 28)),
-                                        ])),
+                                // 관리 모드의 삭제 버튼은 이미지 밖 오른쪽 위에 둔다
+                                Stack(children: [
+                                  Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                          22, 8, 22, 0),
+                                      child: Container(
+                                          padding: const EdgeInsets.all(3),
+                                          decoration: BoxDecoration(
+                                              borderRadius:
+                                                  BorderRadius.circular(
+                                                      avatarSize * .34 + 4),
+                                              border: Border.all(
+                                                  color: selected
+                                                      ? green
+                                                      : Colors.transparent,
+                                                  width: 1)),
+                                          child: Stack(
+                                              alignment: Alignment.center,
+                                              children: [
+                                                ProfileAvatar(
+                                                    id: profile.avatar,
+                                                    size: avatarSize),
+                                                if (managing)
+                                                  Container(
+                                                      width: avatarSize,
+                                                      height: avatarSize,
+                                                      decoration: BoxDecoration(
+                                                          color: Colors.black
+                                                              .withValues(
+                                                                  alpha: .25),
+                                                          borderRadius:
+                                                              BorderRadius
+                                                                  .circular(
+                                                                      avatarSize *
+                                                                          .34)),
+                                                      child: const Icon(
+                                                          Icons.edit_outlined,
+                                                          color: Colors.white,
+                                                          size: 28)),
+                                              ]))),
+                                  if (managing && deletable)
+                                    Positioned(
+                                        top: 0,
+                                        right: 0,
+                                        child: Tooltip(
+                                            message: '${profile.name} 프로필 삭제',
+                                            // 보이는 원은 22, 누르는 범위는 36(터치 화면)
+                                            child: GestureDetector(
+                                                key: ValueKey(
+                                                    'profile-delete-$index'),
+                                                behavior:
+                                                    HitTestBehavior.opaque,
+                                                onTap: () =>
+                                                    _confirmDelete(index),
+                                                child: SizedBox(
+                                                    width: 36,
+                                                    height: 36,
+                                                    child: Align(
+                                                        alignment:
+                                                            Alignment.topRight,
+                                                        child: Container(
+                                                            width: 22,
+                                                            height: 22,
+                                                            decoration: BoxDecoration(
+                                                                color: Colors
+                                                                    .white,
+                                                                shape: BoxShape
+                                                                    .circle,
+                                                                border: Border.all(
+                                                                    color: const Color(
+                                                                        0xFFE1E5DC))),
+                                                            child: const Icon(
+                                                                Icons
+                                                                    .delete_outline_rounded,
+                                                                color: Color(0xFFB3261E),
+                                                                size: 15))))))),
+                                ]),
                                 const SizedBox(height: 8),
                                 Text(profile.name,
                                     maxLines: 1,
