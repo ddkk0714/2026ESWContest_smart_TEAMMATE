@@ -84,6 +84,20 @@ absent_off:
     - {target_id: desk_lamp, operation: set_power, value: "off", ignore_cooldown: true}
     - {target_id: music, operation: set_music, value: {"on": false}, ignore_cooldown: true}
 
+# 빠른 시연(demo_mode.py speed fast)일 때만 ACTION_POSTURE 의 기기를 사람의 '도움 순서'(첫 설정 focus_help)로 고른다 — demo_wake.py.
+# 11-03 결선 대본: A(태환, 알림 › 조명 › 선풍기) 뒤로 젖히기 → 음악, 졸기 → 음악+조명 / B(민경, 조명 › 선풍기 › 알림) 젖히기 → 조명,
+# 다시 젖히기 → 조명, 졸기 → 조명+선풍기. 거북목·턱 괴기는 바른 자세 안내. 앱 '알림' = focus_help sound = 그 사람이 고른 음악.
+demo_wake:
+  enabled: true
+  notice_labels: [forward_head, chin_rest]
+  mild_labels: [recline]
+  deep_labels: [face_down, drowsy]
+  default_order: [light, sound, wind]
+  helps:
+    light: [{target_id: desk_lamp, operation: adjust_brightness, value: {percent: 60, min_raw: 153}, undo: previous}]
+    sound: [{target_id: music, operation: set_music, value: {"on": true}, undo_value: {"on": false}}]
+    wind:  [{target_id: vent_fan, operation: set_power, value: "on", undo_value: "off"}]
+
 actions:
   environment:
     # vent_fan 실물 = Pico 2 W 블루투스 선풍기(firmware/pico2w_ble_fan). Pi 5 앱이 블루투스 탭에서 고른 선풍기에 실행한다.

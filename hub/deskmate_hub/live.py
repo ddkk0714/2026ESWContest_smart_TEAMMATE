@@ -31,6 +31,7 @@ from .co2_window import Co2WindowRule, load_co2_window_config
 from .rest_notice import RestNotifier
 from .arm_notice import ArmDeliverer
 from .demo_mode import DemoSpeed
+from .demo_wake import DemoWake
 from .personalization import PersonalizationRuntime, load_personalization_config
 from .personalization.privacy import PersonalizationPrivacy, load_privacy_config
 from .personalization.ondevice import OnDeviceLearner, load_ondevice_config
@@ -121,7 +122,8 @@ class LiveHub:
         self.engine = FSMEngine(self.fsm_cfg)
         # 빠른 시연(demo_mode.py, fsm.yaml demo_fast:): 화면 버튼 토픽으로 엔진 피로 유지 타이머를 줄였다 되돌린다
         self.demo_speed = DemoSpeed(self.fsm_cfg.get("demo_fast"), self.engine.tm,
-                                    on_log=lambda m: print(m, file=out, flush=True))
+                                    on_log=lambda m: print(m, file=out, flush=True),
+                                    posture_delta=(self.ingest_cfg.get("tof") or {}).get("posture_delta"))
         self.tracker = SessionTracker(
             elapsed_reset_on_rest=bool((self.ingest_cfg.get("elapsed") or {}).get("reset_on_rest", False)))
         self.privacy_cfg = privacy_cfg if privacy_cfg is not None else load_privacy_config()
@@ -291,6 +293,9 @@ class LiveHub:
         self.arm_deliverer = ArmDeliverer(self.control_cfg.get("arm_notice"), boot_id=self.boot_id,
                                           publish_request=self.publish_request, publish_control=arm_sink,
                                           on_log=lambda m: print(m, file=self.out, flush=True))
+        # 빠른 시연 깨우기 규칙(demo_wake.py, control.yaml demo_wake:) — speed fast 일 때만 ACTION_POSTURE 기기를 도움 순서로 고른다
+        self.demo_wake = DemoWake(self.control_cfg.get("demo_wake"))
+        self._demo_plan: dict[str, Any] | None = None
         self.rest_notifier = RestNotifier(
             self.control_cfg.get("rest_notice"), fsm_cfg=self.fsm_cfg, boot_id=self.boot_id,
             publish_request=self.publish_request, publish_control=rest_sink,
@@ -472,6 +477,17 @@ class LiveHub:
             if self.personalize_recorder.last_view is not None:
                 summary["personalize"] = self.personalize_recorder.last_view
             summary["personalize_switch"] = "off" if self.personalize_off else "on"   # devview 개인화 버튼(11-02)
+        # 빠른 시연(11-03 결선 대본): ACTION_POSTURE 에 들어온 tick 이면 밴딧 대신 도움 순서 규칙이 기기를 고른다(demo_wake.py)
+        self._demo_plan = None
+        if (self.control is not None and self.demo_speed.speed == "fast" and self.personalize_recorder is not None
+                and result.state is State.ACTION_POSTURE and result.state is not prev_state):
+            profile = self.personalize_recorder.user_profile if isinstance(self.personalize_recorder.user_profile, dict) else {}
+            self._demo_plan = self.demo_wake.decide(self.personalize_recorder.last_posture_label, profile.get("focus_help"))
+            if self._demo_plan is not None:
+                specs, specs_arm = self._demo_plan["specs"], self._demo_plan["arm"]
+                print(f"[demo_wake] {self._demo_plan['label']} → {self._demo_plan['arm']}", file=self.out, flush=True)
+        if self.demo_wake.enabled:
+            summary["demo_wake"] = self.demo_wake.snapshot()
         if self.control is not None:
             # 제어 에피소드: ACTION_ENV 는 control.yaml 기본 명령으로, 다른 ACTION_* 는 정책이 기기 arm(조명 등)을
             # 골랐을 때만(specs 비어 있지 않음). ACTION_POSTURE 는 정책 결정이 아예 없을 때(specs None: 정책 꺼짐·fallback·
@@ -540,7 +556,11 @@ class LiveHub:
         self.seq += 1
         self.publish(envelope)
         self._maybe_request(result, prev_state, now)
-        self._deliver_deviceless_arm(result, prev_state, specs, now, self._sound_pref())
+        if self._demo_plan is not None:
+            if self._demo_plan["kind"] == "notice":
+                self._deliver_demo_notice(result, now)
+        else:
+            self._deliver_deviceless_arm(result, prev_state, specs, now, self._sound_pref())
         if (self.personalize_recorder is not None and self.personalize_recorder.last_episode_id
                 and self.pending_request is not None):
             self.personalize_recorder.link_request(self.pending_request["data"]["request_id"])
@@ -594,6 +614,11 @@ class LiveHub:
                     self._absent_back_since = back = now
                 if now - back >= float(cfg.get("restore_after_sec", 10)):
                     self._absent_off_ep, self._absent_back_since = None, None
+                    # 11-03 결선 대본: A 가 떠난 자리에 B 가 앉으면(앱에서 사람 바꿈) A 의 조명·음악·선풍기를 되살리지 않는다
+                    if getattr(self, "_absent_off_profile", None) != self.active_profile_id:
+                        print(f"[control] 자리 복귀 — 다른 사람({self.active_profile_id})이라 이전 설정을 되돌리지 않음",
+                              file=self.out, flush=True)
+                        return
                     specs = restore_specs(ep.commands)
                     if specs:
                         print(f"[control] 자리 복귀 → 이전 설정으로 {len(specs)}건", file=self.out, flush=True)
@@ -609,6 +634,7 @@ class LiveHub:
             print(f"[control] 자리 비움 {now - self._absent_off_since:.0f}s → 기기 끄기", file=self.out, flush=True)
             self._absent_off_ep = self.control.on_enter_action("ABSENT", "absent", GateMode.AUTO, now,
                                                                specs=list(cfg["commands"]))
+            self._absent_off_profile = self.active_profile_id
 
     def set_personalize(self, on: bool) -> None:
         """개인화(개입 선택 정책 + 카드 응답 반응 학습)를 지금 켜거나 끈다. DESKMATE_PERSONALIZE=off 와 같은 뜻을 재시작 없이."""
@@ -691,6 +717,19 @@ class LiveHub:
             if item.get("data", {}).get("auto"):
                 self.seq += 1
                 self._mark_card(now, item["data"]["expires_in_s"], kind)      # 안내가 떠 있는 동안 환기·확인 카드는 기다린다
+
+    def _deliver_demo_notice(self, result, now: float) -> None:
+        """빠른 시연 규칙이 거북목·턱 괴기에 고른 바른 자세 안내(arm posture_card)를 카드로 낸다 — 밴딧 arm 전달과 같은 길."""
+        kind, prompt = self._REQUEST_STATES[result.state]
+        expires = float(self.fsm_cfg["timers"].get("focus_break_poll_sec", 180))
+        emitted = self.arm_deliverer.deliver(
+            state=result.state.value, kind=kind, prompt_code=prompt, gate=result.gate.value, arm="posture_card",
+            label="자세 안내 카드", channel="display", explanation=None, cause=result.cause, now=now, seq=self.seq,
+            sound_pref=self._sound_pref(), c_fatigue=self._pub_scores(result)[0], expires_in_s=expires)
+        for item in emitted:
+            if item.get("data", {}).get("auto"):
+                self.seq += 1
+                self._mark_card(now, item["data"]["expires_in_s"], kind)
 
     def _pub_scores(self, result) -> tuple[float, bool]:
         """발행용 (c_fatigue, scores_valid). 자리 비움(이번 tick present false)이면 (0.0, False) — 부재면 환경 하나만 남아 재정규화가
