@@ -32,6 +32,7 @@ from .rest_notice import RestNotifier
 from .arm_notice import ArmDeliverer
 from .demo_mode import DemoSpeed
 from .demo_wake import DemoWake
+from .posture_calib import PostureCalibrator
 from .personalization import PersonalizationRuntime, load_personalization_config
 from .personalization.privacy import PersonalizationPrivacy, load_privacy_config
 from .personalization.ondevice import OnDeviceLearner, load_ondevice_config
@@ -246,6 +247,9 @@ class LiveHub:
             self.personalize_recorder = EpisodeRecorder(
                 self.personalize_cfg, path, boot_id=self.boot_id, ingest_cfg=self.ingest_cfg,
                 on_log=lambda m: print(m, file=self.out), policy=policy, policy_path=policy_path)
+        # 사람별 자세 보정(posture_calib.py, 11-03): profiles/<profile_id>/posture_calib.json 이 있는 사람만 — 없으면 판정 그대로
+        self.posture_calib = PostureCalibrator(
+            self.personalize_recorder.profiles_root if self.personalize_recorder is not None else None)
         self.ondevice_cfg = ondevice_cfg if ondevice_cfg is not None else load_ondevice_config()
         self.ondevice = OnDeviceLearner(self.ondevice_cfg, self.privacy)
         # 피로 점수(공용 KSS 모델, docs/fatigue-dataset.md §6) — 관찰 전용, FSM 입력 아님. 모델 JSON 이 없으면 None.
@@ -317,6 +321,9 @@ class LiveHub:
     def tick_once(self, now: float | None = None) -> dict[str, Any]:
         now = time.time() if now is None else now
         view = self.cache.snapshot()
+        if self.personalize_recorder is not None:              # 프로필이 바뀌었으면 그 사람 보정으로(이 tick 의 프로필 메시지는 다음 tick 부터)
+            self.posture_calib.follow(self.personalize_recorder.active_profile_id)
+        view = self.posture_calib.apply(view)
         self._control_now = now
         # Observe before processing an acceptance: stale/invalid/new manual state
         # must invalidate a proposed command rather than be checked a tick later.
@@ -493,6 +500,7 @@ class LiveHub:
                 print(f"[demo_wake] {self._demo_plan['label']} → {self._demo_plan['arm']}", file=self.out, flush=True)
         if self.demo_wake.enabled:
             summary["demo_wake"] = self.demo_wake.snapshot()
+        summary["posture_calib"] = self.posture_calib.snapshot()
         if self.control is not None:
             # 제어 에피소드: ACTION_ENV 는 control.yaml 기본 명령으로, 다른 ACTION_* 는 정책이 기기 arm(조명 등)을
             # 골랐을 때만(specs 비어 있지 않음). ACTION_POSTURE 는 정책 결정이 아예 없을 때(specs None: 정책 꺼짐·fallback·

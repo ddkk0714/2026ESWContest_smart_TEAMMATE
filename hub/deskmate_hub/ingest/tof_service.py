@@ -106,7 +106,8 @@ def parse_service_state(state: dict[str, Any]) -> dict[str, Any]:
     sensors = state.get("sensors")
     if isinstance(sensors, list):
         data["sensors"] = [
-            {k: s[k] for k in ("name", "online", "posture", "conf", "hz", "frames", "flip_rows", "flip_cols", "stale") if k in s}
+            {k: s[k] for k in ("name", "online", "posture", "conf", "probs", "hz", "frames", "flip_rows", "flip_cols", "stale")
+             if k in s}
             for s in sensors if isinstance(s, dict)
         ]
     # 10-22 판 서비스가 더 주는 것(재실 근거·mmWave 요약·로짓)은 있으면 그대로 — 실기 로그용
