@@ -101,41 +101,43 @@ def test_script_a_then_b_fits_8_minutes(tmp_path, sent):
     acted = lambda cmds, cards: bool(cmds or cards)                      # noqa: E731
 
     s.person(A)
-    s.hold("upright", 40)                                                 # 바르게 앉기 → 집중
+    s.hold("upright", 30)                                                 # 바르게 앉기 → 집중
     cmds, _ = s.hold("recline", 60, until=acted)
     assert _devices(cmds) == ["music"] and cmds[0][2] == {"on": True}, cmds
-    s.hold("upright", 40)                                                 # 깨기
+    s.hold("upright", 30)                                                 # 깨기
     cmds, _ = s.hold("face_down", 60, until=acted)
     assert _devices(cmds) == ["desk_lamp", "music"], "\n".join(f"{t:.0f} {p} {st}" for t, p, st in s.trace)   # 두 번째는 음악 + 조명
-    s.hold("upright", 40)
+    s.hold("upright", 30)
     cmds, cards = s.hold("forward_head", 60, until=acted)
     assert cmds == [] and cards == ["posture_card"], (cmds, cards)        # 거북목 → 바른 자세 안내
-    s.hold("upright", 40)
+    s.hold("upright", 30)
     cmds, _ = s.hold("away", 40, until=lambda c, _: len(c) >= 3)
     assert _devices(cmds) == ["desk_lamp", "music", "vent_fan"] and all(
         v in ("off", {"on": False}) for _, _, v in cmds), cmds          # 자리 비움 → 전부 끄기
     a_end = s.t
 
     s.person(B)
-    cmds, _ = s.hold("upright", 40)
+    cmds, _ = s.hold("upright", 30)
     assert cmds == [], cmds                                               # A 의 기기를 되살리지 않는다
     cmds, _ = s.hold("recline", 60, until=acted)
     assert _devices(cmds) == ["desk_lamp"], cmds                          # B 는 조명 먼저
-    s.hold("upright", 40)
+    s.hold("upright", 30)
     cmds, _ = s.hold("recline", 60, until=acted)
     assert _devices(cmds) == ["desk_lamp"], cmds                          # 다시 조명(쿨다운에 안 막힘)
-    s.hold("upright", 40)
+    s.hold("upright", 30)
     cmds, _ = s.hold("face_down", 60, until=acted)
     assert _devices(cmds) == ["desk_lamp", "vent_fan"], cmds              # 졸기 → 조명 + 선풍기
-    s.hold("upright", 40)
+    s.hold("upright", 30)
     cmds, cards = s.hold("chin_rest", 60, until=acted)
     assert cmds == [] and cards == ["posture_card"], (cmds, cards)
-    s.hold("upright", 40)
+    s.hold("upright", 30)
     cmds, _ = s.hold("away", 40, until=lambda c, _: len(c) >= 3)
     assert _devices(cmds) == ["desk_lamp", "music", "vent_fan"], cmds
 
-    # 10 s tick·깨운 뒤 바르게 40 s 기준 A 310 s·전체 700 s — 8분에 맞추려면 tick·대본 조정이 더 필요하다(11-03 확인)
-    assert a_end <= 320 and s.t <= 720, (a_end, s.t)
+    # 빠른 시연 판정 주기 5 s(fsm.yaml demo_fast.period_sec)·깨운 뒤 바르게 30 s 기준. 센서 tick 시간 — 사람 동작·멘트 시간은 별도
+    print(f"[demo_script] A {a_end:.0f}s, 전체 {s.t:.0f}s")
+    assert hub.period == 5.0
+    assert a_end <= 240 and s.t <= 480, (a_end, s.t)
 
 
 def test_normal_speed_keeps_old_path(tmp_path, sent):
@@ -144,6 +146,6 @@ def test_normal_speed_keeps_old_path(tmp_path, sent):
     cache.put("demo_mode", Sample(received=0.0, ts=0.0, seq=None, data={"speed": "normal"}))
     s = Script(hub, cache, reqs, sent)
     s.person(A)
-    s.hold("upright", 40)
+    s.hold("upright", 30)
     cmds, _ = s.hold("recline", 180)
     assert cmds == [] and hub.demo_wake.last is None, cmds

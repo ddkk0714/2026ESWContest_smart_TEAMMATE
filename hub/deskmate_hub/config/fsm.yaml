@@ -56,6 +56,7 @@ timers:
 demo_fast:
   enabled: false
   max_on_sec: 1800                 # 켜 둔 채 잊어도 30 분 뒤 normal 로
+  period_sec: 5                    # 11-03 사용자 "판정 주기 5초로" — 결선 대본 8분. 운영 score_period_sec 10 은 그대로
   timers:
     fatigue_elevated_hold_sec: 0   # 0 = 이번 tick 이 임계 위면 바로 의심(엔진 _hold_ok·_held 가 같은 뜻으로 본다)
     fatigue_confirm_hold_sec: 0    # 0 = 의심 다음 tick 에 임계 위면 바로 확정

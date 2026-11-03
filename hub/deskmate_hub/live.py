@@ -205,6 +205,7 @@ class LiveHub:
         self.privacy.boot_id = self.boot_id
         self.seq = 0
         self.period = float(self.ingest_cfg.get("frame_period_sec") or self.fsm_cfg["timers"]["score_period_sec"])
+        self._normal_period = self.period
         self.esm_log_path = self.control_cfg.get("esm_log_path") or os.path.join("logs", f"esm-{self.boot_id}.jsonl")
         # 라벨 번호는 state/phase seq 와 따로 센다(seq 에 구멍이 나면 수신 측이 유실로 본다).
         self.personalization_cfg = personalization_cfg if personalization_cfg is not None else load_personalization_config()
@@ -430,6 +431,10 @@ class LiveHub:
                 self.control_log.tick(now)
 
         self.demo_speed.observe(view.demo_mode, now)          # 엔진 tick 전에 — 이번 tick 부터 바뀐 유지 시간으로 본다
+        # 11-03 결선 대본(8분): 빠른 시연은 판정 주기도 줄인다(fsm.yaml demo_fast.period_sec). tick 루프(live·service_bridge)가
+        # 다음 tick 시각을 hub.period 로 잡으므로 다음 tick 부터 바뀐다. 운영 판정 주기(10 s)는 normal 에서 그대로.
+        self.period = ((self.demo_speed.period_sec or self._normal_period) if self.demo_speed.speed == "fast"
+                       else self._normal_period)
         frame = build_frame(view, now, self.ingest_cfg, self.tracker, fsm_state=self.engine.state)
         self._last_present = bool(frame.present)            # 발행용: 자리 비움이면 점수 0.0·scores_valid false (_pub_scores)
         request_kind = self._REQUEST_STATES.get(self.engine.state)

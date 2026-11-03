@@ -9,6 +9,7 @@
   max_on_sec  fast 로 둔 채 잊어도 이 시간 뒤 normal 로 돌아간다(0 이면 끄지 않음).
   posture_delta  fast 일 때 덮을 ingest tof.posture_delta(자세 → 피로 증거) 값. 11-03 결선 대본: 뒤로 젖히기·거북목·턱 괴기도
               시연에서는 개입까지 가야 한다("배속 모드에서는 판정 기준을 낮추거나 시간을 줄여야" — 사용자). normal 이면 되돌린다.
+  period_sec  fast 일 때 판정 주기(초). 11-03 사용자 "판정 주기 5초로" — 대본 8분. live.py 가 hub.period 로 쓴다.
 
 지금 모드는 state/phase sensor_summary.demo_mode 로 낸다 — 화면이 "빠른 시연" 배지를 띄운다.
 제한 Python(보드)에서 돈다 — 표준 라이브러리만.
@@ -33,6 +34,7 @@ class DemoSpeed:
         self._delta = posture_delta if posture_delta is not None else {}   # ingest tof.posture_delta 와 같은 dict — 다음 frame 부터 읽힌다
         self._fast_delta = {k: float(v) for k, v in (cfg.get("posture_delta") or {}).items() if k in self._delta}
         self._normal_delta: dict[str, Any] = {}
+        self.period_sec = float(cfg.get("period_sec") or 0) or None   # fast 판정 주기(live.py 가 hub.period 로 쓴다). 없으면 그대로
         self.speed = "normal"
         self.since: float | None = None
         self.last_reason: str | None = None
@@ -78,6 +80,8 @@ class DemoSpeed:
             view["timers"] = {k: self._timers[k] for k in self._fast}
             if self._fast_delta:
                 view["posture_delta"] = {k: self._delta[k] for k in self._fast_delta}
+            if self.period_sec:
+                view["period_sec"] = self.period_sec
             if self.max_on_sec > 0:
                 view["remaining_s"] = max(0, int(self.max_on_sec - (now - self.since)))
         return view
