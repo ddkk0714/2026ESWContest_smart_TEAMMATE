@@ -108,17 +108,10 @@ def test_fast_mode_lamp_within_30s_and_normal_is_slower(tmp_path, profile):
     assert states[-1]["data"]["sensor_summary"]["demo_mode"] == {"speed": "normal", "enabled": True}
 
 
-def test_recline_confirms_only_in_fast_mode(tmp_path):
-    """11-03 결선 대본: 빠른 시연은 뒤로 젖히기도 개입까지 간다(fsm.yaml demo_fast.posture_delta recline 1.0 → 점수 0.80).
-    보통 속도는 그대로 — 기대기(0.48 < 확정 0.60)는 피로로 확정하지 않고, normal 로 돌리면 값도 되돌아온다."""
-    hub, cache, _ = _hub(tmp_path / "f", "demo-b")
-    _, lamp_at, seen = _run(hub, cache, speed="fast", posture="recline", horizon=120)
-    assert State.FATIGUE in seen and lamp_at is not None
-    assert hub.ingest_cfg["tof"]["posture_delta"]["recline"] == 1.0
-    hub.demo_speed.set("normal", 999.0, "test")
-    assert hub.ingest_cfg["tof"]["posture_delta"]["recline"] == 0.6
-    hub, cache, _ = _hub(tmp_path / "n", "demo-b")
-    _, lamp_at, seen = _run(hub, cache, speed=None, posture="recline", horizon=600)
+def test_fast_mode_still_needs_a_sleepy_posture(tmp_path):
+    """유지 시간만 줄인다 — 기대기(점수 0.48 < 확정 0.60)는 빠른 시연에서도 피로로 확정하지 않는다."""
+    hub, cache, _ = _hub(tmp_path, "demo-b")
+    _, lamp_at, seen = _run(hub, cache, speed="fast", posture="recline", horizon=600)
     assert lamp_at is None and State.FATIGUE not in seen
 
 

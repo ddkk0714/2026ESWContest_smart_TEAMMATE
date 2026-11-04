@@ -47,8 +47,7 @@ personalize:
     conf_auto: 0.55                 # FSM gate.conf_auto 와 같은 값(다르면 정책이 자동을 제안으로 낮춘다)
 ingest:
   presence:                         # 11-02 시연 전용 — ToF 가 빈 의자(away_forced)면 mmWave 거리와 상관없이 부재.
-    tof_away_mm_min_cm: 60          # 기본 90. C1001 은 떠난 뒤에도 30~60 s 재실을 붙든다 — 처음엔 0 이었으나 16:32·16:38 턱 괴기
-                                    # (ToF 아랫줄 빔)를 부재로 봐서 앉은 거리(47~60 cm) 안이면 재실 유지. 타이핑은 keystroke 가 지킨다
+    tof_away_mm_min_cm: 0           # 기본 90(mmWave 가 90 cm 안이면 재실 유지). C1001 은 떠난 뒤에도 30~60 s 재실을 붙든다
   keystroke:
     # 10-26 실측(이 PC collector, 오늘 11:52~19:32 typing_active 창 14 753개): idle_ratio p50 0.83·p90 0.99, flight_cv p50 0.83·p90 1.21·p97 1.38,
     # correction_rate p50 0.09·p90 0.27·p97 0.53. 기본 램프(idle 0.10~0.60·cv 0.25~0.70·정정 0.15)는 baseline 정규화의 폴백이라, 선형 정규화인
