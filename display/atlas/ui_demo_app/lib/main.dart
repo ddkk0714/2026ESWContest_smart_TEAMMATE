@@ -4,6 +4,7 @@ import 'dart:io' show exit;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'demo_model.dart';
+import 'posture_pictogram.dart';
 import 'profile_avatars.dart';
 import 'profile_picker.dart';
 import 'personal_settings.dart';
@@ -866,29 +867,7 @@ class _DemoShellState extends State<DemoShell> {
                           ])),
                     ]))),
                 const SizedBox(height: 16),
-                Expanded(
-                    child: _tile(
-                        color: const Color(0xFFE6EBDD),
-                        child: Row(
-                            key: const ValueKey('desk-posture-card'),
-                            children: [
-                              const Icon(Icons.accessibility_new_rounded,
-                                  color: green, size: 42),
-                              const SizedBox(width: 18),
-                              Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    const Text('지금 자세',
-                                        style: TextStyle(color: muted)),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                        _live == null
-                                            ? '연결 대기'
-                                            : postureText(_live!),
-                                        style: const TextStyle(fontSize: 20))
-                                  ])
-                            ]))),
+                Expanded(child: _postureCard()),
               ])),
         ])),
         const SizedBox(height: 22),
@@ -925,6 +904,38 @@ class _DemoShellState extends State<DemoShell> {
   String _deviceAfter(String target, String fallbackName) {
     final known = _live == null ? null : widget.live!.devices.text(target);
     return known == null ? '$fallbackName 상태 미확인' : '$fallbackName $known';
+  }
+
+  /// 집중 상세 '지금 자세'. 자세마다 그림과 색이 바뀐다(posture_pictogram.dart).
+  Widget _postureCard() {
+    final key = _live == null ? null : postureKey(_live!);
+    final colors = postureColors(key);
+    return AnimatedContainer(
+        duration: const Duration(milliseconds: 400),
+        padding: const EdgeInsets.all(22),
+        decoration: BoxDecoration(
+            color: colors.tile,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: line.withValues(alpha: .65))),
+        child: Row(key: const ValueKey('desk-posture-card'), children: [
+          AnimatedSwitcher(
+              duration: const Duration(milliseconds: 300),
+              child: PosturePictogram(
+                  key: ValueKey('posture-pictogram-${key ?? 'none'}'),
+                  posture: key,
+                  color: colors.ink,
+                  size: 64)),
+          const SizedBox(width: 16),
+          Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Text('지금 자세', style: TextStyle(color: muted)),
+                const SizedBox(height: 8),
+                Text(_live == null ? '연결 대기' : postureText(_live!),
+                    style: TextStyle(fontSize: 20, color: colors.ink))
+              ])
+        ]));
   }
 
   Widget _tile(
