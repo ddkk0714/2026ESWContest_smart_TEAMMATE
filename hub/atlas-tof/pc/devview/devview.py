@@ -2666,6 +2666,8 @@ class Store:
 
     def link(self, name: str, ok: bool, reason: str = "") -> None:
         with self.lock:
+            if name == "mqtt" and self.thinq_phase is not None:
+                self.thinq_phase.set_connected(ok)
             l = self.links[name]
             l["ok"], l["reason"] = ok, reason
             if ok:

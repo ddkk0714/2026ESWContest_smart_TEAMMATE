@@ -18,32 +18,40 @@ test('manual HTML refuses Fixture and read-only credentials and caches the verif
   assert.equal(requests,1);
 });
 
-async function manualUi({loseResponse=false}={}){
+async function manualUi({loseResponse=false,powerControl=false,policyLink=false,runMode='live-manual',expireSnapshot=false,sessionView=null}={}){
   const html=await readFile(new URL('./index.html',import.meta.url),'utf8');
   const inline=html.match(/<script type="module">([\s\S]*?)<\/script>/)[1].replace(/^import .*?;$/m,'');
-  const elements=new Map(),requests=[];
+  const elements=new Map(),requests=[],intervals=[];let preparedValue='LOW';
   class Element {disabled=false;hidden=false;checked=false;textContent='';style={};children=[];classList={toggle(){}};addEventListener(){};append(child){this.children.push(child);}replaceChildren(...children){this.children=children;}showModal(){this.open=true;}close(){this.open=false;}}
   const element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
-  const buttons=['thinqConnect','thinqRead','thinqLow','thinqAuto','thinqExecute','thinqPhysical','thinqRevoke','closeInfo'];
+  const buttons=['thinqConnect','thinqRead','thinqLow','thinqAuto','thinqPowerOff','thinqPowerOn','thinqExecute','thinqPhysical','thinqRevoke','closeInfo'];
   const context=vm.createContext({
-    document:{documentElement:{dataset:{runMode:'live-manual'}},getElementById:element,createElement:()=>new Element(),querySelectorAll:()=>buttons.map(element)},
+    document:{documentElement:{dataset:{runMode,powerControl:String(powerControl),policyLink:String(policyLink)}},getElementById:element,createElement:()=>new Element(),querySelectorAll:()=>buttons.map(element)},
     ThinQUiState,renderSnapshot:()=>{},performance:{now:()=>0},
     fetch:async(route,options)=>{
       const body=options?.body?JSON.parse(options.body):{};requests.push({route,body});
       let reply={pi4:''};
       if(route==='/api/thinq/connect')reply={status:'session_connected',mode:'live',access:'manual_control'};
+      if(policyLink&&route==='/api/thinq/policy')reply=sessionView??{reason:'credential_session_required',proposal:null};
+      if(body.op==='snapshot'&&expireSnapshot)throw Error('synthetic session expired');
+      if(policyLink&&route==='/api/thinq/policy-fixture')reply={manual_review:true,fixture_timeline:true,proposal:{proposal_id:'synthetic-proposal',operation:'set_power',value:'on'},post_enabled:false};
+      if(policyLink&&route==='/api/thinq/policy-response'){
+        preparedValue='POWER_ON';
+        reply={manual_review:true,fixture_timeline:true,proposal:null,result:{status:body.decision==='accept'?'awaiting_manual_approval':'rejected',transport_performed:false},
+          ...(body.decision==='accept'?{manual_approval:{status:'approval_required',nonce:'synthetic-policy-nonce',value:preparedValue,post_enabled:true}}:{})};
+      }
       if(body.op==='read')reply={status:'read_ok',mode:'live',post_enabled:true};
-      if(body.op==='prepare')reply={status:'approval_required',nonce:'synthetic-one-use',value:body.value,post_enabled:true};
+      if(body.op==='prepare'){preparedValue=body.value;reply={status:'approval_required',nonce:'synthetic-one-use',value:body.value,post_enabled:true};}
       if(body.op==='execute'){
         if(loseResponse)throw Error('safe synthetic timeout');
-        reply={status:'state_match',api_accepted:true,state_match:true,physical_confirmed:false,value:'LOW',post_enabled:true};
+        reply={status:'state_match',api_accepted:true,state_match:true,physical_confirmed:false,value:preparedValue,post_enabled:true};
       }
       if(body.op==='physical_confirmation')reply={status:'user_attestation_recorded',physical_confirmed:true,post_enabled:true};
       return {ok:true,json:async()=>reply,blob:async()=>({})};
-    },URL:{createObjectURL:()=> 'blob:fixture',revokeObjectURL(){}},setInterval(){},setTimeout(){},window:{addEventListener(){}},
+    },URL:{createObjectURL:()=> 'blob:fixture',revokeObjectURL(){}},setInterval(fn){intervals.push(fn);},setTimeout(){},window:{addEventListener(){}},
   });
   new vm.Script(inline).runInContext(context);
-  return {element,requests};
+  return {element,requests,poll:()=>intervals[0]()};
 }
 
 test('manual HTML requires explicit two-condition acceptance, sends once, and separates physical evidence',async()=>{
@@ -237,4 +245,162 @@ test('Live HTML remains usable without Pi4 and never constructs a Pi5 remote',as
     const result=await fetch(base+'/api/thinq/connect',{method:'POST',headers:{Origin:base,'X-Deskmate-Key':'test-only','Content-Type':'application/json'},body:'{}'});
     assert.equal(result.status,200);assert.equal((await result.json()).mode,'live');
   }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+});
+
+test('power HTML is opt-in and reuses separate one-shot approvals and physical evidence',async()=>{
+  const normal=await manualUi();
+  assert.equal(normal.element('thinqPowerButtons').hidden,true);
+  assert.equal(normal.element('thinqPowerOff').disabled,true);
+  await normal.element('thinqConnect').onclick();await normal.element('thinqRead').onclick();
+  await normal.element('thinqPowerOff').onclick();
+  assert.equal(normal.requests.filter(r=>r.body.op==='prepare').length,0);
+  const {element,requests}=await manualUi({powerControl:true});
+  assert.equal(element('thinqPowerButtons').hidden,false);
+  await element('thinqConnect').onclick();await element('thinqRead').onclick();
+  for(const [id,value] of [['thinqPowerOff','POWER_OFF'],['thinqPowerOn','POWER_ON']]){
+    const before=requests.filter(r=>r.body.op==='execute').length;
+    await element(id).onclick();
+    assert.equal(requests.at(-1).body.value,value);
+    assert.equal(requests.filter(r=>r.body.op==='execute').length,before);
+    assert.equal(element('thinqExecute').disabled,true);
+    element('thinqOnline').checked=true;element('thinqOnline').onchange();
+    element('thinqUnchanged').checked=true;element('thinqUnchanged').onchange();
+    await Promise.all([element('thinqExecute').onclick(),element('thinqExecute').onclick()]);
+    assert.equal(requests.filter(r=>r.body.op==='execute').length,before+1);
+    assert.equal(element('thinqExecute').disabled,true);
+    await element('thinqPhysical').onclick();
+    assert.equal(requests.at(-1).body.op,'physical_confirmation');
+    assert.equal(requests.at(-1).body.value,value);
+  }
+  assert.equal(requests.filter(r=>r.body.op==='policy_respond').length,0);
+});
+
+test('power HTML cannot connect to a backend without an explicit power capability',async()=>{
+  for(const power of [undefined,false,true]){
+    const client=new ThinQSession({expectedMode:'fixture',powerControl:true,fetcher:async()=>new Response(JSON.stringify({key:'f'.repeat(64),expires_in_seconds:1200,mode:'fixture',access:'manual_control',power_control:power}))});
+    if(power===true)await client.connect();else await assert.rejects(client.connect());
+    assert.equal(client.connected,power===true);
+  }
+  const ordinary=new ThinQSession({fetcher:async()=>new Response(JSON.stringify({key:'f'.repeat(64),expires_in_seconds:1200,power_control:true}))});
+  await assert.rejects(ordinary.connect());
+  assert.equal(ordinary.connected,false);
+});
+
+test('policy acceptance opens separate approval, performs no POST, and blocks direct manual bypass',async()=>{
+  const {element,requests}=await manualUi({powerControl:true,policyLink:true,runMode:'fixture'});
+  await element('thinqConnect').onclick();await element('thinqRead').onclick();
+  assert.equal(element('thinqPowerOn').disabled,true);
+  await element('thinqPowerOn').onclick();
+  assert.equal(requests.filter(r=>r.body.op==='prepare').length,0);
+  await element('purifierOnScenario').onclick();
+  assert.equal(element('purifierAccept').disabled,false);
+  await Promise.all([element('purifierAccept').onclick(),element('purifierAccept').onclick()]);
+  assert.equal(requests.filter(r=>r.route==='/api/thinq/policy-response').length,1);
+  assert.equal(requests.filter(r=>r.body.op==='execute').length,0);
+  assert.equal(element('thinqDialog').open,true);
+  assert.equal(element('thinqApproval').hidden,false);
+  assert.equal(element('thinqExecute').disabled,true);
+  element('thinqOnline').checked=true;element('thinqOnline').onchange();
+  assert.equal(element('thinqExecute').disabled,true);
+  element('thinqUnchanged').checked=true;element('thinqUnchanged').onchange();
+  await Promise.all([element('thinqExecute').onclick(),element('thinqExecute').onclick()]);
+  assert.equal(requests.filter(r=>r.body.op==='execute').length,1);
+  assert.equal(element('thinqPhysical').hidden,false);
+});
+
+test('policy rejection sends only a rejection, without preparation or execution',async()=>{
+  const {element,requests}=await manualUi({powerControl:true,policyLink:true,runMode:'fixture'});
+  await element('purifierOnScenario').onclick();await element('purifierReject').onclick();
+  assert.equal(requests.filter(r=>r.route==='/api/thinq/policy-response'&&r.body.decision==='reject').length,1);
+  assert.equal(requests.filter(r=>['prepare','execute'].includes(r.body.op)).length,0);
+  assert.equal(element('purifierAccept').disabled,true);
+});
+
+test('policy backend identity must match the screen mode',async()=>{
+  const client=new ThinQSession({expectedMode:'live',powerControl:true,policyLink:true,fetcher:async()=>new Response(JSON.stringify({key:'f'.repeat(64),expires_in_seconds:1200,mode:'live',power_control:true,policy_link:false}))});
+  await assert.rejects(client.connect());assert.equal(client.connected,false);
+});
+
+test('40 minute Live sessions require matching configuration and still expire',async()=>{
+  let now=0;
+  const claim={key:'e'.repeat(64),expires_in_seconds:2400,session_lifetime_seconds:2400,mode:'live',access:'manual_control',power_control:true,policy_link:true,policy_post_enabled:false};
+  const options={expectedMode:'live',requiredAccess:'manual_control',powerControl:true,policyLink:true,sessionLifetime:2400,clock:()=>now,fetcher:async()=>new Response(JSON.stringify(claim))};
+  const client=new ThinQSession(options);
+  const reply=await client.connect();
+  assert.equal(reply.expires_in_seconds,2400);assert.equal(reply.policy_post_enabled,false);
+  assert.equal(JSON.stringify(reply).includes(claim.key),false);
+  now=1201000;assert.equal(client.connected,true);
+  assert.equal((await client.connect()).policy_post_enabled,false);
+  now=2400000;assert.equal(client.connected,false);
+  for(const badClaim of [{...claim,expires_in_seconds:2401},{...claim,session_lifetime_seconds:1200}]){
+    const bad=new ThinQSession({...options,fetcher:async()=>new Response(JSON.stringify(badClaim))});
+    await assert.rejects(bad.connect());assert.equal(bad.connected,false);
+  }
+  const legacy=new ThinQSession({...options,sessionLifetime:null});
+  await assert.rejects(legacy.connect());assert.equal(legacy.connected,false);
+});
+
+test('disabled policy controls are not loading while real reads show a temporary wait cursor',async()=>{
+  const {element,requests}=await manualUi({powerControl:true,policyLink:true});
+  await element('thinqConnect').onclick();
+  const pending=element('thinqRead').onclick();
+  assert.equal(element('thinqRead').style.cursor,'wait');
+  await pending;
+  for(const id of ['thinqLow','thinqAuto','thinqPowerOff','thinqPowerOn']){
+    assert.equal(element(id).disabled,true);
+    assert.equal(element(id).style.cursor,'not-allowed');
+  }
+  assert.equal(element('thinqRead').style.cursor,'pointer');
+  assert.equal(element('thinqControlHint').hidden,false);
+  assert.match(element('thinqControlHint').textContent,/제안 카드/);
+  assert.match(element('thinqState').textContent,/로딩 중이 아닙니다/);
+  assert.equal(requests.filter(r=>['prepare','execute'].includes(r.body.op)).length,0);
+});
+
+test('policy card shows missing authentication before connection and clears proposals on expiry without Cloud GET',async()=>{
+  const {element,requests,poll}=await manualUi({powerControl:true,policyLink:true,expireSnapshot:true});
+  await poll();
+  assert.match(element('purifierPolicyState').textContent,/인증 세션 연결 필요/);
+  assert.equal(element('purifierAccept').disabled,true);
+  assert.equal(requests.filter(r=>r.body.op==='read').length,0);
+  await element('thinqConnect').onclick();await element('thinqRead').onclick();
+  await element('purifierOnScenario').onclick();
+  assert.equal(element('purifierAccept').disabled,false);
+  const readCount=requests.filter(r=>r.body.op==='read').length;
+  await poll();
+  assert.match(element('purifierPolicyState').textContent,/인증 세션 연결 필요/);
+  assert.equal(element('purifierAccept').disabled,true);
+  assert.equal(element('purifierPolicyCandidate').textContent,'제어 후보 없음');
+  assert.equal(requests.filter(r=>r.body.op==='read').length,readCount);
+  assert.equal(requests.filter(r=>['prepare','execute'].includes(r.body.op)).length,0);
+});
+
+test('attached session and observed presence counter are visible without implying a synthetic START',async()=>{
+  const sessionView={manual_review:true,session_active:true,session_origin:'attached',presence_elapsed_sec:14.8,presence_required_sec:30,
+    present:true,fsm_state:'FOCUS_NPC',reason:'waiting_for_fsm_boundary_or_presence',proposal:null};
+  const {element,requests,poll}=await manualUi({powerControl:true,policyLink:true,sessionView});
+  await poll();
+  assert.match(element('purifierPolicyState').textContent,/기존 활성 세션 합류/);
+  assert.match(element('purifierPolicyState').textContent,/14\/30초/);
+  assert.match(element('purifierPolicyState').textContent,/FOCUS_NPC/);
+  assert.doesNotMatch(element('purifierPolicyState').textContent,/START 관찰/);
+  sessionView.session_active=false;sessionView.reason='hub_disconnected';sessionView.presence_elapsed_sec=0;
+  await poll();
+  assert.match(element('purifierPolicyState').textContent,/MQTT 연결 끊김/);
+  assert.doesNotMatch(element('purifierPolicyState').textContent,/기존 활성 세션 합류/);
+  assert.equal(element('purifierAccept').disabled,true);
+  assert.equal(requests.filter(r=>['read','prepare','execute'].includes(r.body.op)).length,0);
+});
+
+test('policy popup has a local-only shortcut to the proposal card above sensors',async()=>{
+  const {element,requests}=await manualUi({policyLink:true,powerControl:true});
+  assert.equal(element('thinqPolicyJump').hidden,false);
+  let moved=false;
+  element('purifierPolicyPanel').scrollIntoView=options=>{moved=options.block==='start';};
+  element('thinq').onclick();assert.equal(element('thinqDialog').open,true);
+  const before=requests.length;
+  element('thinqPolicyJump').onclick();
+  assert.equal(element('thinqDialog').open,false);assert.equal(moved,true);
+  assert.equal(requests.length,before);
+  const legacy=await manualUi();assert.equal(legacy.element('thinqPolicyJump').hidden,true);
 });

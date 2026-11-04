@@ -101,23 +101,27 @@ export class SensorViewer {
 }
 
 export class ThinQSession {
-  constructor({fetcher=fetch,clock=Date.now,expectedMode=null,baseUrl="http://127.0.0.1:8792",readOnly=false,requiredAccess=null}={}) {this.fetcher=fetcher;this.clock=clock;this.key=null;this.until=0;this.expectedMode=expectedMode;this.readOnly=readOnly;this.requiredAccess=requiredAccess;this.mode=null;this.access=null;if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(baseUrl))throw new Error("인증 프로세스는 localhost만 허용해요.");this.baseUrl=baseUrl;}
+  constructor({fetcher=fetch,clock=Date.now,expectedMode=null,baseUrl="http://127.0.0.1:8792",readOnly=false,requiredAccess=null,powerControl=false,policyLink=false,sessionLifetime=null}={}) {this.fetcher=fetcher;this.clock=clock;this.key=null;this.until=0;this.expectedMode=expectedMode;this.readOnly=readOnly;this.requiredAccess=requiredAccess;this.powerControl=powerControl;this.policyLink=policyLink;this.sessionLifetime=sessionLifetime;this.policyPostEnabled=false;this.mode=null;this.access=null;if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(baseUrl))throw new Error("인증 프로세스는 localhost만 허용해요.");this.baseUrl=baseUrl;}
   get connected() {return this.key!==null&&this.clock()<this.until;}
   async connect() {
-      if(this.connected) return {status:'session_connected',mode:this.mode,access:this.access,expires_in_seconds:Math.floor((this.until-this.clock())/1000)};
+      if(this.connected) return {status:'session_connected',mode:this.mode,access:this.access,policy_post_enabled:this.policyPostEnabled,expires_in_seconds:Math.floor((this.until-this.clock())/1000)};
     const response=await this.fetcher(this.baseUrl+'/bootstrap',{
       headers:{'X-Deskmate-Bootstrap':'1'},signal:AbortSignal.timeout(5000)});
     if(!response.ok) throw new Error('ThinQ 인증 터미널을 새로 열어 세션을 준비해 주세요.');
     const session=await response.json();
     if(!/^[0-9a-f]{64}$/.test(session.key)||!Number.isInteger(session.expires_in_seconds)||
-       session.expires_in_seconds<1||session.expires_in_seconds>1200) throw new Error('ThinQ 세션 응답이 올바르지 않아요.');
+       session.expires_in_seconds<1||session.expires_in_seconds>(this.sessionLifetime??1200)) throw new Error('ThinQ 세션 응답이 올바르지 않아요.');
     if(this.expectedMode && session.mode!==this.expectedMode) throw new Error('인증 프로세스가 화면의 Fixture/Live 모드와 달라요.');
     if(this.readOnly&&session.access!=='read_only') throw new Error('읽기 전용 인증 프로세스만 연결할 수 있어요.');
     if(this.requiredAccess&&session.access!==this.requiredAccess) throw new Error('별도의 수동 제어 인증 프로세스가 필요해요.');
+    if((session.power_control===true)!==this.powerControl) throw new Error('화면과 인증 프로세스의 전원 시험 옵션이 달라요.');
+    if((session.policy_link===true)!==this.policyLink)throw new Error('화면과 인증 프로세스의 정책 연동 옵션이 달라요.');
+    if(this.sessionLifetime!==null&&session.session_lifetime_seconds!==this.sessionLifetime)throw new Error('화면과 인증 프로세스의 세션 시간이 달라요.');
+    this.policyPostEnabled=session.policy_post_enabled===true;
     this.mode=session.mode??'live';
     this.access=session.access??null;
     this.key=session.key;this.until=this.clock()+session.expires_in_seconds*1000;
-    return {status:'session_connected',mode:this.mode,access:this.access,expires_in_seconds:session.expires_in_seconds};
+    return {status:'session_connected',mode:this.mode,access:this.access,policy_post_enabled:this.policyPostEnabled,expires_in_seconds:session.expires_in_seconds};
   }
   async call(body) {
     if(!this.connected) throw new Error('ThinQ 인증 세션을 먼저 연결해 주세요.');
@@ -125,10 +129,11 @@ export class ThinQSession {
     if(body?.op==='policy')allowed.push('phase');
     if(body?.op==='policy_fixture')allowed.push('scenario');
     if(body?.op==='policy_respond')allowed.push('proposal_id','decision');
+    if(this.policyLink&&['execute','policy_respond'].includes(body?.op))allowed.push('phase');
     if(!body||Array.isArray(body)||Object.keys(body).some(k=>!allowed.includes(k))||
       !['read','snapshot','observation','prepare','execute','physical_confirmation','revoke','policy','policy_fixture','policy_respond'].includes(body.op)) throw new Error('허용되지 않은 ThinQ 요청이에요.');
     if(this.readOnly&&!['read','snapshot','revoke','policy'].includes(body.op)) throw new Error('Live 읽기 전용: 제어·export 요청 금지');
-    if(this.requiredAccess==='manual_control'&&!['read','snapshot','prepare','execute','physical_confirmation','revoke','policy'].includes(body.op)) throw new Error('수동 시험에서 허용되지 않은 요청이에요.');
+    if(this.requiredAccess==='manual_control'&&!['read','snapshot','prepare','execute','physical_confirmation','revoke','policy',...(this.policyLink?['policy_respond']:[])].includes(body.op)) throw new Error('수동 시험에서 허용되지 않은 요청이에요.');
     const response=await this.fetcher(this.baseUrl+'/call',{method:'POST',
       headers:{'Content-Type':'application/json','X-Deskmate-Session':this.key},body:JSON.stringify(body),
       signal:AbortSignal.timeout(90000)});
@@ -149,9 +154,14 @@ async function jsonBody(req) {
   return JSON.parse(text || '{}');
 }
 
-export function createServer({remote, sensors, thinq=new ThinQSession(), port=8791, executionMode='legacy', token=randomBytes(24).toString('hex')}) {
+export function createServer({remote, sensors, thinq=new ThinQSession(), port=8791, executionMode='legacy', powerControl=false, policyLink=false, sessionMinutes=20, token=randomBytes(24).toString('hex')}) {
   const origin=`http://127.0.0.1:${port}`;
   let busy=false;
+  const currentPhase=async()=>{
+    const unavailable=()=>policyLink?{mqtt_connected:false}:null;
+    if(!sensors.host)return unavailable();
+    try{const r=await fetch(`http://127.0.0.1:${sensors.port}/data`,{signal:AbortSignal.timeout(4000)});return r.ok?(await r.json()).thinq_phase??unavailable():unavailable();}catch{return unavailable();}
+  };
   return http.createServer(async(req,res)=>{
     const send=(code,body,type='application/json; charset=utf-8')=>{
       res.writeHead(code, {'Content-Type':type,'Cache-Control':'no-store',
@@ -164,7 +174,7 @@ export function createServer({remote, sensors, thinq=new ThinQSession(), port=87
       if(req.headers.host!==`127.0.0.1:${port}`) return send(403,{error:'로컬 주소만 허용해요'});
       const url=new URL(req.url,origin);
       if(req.method==='GET' && url.pathname==='/') {
-        const html=(await readFile(path.join(here,'index.html'),'utf8')).replace('__SESSION_TOKEN__',token).replace('__RUN_MODE__',executionMode).replace('__EXECUTION_MODE__',executionMode==='live-manual'?'Live Manual · 실제 공기청정기 LOW/AUTO · 각 동작마다 별도 승인 필요 · 자동 제어 OFF':executionMode==='live-read-only'?'Live Read-only · Pi4 센서는 연결 상태 별도 확인 · ThinQ Cloud 수동 GET 전용 · POST 금지':remote.host==='fixture'?(sensors.sourceMode==='live'?'실제 Pi4 센서 · 읽기 전용 / ThinQ Fixture 테스트 · Cloud 연결 없음':'Fixture 테스트 · 실제 보드·Cloud 연결 없음'):'실기 경로 · GET/POST는 별도 승인 필요');
+        const html=(await readFile(path.join(here,'index.html'),'utf8')).replace('__SESSION_TOKEN__',token).replace('__RUN_MODE__',executionMode).replace('__POWER_CONTROL__',String(powerControl)).replace('__POLICY_LINK__',String(policyLink)).replace('인증은 20분 동안 유지돼요.',`인증은 ${sessionMinutes}분 동안 유지돼요.`).replace('__EXECUTION_MODE__',executionMode==='live-manual'?'Live Manual · 실제 공기청정기 LOW/AUTO · 각 동작마다 별도 승인 필요 · 자동 제어 OFF':executionMode==='live-read-only'?'Live Read-only · Pi4 센서는 연결 상태 별도 확인 · ThinQ Cloud 수동 GET 전용 · POST 금지':remote.host==='fixture'?(sensors.sourceMode==='live'?'실제 Pi4 센서 · 읽기 전용 / ThinQ Fixture 테스트 · Cloud 연결 없음':'Fixture 테스트 · 실제 보드·Cloud 연결 없음'):'실기 경로 · GET/POST는 별도 승인 필요');
         return send(200,html,'text/html; charset=utf-8');
       }
       if(req.method==='GET' && url.pathname==='/api/status') {
@@ -172,12 +182,8 @@ export function createServer({remote, sensors, thinq=new ThinQSession(), port=87
       }
       if(req.method==='GET' && url.pathname==='/thinq-ui.mjs') return send(200,await readFile(path.join(here,'thinq-ui.mjs')),'text/javascript; charset=utf-8');
       if(req.method==='GET' && url.pathname==='/api/thinq/policy') {
-        if(!thinq.connected)return send(200,{execution:'mock_only',reason:'인증 세션 연결 전',proposal:null,post_enabled:false});
-        let phase=null;
-        if(sensors.host){try{
-          const response=await fetch(`http://127.0.0.1:${sensors.port}/data`,{signal:AbortSignal.timeout(4000)});
-          if(response.ok)phase=(await response.json()).thinq_phase??null;
-        }catch{ /* Missing live data fails closed in the policy. */ }}
+        if(!thinq.connected)return send(200,{execution:'mock_only',reason:policyLink?'credential_session_required':'인증 세션 연결 전',proposal:null,post_enabled:false});
+        const phase=await currentPhase();
         return send(200,await thinq.call({op:'policy',phase}));
       }
       if(req.method==='GET' && url.pathname==='/api/thinq/commands') {
@@ -220,13 +226,14 @@ export function createServer({remote, sensors, thinq=new ThinQSession(), port=87
           return send(200,await thinq.call({op:'policy_fixture',scenario:body.scenario}));
         }
         else if(url.pathname==='/api/thinq/policy-response') {
-          if(executionMode!=='fixture')return send(403,{error:'현재 정책 수락·거절은 Fixture Mock 전용이에요.'});
+          if(executionMode!=='fixture'&&!(policyLink&&executionMode==='live-manual'))return send(403,{error:'현재 정책 수락·거절은 Fixture Mock 전용이에요.'});
           if(Object.keys(body).some(k=>!['proposal_id','decision'].includes(k)))return send(400,{error:'잘못된 응답'});
-          return send(200,await thinq.call({op:'policy_respond',...body}));
+          return send(200,await thinq.call({op:'policy_respond',...body,...(policyLink?{phase:await currentPhase()}:{} )}));
         }
         else if(url.pathname==='/api/thinq/call') {
           if(String(body.op).startsWith('policy'))return send(403,{error:'전용 정책 경로를 사용해 주세요.'});
-          return send(200,await thinq.call(body));
+          if(policyLink&&Object.hasOwn(body,'phase'))return send(400,{error:'재실 입력은 서버에서 확인해요.'});
+          return send(200,await thinq.call({...body,...(policyLink&&body.op==='execute'?{phase:await currentPhase()}:{} )}));
         }
         else return send(404,{error:'없는 경로예요'});
         return send(200,{ok:true});
@@ -244,6 +251,12 @@ export async function main(args=process.argv.slice(2)) {
   for(let i=0;i<args.length;i+=2) options[args[i].replace(/^--/,'')]=args[i+1];
   const port=Number(options.port??8791);
   if(!Number.isInteger(port)||port<1024||port>65535) throw new Error('포트 범위 오류');
+  const sessionMinutes=Number(options['session-minutes']??20);
+  if(![20,40].includes(sessionMinutes))throw new Error('세션 시간은 20분 또는 40분만 허용');
+  const powerControl=options['power-control']==='true';
+  const policyLink=options['policy-link']==='true';
+  if(policyLink&&!(powerControl&&['fixture','live-manual'].includes(options.mode)))throw new Error('제안 연동은 별도 Fixture/수동 전원 시험만 허용');
+  if(powerControl&&!['fixture','live-manual'].includes(options.mode))throw new Error('전원 시험은 Fixture 또는 별도 수동 모드만 허용');
   const fixture=options.fixture==='true'||options.mode==='fixture';
   const liveReadOnly=options.mode==='live-read-only';
   const liveManual=options.mode==='live-manual';
@@ -262,7 +275,7 @@ export async function main(args=process.argv.slice(2)) {
   await remote.prepare().catch(()=>console.log('Pi5 연결 대기 중. 유선랜을 연결하면 화면 수신과 조작을 다시 시도합니다.'));
   const sensors=localOnly ? {host:liveReadOnly||liveManual?(options.pi4??''):(sensorSource==='live'?options.pi4:'fixture'),sourceMode:sensorSource,port:sensorPort,start:async()=>{throw new Error('읽기 전용 센서 주소는 실행 터미널에서 변경해 주세요');},stop:async()=>{}} : new SensorViewer({docker:options.docker??'docker'});
   if(options.pi4&&!localOnly) await sensors.start(options.pi4);
-  const server=createServer({remote,sensors,port,executionMode:liveManual?'live-manual':liveReadOnly?'live-read-only':fixture?'fixture':'legacy',thinq:new ThinQSession({expectedMode:fixture?'fixture':liveReadOnly||liveManual?'live':null,readOnly:liveReadOnly,requiredAccess:liveManual?'manual_control':null,baseUrl:localOnly?`http://127.0.0.1:${thinqPort}`:'http://127.0.0.1:8792'})});
+  const server=createServer({remote,sensors,port,powerControl,policyLink,sessionMinutes,executionMode:liveManual?'live-manual':liveReadOnly?'live-read-only':fixture?'fixture':'legacy',thinq:new ThinQSession({expectedMode:fixture?'fixture':liveReadOnly||liveManual?'live':null,readOnly:liveReadOnly,requiredAccess:liveManual?'manual_control':null,powerControl,policyLink,sessionLifetime:sessionMinutes*60,baseUrl:localOnly?`http://127.0.0.1:${thinqPort}`:'http://127.0.0.1:8792'})});
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});
   console.log(`DESKMATE 노트북 제어: http://127.0.0.1:${port}/`);
   let closing=false;

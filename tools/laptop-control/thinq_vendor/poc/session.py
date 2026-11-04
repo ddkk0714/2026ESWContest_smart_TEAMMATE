@@ -14,6 +14,8 @@ from tools.thinq_connect.manual_trial import (
     invariant,
     profile_check,
     public_state,
+    power_config,
+    power_profile_check,
 )
 
 
@@ -53,10 +55,12 @@ def error_category(error):
 
 
 class Permit:
-    def __init__(self, enabled):
+    def __init__(self, enabled, power_control=False):
         self.enabled = enabled
+        self.power_control = power_control
         self.target = None
         self.value = None
+        self.policy_auto = False
 
     def select(self, target):
         if self.target is not None:
@@ -64,7 +68,8 @@ class Permit:
         self.target = target
 
     def approve(self, value):
-        if not self.enabled or value not in ("LOW", "AUTO") or self.value is not None:
+        allowed = ("LOW", "AUTO", "POWER_ON", "POWER_OFF") if self.power_control else ("LOW", "AUTO")
+        if not self.enabled or value not in allowed or self.value is not None:
             raise StopTrial("post_disabled")
         self.value = value
 
@@ -73,12 +78,14 @@ class Session:
     def __init__(self, sdk, context=None, clock=time.monotonic):
         self.sdk, self.clock = sdk, clock
         self.authorization_valid = lambda: True
+        self.before_post = lambda challenge, fresh: challenge.get("policy") is None
+        self.policy_approval = None  # Host-only handoff; never accepted from JSON.
         self.ctx = copy.deepcopy(context or {})
         self.ctx.setdefault("enabled", False)
         self.ctx.setdefault("attempted", [])
         self.ctx.setdefault("uncertain", False)
         self.ctx.setdefault("wind", "AUTO")
-        self.permit = Permit(self.ctx["enabled"])
+        self.permit = Permit(self.ctx["enabled"], self.ctx.get("power_control") is True)
         self.io = DeviceIO(sdk, self.permit, probe)
         sdk.permit = self.permit
 
@@ -108,6 +115,11 @@ class Session:
             wind_profile_verified = True
         except StopTrial:
             wind_profile_verified = False
+        try:
+            power_profile_check(profile)
+            power_profile_verified = True
+        except StopTrial:
+            power_profile_verified = False
         result = {
             "status": "read_ok",
             "fields": fields,
@@ -116,6 +128,7 @@ class Session:
             "connection": "unknown",
             "pm2_meaning": "unverified",
             "wind_profile_verified": wind_profile_verified,
+            "power_profile_verified": power_profile_verified,
         }
         try:
             summary = public_state(state)
@@ -140,6 +153,14 @@ class Session:
             )
         except (KeyError, TypeError, StopTrial):
             result["state"] = None
+        # Powered-off devices may omit job/wind. Never invent those fields.
+        if self.ctx.get("power_control") is True and result["state"] is None:
+            try:
+                current = power_config(state)
+                result["state"] = {"power": current["operation"]["airPurifierOperationMode"],
+                                   "job": None, "windStrength": None, "windStrengthDetail": None}
+            except StopTrial:
+                pass
         return result
 
     async def handle(self, request):
@@ -198,16 +219,32 @@ class Session:
         if not self.ctx["enabled"] or self.ctx["uncertain"]:
             raise StopTrial("post_disabled_or_outcome_uncertain")
         if op == "prepare":
+            self.ctx.pop("challenge", None)
             value = request.get("value")
-            if value not in ("LOW", "AUTO") or value in self.ctx["attempted"]:
+            if self.ctx.get("policy_link") and self.policy_approval is None:
+                raise StopTrial("policy_handoff_required")
+            power = value in ("POWER_ON", "POWER_OFF")
+            if value not in ("LOW", "AUTO", "POWER_ON", "POWER_OFF") or value in self.ctx["attempted"]:
                 raise StopTrial("stage_forbidden")
+            if power and self.ctx.get("power_control") is not True:
+                raise StopTrial("power_control_disabled")
+            previous = self.ctx.get("verified")
+            if ((self.policy_approval is not None or power or previous in ("POWER_ON", "POWER_OFF"))
+                    and previous and self.ctx.get("physical") != previous):
+                raise StopTrial("previous_physical_confirmation_required")
             await self.read()
-            profile_check(self.latest_profile)
-            baseline = config(self.latest_state)
-            expected = "AUTO" if value == "LOW" else "LOW"
-            if self.latest_state["airFlow"]["windStrength"] != expected:
-                raise StopTrial("baseline_changed")
-            if value == "AUTO" and (
+            if power:
+                power_profile_check(self.latest_profile)
+                baseline = power_config(self.latest_state)
+                if baseline["operation"]["airPurifierOperationMode"] == value:
+                    raise StopTrial("already_in_requested_state")
+            else:
+                profile_check(self.latest_profile)
+                baseline = config(self.latest_state)
+                expected = "AUTO" if value == "LOW" else "LOW"
+                if self.latest_state["airFlow"]["windStrength"] != expected:
+                    raise StopTrial("baseline_changed")
+            if value == "AUTO" and self.policy_approval is None and (
                 self.ctx.get("verified") != "LOW"
                 or self.ctx.get("physical") != "LOW"
                 or baseline != self.ctx.get("low_config")
@@ -220,6 +257,7 @@ class Session:
                 "baseline": baseline,
                 "deadline": self.clock() + 30,
                 "created": self.clock(),
+                "policy": copy.deepcopy(self.policy_approval),
             }
             return {
                 "status": "approval_required",
@@ -239,15 +277,21 @@ class Session:
         ):
             raise StopTrial("approval_invalid_or_expired")
         value = challenge["value"]
-        await self.read()  # Fresh profile AND state immediately before control.
-        profile_check(self.latest_profile)
-        if config(self.latest_state) != challenge["baseline"]:
+        power = value in ("POWER_ON", "POWER_OFF")
+        if power and self.ctx.get("power_control") is not True:
+            raise StopTrial("power_control_disabled")
+        fresh = await self.read()  # Fresh profile AND state immediately before control.
+        (power_profile_check if power else profile_check)(self.latest_profile)
+        if (power_config if power else config)(self.latest_state) != challenge["baseline"]:
             raise StopTrial("external_change_detected")
         # A fresh GET can take longer than the approval/session lifetime.
         if not challenge["created"] <= self.clock() < challenge["deadline"] or not self.authorization_valid():
             raise StopTrial("approval_or_session_expired_before_post")
+        if not self.before_post(challenge, fresh):
+            raise StopTrial("policy_changed_or_live_post_blocked")
         self.ctx["attempted"].append(value)  # never replay after timeout/response loss
         self.permit.enabled = True
+        self.permit.policy_auto = bool(challenge.get("policy") and value == "AUTO")
         accepted = False
         failure = None
         try:
@@ -264,9 +308,13 @@ class Session:
             readback = (
                 await self.read()
             )  # separate GET even when POST response was lost
-            current = config(self.latest_state)
-            same_invariants = invariant(current) == invariant(challenge["baseline"])
-            matched = current["airFlow"]["windStrength"] == value and same_invariants
+            current = (power_config if power else config)(self.latest_state)
+            if power:
+                # Confirm power only. ON never writes AUTO or assumes a restored mode.
+                matched = current["operation"]["airPurifierOperationMode"] == value
+            else:
+                same_invariants = invariant(current) == invariant(challenge["baseline"])
+                matched = current["airFlow"]["windStrength"] == value and same_invariants
         except (ApiFailure, StopTrial):
             matched = False
             current = None
