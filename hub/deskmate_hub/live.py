@@ -23,6 +23,7 @@ from .features import BaselineStore
 from .ingest import SensorCache, SessionTracker, build_frame, load_ingest_config, sensor_summary
 from .presentation import state_envelope
 from .profile import apply_profile, apply_section
+from .ingest.appliance_display import display_appliances
 from .identity import active_profile_id
 from .esm import make_label, write_label
 from .fatigue.live import build_fatigue_runtime, load_fatigue_config
@@ -515,6 +516,10 @@ class LiveHub:
             })
             if fatigue_view is not None:
                 summary["fatigue"] = fatigue_view
+        # Display projection after inference, never a new FSM sensor input.
+        appliances = display_appliances(self.cache.appliances)
+        if appliances:
+            summary["appliances"] = appliances
         envelope = state_envelope(result, boot_id=self.boot_id, seq=self.seq, ts=now, sensor_summary=summary,
                                   present=self._last_present)
         self.seq += 1

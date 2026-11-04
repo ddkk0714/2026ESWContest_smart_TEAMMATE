@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import time
+
+from .appliance import PREFIX as APPLIANCE_PREFIX
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,10 +24,12 @@ TOPIC_SESSION_REPORT = "deskmate/session/report"
 LINE_PREFIX = "MQTT\t"
 
 
-def route_mqtt_message(cache: SensorCache, topic: str, payload: bytes, now: float | None = None) -> str | None:
+def route_mqtt_message(cache: SensorCache, topic: str, payload: bytes, now: float | None = None, *, retained: bool = False) -> str | None:
     """토픽별로 cache 에 반영하고 종류("mmwave"/"env"/"keystroke"/"feedback"/"control_result"/"fatigue_label"/"user_profile"/"demo_mode")를
     돌려준다. 계약 밖이면 None."""
     now = time.time() if now is None else now
+    if topic.startswith(APPLIANCE_PREFIX):
+        return "appliance" if cache.appliances.ingest(topic, payload, received=now, retained=retained) else None
     if topic == TOPIC_DEMO_MODE:
         # 화면 '빠른 시연' 버튼(demo_mode.py). envelope 이든 맨 data 든 받는다 — speed 검사는 DemoSpeed 가 한다
         try:

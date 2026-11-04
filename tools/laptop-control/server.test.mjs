@@ -2,6 +2,31 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer, coordinates, Pi5Remote, ThinQSession} from './server.mjs';
 
+test('V1.1 Mock routes require origin/key and cannot be used by Live read-only',async()=>{
+  for(const executionMode of ['fixture','live-read-only']){
+    const calls=[],token='fixture-local-key';
+    const thinq={connected:true,call:async body=>{calls.push(body);return {mode:'fixture',post_enabled:false,execution:'mock_only',proposal:null};}};
+    const port=20000+Math.floor(Math.random()*20000);
+    const server=createServer({remote:{host:'fixture'},sensors:{host:''},thinq,port,executionMode,token});
+    await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});
+    const origin=`http://127.0.0.1:${port}`;
+    const post=(route,body,auth=true)=>fetch(origin+route,{method:'POST',headers:{'Content-Type':'application/json',...(auth?{Origin:origin,'X-Deskmate-Key':token}:{})},body:JSON.stringify(body)});
+    try{
+      assert.equal((await post('/api/thinq/policy-fixture',{scenario:'presence_on'},false)).status,403);
+      const scenario=await post('/api/thinq/policy-fixture',{scenario:'presence_on'});
+      assert.equal(scenario.status,executionMode==='fixture'?200:403);
+      const response=await post('/api/thinq/policy-response',{proposal_id:'synthetic',decision:'accept'});
+      assert.equal(response.status,executionMode==='fixture'?200:403);
+      assert.equal((await post('/api/thinq/call',{op:'policy',phase:{}})).status,403);
+      const view=await(await fetch(origin+'/api/thinq/policy')).json();
+      assert.equal(view.post_enabled,false);
+      assert.deepEqual(calls.at(-1),{op:'policy',phase:null});
+      assert.ok(calls.every(c=>!['read','execute','prepare'].includes(c.op)));
+      if(executionMode==='live-read-only')assert.equal(calls.length,1);
+    }finally{await new Promise(resolve=>server.close(resolve));}
+  }
+});
+
 test('ThinQ bridge keeps its host key out of public replies and enforces expiry',async()=>{
   const key='a'.repeat(64),calls=[];let now=100;
   const thinq=new ThinQSession({clock:()=>now,fetcher:async(url,options)=>{
@@ -75,4 +100,20 @@ test('web API permits only local authenticated actions; sensor proxy remains sep
     assert.equal((await fetch(base+'/api/open',{method:'POST',headers,body:'{}'})).status,200);
     assert.equal(actions.at(-1),'open');
   } finally {server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+});
+
+
+test('mixed preview labels real sensors separately from ThinQ Fixture and performs no board action',async()=>{
+  const port=19000+Math.floor(Math.random()*10000),base=`http://127.0.0.1:${port}`;
+  let boardActions=0;
+  const server=createServer({port,remote:{host:'fixture',frame:async()=>{boardActions++;}},
+    sensors:{host:'pi4.invalid',sourceMode:'live',port:18790},thinq:new ThinQSession({expectedMode:'fixture'})});
+  await new Promise(resolve=>server.listen(port,'127.0.0.1',resolve));
+  try {
+    const page=await(await fetch(base)).text();
+    assert.ok(page.includes('실제 Pi4 센서 · 읽기 전용 / ThinQ Fixture 테스트 · Cloud 연결 없음'));
+    assert.ok(!page.includes('Fixture 테스트 · 실제 보드·Cloud 연결 없음'));
+    assert.equal(boardActions,0);
+    const status=await(await fetch(base+'/api/status')).json();assert.equal(status.pi4,'pi4.invalid');
+  }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
 });

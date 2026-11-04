@@ -5,7 +5,7 @@ import os
 import time
 
 from tools.thinq_connect import probe
-from tools.thinq_connect.air_quality import FIELDS, _validate
+from tools.thinq_connect.air_quality import FIELDS, FieldSpec, _validate
 from tools.thinq_connect.manual_trial import (
     ApiFailure,
     DeviceIO,
@@ -16,6 +16,11 @@ from tools.thinq_connect.manual_trial import (
     public_state,
 )
 
+
+# Laptop display fields use the same Profile-based validator, never state-only guesses.
+OBSERVATION_FIELDS = dict(FIELDS,
+    job_mode=FieldSpec("device_state", "airPurifierJobMode", "currentJobMode", "mode"),
+    wind_strength=FieldSpec("device_state", "airFlow", "windStrength", "mode"))
 
 class SafeApiFailure(ApiFailure):
     def __init__(self, http_status=None, code=None, category="api_or_network_error"):
@@ -67,6 +72,7 @@ class Permit:
 class Session:
     def __init__(self, sdk, context=None, clock=time.monotonic):
         self.sdk, self.clock = sdk, clock
+        self.authorization_valid = lambda: True
         self.ctx = copy.deepcopy(context or {})
         self.ctx.setdefault("enabled", False)
         self.ctx.setdefault("attempted", [])
@@ -87,7 +93,7 @@ class Session:
         state = await self.io.state()
         # Parsing is reused verbatim; unknown units and measurement time stay unknown.
         fields = {}
-        for name, spec in FIELDS.items():
+        for name, spec in OBSERVATION_FIELDS.items():
             value, status = _validate(spec, profile, state)
             fields[name] = {
                 "value": value,
@@ -237,6 +243,9 @@ class Session:
         profile_check(self.latest_profile)
         if config(self.latest_state) != challenge["baseline"]:
             raise StopTrial("external_change_detected")
+        # A fresh GET can take longer than the approval/session lifetime.
+        if not challenge["created"] <= self.clock() < challenge["deadline"] or not self.authorization_valid():
+            raise StopTrial("approval_or_session_expired_before_post")
         self.ctx["attempted"].append(value)  # never replay after timeout/response loss
         self.permit.enabled = True
         accepted = False

@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import math
 import os
@@ -32,6 +33,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# Optional, stdlib-only observation. No API execution or new MQTT writer.
+_observer_file = os.path.abspath(os.path.join(HERE, "../../../../tools/laptop-control/thinq_observer.py"))
+CommandObserver = None
+PhaseFeed = None
+if os.path.isfile(_observer_file):
+    _spec = importlib.util.spec_from_file_location("deskmate_thinq_observer", _observer_file)
+    _observer_module = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_observer_module)
+    CommandObserver = _observer_module.CommandObserver
+    PhaseFeed = _observer_module.PhaseFeed
+
 
 # 자세 서비스 라벨 순서(hub/atlas-tof/src/posture_net.h kLabels)와 한국어 이름(posture_view.html KO 표).
 LABELS = ["upright", "lean_forward", "recline", "face_down", "chin_rest", "drowsy", "away", "misplaced",
@@ -2616,6 +2628,8 @@ class Store:
 
     def __init__(self, log_max: int = 200) -> None:
         self.lock = threading.Lock()
+        self.thinq_observer = CommandObserver() if CommandObserver is not None else None
+        self.thinq_phase = PhaseFeed() if PhaseFeed is not None else None
         self.phase: Any = None
         self.posture: Any = None
         self.raw: Any = None
@@ -2657,10 +2671,14 @@ class Store:
             if ok:
                 l["last"] = time.time()
 
-    def on_mqtt(self, topic: str, payload: bytes, at: float | None = None) -> None:
+    def on_mqtt(self, topic: str, payload: bytes, at: float | None = None, *, retained: bool = False) -> None:
         env = decode_payload(payload)
         at = time.time() if at is None else at
         with self.lock:
+            if self.thinq_observer is not None:
+                self.thinq_observer.observe(topic, payload, retained=retained)
+            if self.thinq_phase is not None:
+                self.thinq_phase.observe(topic, payload, retained=retained)
             self.links["mqtt"]["last"] = at
             info = self.topics.get(topic)
             if info is None and len(self.topics) < self.topics_max:
@@ -2878,6 +2896,8 @@ class Store:
             posture = None if self.posture is None else mask_seated_away(self.posture, self.raw)
             return {
                 "page_version": _page_version(),
+                "thinq_commands": self.thinq_observer.view() if self.thinq_observer is not None else {"mode": "unavailable", "commands": [], "post_enabled": False},
+                "thinq_phase": self.thinq_phase.view() if self.thinq_phase is not None else None,
                 "virtual": self.virtual.view(now),
                 "trigger": self.trigger.view(now),
                 "laptop": None if self.laptop is None else self.laptop.view(),
@@ -2993,7 +3013,7 @@ def mqtt_loop(host: str, port: int, store: Store, stop: threading.Event, topic: 
                         t, payload, pid = parse_publish(h & 0x0F, body)
                         if pid is not None:
                             sock.sendall(_packet(0x40, struct.pack("!H", pid)))  # PUBACK
-                        store.on_mqtt(t, payload)
+                        store.on_mqtt(t, payload, retained=bool(h & 1))
         except (OSError, ConnectionError, struct.error) as e:
             store.link("mqtt", False, f"{host}:{port} — {_reason(e)}")
         stop.wait(2.0)
