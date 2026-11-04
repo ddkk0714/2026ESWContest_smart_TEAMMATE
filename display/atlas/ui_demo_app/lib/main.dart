@@ -12,7 +12,10 @@ import 'profile_picker.dart';
 import 'personal_settings.dart';
 import 'page_transition.dart';
 import 'pr56_workspace_view.dart';
+import 'live/auto_action.dart';
 import 'live/auto_action_card.dart';
+import 'cards/card_deck.dart';
+import 'cards/card_look.dart';
 import 'live/home_items.dart';
 import 'live/link_settings.dart';
 import 'live/live_link.dart';
@@ -25,6 +28,7 @@ import 'profile_store.dart';
 import 'suggestion_card.dart';
 import 'developer/developer_controller.dart';
 import 'developer/pr74/notice_banner.dart';
+import 'developer/pr74/voice_alert.dart' show ScreenNotice;
 import 'developer/developer_views.dart';
 import 'developer/pr74/developer_page.dart' as legacy;
 
@@ -320,49 +324,18 @@ class _DemoShellState extends State<DemoShell> {
         final live = widget.live;
         final request =
             live?.status == LinkStatus.connected ? live!.request : null;
-        final screenNotice = live?.notices.current(m.now);
         return Stack(children: [
           Positioned.fill(
               child: PageTransitionView(
                   pageKey: _developerOpen ? 'developer' : m.page,
                   child: _page())),
-          if (!_developerOpen && live != null)
-            Positioned(
-                top: 76,
-                left: 40,
-                right: 40,
-                child: AnimatedSwitcher(
-                  duration: MediaQuery.disableAnimationsOf(context)
-                      ? Duration.zero
-                      : const Duration(milliseconds: 220),
-                  child: screenNotice != null
-                      ? NoticeBanner(
-                          notice: screenNotice,
-                          now: m.now,
-                          onDismiss: live.dismissNotice)
-                      : const SizedBox.shrink(),
-                )),
-          // hub 자동 실행 카드(무드등·선풍기·공기청정기) — 알림 배너가 떠 있으면 그 아래. 제안 카드가 오면 그 뒤에 가린다.
-          if (!_developerOpen && live != null)
-            if (live.autoActions.current(live.now) case final auto?)
-              Positioned(
-                top: screenNotice != null ? 146 : 76,
-                left: 40,
-                right: 40,
-                child: AutoActionCardView(
-                    key: ValueKey('auto-action-${auto.commandId}'),
-                    card: auto,
-                    now: live.now,
-                    onUndo: () => live.undoAutoAction(),
-                    onDismiss: live.autoActions.dismiss)),
           if (live?.state?.demoFast == true)
             const Positioned(
                 left: 16, bottom: 12, child: IgnorePointer(child: DemoFastBadge())),
-          if (request != null && !_developerOpen)
+          // 안내(알림)·자동 실행·제안 카드: 화면을 거의 덮는 큰 카드로, 여러 장이면 쌓는다(cards/card_deck.dart)
+          if (!_developerOpen && live != null)
             Positioned.fill(
-                child: KeyedSubtree(
-                    key: ValueKey('live-card-${request.requestId}'),
-                    child: _liveCard(request))),
+                child: CardDeck(entries: _deckEntries(live, request))),
           if (_manualVentOpen && request == null && !_developerOpen)
             Positioned.fill(child: _manualVentCard()),
           Positioned.fill(
@@ -394,19 +367,112 @@ class _DemoShellState extends State<DemoShell> {
         ]);
       });
 
-  /// 보드가 보낸 확인 질문. 답하면 바로 닫히고 답변 문구만 상단에 잠깐 남는다(V15 카드 규칙).
-  Widget _liveCard(LiveRequest request) {
-    final card = request.card(widget.live!.state);
-    return _suggestionCard(
+  /// 덱에 올릴 카드들: 화면 알림(쌓임) · hub 자동 실행 카드 · hub 확인 질문.
+  List<DeckEntry> _deckEntries(LiveLink live, LiveRequest? request) {
+    final now = live.now;
+    final posture = live.state == null ? null : postureKey(live.state!);
+    final notices = live.notices.all(now);
+    return [
+      for (final (i, n) in notices.indexed)
+        DeckEntry(
+            id: 'notice-${n.requestId ?? n.shownAt.microsecondsSinceEpoch}',
+            at: n.shownAt,
+            card: _noticeCard(n, now, posture, top: i == notices.length - 1)),
+      if (live.autoActions.current(now) case final auto?)
+        DeckEntry(
+            id: 'auto-${auto.commandId}',
+            at: auto.executedAt,
+            card: _autoCard(live, auto, now)),
+      if (request != null)
+        DeckEntry(
+            id: 'request-${request.requestId}',
+            at: request.receivedAt,
+            card: KeyedSubtree(
+                key: ValueKey('live-card-${request.requestId}'),
+                child: _liveCard(request, posture))),
+    ];
+  }
+
+  /// 닫기 하나뿐인 안내(쉬기 알림·자세 안내 카드 등). 테스트가 찾는 키는 맨 위 한 장에만 단다.
+  Widget _noticeCard(ScreenNotice n, DateTime now, String? posture,
+      {required bool top}) {
+    final remaining = n.remaining(now);
+    final live = widget.live!;
+    final look = lookFor(kind: n.kind, arm: n.arm, posture: posture);
+    final tip = look.isPosture ? postureTip(posture) : null;
+    return BigCard(
+        key: top ? const ValueKey('notice-banner') : null,
+        look: look,
+        tag: n.label,
+        lines: [
+          if (look.isPosture && postureKo(posture) != null)
+            '지금 자세 · ${postureKo(posture)}',
+          if (tip != null) tip,
+        ],
+        tagKey: top ? const ValueKey('notice-label') : null,
+        title: n.text,
+        titleKey: top ? const ValueKey('notice-text') : null,
+        trailing: remaining == null
+            ? null
+            : Text(formatCountdown(remaining),
+                key: top ? const ValueKey('notice-countdown') : null,
+                style: const TextStyle(
+                    fontSize: 26,
+                    fontFeatures: [FontFeature.tabularFigures()])),
+        onClose: live.dismissNotice,
+        closeKey: top ? const ValueKey('notice-dismiss') : null,
+        actions: [
+          FilledButton(
+              onPressed: live.dismissNotice, child: const Text('알겠어요')),
+        ]);
+  }
+
+  /// hub 가 기기를 움직였을 때: 무엇을 · 왜 · 개인화 한 줄 · 되돌리기(60 s).
+  Widget _autoCard(LiveLink live, AutoActionCard card, DateTime now) {
+    final status = card.statusTextAt(now);
+    return BigCard(
+        key: const ValueKey('auto-action-card'),
+        look: lookForTarget(card.targetId),
+        tag: '자동으로 도왔어요',
         title: card.title,
-        subtitle: '작은 조정으로, 지금의 편안함을 이어가 볼까요?',
-        details: request.details(widget.live!.state),
+        titleKey: const ValueKey('auto-action-title'),
+        lines: [
+          if (card.reason != null) card.reason!,
+          if (card.personalNote != null) card.personalNote!,
+          if (status != null) status,
+        ],
+        lineKeyPrefix: 'auto-action-line-',
+        onClose: live.autoActions.dismiss,
+        closeKey: const ValueKey('auto-action-dismiss'),
+        actions: [
+          if (card.canUndo(now))
+            OutlinedButton(
+                key: const ValueKey('auto-action-undo'),
+                onPressed: () => live.undoAutoAction(),
+                child: Text('원래대로 ${card.undoSecondsLeft(now)}초')),
+          FilledButton(
+              onPressed: live.autoActions.dismiss, child: const Text('좋아요')),
+        ]);
+  }
+
+  /// 보드가 보낸 확인 질문. 답하면 바로 닫히고 답변 문구만 상단에 잠깐 남는다(V15 카드 규칙).
+  Widget _liveCard(LiveRequest request, String? posture) {
+    final card = request.card(widget.live!.state);
+    final details = request.details(widget.live!.state);
+    return BigCard(
+        key: const ValueKey('suggestion-card'),
+        look: lookFor(kind: request.kind, arm: request.arm, posture: posture),
+        tag: request.armLabel ?? '작은 제안',
+        title: card.title,
+        lines: const ['작은 조정으로, 지금의 편안함을 이어가 볼까요?'],
+        extra: Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: SuggestionDetailsView(details: details)),
         actions: [
           OutlinedButton(
               key: const ValueKey('live-reject'),
               onPressed: () => _answerLive(false),
               child: Text(card.reject)),
-          const SizedBox(width: 16),
           FilledButton(
               key: const ValueKey('live-accept'),
               onPressed: () => _answerLive(true),
@@ -657,10 +723,16 @@ class _DemoShellState extends State<DemoShell> {
           {required String title,
           String? subtitle,
           SuggestionDetails? details,
+          CardLook? look,
           required List<Widget> actions}) =>
       SuggestionCard(
-          title: title, subtitle: subtitle, details: details, actions: actions);
+          title: title,
+          subtitle: subtitle,
+          details: details,
+          look: look,
+          actions: actions);
   Widget _manualVentCard() => _suggestionCard(
+          look: lookFor(kind: 'vent_suggest'),
           title: '잠시, 새로운 공기를 들여볼까요?',
           subtitle: '창문을 열고 숨을 고르며, 다시 나의 속도로.',
           details: SuggestionDetails(
@@ -689,6 +761,7 @@ class _DemoShellState extends State<DemoShell> {
           ]);
 
   Widget _proposal() => _suggestionCard(
+          look: focusStartLook,
           title: '지금, 집중을 시작할까요?',
           subtitle: '집중할 준비가 되면 알려주세요.',
           actions: [
@@ -755,6 +828,9 @@ class _DemoShellState extends State<DemoShell> {
               if (m.notice.isNotEmpty && m.askingFeedback)
                 Positioned.fill(
                     child: _suggestionCard(
+                  look: m.pendingAction == null
+                      ? lookFor(kind: 'checkin_suggest')
+                      : lookForHelp(m.pendingAction!),
                   title: m.notice,
                   actions: [
                     OutlinedButton(

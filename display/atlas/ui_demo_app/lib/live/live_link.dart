@@ -320,7 +320,7 @@ class LiveLink extends ChangeNotifier {
     _transport?.close();
     _transport = null;
     if (!keepGeneration) {
-      notices.dismiss(_clock());
+      notices.clear();
       state = null;
       stateAt = null;
       _lastStateSequence = null;
