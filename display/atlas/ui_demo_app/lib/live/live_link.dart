@@ -169,6 +169,9 @@ class LiveLink extends ChangeNotifier {
   /// hub 자동 실행(무드등·선풍기·공기청정기) 카드 — 무엇을 왜 했는지 + 되돌리기(auto_action.dart).
   final autoActions = AutoActionBoard();
   LiveWeather? weather;
+
+  /// hub 기기 명령(control/cmd)이 올 때마다. 마무리 화면 그래프의 개입 표시(DemoModel.recordCommand).
+  void Function(Map<String, dynamic> data)? onCommand;
   LiveReport? report;
   LiveReport? _reportStart;
 
@@ -374,6 +377,7 @@ class LiveLink extends ChangeNotifier {
           }
         case commandTopic:
           if (message.retained) return;
+          onCommand?.call(data);
           devices.onCommand(data);
           autoActions.onCommand(data, state, _clock());
         case resultTopic:

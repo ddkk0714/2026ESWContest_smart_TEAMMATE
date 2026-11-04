@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'demo_model.dart';
 import 'posture_pictogram.dart';
+import 'report/month_chart.dart';
+import 'report/session_chart.dart';
 import 'profile_avatars.dart';
 import 'profile_picker.dart';
 import 'personal_settings.dart';
@@ -195,6 +197,7 @@ class _DemoAppState extends State<DemoApp> {
       };
       model.onPlacement = live.sendPlacement;
       model.onReportReset = live.markReportStart;
+      live.onCommand = model.recordCommand;
       // V34: devview 가 같은 사람 프로필을 고치면 여기에도 남긴다.
       live.onRemoteProfile = (data) => syncRemoteProfile(model, live, data,
           onPlacement: widget.tools?.setPlacement);
@@ -979,104 +982,130 @@ class _DemoShellState extends State<DemoShell> {
     }
   }
 
+  /// 마무리 화면 탭: 0 이번 집중(요약 + 흐름 그래프) · 1 30일 기록.
+  int _reportTab = 0;
+
   Widget _report() =>
       Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const SizedBox(height: 8),
+        const SizedBox(height: 2),
         Row(children: [
-          const Text('오늘도, 한 걸음 쌓았어요.', style: TextStyle(fontSize: 30)),
+          const Text('오늘도, 한 걸음 쌓았어요.', style: TextStyle(fontSize: 24)),
           const Spacer(),
-          _pill('세션 요약', green)
-        ]),
-        const SizedBox(height: 10),
-        const Text('집중의 질을 점수로 단정하지 않고, 이번 시간을 짧게 돌아봐요.',
-            style: TextStyle(color: muted, fontSize: 15)),
-        const SizedBox(height: 24),
-        SizedBox(
-            height: 150,
-            child:
-                Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              Expanded(
-                  child: _tile(
-                      color: const Color(0xFFE5EBDC),
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text('함께한 시간',
-                                style: TextStyle(color: muted)),
-                            const Spacer(),
-                            FittedBox(
-                                fit: BoxFit.scaleDown,
-                                child: Text(m.elapsed,
-                                    style: const TextStyle(
-                                        fontFamily: 'LGClock', fontSize: 48))),
-                          ]))),
-              const SizedBox(width: 16),
-              Expanded(
-                  child: _tile(
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                    const Text('잠깐의 피로', style: TextStyle(color: muted)),
-                    const Spacer(),
-                    Text(_fatigueCount == null ? '기록 없음' : '$_fatigueCount회',
-                        style: const TextStyle(fontSize: 36)),
-                    Text(
-                        _fatigueCount == null
-                            ? '센서 기록을 받지 못했어요'
-                            : '수신한 기록을 기준으로 보여드려요',
-                        style: const TextStyle(color: muted, fontSize: 12)),
-                  ]))),
-              const SizedBox(width: 16),
-              Expanded(
-                  child: _tile(
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                    const Text('환경 · 마무리', style: TextStyle(color: muted)),
-                    const Spacer(),
-                    Text(_deviceAfter('desk_lamp', '조명'),
-                        style: const TextStyle(fontSize: 27)),
-                    const SizedBox(height: 7),
-                    Text(
-                        '${_deviceAfter('vent_fan', '선풍기')} · ${widget.live?.sessionReport?.interventions == null ? '조정 기록 없음' : '조정 ${widget.live!.sessionReport!.interventions}회'}',
-                        style: const TextStyle(color: muted, fontSize: 13)),
-                  ]))),
-            ])),
-        const SizedBox(height: 20),
-        _tile(
-            child: Row(children: [
-          const Expanded(
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                Text('오늘 피곤했나요?', style: TextStyle(fontSize: 23)),
-                SizedBox(height: 7),
-                Text('다음에 더 잘 도울 수 있게, 한 번만 알려주세요.',
-                    style: TextStyle(color: muted, fontSize: 13)),
-              ])),
-          for (final value in ['괜찮았어요', '조금 피곤해요', '많이 피곤해요'])
+          for (final (i, label) in [(0, '이번 집중'), (1, '30일 기록')])
             Padding(
                 padding: const EdgeInsets.only(left: 8),
                 child: ChoiceChip(
-                    selected: m.feeling == value,
-                    label: Text(value),
-                    onSelected: (_) => m.recordFeeling(value))),
-        ])),
-        const Spacer(),
+                    key: ValueKey('report-tab-$i'),
+                    label: Text(label),
+                    selected: _reportTab == i,
+                    selectedColor: const Color(0xFFE0E9D9),
+                    onSelected: (_) => setState(() => _reportTab = i))),
+        ]),
+        const SizedBox(height: 10),
+        Expanded(
+            child: _reportTab == 0
+                ? _sessionReport()
+                : MonthReport(persona: m.persona, days: sampleMonth(m.persona))),
+        const SizedBox(height: 10),
         Row(children: [
-          Text(
-              m.feeling.isEmpty
-                  ? '응답은 선택이에요 · 기록은 앱 종료 시 사라집니다.'
-                  : '고마워요. 다음 집중을 위한 피드백로 남겼어요.',
-              style: const TextStyle(color: muted, fontSize: 13)),
-          const Spacer(),
+          if (_reportTab == 0) ...[
+            const Text('오늘 피곤했나요?', style: TextStyle(fontSize: 17)),
+            for (final value in ['괜찮았어요', '조금 피곤해요', '많이 피곤해요'])
+              Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: ChoiceChip(
+                      selected: m.feeling == value,
+                      label: Text(value),
+                      onSelected: (_) => m.recordFeeling(value))),
+            const SizedBox(width: 12),
+            Expanded(
+                child: Text(
+                    m.feeling.isEmpty
+                        ? '응답은 선택이에요.'
+                        : '고마워요. 다음 집중을 위한 피드백로 남겼어요.',
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: muted, fontSize: 12))),
+          ] else
+            const Spacer(),
           FilledButton.icon(
-              onPressed: () => m.show(DemoPage.home),
+              onPressed: () {
+                setState(() => _reportTab = 0);
+                m.show(DemoPage.home);
+              },
               icon: const Icon(Icons.done_rounded),
               label: const Text('시계로 돌아가기')),
         ]),
-        const SizedBox(height: 12),
+        const SizedBox(height: 4),
       ]);
+
+  /// 이번 집중: 숫자 셋을 한 줄로 줄이고, 아래에 '신호 넷 → 피로 점수 → 개입' 그래프(report/session_chart.dart).
+  Widget _sessionReport() {
+    final events = m.timeline.events;
+    final shown = events.length <= 3 ? events : events.sublist(events.length - 3);
+    String clock(DateTime t) =>
+        '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+    Widget stat(String title, String value, {String? sub, Color? color}) =>
+        Expanded(
+            child: _tile(
+                color: color ?? Colors.white,
+                padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+                child: Row(children: [
+                  Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                        Text(title,
+                            style: const TextStyle(color: muted, fontSize: 13)),
+                        if (sub != null)
+                          Text(sub,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: muted, fontSize: 11)),
+                      ])),
+                  const SizedBox(width: 8),
+                  FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(value, style: const TextStyle(fontSize: 22))),
+                ])));
+    return Column(children: [
+      SizedBox(
+          height: 72,
+          child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            stat('함께한 시간', m.elapsed, color: const Color(0xFFE5EBDC)),
+            const SizedBox(width: 12),
+            stat('잠깐의 피로',
+                _fatigueCount == null ? '기록 없음' : '$_fatigueCount회',
+                sub: _fatigueCount == null ? '센서 기록을 받지 못했어요' : null),
+            const SizedBox(width: 12),
+            stat('환경 · 마무리', _deviceAfter('desk_lamp', '조명'),
+                sub:
+                    '${_deviceAfter('vent_fan', '선풍기')} · ${widget.live?.sessionReport?.interventions == null ? '조정 기록 없음' : '조정 ${widget.live!.sessionReport!.interventions}회'}'),
+          ])),
+      const SizedBox(height: 10),
+      Expanded(
+          child: _tile(
+              padding: const EdgeInsets.fromLTRB(14, 10, 10, 8),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  const Text('신호 넷 → 피로 점수 → 개입',
+                      style: TextStyle(fontSize: 15)),
+                  const SizedBox(width: 10),
+                  const Text('주황 세모 = 허브가 기기를 움직인 순간',
+                      style: TextStyle(color: muted, fontSize: 11)),
+                  const Spacer(),
+                  for (final e in shown)
+                    Padding(
+                        padding: const EdgeInsets.only(left: 10),
+                        child: Text('${clock(e.at)} ${e.label}',
+                            style: const TextStyle(
+                                fontSize: 11, color: Color(0xFFD9782F)))),
+                ]),
+                const SizedBox(height: 6),
+                Expanded(child: SessionChart(timeline: m.timeline)),
+              ]))),
+    ]);
+  }
 
   void _controls() {
     if (_controlsOpen) return;
