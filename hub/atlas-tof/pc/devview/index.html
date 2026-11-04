@@ -663,7 +663,7 @@ function renderJudge(ph, p, profile) {
   $("fsmMeta").textContent = `단계 ${ph.phase} · 맥락 ${ph.context}`;
   $("seq").textContent = ph.seq == null ? "-" : `seq ${ph.seq}`;
   const fast = ph.demo_speed === "fast";
-  $("demoFast").textContent = fast ? "빠른 시연 켜짐 · 끄기" : ph.demo_speed ? "빠른 시연 켜기" : "빠른 시연(hub 미지원)";
+  $("demoFast").textContent = fast ? "빠른 시연 켜짐" : ph.demo_speed ? "빠른 시연 꺼짐" : "빠른 시연(hub 미지원)";
   $("demoFast").classList.toggle("warn", fast);
   $("demoFast").dataset.next = fast ? "normal" : "fast";
   const pon = ph.personalize_switch === "on";
