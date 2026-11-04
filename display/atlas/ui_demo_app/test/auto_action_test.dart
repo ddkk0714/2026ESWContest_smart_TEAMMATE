@@ -326,6 +326,7 @@ void main() {
     transport.deliver(LiveLink.commandTopic,
         cmd('desk_lamp', 'adjust_brightness', {'percent': 60, 'min_raw': 153}));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500)); // 카드가 올라와 자리 잡을 때까지
     expect(find.byKey(const ValueKey('auto-action-card')), findsOneWidget);
     expect(find.text('졸음이 내려앉기 전에, 불빛을 밝혀 둘게요'), findsOneWidget);
     expect(find.text('처음에 알려 준 대로, 빛으로 깨워 드려요'), findsOneWidget);

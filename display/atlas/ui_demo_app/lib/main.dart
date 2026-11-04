@@ -4,12 +4,18 @@ import 'dart:io' show exit;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'demo_model.dart';
+import 'posture_pictogram.dart';
+import 'report/month_chart.dart';
+import 'report/session_chart.dart';
 import 'profile_avatars.dart';
 import 'profile_picker.dart';
 import 'personal_settings.dart';
 import 'page_transition.dart';
 import 'pr56_workspace_view.dart';
+import 'live/auto_action.dart';
 import 'live/auto_action_card.dart';
+import 'cards/card_deck.dart';
+import 'cards/card_look.dart';
 import 'live/home_items.dart';
 import 'live/link_settings.dart';
 import 'live/live_link.dart';
@@ -22,6 +28,7 @@ import 'profile_store.dart';
 import 'suggestion_card.dart';
 import 'developer/developer_controller.dart';
 import 'developer/pr74/notice_banner.dart';
+import 'developer/pr74/voice_alert.dart' show ScreenNotice;
 import 'developer/developer_views.dart';
 import 'developer/pr74/developer_page.dart' as legacy;
 
@@ -190,13 +197,17 @@ class _DemoAppState extends State<DemoApp> {
       model.onProfileChanged = (persona) {
         live.publishProfile(persona);
         widget.tools?.setPlacement(persona.placement);
+        widget.tools?.setFatigueColor(persona.preferences.fatigueWarmth);
       };
       model.onPlacement = live.sendPlacement;
+      model.onReportReset = live.markReportStart;
+      live.onCommand = model.recordCommand;
       // V34: devview 가 같은 사람 프로필을 고치면 여기에도 남긴다.
       live.onRemoteProfile = (data) => syncRemoteProfile(model, live, data,
           onPlacement: widget.tools?.setPlacement);
       live.publishProfile(model.persona);
       widget.tools?.setPlacement(model.persona.placement);
+      widget.tools?.setFatigueColor(model.persona.preferences.fatigueWarmth);
     }
     if (widget.ticking) {
       timer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -313,49 +324,18 @@ class _DemoShellState extends State<DemoShell> {
         final live = widget.live;
         final request =
             live?.status == LinkStatus.connected ? live!.request : null;
-        final screenNotice = live?.notices.current(m.now);
         return Stack(children: [
           Positioned.fill(
               child: PageTransitionView(
                   pageKey: _developerOpen ? 'developer' : m.page,
                   child: _page())),
-          if (!_developerOpen && live != null)
-            Positioned(
-                top: 76,
-                left: 40,
-                right: 40,
-                child: AnimatedSwitcher(
-                  duration: MediaQuery.disableAnimationsOf(context)
-                      ? Duration.zero
-                      : const Duration(milliseconds: 220),
-                  child: screenNotice != null
-                      ? NoticeBanner(
-                          notice: screenNotice,
-                          now: m.now,
-                          onDismiss: live.dismissNotice)
-                      : const SizedBox.shrink(),
-                )),
-          // hub 자동 실행 카드(무드등·선풍기·공기청정기) — 알림 배너가 떠 있으면 그 아래. 제안 카드가 오면 그 뒤에 가린다.
-          if (!_developerOpen && live != null)
-            if (live.autoActions.current(live.now) case final auto?)
-              Positioned(
-                top: screenNotice != null ? 146 : 76,
-                left: 40,
-                right: 40,
-                child: AutoActionCardView(
-                    key: ValueKey('auto-action-${auto.commandId}'),
-                    card: auto,
-                    now: live.now,
-                    onUndo: () => live.undoAutoAction(),
-                    onDismiss: live.autoActions.dismiss)),
           if (live?.state?.demoFast == true)
             const Positioned(
                 left: 16, bottom: 12, child: IgnorePointer(child: DemoFastBadge())),
-          if (request != null && !_developerOpen)
+          // 안내(알림)·자동 실행·제안 카드: 화면을 거의 덮는 큰 카드로, 여러 장이면 쌓는다(cards/card_deck.dart)
+          if (!_developerOpen && live != null)
             Positioned.fill(
-                child: KeyedSubtree(
-                    key: ValueKey('live-card-${request.requestId}'),
-                    child: _liveCard(request))),
+                child: CardDeck(entries: _deckEntries(live, request))),
           if (_manualVentOpen && request == null && !_developerOpen)
             Positioned.fill(child: _manualVentCard()),
           Positioned.fill(
@@ -387,19 +367,112 @@ class _DemoShellState extends State<DemoShell> {
         ]);
       });
 
-  /// 보드가 보낸 확인 질문. 답하면 바로 닫히고 답변 문구만 상단에 잠깐 남는다(V15 카드 규칙).
-  Widget _liveCard(LiveRequest request) {
-    final card = request.card(widget.live!.state);
-    return _suggestionCard(
+  /// 덱에 올릴 카드들: 화면 알림(쌓임) · hub 자동 실행 카드 · hub 확인 질문.
+  List<DeckEntry> _deckEntries(LiveLink live, LiveRequest? request) {
+    final now = live.now;
+    final posture = live.state == null ? null : postureKey(live.state!);
+    final notices = live.notices.all(now);
+    return [
+      for (final (i, n) in notices.indexed)
+        DeckEntry(
+            id: 'notice-${n.requestId ?? n.shownAt.microsecondsSinceEpoch}',
+            at: n.shownAt,
+            card: _noticeCard(n, now, posture, top: i == notices.length - 1)),
+      if (live.autoActions.current(now) case final auto?)
+        DeckEntry(
+            id: 'auto-${auto.commandId}',
+            at: auto.executedAt,
+            card: _autoCard(live, auto, now)),
+      if (request != null)
+        DeckEntry(
+            id: 'request-${request.requestId}',
+            at: request.receivedAt,
+            card: KeyedSubtree(
+                key: ValueKey('live-card-${request.requestId}'),
+                child: _liveCard(request, posture))),
+    ];
+  }
+
+  /// 닫기 하나뿐인 안내(쉬기 알림·자세 안내 카드 등). 테스트가 찾는 키는 맨 위 한 장에만 단다.
+  Widget _noticeCard(ScreenNotice n, DateTime now, String? posture,
+      {required bool top}) {
+    final remaining = n.remaining(now);
+    final live = widget.live!;
+    final look = lookFor(kind: n.kind, arm: n.arm, posture: posture);
+    final tip = look.isPosture ? postureTip(posture) : null;
+    return BigCard(
+        key: top ? const ValueKey('notice-banner') : null,
+        look: look,
+        tag: n.label,
+        lines: [
+          if (look.isPosture && postureKo(posture) != null)
+            '지금 자세 · ${postureKo(posture)}',
+          if (tip != null) tip,
+        ],
+        tagKey: top ? const ValueKey('notice-label') : null,
+        title: n.text,
+        titleKey: top ? const ValueKey('notice-text') : null,
+        trailing: remaining == null
+            ? null
+            : Text(formatCountdown(remaining),
+                key: top ? const ValueKey('notice-countdown') : null,
+                style: const TextStyle(
+                    fontSize: 26,
+                    fontFeatures: [FontFeature.tabularFigures()])),
+        onClose: live.dismissNotice,
+        closeKey: top ? const ValueKey('notice-dismiss') : null,
+        actions: [
+          FilledButton(
+              onPressed: live.dismissNotice, child: const Text('알겠어요')),
+        ]);
+  }
+
+  /// hub 가 기기를 움직였을 때: 무엇을 · 왜 · 개인화 한 줄 · 되돌리기(60 s).
+  Widget _autoCard(LiveLink live, AutoActionCard card, DateTime now) {
+    final status = card.statusTextAt(now);
+    return BigCard(
+        key: const ValueKey('auto-action-card'),
+        look: lookForTarget(card.targetId),
+        tag: '자동으로 도왔어요',
         title: card.title,
-        subtitle: '작은 조정으로, 지금의 편안함을 이어가 볼까요?',
-        details: request.details(widget.live!.state),
+        titleKey: const ValueKey('auto-action-title'),
+        lines: [
+          if (card.reason != null) card.reason!,
+          if (card.personalNote != null) card.personalNote!,
+          if (status != null) status,
+        ],
+        lineKeyPrefix: 'auto-action-line-',
+        onClose: live.autoActions.dismiss,
+        closeKey: const ValueKey('auto-action-dismiss'),
+        actions: [
+          if (card.canUndo(now))
+            OutlinedButton(
+                key: const ValueKey('auto-action-undo'),
+                onPressed: () => live.undoAutoAction(),
+                child: Text('원래대로 ${card.undoSecondsLeft(now)}초')),
+          FilledButton(
+              onPressed: live.autoActions.dismiss, child: const Text('좋아요')),
+        ]);
+  }
+
+  /// 보드가 보낸 확인 질문. 답하면 바로 닫히고 답변 문구만 상단에 잠깐 남는다(V15 카드 규칙).
+  Widget _liveCard(LiveRequest request, String? posture) {
+    final card = request.card(widget.live!.state);
+    final details = request.details(widget.live!.state);
+    return BigCard(
+        key: const ValueKey('suggestion-card'),
+        look: lookFor(kind: request.kind, arm: request.arm, posture: posture),
+        tag: request.armLabel ?? '작은 제안',
+        title: card.title,
+        lines: const ['작은 조정으로, 지금의 편안함을 이어가 볼까요?'],
+        extra: Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: SuggestionDetailsView(details: details)),
         actions: [
           OutlinedButton(
               key: const ValueKey('live-reject'),
               onPressed: () => _answerLive(false),
               child: Text(card.reject)),
-          const SizedBox(width: 16),
           FilledButton(
               key: const ValueKey('live-accept'),
               onPressed: () => _answerLive(true),
@@ -650,10 +723,16 @@ class _DemoShellState extends State<DemoShell> {
           {required String title,
           String? subtitle,
           SuggestionDetails? details,
+          CardLook? look,
           required List<Widget> actions}) =>
       SuggestionCard(
-          title: title, subtitle: subtitle, details: details, actions: actions);
+          title: title,
+          subtitle: subtitle,
+          details: details,
+          look: look,
+          actions: actions);
   Widget _manualVentCard() => _suggestionCard(
+          look: lookFor(kind: 'vent_suggest'),
           title: '잠시, 새로운 공기를 들여볼까요?',
           subtitle: '창문을 열고 숨을 고르며, 다시 나의 속도로.',
           details: SuggestionDetails(
@@ -682,6 +761,7 @@ class _DemoShellState extends State<DemoShell> {
           ]);
 
   Widget _proposal() => _suggestionCard(
+          look: focusStartLook,
           title: '지금, 집중을 시작할까요?',
           subtitle: '집중할 준비가 되면 알려주세요.',
           actions: [
@@ -748,6 +828,9 @@ class _DemoShellState extends State<DemoShell> {
               if (m.notice.isNotEmpty && m.askingFeedback)
                 Positioned.fill(
                     child: _suggestionCard(
+                  look: m.pendingAction == null
+                      ? lookFor(kind: 'checkin_suggest')
+                      : lookForHelp(m.pendingAction!),
                   title: m.notice,
                   actions: [
                     OutlinedButton(
@@ -866,29 +949,7 @@ class _DemoShellState extends State<DemoShell> {
                           ])),
                     ]))),
                 const SizedBox(height: 16),
-                Expanded(
-                    child: _tile(
-                        color: const Color(0xFFE6EBDD),
-                        child: Row(
-                            key: const ValueKey('desk-posture-card'),
-                            children: [
-                              const Icon(Icons.accessibility_new_rounded,
-                                  color: green, size: 42),
-                              const SizedBox(width: 18),
-                              Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    const Text('지금 자세',
-                                        style: TextStyle(color: muted)),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                        _live == null
-                                            ? '연결 대기'
-                                            : postureText(_live!),
-                                        style: const TextStyle(fontSize: 20))
-                                  ])
-                            ]))),
+                Expanded(child: _postureCard()),
               ])),
         ])),
         const SizedBox(height: 22),
@@ -918,13 +979,45 @@ class _DemoShellState extends State<DemoShell> {
 
   /// 리포트의 피로 횟수. 보드 리포트가 있으면 그 값(hub 기준), 없으면 화면이 센 값.
   int? get _fatigueCount =>
-      widget.live?.report?.fatigueEpisodes ??
+      widget.live?.sessionReport?.fatigueEpisodes ??
       (m.sessionObserved || m.presentationEnabled ? m.fatigueEvents : null);
 
   /// 마무리 카드의 기기 상태. 보드가 알려 준 상태가 있으면 그것, 없으면 기존 'OFF'.
   String _deviceAfter(String target, String fallbackName) {
     final known = _live == null ? null : widget.live!.devices.text(target);
     return known == null ? '$fallbackName 상태 미확인' : '$fallbackName $known';
+  }
+
+  /// 집중 상세 '지금 자세'. 자세마다 그림과 색이 바뀐다(posture_pictogram.dart).
+  Widget _postureCard() {
+    final key = _live == null ? null : postureKey(_live!);
+    final colors = postureColors(key);
+    return AnimatedContainer(
+        duration: const Duration(milliseconds: 400),
+        padding: const EdgeInsets.all(22),
+        decoration: BoxDecoration(
+            color: colors.tile,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: line.withValues(alpha: .65))),
+        child: Row(key: const ValueKey('desk-posture-card'), children: [
+          AnimatedSwitcher(
+              duration: const Duration(milliseconds: 300),
+              child: PosturePictogram(
+                  key: ValueKey('posture-pictogram-${key ?? 'none'}'),
+                  posture: key,
+                  color: colors.ink,
+                  size: 64)),
+          const SizedBox(width: 16),
+          Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Text('지금 자세', style: TextStyle(color: muted)),
+                const SizedBox(height: 8),
+                Text(_live == null ? '연결 대기' : postureText(_live!),
+                    style: TextStyle(fontSize: 20, color: colors.ink))
+              ])
+        ]));
   }
 
   Widget _tile(
@@ -965,104 +1058,130 @@ class _DemoShellState extends State<DemoShell> {
     }
   }
 
+  /// 마무리 화면 탭: 0 이번 집중(요약 + 흐름 그래프) · 1 30일 기록.
+  int _reportTab = 0;
+
   Widget _report() =>
       Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const SizedBox(height: 8),
+        const SizedBox(height: 2),
         Row(children: [
-          const Text('오늘도, 한 걸음 쌓았어요.', style: TextStyle(fontSize: 30)),
+          const Text('오늘도, 한 걸음 쌓았어요.', style: TextStyle(fontSize: 24)),
           const Spacer(),
-          _pill('세션 요약', green)
-        ]),
-        const SizedBox(height: 10),
-        const Text('집중의 질을 점수로 단정하지 않고, 이번 시간을 짧게 돌아봐요.',
-            style: TextStyle(color: muted, fontSize: 15)),
-        const SizedBox(height: 24),
-        SizedBox(
-            height: 150,
-            child:
-                Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              Expanded(
-                  child: _tile(
-                      color: const Color(0xFFE5EBDC),
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text('함께한 시간',
-                                style: TextStyle(color: muted)),
-                            const Spacer(),
-                            FittedBox(
-                                fit: BoxFit.scaleDown,
-                                child: Text(m.elapsed,
-                                    style: const TextStyle(
-                                        fontFamily: 'LGClock', fontSize: 48))),
-                          ]))),
-              const SizedBox(width: 16),
-              Expanded(
-                  child: _tile(
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                    const Text('잠깐의 피로', style: TextStyle(color: muted)),
-                    const Spacer(),
-                    Text(_fatigueCount == null ? '기록 없음' : '$_fatigueCount회',
-                        style: const TextStyle(fontSize: 36)),
-                    Text(
-                        _fatigueCount == null
-                            ? '센서 기록을 받지 못했어요'
-                            : '수신한 기록을 기준으로 보여드려요',
-                        style: const TextStyle(color: muted, fontSize: 12)),
-                  ]))),
-              const SizedBox(width: 16),
-              Expanded(
-                  child: _tile(
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                    const Text('환경 · 마무리', style: TextStyle(color: muted)),
-                    const Spacer(),
-                    Text(_deviceAfter('desk_lamp', '조명'),
-                        style: const TextStyle(fontSize: 27)),
-                    const SizedBox(height: 7),
-                    Text(
-                        '${_deviceAfter('vent_fan', '선풍기')} · ${widget.live?.report?.interventions == null ? '조정 기록 없음' : '조정 ${widget.live!.report!.interventions}회'}',
-                        style: const TextStyle(color: muted, fontSize: 13)),
-                  ]))),
-            ])),
-        const SizedBox(height: 20),
-        _tile(
-            child: Row(children: [
-          const Expanded(
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                Text('오늘 피곤했나요?', style: TextStyle(fontSize: 23)),
-                SizedBox(height: 7),
-                Text('다음에 더 잘 도울 수 있게, 한 번만 알려주세요.',
-                    style: TextStyle(color: muted, fontSize: 13)),
-              ])),
-          for (final value in ['괜찮았어요', '조금 피곤해요', '많이 피곤해요'])
+          for (final (i, label) in [(0, '이번 집중'), (1, '30일 기록')])
             Padding(
                 padding: const EdgeInsets.only(left: 8),
                 child: ChoiceChip(
-                    selected: m.feeling == value,
-                    label: Text(value),
-                    onSelected: (_) => m.recordFeeling(value))),
-        ])),
-        const Spacer(),
+                    key: ValueKey('report-tab-$i'),
+                    label: Text(label),
+                    selected: _reportTab == i,
+                    selectedColor: const Color(0xFFE0E9D9),
+                    onSelected: (_) => setState(() => _reportTab = i))),
+        ]),
+        const SizedBox(height: 10),
+        Expanded(
+            child: _reportTab == 0
+                ? _sessionReport()
+                : MonthReport(persona: m.persona, days: sampleMonth(m.persona))),
+        const SizedBox(height: 10),
         Row(children: [
-          Text(
-              m.feeling.isEmpty
-                  ? '응답은 선택이에요 · 기록은 앱 종료 시 사라집니다.'
-                  : '고마워요. 다음 집중을 위한 피드백로 남겼어요.',
-              style: const TextStyle(color: muted, fontSize: 13)),
-          const Spacer(),
+          if (_reportTab == 0) ...[
+            const Text('오늘 피곤했나요?', style: TextStyle(fontSize: 17)),
+            for (final value in ['괜찮았어요', '조금 피곤해요', '많이 피곤해요'])
+              Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: ChoiceChip(
+                      selected: m.feeling == value,
+                      label: Text(value),
+                      onSelected: (_) => m.recordFeeling(value))),
+            const SizedBox(width: 12),
+            Expanded(
+                child: Text(
+                    m.feeling.isEmpty
+                        ? '응답은 선택이에요.'
+                        : '고마워요. 다음 집중을 위한 피드백로 남겼어요.',
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: muted, fontSize: 12))),
+          ] else
+            const Spacer(),
           FilledButton.icon(
-              onPressed: () => m.show(DemoPage.home),
+              onPressed: () {
+                setState(() => _reportTab = 0);
+                m.show(DemoPage.home);
+              },
               icon: const Icon(Icons.done_rounded),
               label: const Text('시계로 돌아가기')),
         ]),
-        const SizedBox(height: 12),
+        const SizedBox(height: 4),
       ]);
+
+  /// 이번 집중: 숫자 셋을 한 줄로 줄이고, 아래에 '신호 넷 → 피로 점수 → 개입' 그래프(report/session_chart.dart).
+  Widget _sessionReport() {
+    final events = m.timeline.events;
+    final shown = events.length <= 3 ? events : events.sublist(events.length - 3);
+    String clock(DateTime t) =>
+        '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+    Widget stat(String title, String value, {String? sub, Color? color}) =>
+        Expanded(
+            child: _tile(
+                color: color ?? Colors.white,
+                padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+                child: Row(children: [
+                  Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                        Text(title,
+                            style: const TextStyle(color: muted, fontSize: 13)),
+                        if (sub != null)
+                          Text(sub,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: muted, fontSize: 11)),
+                      ])),
+                  const SizedBox(width: 8),
+                  FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(value, style: const TextStyle(fontSize: 22))),
+                ])));
+    return Column(children: [
+      SizedBox(
+          height: 72,
+          child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            stat('함께한 시간', m.elapsed, color: const Color(0xFFE5EBDC)),
+            const SizedBox(width: 12),
+            stat('잠깐의 피로',
+                _fatigueCount == null ? '기록 없음' : '$_fatigueCount회',
+                sub: _fatigueCount == null ? '센서 기록을 받지 못했어요' : null),
+            const SizedBox(width: 12),
+            stat('환경 · 마무리', _deviceAfter('desk_lamp', '조명'),
+                sub:
+                    '${_deviceAfter('vent_fan', '선풍기')} · ${widget.live?.sessionReport?.interventions == null ? '조정 기록 없음' : '조정 ${widget.live!.sessionReport!.interventions}회'}'),
+          ])),
+      const SizedBox(height: 10),
+      Expanded(
+          child: _tile(
+              padding: const EdgeInsets.fromLTRB(14, 10, 10, 8),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  const Text('신호 넷 → 피로 점수 → 개입',
+                      style: TextStyle(fontSize: 15)),
+                  const SizedBox(width: 10),
+                  const Text('주황 세모 = 허브가 기기를 움직인 순간',
+                      style: TextStyle(color: muted, fontSize: 11)),
+                  const Spacer(),
+                  for (final e in shown)
+                    Padding(
+                        padding: const EdgeInsets.only(left: 10),
+                        child: Text('${clock(e.at)} ${e.label}',
+                            style: const TextStyle(
+                                fontSize: 11, color: Color(0xFFD9782F)))),
+                ]),
+                const SizedBox(height: 6),
+                Expanded(child: SessionChart(timeline: m.timeline)),
+              ]))),
+    ]);
+  }
 
   void _controls() {
     if (_controlsOpen) return;
@@ -1097,11 +1216,16 @@ class _DemoShellState extends State<DemoShell> {
                     label: const Text('개발자 화면')),
             ]),
             const SizedBox(height: 12),
+            // 빠른 진행: 화면의 발표 설정과 hub 빠른 시연(deskmate/demo/mode)을 함께 켜고 끈다.
+            // hub 는 시연 프로파일(demo-a·demo-b)일 때만 받아들인다.
             SwitchListTile(
-                key: const ValueKey('presentation-enabled'),
-                title: const Text('발표 설정 사용'),
+                key: const ValueKey('demo-fast'),
+                title: const Text('빠른 진행'),
                 value: m.presentationEnabled,
-                onChanged: (v) => m.configurePresentation(enabled: v)),
+                onChanged: (v) {
+                  m.configurePresentation(enabled: v);
+                  widget.live?.setDemoSpeed(v);
+                }),
             if (m.presentationEnabled) ...[
               const Text('시간 배속'),
               Wrap(spacing: 12, children: [

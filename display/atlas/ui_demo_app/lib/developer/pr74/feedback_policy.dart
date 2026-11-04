@@ -61,6 +61,15 @@ List<List<int>> ilinkFramesForPhase(String phase) {
   }
 }
 
+/// 피곤할 때 조명 색: 앱의 '빛의 온도'(0 따뜻하게 … 1 시원하게) → iLink RGB.
+/// 따뜻한 주황(255,120,40) → 하얀빛(255,230,200) → 시원한 푸른빛(170,205,255) 사이를 잇는다.
+List<int> ilinkRgbForWarmth(double warmth) {
+  const warm = [255, 120, 40], neutral = [255, 230, 200], cool = [170, 205, 255];
+  final w = warmth.isFinite ? warmth.clamp(0.0, 1.0) : 0.5;
+  final (a, b, t) = w < .5 ? (warm, neutral, w / .5) : (neutral, cool, (w - .5) / .5);
+  return [for (var i = 0; i < 3; i++) (a[i] + (b[i] - a[i]) * t).round()];
+}
+
 class IlinkLampFeedback {
   IlinkLampFeedback(this._bluetooth,
       {this.rescanFor = const Duration(seconds: 6),
@@ -480,6 +489,10 @@ class FeedbackCoordinator {
 
   /// adjust_brightness 의 하한(원시 0~255). 설정 `lamp_brightness_floor`, 없으면 [kLampBrightnessFloorDefault].
   int brightnessFloor = kLampBrightnessFloorDefault;
+
+  /// 지금 사람의 '피곤할 때 조명 색'(RGB). hub 가 피로 단계에서 무드등을 밝힐 때 이 색을 같이 쓴다. null 이면 색은 그대로.
+  List<int>? fatigueRgb;
+  void setFatigueColor(double warmth) => fatigueRgb = ilinkRgbForWarmth(warmth);
   String? _speakerAddress;
   String? get speakerAddress => _speakerAddress;
   bool _enabled = false;
@@ -581,6 +594,9 @@ class FeedbackCoordinator {
   }
 
   Future<void> _applyOutputs(DisplayState state) async {
+    // 피로 단계의 기기는 hub 명령(control/cmd)만 바꾼다. 앱이 따로 국면 조명·음악을 켜면
+    // 사람마다 다른 도움(A 음악 · B 조명)이 섞이고 자세 안내 카드에도 기기가 켜진다(11-04 결선 대본 점검).
+    if (state.phase == 'fatigue') return;
     if (_applying) return;
     _applying = true;
     try {
@@ -593,9 +609,7 @@ class FeedbackCoordinator {
           _phaseLampFailed(key);
         }
       }
-      if (state.phase == 'fatigue') {
-        await _playFatigueMusic();
-      } else if (state.phase == 'recovery' ||
+      if (state.phase == 'recovery' ||
           state.phase == 'idle' ||
           state.phase == 'end') {
         if (_lastMusicKey != state.phase) {
@@ -610,15 +624,6 @@ class FeedbackCoordinator {
     } finally {
       _applying = false;
     }
-  }
-
-  Future<void> _playFatigueMusic() async {
-    if (_lastMusicKey == 'fatigue') return;
-    final address = _speakerAddress;
-    if (address != null && !await bluetooth.isA2dpConnected(address)) return;
-    if (!music.isPlaying) await music.toggle();
-    lastAudioError = null;
-    if (music.isPlaying) _lastMusicKey = 'fatigue';
   }
 
   /// Hub already applied its gate and received acceptance before publishing.
@@ -697,7 +702,7 @@ class FeedbackCoordinator {
       return _result(command, 'failed', error: 'lamp_not_configured');
     }
     final value = command['value'];
-    final List<List<int>> frames;
+    List<List<int>> frames;
     // adjust_brightness: 결과에 previous(기준)·actual(새 값)을 싣는다. actual_value 도 새 값.
     var actual = value;
     var extra = const <String, Object?>{};
@@ -744,6 +749,14 @@ class FeedbackCoordinator {
       return _result(command, 'failed',
           error: 'unsupported_operation_or_value');
     }
+    // 피로 단계에 hub 가 무드등을 켜거나 밝히면 이 사람의 '피곤할 때 색'으로 칠한다(되돌리기·끄기는 제외).
+    final rgb = fatigueRgb;
+    if (rgb != null &&
+        command['gate'] != 'undo' &&
+        _latest?.phase == 'fatigue' &&
+        !(command['operation'] == 'set_power' && value == 'off')) {
+      frames = [...frames, ilinkFrame([0x03, 0x08, 0x02, ...rgb])];
+    }
     final write = await lamp.writeFramesReport(frames,
         expiresTsMs: expires, rediscover: true);
     final recovery = _recovery(write.rediscovered);
@@ -757,14 +770,6 @@ class FeedbackCoordinator {
           extra: recovery);
     }
     extra = {...extra, ...recovery};
-    // Sound failure must not turn a successful lamp command into a failure.
-    if (command['gate'] != 'undo' && _latest?.phase == 'fatigue') {
-      try {
-        await _playFatigueMusic();
-      } catch (error) {
-        lastAudioError = error;
-      }
-    }
     return _result(command, 'succeeded', actual: actual, extra: extra);
   }
 

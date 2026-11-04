@@ -243,6 +243,9 @@ class DeveloperController extends ChangeNotifier {
     _changed();
   }
 
+  /// 지금 사람의 '피곤할 때 조명 색'(설정 '빛의 온도', 0 따뜻하게 … 1 시원하게).
+  void setFatigueColor(double warmth) => feedback.setFatigueColor(warmth);
+
   void setPlacement(String value) {
     if (settings.load().placement == value) return;
     settings.save(settings.load().copyWith(placement: value));

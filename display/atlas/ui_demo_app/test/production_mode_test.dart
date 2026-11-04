@@ -102,7 +102,7 @@ void main() {
     expect(m.preferencesOpen, isTrue);
     expect(find.text('재실·작업 상황 재생'), findsNothing);
     expect(find.text('피로·졸음 상황'), findsNothing);
-    await tester.tap(find.byKey(const ValueKey('presentation-enabled')));
+    await tester.tap(find.byKey(const ValueKey('demo-fast')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('10배속'));
     await tester.tap(find.byKey(const ValueKey('presentation-goal')));

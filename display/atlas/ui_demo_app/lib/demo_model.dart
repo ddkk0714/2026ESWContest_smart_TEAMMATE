@@ -3,6 +3,7 @@ import 'live/payload.dart' show newProfileId;
 import 'live/profile_payload.dart' show applyProfileData;
 import 'pr56/display_state.dart';
 import 'profile_store.dart';
+import 'report/session_timeline.dart';
 
 enum DemoPage { home, focus, details, widgets, report }
 
@@ -143,6 +144,17 @@ class DemoModel extends ChangeNotifier {
 
   /// 프로필이 만들어지거나 바뀌거나 골라질 때(보드에 선호를 알린다). 연결이 없으면 null.
   void Function(Persona persona)? onProfileChanged;
+
+  /// 이번 집중의 흐름(hub 상태·기기 명령). 마무리 화면 그래프가 그린다. 집중 시작·프로필 전환 때 비운다.
+  final timeline = SessionTimeline();
+
+  /// hub 기기 명령(control/cmd) 한 건 — 집중 중일 때만 그래프 표시로 남긴다.
+  void recordCommand(Map<String, dynamic> data) {
+    if (active) timeline.addCommand(data);
+  }
+
+  /// 리포트를 새로 세기 시작할 때(집중 시작·프로필 전환). 보드 리포트의 기준점을 잡는다.
+  VoidCallback? onReportReset;
 
   /// 장치 위치를 보드에 보낸다. 화면에 잠깐 보일 한 줄을 돌려준다(보낼 곳이 없으면 null).
   Future<String?> Function(String placement)? onPlacement;
@@ -287,9 +299,22 @@ class DemoModel extends ChangeNotifier {
     proposal = false;
     scenario = false;
     workTicks = 0;
+    _resetReport();
     _persist();
     onProfileChanged?.call(persona);
     notifyListeners();
+  }
+
+  /// 지난 집중의 리포트(피로 횟수·느낌·기록)를 비운다. 다른 사람 것이 남지 않게 프로필 전환에도 부른다.
+  void _resetReport() {
+    sessionSeconds = 0;
+    fatigueEvents = 0;
+    interventionStep = 0;
+    feeling = '';
+    events.clear();
+    timeline.clear();
+    if (page == DemoPage.report) page = DemoPage.home;
+    onReportReset?.call();
   }
 
   void beginScenario() {
@@ -310,14 +335,10 @@ class DemoModel extends ChangeNotifier {
     scenario = false;
     absent = false;
     absentTicks = 0;
-    sessionSeconds = 0;
-    fatigueEvents = 0;
-    interventionStep = 0;
+    _resetReport();
     if (!liveDriven) posture = presentationEnabled ? '바른 자세' : '연결 대기';
     pendingAction = null;
     askingFeedback = false;
-    feeling = '';
-    events.clear();
     events.add(automatic ? '집중 자동 진입' : '집중 시작 · 사용자 확인');
     if (proposal) {
       persona.rounds++;
@@ -482,6 +503,7 @@ class DemoModel extends ChangeNotifier {
     } else if (current) {
       profileIndex = profileIndex.clamp(0, profiles.length - 1);
       _applyPreferences();
+      _resetReport();
       onProfileChanged?.call(persona);
     }
     _persist();
@@ -515,6 +537,7 @@ class DemoModel extends ChangeNotifier {
       if (enteredFocus && !preferencesOpen) {
         if (persona.preferences.autoStart) {
           start(automatic: true);
+          timeline.add(s);
           return;
         }
         proposal = true;
@@ -524,6 +547,7 @@ class DemoModel extends ChangeNotifier {
       return;
     }
     sessionObserved = true;
+    timeline.add(s);
     if (s.fsmState == 'END' || s.fsmState == 'IDLE') {
       finish();
       return;

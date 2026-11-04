@@ -114,9 +114,13 @@ class ScreenNotice {
     this.kind,
     this.countdown,
     this.label,
+    this.arm,
   });
 
   final String text;
+
+  /// hub 가 고른 방법(arm, 예: posture_card · sound_cue). 카드 그림을 고를 때 쓴다. 없으면 null.
+  final String? arm;
 
   /// 자동 정보 카드의 `arm_label`(예: "알림음") — 어떤 알림 방식으로 골랐는지. 없으면 null.
   final String? label;
@@ -171,29 +175,46 @@ class ScreenNotice {
       kind: data['kind']?.toString(),
       countdown: count == null ? null : Duration(seconds: count.round()),
       label: label is String && label.trim().isNotEmpty ? label.trim() : null,
+      arm: data['arm']?.toString(),
     );
   }
 }
 
-/// 지금 떠 있는 화면 알림. 새 알림이 오면 앞의 것을 바꾼다.
+/// 지금 떠 있는 화면 알림들. 새 알림은 위에 쌓이고(같은 request_id 면 바꾼다), 닫기는 맨 위 한 장만 닫는다.
 class NoticeBoard extends ChangeNotifier {
-  ScreenNotice? _current;
+  /// 너무 많이 쌓이지 않게 — 넘치면 가장 오래된 것부터 버린다.
+  static const maxCards = 5;
+  final _items = <ScreenNotice>[];
 
+  /// 맨 위(가장 최근)의 아직 안 지난 알림.
   ScreenNotice? current(DateTime now) {
-    final notice = _current;
-    return notice == null || notice.expired(now) ? null : notice;
+    final live = all(now);
+    return live.isEmpty ? null : live.last;
   }
+
+  /// 아직 안 지난 알림 전부(오래된 것 → 최근).
+  List<ScreenNotice> all(DateTime now) =>
+      [for (final n in _items) if (!n.expired(now)) n];
 
   void show(ScreenNotice notice) {
-    _current = notice;
+    final id = notice.requestId;
+    if (id != null) _items.removeWhere((n) => n.requestId == id);
+    _items.add(notice);
+    if (_items.length > maxCards) _items.removeAt(0);
     notifyListeners();
   }
 
-  /// 닫는다. 닫힌 알림을 돌려준다(이미 없거나 지났으면 null).
+  /// 맨 위 한 장을 닫는다. 닫힌 알림을 돌려준다(이미 없거나 지났으면 null).
   ScreenNotice? dismiss(DateTime now) {
     final notice = current(now);
-    _current = null;
+    _items.removeWhere((n) => n.expired(now) || identical(n, notice));
     notifyListeners();
     return notice;
+  }
+
+  /// 전부 비운다(연결이 끊겼을 때).
+  void clear() {
+    _items.clear();
+    notifyListeners();
   }
 }
