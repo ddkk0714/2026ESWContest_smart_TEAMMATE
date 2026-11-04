@@ -118,16 +118,33 @@ class BigCard extends StatelessWidget {
             const Spacer(),
           if (actions.isNotEmpty) ...[
             const SizedBox(height: 14),
-            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-              for (final (i, a) in actions.indexed) ...[
-                if (i > 0) const SizedBox(width: 12),
-                a
-              ]
-            ]),
+            // 큰 카드 버튼은 터치 화면에서 누르기 쉽게 조금 크게(높이 56, 글자 19)
+            Theme(
+                data: Theme.of(context).copyWith(
+                    filledButtonTheme: FilledButtonThemeData(
+                        style: _bigButton(context)
+                            .merge(Theme.of(context).filledButtonTheme.style)),
+                    outlinedButtonTheme: OutlinedButtonThemeData(
+                        style: _bigButton(context).merge(
+                            Theme.of(context).outlinedButtonTheme.style))),
+                child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                  for (final (i, a) in actions.indexed) ...[
+                    if (i > 0) const SizedBox(width: 14),
+                    a
+                  ]
+                ])),
           ],
         ])),
       ]));
 }
+
+/// 앱 글꼴은 그대로 두고 크기만 키운다(textStyle 을 새로 주면 글꼴이 빠져 한글이 깨진다).
+ButtonStyle _bigButton(BuildContext context) => ButtonStyle(
+    minimumSize: const WidgetStatePropertyAll(Size(140, 56)),
+    padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 28)),
+    textStyle: WidgetStatePropertyAll(
+        (Theme.of(context).textTheme.labelLarge ?? const TextStyle())
+            .copyWith(fontSize: 19)));
 
 class DeckEntry {
   const DeckEntry({required this.id, required this.at, required this.card});

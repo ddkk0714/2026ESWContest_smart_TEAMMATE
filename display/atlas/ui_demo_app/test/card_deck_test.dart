@@ -82,6 +82,9 @@ void main() {
     expect(find.text('지금 자세 · 고개가 앞으로 나옴'), findsOneWidget);
     expect(find.text('턱을 살짝 당기고 화면을 눈높이로 올려 보세요.'), findsOneWidget);
     expect(find.byKey(const ValueKey('card-deck-count')), findsNothing);
+    // 큰 카드 버튼은 누르기 쉽게 높이 56 이상
+    expect(tester.getSize(find.widgetWithText(FilledButton, '알겠어요')).height,
+        greaterThanOrEqualTo(56));
     // 거의 화면을 덮는다
     expect(tester.getSize(find.byKey(const ValueKey('notice-banner'))).width,
         greaterThan(800));
