@@ -1097,11 +1097,16 @@ class _DemoShellState extends State<DemoShell> {
                     label: const Text('개발자 화면')),
             ]),
             const SizedBox(height: 12),
+            // 빠른 진행: 화면의 발표 설정과 hub 빠른 시연(deskmate/demo/mode)을 함께 켜고 끈다.
+            // hub 는 시연 프로파일(demo-a·demo-b)일 때만 받아들인다.
             SwitchListTile(
-                key: const ValueKey('presentation-enabled'),
-                title: const Text('발표 설정 사용'),
+                key: const ValueKey('demo-fast'),
+                title: const Text('빠른 진행'),
                 value: m.presentationEnabled,
-                onChanged: (v) => m.configurePresentation(enabled: v)),
+                onChanged: (v) {
+                  m.configurePresentation(enabled: v);
+                  widget.live?.setDemoSpeed(v);
+                }),
             if (m.presentationEnabled) ...[
               const Text('시간 배속'),
               Wrap(spacing: 12, children: [
