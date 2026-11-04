@@ -91,6 +91,7 @@ body:not([data-mode="virtual"]) #virt { display: none; }
 /* 2행: 판정 + 센서 원값 */
 #row2 { display: grid; grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.6fr); gap: calc(8px * var(--k)); min-height: 0; }
 #fsmWrap { display: flex; align-items: baseline; gap: calc(12px * var(--k)); white-space: nowrap; }
+#fsmBtns { display: flex; flex-wrap: wrap; gap: calc(8px * var(--k)); margin: calc(4px * var(--k)) 0 calc(8px * var(--k)); }
 #fsm { font-size: calc(46px * var(--k)); font-weight: 800; line-height: 1.05; }
 #fsmMeta { font-size: calc(14px * var(--k)); color: var(--dim); }
 .meters { display: grid; grid-template-columns: 1fr 1fr; gap: calc(14px * var(--k)); margin: 2px 0 calc(6px * var(--k)); }
@@ -238,6 +239,15 @@ body:not([data-mode="virtual"]) #toasts { display: none; }
 #cardBox .ttl { font-size: calc(13px * var(--k)); color: var(--dim); }
 #cardText { font-size: calc(19px * var(--k)); font-weight: 700; margin: calc(4px * var(--k)) 0 calc(8px * var(--k)); }
 #cardBtns { display: flex; gap: calc(8px * var(--k)); align-items: center; flex-wrap: wrap; }
+#mjWrap { margin-top: calc(10px * var(--k)); border-top: 1px solid var(--line); padding-top: calc(8px * var(--k)); }
+#mjRow { display: flex; flex-wrap: wrap; gap: calc(6px * var(--k)); align-items: center; }
+#mjBtns { display: contents; }
+#mjBtns .btn { padding: calc(4px * var(--k)) calc(10px * var(--k)); }
+#mjNote { flex: 1 1 calc(160px * var(--k)); min-width: 0; font: inherit; font-size: calc(14px * var(--k)); padding: calc(4px * var(--k)) calc(8px * var(--k));
+  border-radius: calc(6px * var(--k)); border: 1px solid var(--line); background: #151a24; color: var(--fg); }
+#mjMsg { font-size: calc(13px * var(--k)); color: var(--dim); margin-top: calc(4px * var(--k)); }
+#mjList { font-size: calc(13px * var(--k)); color: var(--dim); margin-top: calc(4px * var(--k)); }
+#mjList div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #cardMsg { font-size: calc(13px * var(--k)); color: var(--dim); margin-top: calc(6px * var(--k)); }
 #vdevs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: calc(10px * var(--k)); }
 .dcard { background: var(--panel); border: 1px solid var(--line); border-radius: calc(12px * var(--k)); padding: calc(12px * var(--k)) calc(14px * var(--k)); position: relative; }
@@ -425,12 +435,18 @@ body.narrow #tl .row .why, body.narrow #tl .row .rl { grid-column: 3; }
   <div class="panel">
     <div class="ptitle"><span><b>판정</b> · Pi 4 hub FSM (state/phase)</span><span class="mono" id="seq">-</span></div>
     <div id="fsmWrap"><span id="fsm">-</span><span id="fsmMeta">-</span>
-      <button class="btn" id="demoFast" title="hub 피로 유지 시간을 줄인다(시연 프로파일에서만) — deskmate/demo/mode">빠른 시연</button></div>
+</div>
+    <div id="fsmBtns">
+      <button class="btn" id="demoFast" title="hub 피로 유지 시간을 줄인다(시연 프로파일에서만) — deskmate/demo/mode">빠른 시연</button>
+      <button class="btn" id="persSwitch" title="hub 개인화(사람별 개입 선택·반응 학습)를 재시작 없이 켜고 끈다. 끄면 기본 규칙대로 개입하고 기록만 한다">개인화</button></div>
     <div class="meters">
       <div class="meter"><div class="lab"><span>피로도 C_fatigue</span><span class="num" id="fatT">-</span></div><div class="track"><i id="fatB"></i></div></div>
       <div class="meter"><div class="lab"><span>집중 저하 C_focus</span><span class="num" id="focT">-</span></div><div class="track"><i id="focB"></i></div></div>
     </div>
     <dl class="kv" id="judgeKv"></dl>
+    <div id="mjWrap"><div id="mjRow"><b>오판</b><span id="mjBtns"></span>
+      <input id="mjNote" maxlength="200" placeholder="메모(선택) — 예: 바르게 타이핑 중"></div>
+      <div id="mjMsg"></div><div id="mjList"></div></div>
   </div>
   <div class="panel">
     <div class="ptitle"><span><b>센서 원값</b> · 출처 우선순위: /raw other(ESP32 프레임) → MQTT 센서 토픽 → hub 요약</span><span class="mono" id="rawNote"></span></div>
@@ -650,6 +666,10 @@ function renderJudge(ph, p, profile) {
   $("demoFast").textContent = fast ? "빠른 시연 켜짐 · 끄기" : ph.demo_speed ? "빠른 시연 켜기" : "빠른 시연(hub 미지원)";
   $("demoFast").classList.toggle("warn", fast);
   $("demoFast").dataset.next = fast ? "normal" : "fast";
+  const pon = ph.personalize_switch === "on";
+  $("persSwitch").textContent = ph.personalize_switch ? (pon ? "개인화 켜짐" : "개인화 꺼짐") : "개인화(hub 미지원)";
+  $("persSwitch").classList.toggle("warn", ph.personalize_switch === "off");
+  $("persSwitch").dataset.next = pon ? "off" : "on";
   const meter = (v, t, b, color) => { $(t).textContent = f2(v); $(b).style.width = v == null ? "0" : (v * 100).toFixed(1) + "%"; $(b).style.background = color; };
   meter(ph.fatigue, "fatT", "fatB", ph.fatigue >= 0.7 ? "var(--bad)" : ph.fatigue >= 0.45 ? "var(--warn)" : "var(--ok)");
   meter(ph.focus, "focT", "focB", "var(--accent)");
@@ -664,6 +684,27 @@ function renderJudge(ph, p, profile) {
     ["2단계 피로 관찰", `${esc(ph.stage2)} <span class="empty">(판정 무관)</span>`],
     ["반응 학습", esc(ph.learning)],
   ]);
+}
+
+// "오판" 버튼(11-02): 누른 순간의 판정·자세·재실을 이 노트북 파일에 남기고, hub 는 그때 열린 개입을 개인화 학습에서 뺀다
+let mjCats = "";
+function renderMisjudge(m) {
+  if (!m) return;
+  const cats = m.categories.join("|");
+  if (cats !== mjCats) {
+    mjCats = cats;
+    $("mjBtns").innerHTML = m.categories.map(c => `<button class="btn" data-mj="${esc(c)}">${esc(c)}</button>`).join("");
+    $("mjBtns").querySelectorAll("[data-mj]").forEach(b => b.onclick = () => markMisjudge(b.dataset.mj));
+  }
+  $("mjList").innerHTML = m.recent.length
+    ? m.recent.slice(0, 5).map(r => `<div>${esc(r.t)} · <b>${esc(r.category)}</b>${r.note ? " · " + esc(r.note) : ""}` +
+        ` <span class="empty">— ${esc(r.fsm_state)} · 피로 ${f2(r.c_fatigue)} · 재실 ${esc(r.present)} · 자세 ${esc(r.posture)} · hub ${esc(r.hub)}</span></div>`).join("")
+    : `<span class="empty">판정이 틀리면 종류를 누르세요 — 그 순간을 기록하고 그 개입은 학습에서 뺍니다</span>`;
+}
+async function markMisjudge(category) {
+  const r = await post("/api/misjudge", {category, note: $("mjNote").value}).catch(e => ({ok: false, error: e.message}));
+  $("mjMsg").textContent = r.ok ? `'${category}' 기록함 · hub ${r.hub}` : `기록 실패: ${r.error}`;
+  if (r.ok) $("mjNote").value = "";
 }
 
 function rawCell(v) {
@@ -896,6 +937,11 @@ const VLABEL = {accept: "수락", reject: "거절", undo: "되돌리기"};
 $("demoFast").onclick = async () => {
   const r = await post("/api/demo-mode", {speed: $("demoFast").dataset.next || "fast"}).catch(e => ({ok: false, error: e.message}));
   cardMsg = r.ok ? "빠른 시연 요청 보냄 — 다음 판정(10 s 안)에 반영" : `빠른 시연 보내기 실패: ${r.error}`;
+};
+$("persSwitch").onclick = async () => {
+  const on = ($("persSwitch").dataset.next || "on") === "on";
+  const r = await post("/api/personalize", {on}).catch(e => ({ok: false, error: e.message}));
+  cardMsg = r.ok ? `개인화 ${on ? "켜기" : "끄기"} 보냄 — 다음 판정(10 s 안)에 반영` : `개인화 보내기 실패: ${r.error}`;
 };
 // 한 번 누르면 '한 번 더 눌러 보내기'(4 s), 두 번째에 보낸다 — 실수로 hub 에 라벨을 보내지 않게
 async function answer(rid, verdict) {
@@ -1237,6 +1283,7 @@ async function tick() {
     renderSvc(d.posture);
     renderFaceDown(d.face_down);
     renderJudge(d.phase, d.posture, d.profile);
+    renderMisjudge(d.misjudge);
     renderRaw(d.sections);
     renderDevices(d.devices);
     renderControl(d.control, d.phase);

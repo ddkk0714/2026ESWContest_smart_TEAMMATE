@@ -52,6 +52,7 @@ TOPIC_REQUEST = "deskmate/interaction/request"
 TOPIC_FEEDBACK = "deskmate/feedback/user"
 TOPIC_HEALTH_HUB = "deskmate/health/hub"
 TOPIC_PROFILE = "deskmate/profile/user"
+MISJUDGE_CATEGORIES = ("피로 과다", "피로 놓침", "자세 틀림", "재실 틀림", "기타")   # "오판" 버튼 종류(11-02)
 TOPIC_DEMO_MODE = "deskmate/demo/mode"   # 빠른 시연 버튼 → hub demo_mode.py {"speed": "fast"|"normal"} (보내기만, 지금 모드는 state/phase)
 
 DASH = "-"
@@ -188,6 +189,7 @@ def phase_view(envelope: Any) -> dict[str, Any]:
         "prior": prior or DASH,
         # hub 빠른 시연 모드(demo_mode.py): fast·normal, 옛 hub 면 ""
         "demo_speed": str(_map(ss.get("demo_mode")).get("speed") or ""),
+        "personalize_switch": str(ss.get("personalize_switch") or ""),   # on|off — 옛 hub 면 빈 값(버튼 없음 표시)
     }
 
 
@@ -2635,6 +2637,9 @@ class Store:
         self.publisher: Publisher | None = None
         self.sent: deque[dict[str, Any]] = deque(maxlen=20)
         self.profile_sent: dict[str, Any] | None = None
+        # "오판" 표시(11-02): 누른 순간의 판정·자세·재실을 이 노트북 파일에 한 줄씩(main 이 경로를 준다) + hub 에 학습 제외 신호
+        self.misjudge_path: str | None = None
+        self.misjudges: deque[dict[str, Any]] = deque(maxlen=20)
         # profile_id → 부르는 이름(이 노트북에만, main 이 파일 경로를 준다)
         self.names = ProfileNames(None)
         # 연결별 상태: ok, reason, last(마지막 수신 epoch)
@@ -2722,6 +2727,59 @@ class Store:
             with self.lock:
                 self.profile_sent = {"profile_id": prof["profile_id"], "label": label, "at": time.time(), "data": prof}
         return res
+
+    def misjudge_snapshot(self, now: float) -> dict[str, Any]:
+        """오판 표시 순간의 근거 — hub state/phase(상태·점수·재실·센서 요약)와 자세 서비스 판정. lock 안에서 부른다."""
+        data = _map(_map(self.phase).get("data"))
+        summ = _map(data.get("sensor_summary"))
+        post = _map(self.posture)
+        return {
+            "fsm_state": data.get("fsm_state"), "c_fatigue": data.get("c_fatigue"), "c_focus": data.get("c_focus"),
+            "cause": data.get("cause"), "gate": data.get("gate"),
+            "present": summ.get("present"), "presence_source": summ.get("presence_source"),
+            "mmwave": summ.get("mmwave"), "tof": summ.get("tof"), "keystroke": summ.get("keystroke"),
+            "env": summ.get("env"),
+            "profile_id": _map(summ.get("personalize")).get("active_profile_id"),
+            "posture_service": {k: post.get(k) for k in ("posture", "conf", "since_ms", "probs") if k in post},
+            "phase_age_s": (None if _num(_map(self.phase).get("ts")) is None
+                            else round(now - _num(_map(self.phase).get("ts")), 1)),
+        }
+
+    def mark_misjudge(self, category: Any, note: Any) -> dict[str, Any]:
+        """"오판" 버튼: 누른 순간을 이 노트북 JSONL 에 남기고 hub 에 feedback/user {kind: misjudge} — hub 는 그때 열린
+        최근 개입을 개인화 학습에서 뺀다(personalize/record.py on_misjudge). --read-only 면 파일에만."""
+        cat = str(category or "").strip()[:32]
+        if cat not in MISJUDGE_CATEGORIES:
+            return {"ok": False, "error": "종류가 아님: " + " · ".join(MISJUDGE_CATEGORIES)}
+        now = time.time()
+        with self.lock:
+            snap = self.misjudge_snapshot(now)
+        rec = {"ts": round(now, 3), "t": time.strftime("%H:%M:%S", time.localtime(now)), "category": cat,
+               "note": str(note or "").strip()[:200], **snap}
+        err = None
+        if self.misjudge_path:
+            try:
+                os.makedirs(os.path.dirname(self.misjudge_path) or ".", exist_ok=True)
+                with open(self.misjudge_path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            except OSError as e:
+                err = f"파일 저장 실패: {_reason(e)}"
+        sent = (self._send(TOPIC_FEEDBACK, {"kind": "misjudge", "category": cat, "note": rec["note"],
+                                            "ts_ms": int(now * 1000)}, f"오판 {cat}")
+                if self.publisher is not None else {"ok": False, "error": "보내기 꺼짐(--read-only)"})
+        rec["hub"] = "보냄" if sent["ok"] else f"못 보냄 — {sent['error']}"
+        with self.lock:
+            self.misjudges.appendleft({k: rec[k] for k in ("t", "category", "note", "fsm_state", "c_fatigue",
+                                                            "present", "hub")} |
+                                      {"posture": snap["posture_service"].get("posture")})
+        return {"ok": err is None, "error": err, "hub": rec["hub"]}
+
+    def send_personalize(self, on: Any) -> dict[str, Any]:
+        """개인화 켜기·끄기(11-02) — hub 가 재시작 없이 개입 선택 정책·반응 학습을 켜거나 끈다(feedback/user kind
+        personalize_switch). 지금 상태는 다음 state/phase 의 sensor_summary.personalize_switch."""
+        if not isinstance(on, bool):
+            return {"ok": False, "error": "on 은 true|false"}
+        return self._send(TOPIC_FEEDBACK, {"kind": "personalize_switch", "on": on}, f"개인화 {'켜기' if on else '끄기'}")
 
     def send_demo_mode(self, speed: Any) -> dict[str, Any]:
         """빠른 시연 켜기·끄기 — Pi 5 앱 개발자 모드 스위치와 같은 data {"speed"}. hub 가 시연 프로파일이 아니면 무시한다."""
@@ -2824,6 +2882,8 @@ class Store:
                 "trigger": self.trigger.view(now),
                 "laptop": None if self.laptop is None else self.laptop.view(),
                 "persona": self.persona_view(),
+                "misjudge": {"categories": list(MISJUDGE_CATEGORIES), "recent": list(self.misjudges),
+                             "path": self.misjudge_path},
                 "control": control,
                 "keystroke": self.keystroke.view(now),
                 "video": video_view(self.phase, posture, control),
@@ -3481,6 +3541,10 @@ def make_handler(store: Store) -> type[BaseHTTPRequestHandler]:
                 res = store.send_profile(_map(body).get("data"), str(_map(body).get("label") or "")[:20])
             elif path == "/api/feedback":
                 res = store.send_feedback(_map(body).get("request_id"), _map(body).get("verdict"))
+            elif path == "/api/personalize":
+                res = store.send_personalize(_map(body).get("on"))
+            elif path == "/api/misjudge":
+                res = store.mark_misjudge(_map(body).get("category"), _map(body).get("note"))
             elif path == "/api/demo-mode":
                 res = store.send_demo_mode(_map(body).get("speed"))
             elif path == "/api/name":
@@ -3526,11 +3590,15 @@ def main(argv: list[str] | None = None) -> None:
                     help=f"가짜 각본을 S 초부터(0–{FAKE_PERIOD:.0f}, 예: 26 = 졸음→무드등 직전)")
     ap.add_argument("--names-file", default=os.path.join(os.environ.get("LOCALAPPDATA", HERE), "deskmate-devview", "profile_names.json"),
                     metavar="PATH", help="profile_id → 부르는 이름(이 노트북에만, MQTT 로 안 보냄)")
+    ap.add_argument("--misjudge-file", default=os.path.join(os.environ.get("LOCALAPPDATA", HERE), "deskmate-devview",
+                                                             "misjudge.jsonl"),
+                    metavar="PATH", help="'오판' 버튼 기록(이 노트북에만 — hub 에는 종류·메모만 보냄)")
     ap.add_argument("--bind", choices=("127.0.0.1", "0.0.0.0"), default="127.0.0.1")
     args = ap.parse_args(argv)
 
     store = Store()
     store.names = ProfileNames(args.names_file)
+    store.misjudge_path = args.misjudge_file
     store.hub_floors = parse_floors(args.hub_floor)
     rules = load_hub_rules(args.hub_config, args.hub_profile or ("demo-b" if args.fake else ""))
     store.trigger = TriggerTracker(rules)
