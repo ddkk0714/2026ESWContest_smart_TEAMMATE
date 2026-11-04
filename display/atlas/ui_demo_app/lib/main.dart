@@ -14,6 +14,7 @@ import 'live/home_items.dart';
 import 'live/link_settings.dart';
 import 'live/live_link.dart';
 import 'live/live_request.dart';
+import 'live/pi4_bringup.dart';
 import 'live/profile_sync.dart';
 import 'pr56/co2_grade.dart';
 import 'pr56/display_state.dart';
@@ -36,7 +37,9 @@ Future<void> main() async {
       jsonDecode(await rootBundle.loadString('assets/config/demo.json'))
           as Map<String, dynamic>;
   // V18: 보드 주소가 저장돼 있으면 연결을 시작한다. 없거나 닿지 않으면 메모리 동작 그대로.
-  final live = LiveLink(store: LinkSettingsStore())..start();
+  // V47: hub 가 20 s 넘게 안 오면 재부팅한 Pi 4 를 SSH 로 깨운다(live/pi4_bringup.dart).
+  final live =
+      LiveLink(store: LinkSettingsStore(), bringupRunner: sshBringup)..start();
   // V18: 프로필은 Pi 5 에 저장한다(profile_id 가 실행마다 바뀌면 hub 의 사람별 학습이 처음부터 시작된다).
   final model = DemoModel(DemoConfig(values), store: ProfileStore());
   runApp(DemoApp(

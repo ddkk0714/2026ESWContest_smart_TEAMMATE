@@ -468,6 +468,27 @@ class DemoModel extends ChangeNotifier {
     return target;
   }
 
+  /// 프로필 하나를 지운다. 마지막 하나와 집중 중인 지금 프로필은 지우지 않는다(false).
+  /// 지금 프로필을 지우면 그 자리의 다음 프로필로 넘어가고 보드에 알린다.
+  bool deleteProfile(int index) {
+    if (profiles.length <= 1 || index < 0 || index >= profiles.length) {
+      return false;
+    }
+    final current = index == profileIndex;
+    if (current && active) return false;
+    profiles.removeAt(index);
+    if (index < profileIndex) {
+      profileIndex--;
+    } else if (current) {
+      profileIndex = profileIndex.clamp(0, profiles.length - 1);
+      _applyPreferences();
+      onProfileChanged?.call(persona);
+    }
+    _persist();
+    notifyListeners();
+    return true;
+  }
+
   void saveProfile(Persona draft) {
     profiles.add(draft);
     profileIndex = profiles.length - 1;

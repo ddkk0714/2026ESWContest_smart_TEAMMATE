@@ -7,6 +7,7 @@ import 'package:deskmate_ui_demo/profile_avatars.dart';
 import 'package:deskmate_ui_demo/profile_creation.dart';
 import 'package:deskmate_ui_demo/personal_settings.dart';
 import 'package:deskmate_ui_demo/profile_store.dart';
+import 'package:deskmate_ui_demo/placement_sketch.dart';
 
 DemoModel model() => DemoModel(
     DemoConfig(jsonDecode(File('assets/config/demo.json').readAsStringSync())
@@ -97,5 +98,35 @@ void main() {
     }
     expect(avatarGroups.values.expand((ids) => ids).toSet(),
         avatarChoices.keys.toSet());
+  });
+
+  test('deleteProfile keeps one profile and moves the selection', () {
+    final m = model();
+    m.selectProfile(1);
+    expect(m.deleteProfile(0), isTrue);
+    expect(m.profiles.map((p) => p.name), ['민준', '새 사용자']);
+    expect(m.profileIndex, 0);
+    expect(m.persona.name, '민준');
+    expect(m.deleteProfile(0), isTrue);
+    expect(m.persona.name, '새 사용자');
+    expect(m.deleteProfile(0), isFalse);
+    expect(m.profiles, hasLength(1));
+  });
+
+  test('placement spots are the same distance from the person', () {
+    for (final size in const [Size(320, 140), Size(300, 130)]) {
+      final person = DeskSketchPainter.person(size);
+      final distances = [
+        for (final p in ['left', 'center', 'right'])
+          (DeskSketchPainter.spot(p, size) - person).distance
+      ];
+      for (final d in distances) {
+        expect(d, closeTo(distances[1], 1e-9));
+      }
+      expect(DeskSketchPainter.spot('left', size).dx,
+          lessThan(DeskSketchPainter.spot('center', size).dx));
+      expect(DeskSketchPainter.spot('right', size).dx,
+          greaterThan(DeskSketchPainter.spot('center', size).dx));
+    }
   });
 }

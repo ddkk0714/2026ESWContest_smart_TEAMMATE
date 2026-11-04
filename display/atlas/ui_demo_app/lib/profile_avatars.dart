@@ -145,7 +145,9 @@ class _ProfileAvatarChoicesState extends State<ProfileAvatarChoices> {
       ]);
 }
 
-Future<String?> pickProfileAvatar(BuildContext context, String current) =>
+/// [onDelete] 를 주면 출처와 닫기 사이에 `삭제` 가 생긴다. 누르면 창을 닫고 부른다.
+Future<String?> pickProfileAvatar(BuildContext context, String current,
+        {VoidCallback? onDelete}) =>
     showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
@@ -160,6 +162,16 @@ Future<String?> pickProfileAvatar(BuildContext context, String current) =>
         actions: [
           const Text('Twemoji · CC BY 4.0',
               style: TextStyle(fontSize: 10, color: Color(0xFF7A8580))),
+          if (onDelete != null)
+            TextButton(
+                key: const ValueKey('avatar-delete-profile'),
+                style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFFB3261E)),
+                onPressed: () {
+                  Navigator.pop(context);
+                  onDelete();
+                },
+                child: const Text('삭제')),
           TextButton(
               onPressed: () => Navigator.pop(context), child: const Text('닫기'))
         ],

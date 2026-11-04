@@ -6,6 +6,13 @@
 >
 > 같은 날 Pi 4에서 확인한 것: hub 프로세스 강제 종료 → 약 11초 뒤 새 PID로 복구. broker 재시작 → hub MQTT 재연결, broker 프로세스 1개. UART 권한 `g0_a5015 660` 복구. Pi 5 앱이 AppManager로 기동. Pi 4에는 broker·hub 감독 서비스, Pi 5에는 디스플레이 기동 서비스를 설치한다. 두 보드 모두 30초 간격으로 복구 상태를 점검한다.
 
+## 11-03 Pi 5 앱(V47)이 Pi 4를 깨운다
+
+재부팅한 Pi 4에서 떠 있는 것은 SSH(dropbear, 빈 비밀번호 root)뿐이다. V47 앱은 hub 상태가 20초 넘게 안 오면 Pi 4(앱의 MQTT 주소)에 SSH로 `sh /data/share/deskmate/recovery/bringup.sh`를 부른다. 스크립트는 ESP32 USB(`ch340cfg`·`ttyUSB0` 정리) → 브로커·hub(`install.sh pi4 --runtime-only`) → ToF 자세 서비스(`deskmate_tof/start.sh`) 순서로, 이미 떠 있는 것은 건너뛴다. 결과 줄(`bringup hub=… tof=… uart=…`)은 `bringup.log`와 앱 연결 칸에 남는다. 스크립트가 끝까지 못 돌았으면(부팅 중) 15초 뒤, 돌았으면 2분 뒤 다시 시도한다.
+
+- 설치: `tools/atlas-recovery/bringup.sh`를 Pi 4 `/data/share/deskmate/recovery/`에 한 번 복사한다.
+- 11-03 실기: Pi 4 재부팅 → 부팅 완료 11초 뒤 앱이 `bringup start` → `hub=ok tof=ok`, 앱 MQTT 재연결. 손으로 할 일은 없다.
+
 ## 10-24 재부팅 뒤 Pi 4 허브 켜기
 
 10-24 핫스팟(Pi 4 `172.20.10.3`)에서 두 번 재부팅했는데, 두 번 다 broker·hub가 꺼진 채로 올라왔다. Pi 5 앱의 "Pi 4 연결 점검"은 4단계(상태 수신)에서 `health/hub 도 받지 못함`으로 실패했다.

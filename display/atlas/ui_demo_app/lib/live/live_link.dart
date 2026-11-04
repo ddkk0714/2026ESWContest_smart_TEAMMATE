@@ -25,6 +25,7 @@ import 'placement_client.dart';
 import 'profile_payload.dart';
 import 'transport.dart';
 import 'mqtt_watchdog.dart';
+import 'pi4_bringup.dart';
 
 enum LinkStatus { off, connecting, connected }
 
@@ -76,10 +77,14 @@ class LiveLink extends ChangeNotifier {
     DateTime Function()? clock,
     this.retryDelay = const Duration(seconds: 5),
     this.staleAfter = const Duration(seconds: 45),
+    BringupRunner? bringupRunner,
+    BringupGuard? bringupGuard,
   })  : _transportFactory = transportFactory ?? MqttLiveTransport.new,
         _store = store,
         _placementFactory = placementFactory ?? HttpPlacementClient.new,
-        _clock = clock ?? DateTime.now {
+        _clock = clock ?? DateTime.now,
+        _bringupRunner = bringupRunner,
+        _bringupGuard = bringupGuard ?? BringupGuard() {
     // node 는 개발자 앱(ui_env_app, `display`)과 hub 로그에서 구분되게 `pi5-ui`.
     // hub(mqtt_lines.route_mqtt_message → live.tick_once)·보드 C++ 브리지는 feedback 의 node 로 거르지 않는다(10-25 확인).
     notices.addListener(_notify);
@@ -158,6 +163,13 @@ class LiveLink extends ChangeNotifier {
   /// `deskmate/health/hub` status(online|offline). 못 받았으면 null.
   String? hubHealth;
 
+  /// 재부팅한 Pi 4 를 SSH 로 깨우는 중인가, 마지막 결과 한 줄(pi4_bringup.dart). 연결 칸에 보인다.
+  bool bringupRunning = false;
+  String? bringupSummary;
+  final BringupRunner? _bringupRunner;
+  final BringupGuard _bringupGuard;
+  Timer? _bringupTimer;
+
   /// state/phase 를 새로 받을 때마다. 화면 흐름(집중·쉬기·종료)을 맞추는 데 쓴다.
   void Function(DisplayState state)? onState;
 
@@ -194,6 +206,25 @@ class LiveLink extends ChangeNotifier {
     port = saved.port;
     hostSource = saved.source;
     if (configured) unawaited(_connect());
+    if (_bringupRunner != null) {
+      _bringupTimer = Timer.periodic(const Duration(seconds: 5), (_) => unawaited(checkBringup()));
+    }
+  }
+
+  /// hub 상태가 한동안 안 오면 Pi 4 를 SSH 로 깨운다(재부팅 뒤 아무것도 안 떠 있는 경우).
+  Future<void> checkBringup() async {
+    final runner = _bringupRunner;
+    if (runner == null || _disposed || bringupRunning || !configured) return;
+    if (!_bringupGuard.shouldRun(_clock(), live: live)) return;
+    bringupRunning = true;
+    bringupSummary = 'Pi 4 를 깨우는 중';
+    _notify();
+    final result = await runner(host);
+    if (_disposed) return;
+    if (!result.reached) _bringupGuard.unreachable();
+    bringupRunning = false;
+    bringupSummary = result.summary;
+    _notify();
   }
 
   /// 연결 설정을 바꾼다. 빈 host 면 연결을 끊고 메모리 동작만 쓴다. 저장하지 못하면 false.
@@ -476,6 +507,7 @@ class LiveLink extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _bringupTimer?.cancel();
     _teardown();
     notices.removeListener(_notify);
     notices.dispose();

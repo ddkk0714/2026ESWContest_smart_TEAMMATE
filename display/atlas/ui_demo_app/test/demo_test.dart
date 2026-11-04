@@ -398,6 +398,51 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });
+  testWidgets('profile image dialog deletes a profile after confirmation',
+      (tester) async {
+    tester.view.physicalSize = const Size(1024, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final m = model();
+    await tester.pumpWidget(DemoApp(model: m, ticking: false));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('지우 · 수험생'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('프로필 관리'));
+    await tester.pumpAndSettle();
+    // 취소하면 그대로 남는다
+    await tester.tap(find.byTooltip('새 사용자 이미지 변경'));
+    await tester.pumpAndSettle();
+    expect(find.text('Twemoji · CC BY 4.0'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('avatar-delete-profile')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('취소'));
+    await tester.pumpAndSettle();
+    expect(m.profiles, hasLength(3));
+    // 확인하면 그 프로필만 사라진다
+    await tester.tap(find.byTooltip('새 사용자 이미지 변경'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('avatar-delete-profile')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('confirm-delete-profile')));
+    await tester.pumpAndSettle();
+    expect(m.profiles.map((p) => p.name), ['지우', '민준']);
+    expect(m.profileIndex, 0);
+    expect(find.byTooltip('새 사용자 이미지 변경'), findsNothing);
+    // 이미지 밖 오른쪽 위 삭제 버튼으로도 지운다(누르는 범위 36)
+    expect(tester.getSize(find.byKey(const ValueKey('profile-delete-1'))),
+        const Size(36, 36));
+    await tester.tap(find.byKey(const ValueKey('profile-delete-1')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('confirm-delete-profile')));
+    await tester.pumpAndSettle();
+    expect(m.profiles.map((p) => p.name), ['지우']);
+    // 마지막 하나는 삭제 버튼이 없다
+    expect(find.byKey(const ValueKey('profile-delete-0')), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
   testWidgets('profile conversation supports back and cancel without saving',
       (tester) async {
     tester.view.physicalSize = const Size(1024, 600);
