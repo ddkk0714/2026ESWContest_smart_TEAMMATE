@@ -6,13 +6,14 @@ import json
 import sys
 
 from poc.session import SafeApiFailure, Session
-from tools.thinq_connect.manual_trial import ApiFailure
+from tools.thinq_connect.manual_trial import ApiFailure, control_payload
 
 
 class FixtureSdk:
     def __init__(self, fixture, wind="AUTO"):
         self.fixture = fixture
         self.wind = wind
+        self.power = fixture["state"]["operation"]["airPurifierOperationMode"]
         self.device_id = "fixture-only-not-a-device-id"
         self.calls = []
         self.fail = None
@@ -45,18 +46,22 @@ class FixtureSdk:
         if self.fail:
             raise ApiFailure(*self.fail)
         state = copy.deepcopy(self.fixture["state"])
+        state["operation"]["airPurifierOperationMode"] = self.power
         state["airFlow"]["windStrength"] = self.wind
         state["airFlow"]["windStrengthDetail"] = self.wind
         return state
 
     async def async_post_device_control(self, target, payload, **kwargs):
-        value = payload["airFlow"]["windStrength"]
-        if self.permit.value != value:
+        value = self.permit.value
+        if value is None or payload != control_payload(value):
             raise ApiFailure()
         self.permit.value = None
         self.calls.append("post")
         if not self.mismatch:
-            self.wind = value
+            if value in ("POWER_ON", "POWER_OFF"):
+                self.power = value
+            else:
+                self.wind = value
         if self.response_loss:
             raise ApiFailure()
         return {}

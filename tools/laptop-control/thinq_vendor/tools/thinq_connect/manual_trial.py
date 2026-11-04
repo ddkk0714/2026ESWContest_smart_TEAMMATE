@@ -59,6 +59,37 @@ def profile_check(profile):
         raise StopTrial("windStrength LOW/AUTO read/write support not confirmed")
 
 
+def power_profile_check(profile):
+    try:
+        prop = profile["property"]["operation"]["airPurifierOperationMode"]
+        valid = (prop["type"] == "enum" and isinstance(prop["mode"], list)
+                 and {"r", "w"} <= set(prop["mode"])
+                 and all(isinstance(prop["value"][mode], list)
+                         and {"POWER_ON", "POWER_OFF"} <= set(prop["value"][mode])
+                         for mode in ("r", "w")))
+    except (KeyError, TypeError, ValueError):
+        valid = False
+    if not valid:
+        raise StopTrial("power read/write support not confirmed")
+
+
+def control_payload(value):
+    if value in ("LOW", "AUTO"):
+        return {"airFlow": {"windStrength": value}}
+    if value in ("POWER_ON", "POWER_OFF"):
+        return {"operation": {"airPurifierOperationMode": value}}
+    raise StopTrial("unsupported_control")
+
+
+def power_config(state):
+    try:
+        if state["operation"]["airPurifierOperationMode"] not in ("POWER_ON", "POWER_OFF"):
+            raise StopTrial("power_state_unknown")
+        return {key: copy.deepcopy(state[key]) for key in CONFIG_GROUPS if key in state}
+    except (KeyError, TypeError):
+        raise StopTrial("power_state_missing") from None
+
+
 def config(state):
     if not isinstance(state, dict):
         raise StopTrial("State missing; do not control")
@@ -100,8 +131,10 @@ def public_state(state):
 class Transport:
     """Last network boundary: no redirects, one exact POST per approved stage."""
 
-    def __init__(self, session, execute=False):
+    def __init__(self, session, execute=False, *, power_control=False, policy_control=False):
         self.session, self.execute = session, execute
+        self.power_control = power_control
+        self.policy_control = policy_control
         self.target = None
         self.permit = None
         self.attempted = set()
@@ -116,15 +149,15 @@ class Transport:
             raise StopTrial("Invalid or repeated target selection")
         self.target = device_id
 
-    def approve(self, value):
+    def approve(self, value, *, policy_auto=False):
         if (
             not self.execute
-            or value not in ("LOW", "AUTO")
+            or value not in (("LOW", "AUTO", "POWER_ON", "POWER_OFF") if self.power_control else ("LOW", "AUTO"))
             or value in self.attempted
             or self.permit is not None
         ):
             raise StopTrial("POST permit denied")
-        if value == "AUTO" and "LOW" not in self.attempted:
+        if value == "AUTO" and "LOW" not in self.attempted and not (self.policy_control and policy_auto):
             raise StopTrial("AUTO restore cannot precede LOW attempt")
         self.permit = value
 
@@ -156,9 +189,10 @@ class Transport:
                 not self.execute
                 or self.target is None
                 or value is None
+                or (value in ("POWER_ON", "POWER_OFF") and not self.power_control)
                 or value in self.attempted
                 or parsed.path != f"/devices/{self.target}/control"
-                or kwargs.get("json") != {"airFlow": {"windStrength": value}}
+                or kwargs.get("json") != control_payload(value)
             ):
                 raise StopTrial("Unapproved POST endpoint, payload or stage")
             self.permit = None
@@ -224,7 +258,7 @@ class DeviceIO:
         await self.call(
             "async_post_device_control",
             self.target,
-            {"airFlow": {"windStrength": value}},
+            control_payload(value),
         )
 
 

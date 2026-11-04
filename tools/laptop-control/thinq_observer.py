@@ -8,6 +8,7 @@ import json
 import math
 import re
 import time
+import uuid
 from collections import OrderedDict
 
 CMD_TOPIC = "deskmate/control/cmd"
@@ -19,6 +20,13 @@ class PhaseFeed:
     def __init__(self, clock=time.monotonic):
         self.clock, self.received, self.envelope = clock, None, None
         self.retired = set()
+        self.mqtt_connected = None
+        self.mqtt_epoch = None  # Local transport generation, never a Hub session ID.
+
+    def set_connected(self, connected):
+        if connected is not self.mqtt_connected:
+            self.mqtt_epoch = uuid.uuid4().hex
+        self.mqtt_connected = connected
 
     def observe(self, topic, payload, *, retained=False):
         if topic != "deskmate/state/phase" or retained:
@@ -46,6 +54,10 @@ class PhaseFeed:
             self.envelope = {"schema_version": "1.0", "node": "hub", "boot_id": env["boot_id"], "seq": env["seq"],
                              "data": {"present": d["present"], "fsm_state": d["fsm_state"],
                                       "reasons": ["absent_timeout"] if isinstance(reasons, list) and "absent_timeout" in reasons else []}}
+            if d.get("source") == "fsm":
+                self.envelope["data"]["source"] = "fsm"
+            if d.get("phase") in ("idle", "start", "focus", "fatigue", "recovery", "end"):
+                self.envelope["data"]["phase"] = d["phase"]
             self.received = self.clock()
         except (ValueError, KeyError, TypeError, AttributeError):
             return
@@ -53,7 +65,8 @@ class PhaseFeed:
     def view(self):
         if self.envelope is None:
             return None
-        return {"envelope": copy.deepcopy(self.envelope), "age_sec": self.clock() - self.received, "retained": False}
+        return {"envelope": copy.deepcopy(self.envelope), "age_sec": self.clock() - self.received, "retained": False,
+                **({"mqtt_connected": self.mqtt_connected, "mqtt_epoch": self.mqtt_epoch} if self.mqtt_connected is not None else {})}
 
 
 class CommandObserver:

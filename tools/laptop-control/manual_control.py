@@ -1,4 +1,4 @@
-"""Interactive LOW/AUTO trial using the existing Session and final HTTP guard.
+"""Manual wind or opt-in power trial using Session and the final HTTP guard.
 
 Default: GET preflight only. --manual requires independent typed approval for
 each POST. No server, MQTT writer, persistence, automatic retry or restore.
@@ -19,11 +19,14 @@ from tools.thinq_connect.manual_trial import (
     AUTO_APPROVAL, LOW_APPROVAL, PHYSICAL_AUTO, PHYSICAL_LOW, Transport,
 )
 
+POWER_APPROVAL = {value: f"APPROVE AS183HWWA {value} ONLINE NO OTHER CONTROL"
+                  for value in ("POWER_OFF", "POWER_ON")}
+
 
 class SafeParser(argparse.ArgumentParser):
     def error(self, message):
         # argparse's default error echoes unknown arguments, possibly a secret.
-        self.exit(2, "허용 옵션은 --manual 또는 --help입니다. 인증정보는 인자로 넣지 마세요.\n")
+        self.exit(2, "허용 옵션은 --manual, --power-control, --help입니다. 인증정보는 인자로 넣지 마세요.\n")
 
 
 def record(event):
@@ -41,8 +44,8 @@ def state_summary(reply):
     return {key: state.get(key) if state.get(key) in values else None for key, values in allowed.items()}
 
 
-async def run_trial(host, *, manual=False, confirm=input, emit=record):
-    """One process, one fixed target, and at most one LOW and one AUTO write."""
+async def run_trial(host, *, manual=False, power_control=False, confirm=input, emit=record):
+    """One fixed target; each permitted stage at most once, with no restore."""
     key = host.key  # In-process call; no HTTP listener or exposed bootstrap.
     try:
         read = await host.call(key, {"op": "read"})
@@ -50,17 +53,24 @@ async def run_trial(host, *, manual=False, confirm=input, emit=record):
         ready = (read.get("status") == "read_ok" and read.get("wind_profile_verified") is True
                  and state is not None and state["power"] == "POWER_ON"
                  and state["job"] == "CLEAN" and state["windStrength"] == "AUTO")
+        if power_control:
+            ready = (read.get("status") == "read_ok" and read.get("power_profile_verified") is True
+                     and state is not None and state["power"] in ("POWER_ON", "POWER_OFF"))
         emit({"event": "preflight", "status": "ready" if ready else "blocked",
               "wind_profile_verified": read.get("wind_profile_verified") is True,
+              "power_profile_verified": read.get("power_profile_verified") is True,
               "state": state, "connection": "unknown", "post_attempted": False,
               "control_permission_verified": False, "physical_online_confirmed": False})
         if not ready:
             return 1
         if not manual:
             return 0
-        print("수동 시험 대기. LOW/AUTO는 별도 승인입니다. 명령: LOW / AUTO / GET / QUIT", flush=True)
+        commands = "set_power off / set_power on / GET / QUIT" if power_control else "LOW / AUTO / GET / QUIT"
+        print("수동 시험 대기. 각 동작은 별도 승인입니다. 명령: " + commands, flush=True)
         while host.active():
-            command = confirm("명령 (승인 전에는 LOW/AUTO 전송 없음): ").strip()
+            command = confirm("명령 (승인 전에는 POST 없음): ").strip()
+            if power_control:
+                command = {"set_power off": "POWER_OFF", "set_power on": "POWER_ON"}.get(command, command)
             if command == "QUIT":
                 return 0
             if command == "GET":
@@ -69,15 +79,15 @@ async def run_trial(host, *, manual=False, confirm=input, emit=record):
                 if reply.get("status") != "read_ok":
                     return 1
                 continue
-            if command not in ("LOW", "AUTO"):
-                print("LOW / AUTO / GET / QUIT 중 선택해 주세요.", flush=True)
+            if command not in (("POWER_ON", "POWER_OFF") if power_control else ("LOW", "AUTO")):
+                print(commands + " 중 선택해 주세요.", flush=True)
                 continue
             prepared = await host.call(key, {"op": "prepare", "value": command})
             if prepared.get("status") != "approval_required":
                 emit({"event": "approval", "value": command, "status": "blocked", "post_attempted": False})
                 return 1
-            phrase = LOW_APPROVAL if command == "LOW" else AUTO_APPROVAL
-            print("본체 온라인·전원 ON·청정 모드와 외부 조작/예약이 없음을 확인하세요. 승인 유효 시간은 30초입니다.", flush=True)
+            phrase = POWER_APPROVAL[command] if power_control else LOW_APPROVAL if command == "LOW" else AUTO_APPROVAL
+            print("본체 온라인·현재 전원 상태·외부 조작/예약 없음을 확인하세요. 승인은 30초입니다. 전원 ON은 AUTO 변경을 포함하지 않습니다.", flush=True)
             if confirm("별도 동작 승인 후 다음 문구를 정확히 입력하세요:\n" + phrase + "\n> ") != phrase:
                 emit({"event": "approval", "value": command, "status": "cancelled", "post_attempted": False})
                 return 0
@@ -97,7 +107,7 @@ async def run_trial(host, *, manual=False, confirm=input, emit=record):
                     or reply.get("state_match") is not True):
                 print("결과 불확실: 추가 POST·자동 복원 없이 종료합니다. 본체와 ThinQ 앱에서 상태를 확인하세요.", flush=True)
                 return 1
-            physical_phrase = PHYSICAL_LOW if command == "LOW" else PHYSICAL_AUTO
+            physical_phrase = f"PHYSICAL {command} CONFIRMED" if power_control else PHYSICAL_LOW if command == "LOW" else PHYSICAL_AUTO
             physical = confirm("API 상태 일치와 물리 동작은 별개입니다. 본체 표시·풍량을 직접 확인한 경우만 입력하세요:\n" + physical_phrase + "\n> ") == physical_phrase
             if not physical:
                 emit({"event": "physical_confirmation", "value": command, "confirmed": False})
@@ -108,10 +118,10 @@ async def run_trial(host, *, manual=False, confirm=input, emit=record):
                   "evidence": "user_attestation"})
             if not confirmed:
                 return 1
-            if command == "AUTO":
+            if command == "AUTO" or power_control and command == "POWER_ON":
                 emit({"event": "trial_complete", "automatic_restore": False})
                 return 0
-            print("LOW 확인 완료. AUTO 복원은 별도 승인 전까지 실행하지 않습니다. 명령 입력 대기 중입니다.", flush=True)
+            print("확인 완료. 다음 동작은 별도 승인 전까지 실행하지 않습니다.", flush=True)
         emit({"event": "session_expired", "post_enabled": False})
         return 1
     finally:
@@ -126,6 +136,7 @@ def main():
     warnings.simplefilter("error", getpass.GetPassWarning)
     parser = SafeParser(description=__doc__)
     parser.add_argument("--manual", action="store_true", help="GET preflight then individually approved LOW/AUTO")
+    parser.add_argument("--power-control", action="store_true", help="GET-only power preflight; add --manual for approved set_power on/off")
     args = parser.parse_args()
     if not sys.stdin.isatty():
         raise SystemExit("사용자의 대화형 WSL 터미널에서 직접 실행해 주세요.")
@@ -146,10 +157,10 @@ def main():
         from aiohttp import ClientSession, ClientTimeout, DummyCookieJar
         from thinqconnect.thinq_api import ThinQApi
         async with ClientSession(trust_env=False, cookie_jar=DummyCookieJar(), timeout=ClientTimeout(total=15)) as http:
-            transport = Transport(http, execute=args.manual)
+            transport = Transport(http, execute=args.manual, power_control=args.power_control)
             sdk = GuardedSdk(ThinQApi(session=transport, access_token=token, country_code="KR", client_id=client_id), transport)
-            host = HostSession(Session(sdk, {"enabled": args.manual, "backend": "live_manual" if args.manual else "live_read_only"}))
-            return await run_trial(host, manual=args.manual)
+            host = HostSession(Session(sdk, {"enabled": args.manual, "backend": "live_manual" if args.manual else "live_read_only", "power_control": args.power_control}))
+            return await run_trial(host, manual=args.manual, power_control=args.power_control)
 
     try:
         return asyncio.run(session_main())

@@ -15,14 +15,26 @@ FSM_STATES = {"IDLE", "START", "END", "CONTEXT_DETECT", "FOCUS_PC", "FOCUS_MIXED
               "FOCUS_BREAK", "FATIGUE_SUSPECT", "FATIGUE", "CAUSE_ANALYSIS", "MONITOR", "ESCALATE",
               "ACTION_ENV", "ACTION_POSTURE", "ACTION_BREAK", "REST", "RECOVERY"}
 
+# Exact active-state projection from presentation.state_envelope, verified on Pi 4.
+ACTIVE_PHASE = {
+    **dict.fromkeys(("START", "CONTEXT_DETECT"), "start"),
+    **dict.fromkeys(("FOCUS_PC", "FOCUS_MIXED", "FOCUS_NPC", "FOCUS_BREAK"), "focus"),
+    **dict.fromkeys(("FATIGUE_SUSPECT", "FATIGUE", "CAUSE_ANALYSIS", "MONITOR", "ESCALATE",
+                     "ACTION_ENV", "ACTION_POSTURE", "ACTION_BREAK"), "fatigue"),
+    **dict.fromkeys(("REST", "RECOVERY"), "recovery"),
+}
+STATE_PHASE = {"IDLE": "idle", "END": "end", **ACTIVE_PHASE}
+
 
 def finite(value):
     return type(value) in (int, float) and math.isfinite(value)
 
 
 class AirPurifierPolicy:
-    def __init__(self, config, *, clock=time.monotonic):
+    def __init__(self, config, *, clock=time.monotonic, manual_review=False):
         self.cfg = dict(config)
+        self.manual_review = manual_review
+        self.manual_approval = None
         if config.get("automatic_power") is not False:
             raise ValueError("automatic_power_must_remain_disabled")
         for key in ("presence_on_sec", "pollution_hold_sec", "pollution_max_gap_sec",
@@ -40,6 +52,10 @@ class AirPurifierPolicy:
         self.present = None
         self.session = 0
         self.active_session = False
+        self.session_open = False
+        self.session_origin = None
+        self.mqtt_connected = None
+        self.mqtt_epoch = None
         self.present_since = None
         self.off_pending = False
         self.snapshot = {}
@@ -71,38 +87,69 @@ class AirPurifierPolicy:
         now = self._now()
         # Duplicate polling cannot renew the original MQTT receipt.
         if isinstance(phase, dict):
+            connected, epoch = phase.get("mqtt_connected"), phase.get("mqtt_epoch")
+            changed = isinstance(epoch, str) and self.mqtt_epoch is not None and epoch != self.mqtt_epoch
+            if type(connected) is bool:
+                self.mqtt_connected = connected
+            if isinstance(epoch, str):
+                self.mqtt_epoch = epoch
+            if connected is False or changed:
+                self.active_session = False
+                self.present_since = None
+                self.off_pending = False
             env, age = phase.get("envelope", {}), phase.get("age_sec")
             if isinstance(env, dict):
                 data = env.get("data", {})
                 boot, seq = env.get("boot_id"), env.get("seq")
+                proof = (isinstance(data, dict) and isinstance(data.get("fsm_state"), str) and data.get("source") == "fsm"
+                         and data.get("phase") == STATE_PHASE.get(data.get("fsm_state")))
+                if self.session_origin == "attached" and not proof:
+                    self.active_session = False
+                    self.present_since = None
+                    self.off_pending = False
                 valid = (env.get("node") == "hub" and env.get("schema_version") == "1.0"
                          and isinstance(boot, str) and 0 < len(boot) <= 128
                          and type(seq) is int and seq >= 0 and isinstance(data, dict)
                          and type(data.get("present")) is bool and isinstance(data.get("fsm_state"), str)
                          and data["fsm_state"] in FSM_STATES
+                         and (not ("source" in data or "phase" in data) or proof)
+                         and connected is not False
                          and phase.get("retained") is False and finite(age)
                          and 0 <= age < self.cfg["hub_max_age_sec"])
                 if valid and boot not in self.retired_boots and (boot != self.boot or seq > self.seq):
+                    new_boot = boot != self.boot
                     if boot != self.boot or self.hub_at is None or now - self.hub_at >= self.cfg["hub_max_age_sec"]:
                         if self.boot is not None and boot != self.boot:
                             self.retired_boots.add(self.boot)
                         self.active_session = False
                         self.present_since = None
                         self.off_pending = False
-                        self.pending = None
-                        self.state = None
+                        if new_boot:
+                            self.session_open = False
+                            self.state = None
                     previous = self.state
                     self.boot, self.seq, self.hub_at = boot, seq, now - age
                     self.state, self.present = data["fsm_state"], data["present"]
-                    if self.state == "START" and previous != "START" and not self.active_session:
-                        self.session += 1
+                    if self.state == "START" and not self.active_session:
+                        if previous != "START" or not self.session_open:
+                            self.session += 1
+                            self.seen.clear()
+                            self.result = None
                         self.active_session = True
+                        self.session_open = True
+                        self.session_origin = "start_observed"
                         self.off_pending = False
-                        self.seen.clear()
-                        self.result = None
+                    if (not self.active_session and data.get("source") == "fsm"
+                            and self.state in ACTIVE_PHASE and data.get("phase") == ACTIVE_PHASE[self.state]):
+                        if not self.session_open:
+                            self.session += 1
+                            self.seen.clear()
+                            self.result = None
+                        self.session_open = self.active_session = True
+                        self.session_origin = "attached"
                     if self.active_session and self.present:
                         if self.present_since is None:
-                            self.present_since = self.hub_at
+                            self.present_since = now
                     else:
                         self.present_since = None
                     if self.state in ("IDLE", "END") and previous != self.state:
@@ -110,12 +157,14 @@ class AirPurifierPolicy:
                                             and self.state == "IDLE" and not self.present
                                             and isinstance(data.get("reasons"), list) and "absent_timeout" in data["reasons"])
                         self.active_session = False
+                        self.session_open = False
+                        self.session_origin = None
                         self.present_since = None
         self.snapshot = copy.deepcopy(snapshot) if isinstance(snapshot, dict) else {}
         self.snapshot_at = now
         age, receipt, expiry = (self.snapshot.get(k) for k in ("api_age_sec", "received_at", "expires_at"))
         ready = (self.snapshot.get("api_status") == "ok" and self.snapshot.get("receipt_stale") is False
-                 and self.snapshot.get("connection") == "online" and all(finite(v) for v in (age, receipt, expiry))
+                 and self._connection_reviewable() and all(finite(v) for v in (age, receipt, expiry))
                  and 0 <= age < expiry - receipt)
         if not ready:
             self.bad_since, self.bad_reads, self.last_bad_at = None, 0, None
@@ -143,6 +192,9 @@ class AirPurifierPolicy:
     def _candidate(self, now):
         if self.clock_invalid:
             return None, "clock_regressed"
+        if self.mqtt_connected is False:
+            self.present_since = None
+            return None, "hub_disconnected"
         if self.hub_at is None or now - self.hub_at >= self.cfg["hub_max_age_sec"]:
             self.present_since = None
             return None, "hub_missing_or_stale"
@@ -153,7 +205,7 @@ class AirPurifierPolicy:
         if (s.get("api_status") != "ok" or s.get("receipt_stale") is not False
                 or not all(finite(v) for v in (age, received, expiry)) or not 0 <= age < expiry - received):
             return None, "thinq_missing_or_stale"
-        if s.get("connection") != "online":
+        if not self._connection_reviewable():
             return None, "connection_unconfirmed"
         if now < self.manual_until:
             return None, "manual_override"
@@ -196,18 +248,38 @@ class AirPurifierPolicy:
             k: self.pending[k] for k in ("proposal_id", "operation", "value", "reason")}
         return {"version": "1.1", "execution": "mock_only", "post_enabled": False,
                 "automatic_power": False, "present": self.present, "fsm_state": self.state,
+                "session_active": bool(self.active_session and self.mqtt_connected is not False and self.hub_at is not None
+                                       and 0 <= now - self.hub_at < self.cfg["hub_max_age_sec"]),
+                "session_origin": self.session_origin,
+                "presence_elapsed_sec": max(0, now - self.present_since) if self.present_since is not None else 0,
+                "presence_required_sec": self.cfg["presence_on_sec"],
                 "pollution_level": self._field("total_pollution_level"),
                 "reason": candidate[2] if candidate else reason, "proposal": proposal,
                 "result": copy.deepcopy(self.result), "persistence_basis": "api_reports_not_sensor_measurements"}
 
-    def respond(self, proposal_id, decision):
+    def _connection_reviewable(self):
+        # Unknown permits a human-review candidate only; never assert online.
+        return self.snapshot.get("connection") == "online" or (
+            self.manual_review and self.snapshot.get("connection") == "unknown")
+
+    def manual_valid(self, proposal_id):
+        p = self.manual_approval
+        now = self._now()
+        candidate, _ = self._candidate(now)
+        return bool(p and p["proposal_id"] == proposal_id and now < p["deadline"]
+                    and candidate and (self.session, *candidate[:2]) == p["key"])
+
+    def respond(self, proposal_id, decision, *, manual=False):
         view = self.view()  # Recheck freshness, identity, state, manual hold and expiry.
         if decision not in ("accept", "reject") or not view["proposal"] or view["proposal"]["proposal_id"] != proposal_id:
             raise ValueError("proposal_expired_or_invalid")
         p = self.pending
+        if manual and not self.manual_review:
+            raise ValueError("manual_review_disabled")
+        self.manual_approval = copy.deepcopy(p) if manual and decision == "accept" else None
         self.seen.add(p["key"])
         self.pending = None
-        self.result = {"proposal_id": proposal_id, "status": "mock_succeeded" if decision == "accept" else "rejected",
+        self.result = {"proposal_id": proposal_id, "status": ("awaiting_manual_approval" if manual else "mock_succeeded") if decision == "accept" else "rejected",
                        "operation": p["operation"], "value": p["value"], "actual_value": None,
                        "state_confirmed": False, "transport_performed": False, "post_enabled": False}
         return self.view()
