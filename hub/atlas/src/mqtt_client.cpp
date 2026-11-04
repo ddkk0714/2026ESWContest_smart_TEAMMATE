@@ -153,6 +153,11 @@ bool parsePublish(const Packet& packet, IncomingPublish& out)
     return true;
 }
 
+bool forwardObservation(const Packet& packet, const IncomingPublish& message)
+{
+    return !((packet.flags & 0x01) && message.topic.rfind("deskmate/sensor/appliance/", 0) == 0);
+}
+
 }  // namespace mqtt_codec
 
 // ---------------------------------------------------------------------------------------------------------
@@ -386,7 +391,8 @@ void MqttClient::session(int fd)
                             fatal = true;
                             break;
                         }
-                        if (on_message_) on_message_(message.topic, message.payload);
+                        if (mqtt_codec::forwardObservation(packet, message) && on_message_)
+                            on_message_(message.topic, message.payload);
                     }
                     break;
                 }
