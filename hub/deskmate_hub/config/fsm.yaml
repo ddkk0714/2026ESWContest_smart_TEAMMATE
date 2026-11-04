@@ -56,17 +56,9 @@ timers:
 demo_fast:
   enabled: false
   max_on_sec: 1800                 # 켜 둔 채 잊어도 30 분 뒤 normal 로
-  period_sec: 5                    # 11-03 사용자 "판정 주기 5초로" — 결선 대본 8분. 운영 score_period_sec 10 은 그대로
   timers:
     fatigue_elevated_hold_sec: 0   # 0 = 이번 tick 이 임계 위면 바로 의심(엔진 _hold_ok·_held 가 같은 뜻으로 본다)
     fatigue_confirm_hold_sec: 0    # 0 = 의심 다음 tick 에 임계 위면 바로 확정
-    monitor_window_sec: 20         # 11-03 결선 대본(8분): 깨운 뒤 지켜보는 시간. demo-b 60 이면 깨우기 한 번에 150 s 가 걸린다
-  # 11-03 결선 대본: 배속에서는 뒤로 젖히기·거북목·턱 괴기도 개입까지 간다(점수 0.80 = 확정 0.60 위). 어떤 개입인지는
-  # control.yaml demo_wake(깨우기 = 도움 순서, 거북목·턱 괴기 = 바른 자세 안내)가 정한다. normal 로 돌아가면 ingest 값으로 되돌린다.
-  posture_delta:
-    recline: 1.0                   # ingest 기본 0.6
-    forward_head: 1.0              # ingest 기본 0.2
-    chin_rest: 1.0                 # ingest 기본 0.6
 
 # 개입 라우팅 그룹 (dominant = argmax(wᵢ·δᵢ))
 routing:
