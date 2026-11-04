@@ -70,7 +70,9 @@ def test_parse_service_state_keeps_contract_fields_only():
     assert d["online_sensors"] == 2 and d["baseline_ready"] is True and d["source"] == "service"
     assert d["model"] == {"file": "models/opt_l8_c256/posture_net.bin", "classes": 9, "rate_hz": 10,
                           "fusion": "logsoftmax_sum"}
-    assert [s["name"] for s in d["sensors"]] == ["s0", "s1"] and "probs" not in d["sensors"][0]
+    assert [s["name"] for s in d["sensors"]] == ["s0", "s1"]
+    # 11-03: 센서별 probs 는 남긴다 — 사람별 자세 보정(posture_calib.py)의 입력
+    assert all(set(s.get("probs") or SERVICE_LABELS) == set(SERVICE_LABELS) for s in d["sensors"])
     assert "instant" not in d and "ticks" not in d           # 원본 전부를 싣지 않는다
     assert set(d["probs"]) == set(SERVICE_LABELS)
 

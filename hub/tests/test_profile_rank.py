@@ -84,3 +84,46 @@ def test_repeated_rejection_overrides_first_rank():
         p.feedback(d, "reject")
     assert arms[0] == "sound_cue" and arms[-1] != "sound_cue", arms
     assert len(arms) - 1 <= 3, arms                 # 거절 세 번 안에 바뀐다(시연 중 확인 가능한 횟수)
+
+
+def test_personalize_off_env_switch(tmp_path, monkeypatch):
+    """11-02 "지금은 개인화 하지 말아봐" — DESKMATE_PERSONALIZE=off 면 정책·반응 학습 없이 기록만."""
+    import io
+
+    from deskmate_hub.ingest import SensorCache
+    from deskmate_hub.live import LiveHub
+    from deskmate_hub.personalize import load_personalize_config
+
+    monkeypatch.setenv("DESKMATE_PERSONALIZE", "off")
+    pcfg = dict(load_personalize_config(), enabled=True, log_dir=str(tmp_path))
+    out = io.StringIO()
+    hub = LiveHub(SensorCache(), out=out, personalize_cfg=pcfg, personalize_log_path=str(tmp_path / "p.jsonl"))
+    assert hub.personalize_recorder is not None and hub.personalize_recorder.policy is None
+    assert hub.learner is None
+    assert "DESKMATE_PERSONALIZE=off" in out.getvalue()
+    monkeypatch.delenv("DESKMATE_PERSONALIZE")
+    hub2 = LiveHub(SensorCache(), out=io.StringIO(), personalize_cfg=pcfg,
+                   personalize_log_path=str(tmp_path / "p2.jsonl"))
+    assert hub2.personalize_recorder.policy is not None
+
+
+def test_personalize_switch_at_runtime(tmp_path, monkeypatch):
+    """devview 버튼(feedback/user kind personalize_switch) — 재시작 없이 켜고 끈다."""
+    import io
+
+    from deskmate_hub.ingest import SensorCache
+    from deskmate_hub.live import LiveHub
+    from deskmate_hub.personalize import load_personalize_config
+
+    monkeypatch.setenv("DESKMATE_PERSONALIZE", "off")
+    pcfg = dict(load_personalize_config(), enabled=True, log_dir=str(tmp_path))
+    cache = SensorCache()
+    hub = LiveHub(cache, out=io.StringIO(), personalize_cfg=pcfg, personalize_log_path=str(tmp_path / "p.jsonl"))
+    assert hub.personalize_recorder.policy is None
+    cache.put_feedback({"kind": "personalize_switch", "on": True})
+    hub.tick_once(1000.0)
+    assert hub.personalize_recorder.policy is not None and not hub.personalize_off
+    assert hub.engine.score_adjust is not None or not hub._learning_on_cfg
+    cache.put_feedback({"kind": "personalize_switch", "on": False})
+    hub.tick_once(1010.0)
+    assert hub.personalize_recorder.policy is None and hub.learner is None and hub.engine.score_adjust is None

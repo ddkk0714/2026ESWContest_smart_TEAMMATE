@@ -284,12 +284,33 @@ def _mmwave_at_desk(mm: Sample, pcfg: dict[str, Any]) -> bool | None:
     return float(dist) <= float(desk_max)
 
 
-def resolve_presence(mm: Sample | None, tof: Sample | None, cfg: dict[str, Any]) -> tuple[bool, str]:
+def typed_recently(view: CacheView, now: float, sec: float) -> bool:
+    """최근 sec 초 안에 키를 쳤는가 — event_count(60 s 창 타건 수)가 이전 표본보다 늘어난 표본이 그 안에 있으면. input_active 는
+    60 s 창이라 자리를 뜬 뒤에도 1 분 참이어서 쓰지 않는다."""
+    prev = None
+    for t in view.keystroke_history:
+        if prev is not None and t.keys is not None and prev.keys is not None and t.keys > prev.keys                 and now - t.received <= sec:
+            return True
+        prev = t
+    return False
+
+
+def resolve_presence(mm: Sample | None, tof: Sample | None, cfg: dict[str, Any], *,
+                     typing: bool = False) -> tuple[bool, str]:
     """(책상 재실, 근거). `presence.source: mmwave`(기본)면 신선한 mmWave 가 정한다 — 없음 → 부재, 있음 + 거리 ≤
     desk_max_cm → 재실(엎드려 ToF 가 놓쳐도), 있음 + 더 멀다 → 부재(ToF 가 빈 의자를 사람으로 봐도). 거리가 없거나
     mmWave 가 끊겼을 때만 ToF present 로 대신한다. `either` 면 둘 중 하나라도 보면 재실(10-22 까지).
     근거: mmwave | mmwave_room(방엔 있음·책상 빔) | tof | either | none."""
     pcfg = cfg.get("presence") or {}
+    present, source = _resolve_presence(mm, tof, pcfg)
+    # 11-02 실기: 턱 괴고 타이핑하는데 ToF 아랫줄이 비어(빈 의자) 시연 설정(tof_away_mm_min_cm 0)에서 부재로 봤다.
+    # 이 책상 PC 에서 방금 키를 쳤으면 자리에 있다.
+    if not present and typing:
+        return True, "keystroke"
+    return present, source
+
+
+def _resolve_presence(mm: Sample | None, tof: Sample | None, pcfg: dict[str, Any]) -> tuple[bool, str]:
     mm_present = bool(mm.data.get("present", False)) if mm else False
     tof_present = bool(tof.data.get("present", False)) if tof else False
     if str(pcfg.get("source", "mmwave")) == "either":
@@ -442,8 +463,9 @@ def build_frame(
 
     mm_present = bool(mm.data.get("present", False)) if mm else False
     tof_present = bool(tof.data.get("present", False)) if tof else False
-    present, _ = resolve_presence(mm, tof, cfg)
     pcfg = cfg.get("presence") or {}
+    present, _ = resolve_presence(mm, tof, cfg, typing=typed_recently(
+        view, now, float(pcfg.get("keystroke_keeps_present_sec", 0) or 0)))
     # mmWave 가 책상에 사람이 없다고 하면 ToF 가 무엇을 보든 자세로 쓰지 않는다(빈 의자·지나가는 사람·방 안 다른 자리)
     tof_gated = bool(pcfg.get("gate_posture", True)) and _usable_mmwave(mm) is not None and not present
     signals: dict[str, Signal] = {}
@@ -606,7 +628,8 @@ def sensor_summary(view: CacheView, now: float, cfg: dict[str, Any],
     mm = view.fresh("mmwave", now, fresh["mmwave"])
     if mm or tof:
         # 재실은 build_frame 과 같은 규칙(presence.source) — 화면 배지와 FSM 이 다른 말을 하지 않게
-        out["present"], out["presence_source"] = resolve_presence(mm, tof, cfg)
+        out["present"], out["presence_source"] = resolve_presence(mm, tof, cfg, typing=typed_recently(
+            view, now, float((cfg.get("presence") or {}).get("keystroke_keeps_present_sec", 0) or 0)))
         if mm:
             out["in_room"] = bool(mm.data.get("present", False))       # 책상은 비어도 방엔 있음(화면 표시용)
     if mm:

@@ -47,7 +47,8 @@ personalize:
     conf_auto: 0.60                 # 시연 전용 — PC 리허설 10-24 근거. 기본 0.75. FSM gate.conf_auto 와 같은 값으로 맞춘 것 — 다르면 정책이 FSM 자동을 제안(personalize:ask)으로 낮춰 무드등이 자동으로 안 켜진다
 ingest:
   presence:                         # 11-02 시연 전용 — ToF 가 빈 의자(away_forced)면 mmWave 거리와 상관없이 부재.
-    tof_away_mm_min_cm: 0           # 기본 90(mmWave 가 90 cm 안이면 재실 유지). C1001 은 떠난 뒤에도 30~60 s 재실을 붙든다
+    tof_away_mm_min_cm: 60          # 기본 90. C1001 은 떠난 뒤에도 30~60 s 재실을 붙든다 — 처음엔 0 이었으나 16:32·16:38 턱 괴기
+                                    # (ToF 아랫줄 빔)를 부재로 봐서 앉은 거리(47~60 cm) 안이면 재실 유지. 타이핑은 keystroke 가 지킨다
   tof:
     # 10-25 PC 시뮬: 자세 몫 0.80 에서 ESP32 0x03 규칙 졸음 플래그·끄덕임(δ 1.0)이 깨어 있는 사람(턱 괴기·타이핑)에게 무드등을
     # 헛켰다(턱 괴기 600 s 플래그 49/60 tick → C 0.81). posture_source: service 라 자세 모델 라벨(face_down·drowsy)은 그대로 1.0,

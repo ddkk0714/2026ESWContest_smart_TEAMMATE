@@ -178,6 +178,8 @@ onboarding:                     # 첫 설정 → 기준(prior). 입력 = deskmat
     sleep_short: {note_ko: "수면 부족 → 휴식 먼저",
                   prior: {break_short: {accept: {bias: 0.2}}, break_long: {accept: {bias: 0.2}}}}
 
+misjudge:                       # 11-02 "오판" 표시(PC devview 버튼 → feedback/user kind misjudge) — 판정이 틀려 나간 개입은 학습하지 않는다
+  window_sec: 600               # 표시 시각에서 이만큼 안에 열린 가장 최근 개입(아직 안 닫힌 것)을 뺀다
 implicit:                       # "무드등을 밝혔는데 사용자가 다시 어둡게 하면 밝음을 싫어하는 것" — 밝힘 뒤 직접 어둡게 함 = 음의 보상
   enabled: true
   lamp_target: desk_lamp        # 추적하는 기기
