@@ -82,6 +82,7 @@ class Pr56WorkspaceView extends StatelessWidget {
               feedback: session.feedback,
               store: session.store,
               now: () => model.now,
+              profileId: model.persona.profileId,
               onReturnToClock: () =>
                   model.show(model.active ? DemoPage.details : DemoPage.home),
               onExit: onExit,

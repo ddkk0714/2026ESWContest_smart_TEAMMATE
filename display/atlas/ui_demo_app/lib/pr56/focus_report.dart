@@ -5,11 +5,15 @@ class FocusReport {
       {required this.startedAt,
       required this.endedAt,
       required this.timerSeconds,
-      required this.demo});
+      required this.demo,
+      this.profileId});
   final DateTime startedAt;
   final DateTime endedAt;
   final int timerSeconds;
   final bool demo;
+
+  /// 누구의 집중인가(DemoModel 프로필 id). 프로필마다 기록을 따로 보여 준다. 예전 기록은 null.
+  final String? profileId;
   int? get focusedSeconds => demo ? (timerSeconds * .84).round() : null;
   int? get posturePercent => demo ? 78 : null;
   Map<String, Object> toJson() => {
@@ -17,7 +21,15 @@ class FocusReport {
         'endedAt': endedAt.toIso8601String(),
         'timerSeconds': timerSeconds,
         'demo': demo,
+        if (profileId != null) 'profileId': profileId!,
       };
+
+  FocusReport withProfile(String id) => FocusReport(
+      startedAt: startedAt,
+      endedAt: endedAt,
+      timerSeconds: timerSeconds,
+      demo: demo,
+      profileId: id);
   static FocusReport? parse(Object? raw) {
     if (raw is! Map) return null;
     final start = DateTime.tryParse('${raw['startedAt']}');
@@ -36,7 +48,8 @@ class FocusReport {
         startedAt: start,
         endedAt: end,
         timerSeconds: seconds,
-        demo: raw['demo']);
+        demo: raw['demo'],
+        profileId: raw['profileId'] is String ? raw['profileId'] : null);
   }
 }
 

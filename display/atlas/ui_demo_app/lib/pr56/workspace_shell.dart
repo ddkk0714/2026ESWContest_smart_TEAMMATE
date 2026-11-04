@@ -46,6 +46,7 @@ class DeskmateWorkspace extends StatefulWidget {
       this.onPreferences,
       this.store,
       this.now,
+      this.profileId,
       this.deviceStatus = const {}});
   final DisplayState? state;
 
@@ -67,6 +68,9 @@ class DeskmateWorkspace extends StatefulWidget {
   final VoidCallback? onPreferences;
   final WorkspaceStore? store;
   final DateTime Function()? now;
+
+  /// 지금 프로필 id. 집중 기록을 이 프로필 것만 보여 주고, 새 기록에 붙인다. null 이면 구분하지 않는다.
+  final String? profileId;
   @override
   State<DeskmateWorkspace> createState() => _WorkspaceState();
 }
@@ -148,6 +152,15 @@ class _WorkspaceState extends State<DeskmateWorkspace> {
     super.initState();
     _store = widget.store ?? WorkspaceStore();
     _prefs = _store.load();
+    // 프로필 id 가 없던 예전 집중 기록은 처음 연 프로필 것으로 둔다.
+    final owner = widget.profileId;
+    if (owner != null && _prefs.focusReports.any((r) => r.profileId == null)) {
+      _prefs.focusReports = [
+        for (final r in _prefs.focusReports)
+          r.profileId == null ? r.withProfile(owner) : r
+      ];
+      _store.save(_prefs);
+    }
     _now = _clockNow;
     _focusStartedAt = _now;
     _tools = DeskClockController(
@@ -200,7 +213,8 @@ class _WorkspaceState extends State<DeskmateWorkspace> {
                 startedAt: _focusStartedAt,
                 endedAt: _focusEnd!,
                 timerSeconds: _focusMinutes * 60,
-                demo: widget.demo);
+                demo: widget.demo,
+                profileId: widget.profileId);
             _prefs.focusReports.insert(0, report);
             if (_prefs.focusReports.length > 200) {
               _prefs.focusReports.removeLast();
@@ -1243,7 +1257,11 @@ class _WorkspaceState extends State<DeskmateWorkspace> {
     if (minutes != null && mounted) _applyFocus(minutes);
   }
 
-  List<FocusReport> _reportsFor(DateTime day, bool demo) => _prefs.focusReports
+  /// 지금 프로필의 집중 기록만.
+  Iterable<FocusReport> get _myReports => _prefs.focusReports.where(
+      (r) => widget.profileId == null || r.profileId == widget.profileId);
+
+  List<FocusReport> _reportsFor(DateTime day, bool demo) => _myReports
       .where((r) => sameFocusDay(r.endedAt, day) && r.demo == demo)
       .toList();
   List<FocusReport> get _todayFocus => _reportsFor(_now, widget.demo);
@@ -1263,7 +1281,7 @@ class _WorkspaceState extends State<DeskmateWorkspace> {
   }
 
   Future<void> _showFocusHistory({DateTime? day}) async {
-    final records = _prefs.focusReports
+    final records = _myReports
         .where((r) =>
             r.demo == widget.demo &&
             (day == null || sameFocusDay(r.endedAt, day)))

@@ -67,6 +67,17 @@ class LiveReport {
       interventions: (counts['total'] as num?)?.round(),
     );
   }
+
+  /// [start] 이후 늘어난 만큼. 값이 줄었으면 hub 가 다시 켜진 것이라 지금 값을 그대로 쓴다.
+  LiveReport since(LiveReport? start) {
+    int? delta(int? now, int? before) =>
+        now == null || before == null || now < before ? now : now - before;
+    return LiveReport(
+      durationS: delta(durationS, start?.durationS),
+      fatigueEpisodes: delta(fatigueEpisodes, start?.fatigueEpisodes),
+      interventions: delta(interventions, start?.interventions),
+    );
+  }
 }
 
 class LiveLink extends ChangeNotifier {
@@ -159,6 +170,13 @@ class LiveLink extends ChangeNotifier {
   final autoActions = AutoActionBoard();
   LiveWeather? weather;
   LiveReport? report;
+  LiveReport? _reportStart;
+
+  /// hub 리포트는 hub 가 켜진 뒤로 계속 쌓인다. 집중 시작·프로필 전환 때 기준점을 잡는다.
+  void markReportStart() => _reportStart = report;
+
+  /// 기준점 이후에 늘어난 만큼만(이번 집중의 리포트).
+  LiveReport? get sessionReport => report?.since(_reportStart);
 
   /// `deskmate/health/hub` status(online|offline). 못 받았으면 null.
   String? hubHealth;

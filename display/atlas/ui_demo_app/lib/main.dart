@@ -192,6 +192,7 @@ class _DemoAppState extends State<DemoApp> {
         widget.tools?.setPlacement(persona.placement);
       };
       model.onPlacement = live.sendPlacement;
+      model.onReportReset = live.markReportStart;
       // V34: devview 가 같은 사람 프로필을 고치면 여기에도 남긴다.
       live.onRemoteProfile = (data) => syncRemoteProfile(model, live, data,
           onPlacement: widget.tools?.setPlacement);
@@ -918,7 +919,7 @@ class _DemoShellState extends State<DemoShell> {
 
   /// 리포트의 피로 횟수. 보드 리포트가 있으면 그 값(hub 기준), 없으면 화면이 센 값.
   int? get _fatigueCount =>
-      widget.live?.report?.fatigueEpisodes ??
+      widget.live?.sessionReport?.fatigueEpisodes ??
       (m.sessionObserved || m.presentationEnabled ? m.fatigueEvents : null);
 
   /// 마무리 카드의 기기 상태. 보드가 알려 준 상태가 있으면 그것, 없으면 기존 'OFF'.
@@ -1024,7 +1025,7 @@ class _DemoShellState extends State<DemoShell> {
                         style: const TextStyle(fontSize: 27)),
                     const SizedBox(height: 7),
                     Text(
-                        '${_deviceAfter('vent_fan', '선풍기')} · ${widget.live?.report?.interventions == null ? '조정 기록 없음' : '조정 ${widget.live!.report!.interventions}회'}',
+                        '${_deviceAfter('vent_fan', '선풍기')} · ${widget.live?.sessionReport?.interventions == null ? '조정 기록 없음' : '조정 ${widget.live!.sessionReport!.interventions}회'}',
                         style: const TextStyle(color: muted, fontSize: 13)),
                   ]))),
             ])),
