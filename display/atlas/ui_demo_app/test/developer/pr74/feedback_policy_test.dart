@@ -77,25 +77,18 @@ void main() {
     expect(bluetooth.frames, isEmpty);
   });
 
-  test(
-      'music failure leaves successful light feedback intact and retries sound',
-      () async {
+  test('fatigue phase leaves the lamp and music to hub commands', () async {
+    // 11-04 결선 대본 점검: 앱이 따로 국면 조명·음악을 켜면 사람마다 다른 도움이 섞인다
     final bluetooth = _FakeBluetooth();
-    final music = _FakeMusic()..toggleFails = true;
+    final music = _FakeMusic();
     final coordinator = FeedbackCoordinator(
         music: music,
         lamp: IlinkLampFeedback(bluetooth)..select(firstAddress),
         bluetooth: bluetooth)
       ..enabled = true;
-    final state = _state('ACTION_POSTURE', gate: 'auto');
-    await coordinator.apply(state);
-    expect(coordinator.lastAudioError, isA<StateError>());
-    expect(bluetooth.frames, hasLength(3));
-    music.toggleFails = false;
-    await coordinator.apply(state);
-    expect(music.isPlaying, isTrue);
-    expect(coordinator.lastAudioError, isNull);
-    expect(bluetooth.frames, hasLength(3));
+    await coordinator.apply(_state('ACTION_POSTURE', gate: 'auto'));
+    expect(bluetooth.writeCount, 0);
+    expect(music.isPlaying, isFalse);
   });
 
   for (final fsm in ['FATIGUE_SUSPECT', 'ACTION_ENV']) {
@@ -128,29 +121,7 @@ void main() {
     expect(bluetooth.writeCount, 2 + ilinkFramesForPhase('focus').length);
   });
 
-  test(
-      'accepted local suggestion retries failed writes until it leaves the action',
-      () async {
-    final bluetooth = _FakeBluetooth()..writeFailuresRemaining = 2;
-    final coordinator = FeedbackCoordinator(
-        music: _FakeMusic(),
-        lamp: IlinkLampFeedback(bluetooth)..select(firstAddress),
-        bluetooth: bluetooth)
-      ..enabled = true;
-    final suggestion = _state('ACTION_POSTURE', gate: 'suggest');
-    await coordinator.apply(suggestion);
-    await coordinator.accept(suggestion);
-    expect(coordinator.lamp.connected, isFalse);
-    await coordinator.apply(suggestion);
-    expect(coordinator.lamp.connected, isTrue);
-    final count = bluetooth.writeCount;
-    await coordinator.apply(_state('MONITOR'));
-    await coordinator.apply(suggestion);
-    expect(bluetooth.writeCount, count,
-        reason: 'A later suggestion requires a new acceptance');
-  });
-
-  test('acceptance and auto actions run once even within the fatigue phase',
+  test('accepting a fatigue suggestion writes nothing locally (the hub sends commands)',
       () async {
     final bluetooth = _FakeBluetooth();
     final music = _FakeMusic();
@@ -159,17 +130,73 @@ void main() {
         lamp: IlinkLampFeedback(bluetooth)..select(firstAddress),
         bluetooth: bluetooth)
       ..enabled = true;
-    final suggestion = _state('ACTION_BREAK', gate: 'suggest');
-    await coordinator.apply(_state('FATIGUE_SUSPECT'));
+    final suggestion = _state('ACTION_POSTURE', gate: 'suggest');
     await coordinator.apply(suggestion);
-    expect(bluetooth.writeCount, 0);
     await coordinator.accept(suggestion);
-    expect(bluetooth.writeCount, 3);
-    expect(music.isPlaying, isTrue);
+    expect(bluetooth.writeCount, 0);
+    expect(music.isPlaying, isFalse);
+  });
+
+  test('recovery still stops music the hub started during fatigue', () async {
+    final bluetooth = _FakeBluetooth();
+    final music = _FakeMusic();
+    final coordinator = FeedbackCoordinator(
+        music: music,
+        lamp: IlinkLampFeedback(bluetooth)..select(firstAddress),
+        bluetooth: bluetooth)
+      ..enabled = true;
     await coordinator.apply(_state('ACTION_BREAK', gate: 'auto'));
-    expect(bluetooth.writeCount, 3);
+    await music.toggle(); // hub set_music on 으로 켜진 셈
     await coordinator.apply(_state('RECOVERY', phase: 'recovery'));
     expect(music.isPlaying, isFalse);
+  });
+
+  test('hub lamp command in fatigue uses the person fatigue color, no music',
+      () async {
+    final bluetooth = _FakeBluetooth();
+    final music = _FakeMusic();
+    final coordinator = FeedbackCoordinator(
+        music: music,
+        lamp: IlinkLampFeedback(bluetooth)..select(firstAddress),
+        bluetooth: bluetooth)
+      ..enabled = true
+      ..setFatigueColor(0); // 따뜻하게
+    await coordinator.apply(_state('ACTION_POSTURE', gate: 'auto'));
+    expect((await coordinator.handleControlCommand(_command('warm')))?['status'],
+        'succeeded');
+    expect(bluetooth.frames.last, ilinkFrame([3, 8, 2, 255, 120, 40]));
+    expect(music.isPlaying, isFalse);
+    // 다른 사람(시원하게)으로 바뀌면 그 색
+    coordinator.setFatigueColor(1);
+    await coordinator.handleControlCommand(_command('cool'));
+    expect(bluetooth.frames.last, ilinkFrame([3, 8, 2, 170, 205, 255]));
+    // 되돌리기는 색을 칠하지 않는다
+    final before = bluetooth.writeCount;
+    await coordinator.handleControlCommand(
+        {..._command('undo'), 'gate': 'undo', 'value': 40});
+    expect(bluetooth.writeCount - before, 2);
+    expect(bluetooth.frames.last, ilinkFrame([1, 8, 1, 40]));
+  });
+
+  test('fatigue color is not added outside the fatigue phase', () async {
+    final bluetooth = _FakeBluetooth();
+    final coordinator = FeedbackCoordinator(
+        music: _FakeMusic(),
+        lamp: IlinkLampFeedback(bluetooth)..select(firstAddress),
+        bluetooth: bluetooth)
+      ..enabled = true
+      ..setFatigueColor(0);
+    await coordinator.apply(_state('FOCUS_PC', phase: 'focus'));
+    final before = bluetooth.writeCount;
+    await coordinator.handleControlCommand(_command('focus'));
+    expect(bluetooth.writeCount - before, 2);
+  });
+
+  test('warmth maps from warm orange through white to cool blue', () {
+    expect(ilinkRgbForWarmth(0), [255, 120, 40]);
+    expect(ilinkRgbForWarmth(.5), [255, 230, 200]);
+    expect(ilinkRgbForWarmth(1), [170, 205, 255]);
+    expect(ilinkRgbForWarmth(double.nan), [255, 230, 200]);
   });
 
   test(
@@ -929,10 +956,10 @@ void main() {
       final suggestion = _state('ACTION_POSTURE', gate: 'suggest');
       await c.apply(suggestion); // 제안만 — 아직 아무것도 안 켠다
       await c.handleControlCommand(musicCommand('off', {'on': false}));
-      // 수락하면 앱이 졸음 음악을 켜던 자리(기존 동작)지만, 이 국면엔 hub 가 끄라고 했다
+      // 피로 단계에선 앱이 따로 음악·램프를 켜지 않는다(11-04) — hub 가 끄라고 한 상태 그대로
       await c.accept(suggestion);
       expect(music.isPlaying, isFalse);
-      expect(bluetooth.writeCount, greaterThan(0)); // 램프는 그대로 실행
+      expect(bluetooth.writeCount, 0);
     });
   });
 

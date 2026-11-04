@@ -190,6 +190,7 @@ class _DemoAppState extends State<DemoApp> {
       model.onProfileChanged = (persona) {
         live.publishProfile(persona);
         widget.tools?.setPlacement(persona.placement);
+        widget.tools?.setFatigueColor(persona.preferences.fatigueWarmth);
       };
       model.onPlacement = live.sendPlacement;
       // V34: devview 가 같은 사람 프로필을 고치면 여기에도 남긴다.
@@ -197,6 +198,7 @@ class _DemoAppState extends State<DemoApp> {
           onPlacement: widget.tools?.setPlacement);
       live.publishProfile(model.persona);
       widget.tools?.setPlacement(model.persona.placement);
+      widget.tools?.setFatigueColor(model.persona.preferences.fatigueWarmth);
     }
     if (widget.ticking) {
       timer = Timer.periodic(const Duration(seconds: 1), (_) {
