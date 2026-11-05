@@ -241,6 +241,12 @@ void main() {
     await tester
         .pumpWidget(DemoApp(model: m, ticking: false, onExit: () => exits++));
     await tester.pumpAndSettle();
+    // V57: 종료 버튼은 X 가 아니라 전원 아이콘
+    expect(
+        find.descendant(
+            of: find.byTooltip('앱 종료'),
+            matching: find.byIcon(Icons.power_settings_new_rounded)),
+        findsOneWidget);
     await tester.tap(find.byTooltip('앱 종료'));
     expect(exits, 1);
     m.start();

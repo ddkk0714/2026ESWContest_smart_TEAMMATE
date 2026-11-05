@@ -156,6 +156,9 @@ class DemoModel extends ChangeNotifier {
   /// 리포트를 새로 세기 시작할 때(집중 시작·프로필 전환). 보드 리포트의 기준점을 잡는다.
   VoidCallback? onReportReset;
 
+  /// V57: 작업(집중)이 시작되거나 끝날 때. 끝나면 앱이 틀던 음악을 멈춘다.
+  void Function(bool active)? onSessionChanged;
+
   /// 장치 위치를 보드에 보낸다. 화면에 잠깐 보일 한 줄을 돌려준다(보낼 곳이 없으면 null).
   Future<String?> Function(String placement)? onPlacement;
 
@@ -330,6 +333,7 @@ class DemoModel extends ChangeNotifier {
   void start({bool automatic = false}) {
     if (active) return;
     active = true;
+    onSessionChanged?.call(true);
     liveSession = liveDriven;
     sessionObserved = liveDriven;
     resting = false;
@@ -426,6 +430,7 @@ class DemoModel extends ChangeNotifier {
   void finish() {
     if (!active) return;
     active = false;
+    onSessionChanged?.call(false);
     liveSession = false;
     resting = false;
     scenario = false;
@@ -538,6 +543,12 @@ class DemoModel extends ChangeNotifier {
     final enteredFocus = focus &&
         (previous == null || !previous.startsWith('FOCUS_') || _missedFocus);
     if (!active) {
+      // V57: 작업을 끝내고 리포트를 보는 동안에는 hub 가 다시 집중해도(피로 → 집중 등) 작업 화면으로 가지 않고
+      // 시작 제안도 띄우지 않는다. 홈으로 나간 뒤 hub 가 새로 집중에 들어오면 그때 시작한다.
+      if (page == DemoPage.report) {
+        notifyListeners();
+        return;
+      }
       if (enteredFocus && preferencesOpen) _missedFocus = true;
       if (enteredFocus && !preferencesOpen) {
         _missedFocus = false;

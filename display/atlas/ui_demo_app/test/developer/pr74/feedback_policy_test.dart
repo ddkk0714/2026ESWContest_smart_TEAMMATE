@@ -178,6 +178,28 @@ void main() {
     expect(bluetooth.frames.last, ilinkFrame([1, 8, 1, 40]));
   });
 
+  test('V57: focus and recovery lamp colors follow the person warmth',
+      () async {
+    final bluetooth = _FakeBluetooth();
+    final coordinator = FeedbackCoordinator(
+        music: _FakeMusic(),
+        lamp: IlinkLampFeedback(bluetooth)..select(firstAddress),
+        bluetooth: bluetooth)
+      ..enabled = true
+      ..setCalmColor(1); // 맑고 시원하게
+    await coordinator.apply(_state('FOCUS_PC', phase: 'focus'));
+    expect(bluetooth.frames.last, ilinkFrame([3, 8, 2, 170, 205, 255]));
+    coordinator.setCalmColor(0); // 다른 사람: 따뜻하게 — 같은 국면이어도 다시 칠한다
+    await coordinator.apply(_state('FOCUS_PC', phase: 'focus'));
+    expect(bluetooth.frames.last, ilinkFrame([3, 8, 2, 255, 120, 40]));
+    await coordinator.apply(_state('RECOVERY', phase: 'recovery'));
+    expect(bluetooth.frames.last, ilinkFrame([3, 8, 2, 255, 120, 40]),
+        reason: '회복도 고정 파랑이 아니라 그 사람 색');
+    // 끄는 국면은 색이 없다
+    expect(ilinkFramesForPhase('idle', rgb: [1, 2, 3]),
+        ilinkFramesForPhase('idle'));
+  });
+
   test('fatigue color is not added outside the fatigue phase', () async {
     final bluetooth = _FakeBluetooth();
     final coordinator = FeedbackCoordinator(
@@ -911,6 +933,84 @@ void main() {
       expect(music.selectedTrack, 7);
     });
 
+    test('V57: waking plays the cheer song only for the 태환 profile', () async {
+      final music = _StateMusic();
+      final c = coordinator(music);
+      await c.setMusicProfile('태환', '카페 음악');
+      await c.handleControlCommand(musicCommand('w1', {'on': true}));
+      expect(music.selectedTrack, wakeSongTrack);
+      expect(music.gain, 1);
+      expect(classicalPlaylist[wakeSongTrack], 'audio/lg_twins_cheer.mp3');
+
+      final other = _StateMusic();
+      final c2 = coordinator(other);
+      await c2.setMusicProfile('민경', '카페 음악');
+      await c2.handleControlCommand(musicCommand('w2', {'on': true}));
+      expect(other.selectedTrack, 6);
+    });
+
+    test('V57: focus starts the chosen sound quietly, once per focus',
+        () async {
+      final music = _StateMusic();
+      final c = coordinator(music);
+      await c.setMusicProfile('민경', '백색 소음');
+      await c.setSessionActive(true);
+      await c.apply(_state('FOCUS_PC', phase: 'focus'));
+      expect(music.isPlaying, isTrue);
+      expect(music.selectedTrack, 7);
+      expect(music.gain, FeedbackCoordinator.focusMusicGain);
+      // 사람이 끄면 이번 집중에서는 다시 켜지 않는다
+      await music.toggle();
+      await c.apply(_state('FOCUS_PC', phase: 'focus'));
+      expect(music.isPlaying, isFalse);
+      // 집중을 벗어났다 돌아오면 다시
+      await c.apply(_state('IDLE', phase: 'idle'));
+      await c.apply(_state('FOCUS_PC', phase: 'focus'));
+      expect(music.isPlaying, isTrue);
+      // 무음이면 켜지 않는다
+      final quiet = _StateMusic();
+      final c2 = coordinator(quiet);
+      await c2.setMusicProfile('민경', '무음');
+      await c2.setSessionActive(true);
+      await c2.apply(_state('FOCUS_PC', phase: 'focus'));
+      expect(quiet.isPlaying, isFalse);
+    });
+
+    test('V57: back in focus after the cheer song, the chosen sound returns',
+        () async {
+      final music = _StateMusic();
+      final c = coordinator(music);
+      await c.setMusicProfile('태환', '카페 음악');
+      await c.setSessionActive(true);
+      await c.apply(_state('FOCUS_PC', phase: 'focus'));
+      await c.apply(_state('ACTION_POSTURE', phase: 'fatigue', gate: 'auto'));
+      await c.handleControlCommand(musicCommand('w3', {'on': true}));
+      expect(music.selectedTrack, wakeSongTrack);
+      expect(music.gain, 1);
+      await c.apply(_state('FOCUS_PC', phase: 'focus'));
+      expect(music.isPlaying, isTrue);
+      expect(music.selectedTrack, 6);
+      expect(music.gain, FeedbackCoordinator.focusMusicGain);
+    });
+
+    test('V57: ending the work stops the music and keeps focus music off',
+        () async {
+      final music = _StateMusic();
+      final c = coordinator(music);
+      await c.setMusicProfile('민경', '카페 음악');
+      // 작업 전에는 hub 가 집중이어도 켜지 않는다
+      await c.apply(_state('FOCUS_PC', phase: 'focus'));
+      expect(music.isPlaying, isFalse);
+      await c.setSessionActive(true);
+      await c.apply(_state('FOCUS_PC', phase: 'focus'));
+      expect(music.isPlaying, isTrue);
+      await c.setSessionActive(false); // 작업 종료
+      expect(music.isPlaying, isFalse);
+      await c.apply(_state('ACTION_POSTURE', phase: 'fatigue', gate: 'auto'));
+      await c.apply(_state('FOCUS_PC', phase: 'focus'));
+      expect(music.isPlaying, isFalse);
+    });
+
     test('undo sends previous back and restores the earlier music', () async {
       final music = _StateMusic(volume: .3);
       final c = coordinator(music);
@@ -1242,8 +1342,12 @@ class _FakeMusic implements MusicPlayback {
 }
 
 /// V32 음악 명령용 — 곡·볼륨·재생 상태를 기억하고 스트림으로 알린다.
-class _StateMusic implements MusicPlayback {
+class _StateMusic implements MusicPlayback, MusicGain {
   _StateMusic({double volume = 1}) : _volume = volume;
+  @override
+  double gain = 1;
+  @override
+  Future<void> setGain(double value) async => gain = value;
   bool _playing = false;
   double _volume;
   int _track = 0;

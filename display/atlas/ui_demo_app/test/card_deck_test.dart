@@ -42,6 +42,51 @@ void main() {
     expect(lookForHelp('알림').label, '알림');
   });
 
+  testWidgets('V57: no cards over the report after the work ends',
+      (tester) async {
+    tester.view.physicalSize = const Size(1024, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final m = DemoModel(DemoConfig(
+        jsonDecode(File('assets/config/demo.json').readAsStringSync())
+            as Map<String, dynamic>));
+    late FakeTransport transport;
+    final link = LiveLink(
+        transportFactory: (h, p) => transport = FakeTransport(),
+        retryDelay: const Duration(hours: 1));
+    await tester.pumpWidget(DemoApp(model: m, ticking: false, live: link));
+    link.configure('192.168.0.10', 1883);
+    await tester.pump();
+    m.start();
+    m.finish(); // '작업 종료' → 리포트
+    await tester.pump();
+    expect(m.page, DemoPage.report);
+    transport.deliver(LiveLink.stateTopic, phase('FOCUS_PC'));
+    transport.deliver(
+        LiveLink.requestTopic,
+        request('posture_suggest', {
+          'request_id': 'card-r',
+          'auto': true,
+          'options': ['dismiss'],
+          'arm': 'posture_card',
+          'text': '자세를 바로 해 볼까요?',
+          'expires_in_s': 60,
+        }));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(m.page, DemoPage.report);
+    expect(find.byKey(const ValueKey('card-deck')), findsNothing);
+    expect(find.text('자세를 바로 해 볼까요?'), findsNothing);
+    // 리포트를 닫으면 다시 보인다
+    m.show(DemoPage.home);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(find.byKey(const ValueKey('card-deck')), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    link.dispose();
+  });
+
   testWidgets('cards stack on top of each other and close one by one',
       (tester) async {
     tester.view.physicalSize = const Size(1024, 600);

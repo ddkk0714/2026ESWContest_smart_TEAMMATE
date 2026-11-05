@@ -246,8 +246,16 @@ class DeveloperController extends ChangeNotifier {
   /// 지금 사람의 '피곤할 때 조명 색'(설정 '빛의 온도', 0 따뜻하게 … 1 시원하게).
   void setFatigueColor(double warmth) => feedback.setFatigueColor(warmth);
 
-  void setMusicChoice(String sound) =>
-      unawaited(feedback.setMusicChoice(sound));
+  /// 지금 사람의 '빛의 온도'(시작·집중·회복 조명 색).
+  void setCalmColor(double warmth) => feedback.setCalmColor(warmth);
+
+  /// 작업 시작·종료(끝나면 음악을 멈춘다).
+  void setSessionActive(bool active) =>
+      unawaited(feedback.setSessionActive(active));
+
+  /// 프로필의 이름(깨우기 응원가)과 소리 선택(곡 묶음).
+  void setMusicProfile(String name, String sound) =>
+      unawaited(feedback.setMusicProfile(name, sound));
 
   void setPlacement(String value) {
     if (settings.load().placement == value) return;

@@ -74,3 +74,10 @@ Files: chime_single.mp3, chime_soft.mp3, chime_alert.mp3. Synthesized from sine 
 - Team-provided 3-minute recordings (`cozy_coffee_jazz_3min.m4a`, `river_birds_3min.m4a`), converted to
   128 kb/s MP3 on 2026-11-05 to match the other bundled files. Source and license have not been supplied;
   no license claim is made.
+
+## Wake-up cheer song (V57)
+
+- File: `lg_twins_cheer.mp3` (응원가, played only when waking the profile named 태환).
+- Team-provided 1-minute recording (`lg_twins_cheer_1min.m4a`), converted to 128 kb/s MP3 on 2026-11-05.
+  Source and license have not been supplied; this is likely a copyrighted club cheer song — confirm before
+  public release.
