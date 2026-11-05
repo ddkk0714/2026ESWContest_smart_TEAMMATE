@@ -32,11 +32,31 @@ REMOTE_LOOP = (
     "done"
 )
 
-PAGE = b"""<!doctype html><html lang="ko"><head><meta charset="utf-8">
-<title>DESKMATE Pi 5 \xed\x99\x94\xeb\xa9\xb4</title>
-<style>html,body{margin:0;height:100%;background:#111}
-img{position:fixed;inset:0;margin:auto;max-width:100%;max-height:100%}</style>
-</head><body><img src="/stream" alt=""></body></html>"""
+PAGE = """<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<title>DESKMATE Pi 5 화면</title>
+<style>
+html,body{margin:0;height:100%;background:#111;overflow:hidden}
+img{position:fixed;inset:0;margin:auto;max-width:100%;max-height:100%}
+:fullscreen img{width:100%;height:100%;object-fit:contain}
+#full{position:fixed;top:12px;right:12px;z-index:1;padding:8px 14px;border:0;border-radius:10px;
+  background:rgba(255,255,255,.85);color:#111;font:600 14px system-ui,sans-serif;cursor:pointer}
+#full:hover{background:#fff}
+:fullscreen #full{opacity:0;transition:opacity .3s}
+:fullscreen #full:hover{opacity:1}
+</style></head><body>
+<img src="/stream" alt="">
+<button id="full" type="button">전체 화면</button>
+<script>
+// 전체 화면에서는 버튼을 숨기고(마우스를 올리면 보임) 누르면 빠져나온다. Esc 로도 나온다.
+const b = document.getElementById('full');
+b.onclick = () => document.fullscreenElement
+  ? document.exitFullscreen()
+  : document.documentElement.requestFullscreen();
+document.addEventListener('fullscreenchange', () => {
+  b.textContent = document.fullscreenElement ? '전체 화면 끄기' : '전체 화면';
+});
+</script>
+</body></html>""".encode("utf-8")
 
 
 class Latest:
