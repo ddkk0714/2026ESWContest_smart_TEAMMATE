@@ -27,7 +27,11 @@ const classicalPlaylist = [
   'audio/bach_prelude_bwv846.mp3',
   'audio/cozy_coffee_jazz.mp3',
   'audio/river_birds.mp3',
+  'audio/lg_twins_cheer.mp3',
 ];
+
+/// V57: 깨울 때 트는 응원가(설정에서 고르는 묶음에는 없다). wakeSongProfiles 프로필만.
+const wakeSongTrack = 8;
 
 const classicalTrackTitles = [
   '드뷔시 · 달빛',
@@ -38,6 +42,7 @@ const classicalTrackTitles = [
   '바흐 · 프렐류드 BWV 846',
   '카페 재즈',
   '냇물과 새소리',
+  '응원가',
 ];
 
 /// 설정 '소리' 선택(Persona.sound) → 곡 묶음. 곡이 끝나면 같은 묶음 안에서 다음 곡(한 곡이면 그 곡을 다시).
@@ -50,6 +55,13 @@ const musicGroups = {
 /// [index] 가 든 묶음. 어느 묶음에도 없으면 그 곡 하나.
 List<int> musicGroupOf(int index) => musicGroups.values
     .firstWhere((g) => g.contains(index), orElse: () => [index]);
+
+/// V57: 출력 기기 볼륨과 따로, 이 플레이어 소리만 줄이는 배율(0~1). 집중 중 음악을 잔잔하게 할 때 쓴다 —
+/// 기기 볼륨을 줄이면 알림음까지 작아진다.
+abstract interface class MusicGain {
+  double get gain;
+  Future<void> setGain(double value);
+}
 
 /// Small audio boundary so completion/pause races can be tested without a board.
 abstract interface class MusicTrackPlayer {
@@ -68,7 +80,7 @@ abstract interface class MusicOutputVolume {
   Future<void> dispose();
 }
 
-class AtlasMusicPlayback implements MusicPlayback {
+class AtlasMusicPlayback implements MusicPlayback, MusicGain {
   AtlasMusicPlayback({
     MusicTrackPlayer Function()? playerFactory,
     MusicOutputVolume? outputVolume,
@@ -111,6 +123,7 @@ class AtlasMusicPlayback implements MusicPlayback {
   Future<void> _pending = Future<void>.value();
   int _index = 0;
   double _volume = 1;
+  double _gain = 1;
   bool _prepared = false;
   bool _playing = false;
   bool _disposed = false;
@@ -123,6 +136,20 @@ class AtlasMusicPlayback implements MusicPlayback {
 
   @override
   double get volume => _volume;
+
+  @override
+  double get gain => _gain;
+
+  @override
+  Future<void> setGain(double value) async {
+    if (!value.isFinite || value < 0 || value > 1) {
+      throw RangeError.range(value, 0, 1, 'value');
+    }
+    await _enqueue(() async {
+      _gain = value;
+      if (_prepared) await _player!.setVolume(_volume * _gain);
+    });
+  }
 
   @override
   Stream<bool> get playingChanges => _changes.stream;
@@ -166,7 +193,7 @@ class AtlasMusicPlayback implements MusicPlayback {
     _player = player;
     _listenForCompletion(player);
     await _volumeReady;
-    await player.play(classicalPlaylist[_index], volume: _volume);
+    await player.play(classicalPlaylist[_index], volume: _volume * _gain);
     _prepared = true;
   }
 
@@ -214,7 +241,7 @@ class AtlasMusicPlayback implements MusicPlayback {
     await _enqueue(() async {
       await _volumeReady;
       await _outputVolume.setVolume(value);
-      if (_prepared) await _player!.setVolume(value);
+      if (_prepared) await _player!.setVolume(value * _gain);
       _setVolumeFromOutput(value);
     });
   }

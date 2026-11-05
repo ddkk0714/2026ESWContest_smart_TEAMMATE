@@ -191,6 +191,7 @@ class _DemoAppState extends State<DemoApp> {
     super.initState();
     final live = widget.live;
     final model = widget.model;
+    model.onSessionChanged = (active) => widget.tools?.setSessionActive(active);
     if (live != null) {
       live.onState =
           (state) => model.followLive(state, postureLabel: postureText(state));
@@ -198,7 +199,8 @@ class _DemoAppState extends State<DemoApp> {
         live.publishProfile(persona);
         widget.tools?.setPlacement(persona.placement);
         widget.tools?.setFatigueColor(persona.preferences.fatigueWarmth);
-        widget.tools?.setMusicChoice(persona.sound);
+        widget.tools?.setCalmColor(persona.preferences.warmth);
+        widget.tools?.setMusicProfile(persona.name, persona.sound);
       };
       model.onPlacement = live.sendPlacement;
       model.onReportReset = live.markReportStart;
@@ -209,7 +211,8 @@ class _DemoAppState extends State<DemoApp> {
       live.publishProfile(model.persona);
       widget.tools?.setPlacement(model.persona.placement);
       widget.tools?.setFatigueColor(model.persona.preferences.fatigueWarmth);
-      widget.tools?.setMusicChoice(model.persona.sound);
+      widget.tools?.setCalmColor(model.persona.preferences.warmth);
+      widget.tools?.setMusicProfile(model.persona.name, model.persona.sound);
     }
     if (widget.ticking) {
       timer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -335,7 +338,8 @@ class _DemoShellState extends State<DemoShell> {
             const Positioned(
                 left: 16, bottom: 12, child: IgnorePointer(child: DemoFastBadge())),
           // 안내(알림)·자동 실행·제안 카드: 화면을 거의 덮는 큰 카드로, 여러 장이면 쌓는다(cards/card_deck.dart)
-          if (!_developerOpen && live != null)
+          // V57: 작업을 끝내고 리포트를 보는 동안에는 띄우지 않는다 — hub 는 계속 판정해 카드를 보낸다.
+          if (!_developerOpen && live != null && m.page != DemoPage.report)
             Positioned.fill(
                 child: CardDeck(entries: _deckEntries(live, request))),
           if (_manualVentOpen && request == null && !_developerOpen)
@@ -605,7 +609,7 @@ class _DemoShellState extends State<DemoShell> {
         IconButton(
             tooltip: '앱 종료',
             onPressed: widget.onExit,
-            icon: const Icon(Icons.close_rounded)),
+            icon: const Icon(Icons.power_settings_new_rounded)),
       ]));
 
   Widget _pill(String label, Color color) => Container(
@@ -852,7 +856,7 @@ class _DemoShellState extends State<DemoShell> {
                       tooltip: '앱 종료',
                       onPressed: widget.onExit,
                       color: const Color(0xFF829283),
-                      icon: const Icon(Icons.close_rounded))),
+                      icon: const Icon(Icons.power_settings_new_rounded))),
             ])),
       );
 

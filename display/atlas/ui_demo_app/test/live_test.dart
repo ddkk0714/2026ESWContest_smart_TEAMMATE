@@ -746,6 +746,28 @@ void main() {
       expect(m.active, isFalse);
     });
 
+    test('V57: the report stays after ending even if the hub refocuses', () {
+      final m = model();
+      DisplayState s(String fsm) => DisplayState.fromEnvelope(phase(fsm));
+      final sessions = <bool>[];
+      m.onSessionChanged = sessions.add;
+      m.followLive(s('FOCUS_PC'));
+      expect(m.active, isTrue);
+      m.finish(); // '작업 종료'
+      expect(m.page, DemoPage.report);
+      m.followLive(s('FATIGUE'));
+      m.followLive(s('FOCUS_PC'));
+      expect(m.active, isFalse);
+      expect(m.page, DemoPage.report);
+      expect(m.proposal, isFalse);
+      expect(sessions, [true, false]);
+      // 홈으로 나간 뒤 새로 집중에 들어오면 시작한다
+      m.show(DemoPage.home);
+      m.followLive(s('FATIGUE'));
+      m.followLive(s('FOCUS_PC'));
+      expect(m.active, isTrue);
+    });
+
     test('auto start off shows the start proposal instead', () {
       final m = model()..selectProfile(2);
       m.persona.preferences.autoStart = false;

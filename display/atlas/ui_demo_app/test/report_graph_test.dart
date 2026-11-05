@@ -74,6 +74,11 @@ void main() {
     expect(m.page, DemoPage.report);
     expect(m.timeline.samples, hasLength(3), reason: '리포트가 볼 기록은 남는다');
     m.followLive(s('FOCUS_PC'));
+    expect(m.timeline.samples, hasLength(3),
+        reason: 'V57: 리포트를 보는 동안에는 새 집중으로 넘어가지 않는다');
+    m.show(DemoPage.home);
+    m.followLive(s('IDLE'));
+    m.followLive(s('FOCUS_PC'));
     expect(m.timeline.samples, hasLength(1), reason: '새 집중은 새로 센다');
     expect(m.timeline.events, isEmpty);
   });

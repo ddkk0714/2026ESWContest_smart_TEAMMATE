@@ -25,6 +25,17 @@ class _Player implements MusicTrackPlayer {
   Future<void> dispose() => _done.close();
 }
 
+/// 플레이어에 건 소리 크기를 적는다.
+class _GainPlayer extends _Player {
+  _GainPlayer(this.volumes) : super([]);
+  final List<double> volumes;
+  @override
+  Future<void> play(String asset, {required double volume}) async =>
+      volumes.add(volume);
+  @override
+  Future<void> setVolume(double value) async => volumes.add(value);
+}
+
 void main() {
   test('V55: sound choices map to bundled tracks', () {
     expect(classicalPlaylist[musicGroups['카페 음악']!.single],
@@ -32,6 +43,18 @@ void main() {
     expect(classicalPlaylist[musicGroups['백색 소음']!.single],
         'audio/river_birds.mp3');
     expect(classicalTrackTitles.length, classicalPlaylist.length);
+  });
+
+  test('V57: gain lowers only this player, volume stays', () async {
+    final volumes = <double>[];
+    final music = AtlasMusicPlayback(playerFactory: () => _GainPlayer(volumes));
+    await music.setGain(.45);
+    await music.toggle();
+    expect(volumes.last, closeTo(.45, 1e-9)); // 볼륨 1 × 배율 .45
+    await music.setGain(1);
+    expect(volumes.last, 1);
+    expect(music.volume, 1);
+    await music.dispose();
   });
 
   test('V55: a one-track sound repeats, classical still goes round', () async {

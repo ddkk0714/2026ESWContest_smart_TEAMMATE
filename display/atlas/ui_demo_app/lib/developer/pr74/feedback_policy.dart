@@ -25,7 +25,16 @@ List<int> ilinkFrame(List<int> body) {
   return [...head, checksum];
 }
 
-List<List<int>> ilinkFramesForPhase(String phase) {
+/// 국면 조명. [rgb] 를 주면 시작·집중·회복의 색을 그 색으로 칠한다(V57: 프로필 '빛의 온도').
+List<List<int>> ilinkFramesForPhase(String phase, {List<int>? rgb}) {
+  if (rgb != null &&
+      (phase == 'start' || phase == 'focus' || phase == 'recovery')) {
+    final frames = ilinkFramesForPhase(phase);
+    return [
+      ...frames.sublist(0, frames.length - 1),
+      ilinkFrame([0x03, 0x08, 0x02, ...rgb]),
+    ];
+  }
   switch (phase) {
     case 'idle':
     case 'end':
@@ -494,6 +503,69 @@ class FeedbackCoordinator {
   List<int>? fatigueRgb;
   void setFatigueColor(double warmth) => fatigueRgb = ilinkRgbForWarmth(warmth);
 
+  /// V57: 시작·집중·회복 조명 색 — 프로필 '빛의 온도'. null 이면 예전 고정 색(회복 파랑 등).
+  List<int>? calmRgb;
+  void setCalmColor(double warmth) => calmRgb = ilinkRgbForWarmth(warmth);
+
+  /// V57: 집중 중 음악은 이 배율로 잔잔하게(기기 볼륨은 그대로). 깨우기·hub 명령은 1.
+  static const focusMusicGain = .45;
+
+  /// V57: 깨울 때(hub 의 곡 없는 켜기) 응원가를 트는 프로필 이름.
+  static const wakeSongProfiles = {'태환'};
+
+  /// 지금 프로필이 [wakeSongProfiles] 인지. [setMusicProfile] 이 정한다.
+  bool wakeSong = false;
+
+  /// 앱에서 작업(집중)이 진행 중인지. 작업 중일 때만 집중 음악을 켠다.
+  bool _session = false;
+
+  /// V57: 작업 시작·종료. 끝나면 틀던 음악(집중 음악·응원가)을 멈추고, 다음 작업까지 집중 음악을 켜지 않는다.
+  Future<void> setSessionActive(bool value) async {
+    if (_session == value) return;
+    _session = value;
+    _focusMusicStarted = false;
+    if (value || !music.isPlaying) return;
+    try {
+      await music.toggle();
+    } catch (error) {
+      lastAudioError = error;
+    }
+  }
+
+  /// 이번 집중에서 잔잔한 음악을 이미 켰는지(사람·hub 가 끄면 다시 켜지 않으려고). 집중을 벗어나면 지운다.
+  bool _focusMusicStarted = false;
+
+  /// 프로필이 바뀔 때: 이름으로 깨우기 곡을, 소리 선택으로 곡 묶음을 정한다.
+  Future<void> setMusicProfile(String name, String sound) async {
+    wakeSong = wakeSongProfiles.contains(name.trim());
+    await setMusicChoice(sound);
+  }
+
+  Future<void> _setGain(double value) async {
+    // MusicGain 은 MusicPlayback 의 하위형이 아니라 Object 에서 좁힌다
+    final Object m = music;
+    if (m is MusicGain) await m.setGain(value);
+  }
+
+  /// 집중에 들어서면 고른 소리를 잔잔하게 한 번 켠다. 깨우기 응원가가 남아 있으면 고른 소리로 돌린다.
+  Future<void> _focusMusic(bool hubDecided) async {
+    final group = musicGroups[musicChoice];
+    // 무음·고른 적 없음, 또는 이 국면에 hub 가 음악을 정했다
+    if (group == null || hubDecided || !_session) return;
+    if (music.isPlaying && music.selectedTrack == wakeSongTrack) {
+      await music.selectTrack(group.first);
+      await _setGain(focusMusicGain);
+      return;
+    }
+    if (_focusMusicStarted) return;
+    final address = _speakerAddress;
+    if (address != null && !await bluetooth.isA2dpConnected(address)) return;
+    _focusMusicStarted = true;
+    await _setGain(focusMusicGain);
+    await _selectPreferredTrack();
+    if (!music.isPlaying) await music.toggle();
+  }
+
   /// V55: 프로필 설정의 소리 선택(백색 소음 · 카페 음악 · 클래식 · 무음). null 이면 고른 적 없음 — 곡을 바꾸지 않는다.
   String? musicChoice;
 
@@ -594,6 +666,7 @@ class FeedbackCoordinator {
 
   Future<void> apply(DisplayState state) async {
     _latest = state;
+    if (state.phase != 'focus') _focusMusicStarted = false;
     if (state.fsmState != _acceptedAction) _acceptedAction = null;
     if (!enabled || _applying) return;
     // ACTION_ENV is executed by the hub's explicit control command. Suspected
@@ -626,9 +699,11 @@ class FeedbackCoordinator {
     if (_applying) return;
     _applying = true;
     try {
-      final key = '${state.phase}:${lamp.address}';
+      // 색도 열쇠에 넣어 같은 국면에서 사람이 바뀌면 다시 칠한다
+      final key = '${state.phase}:${lamp.address}:${calmRgb?.join(',')}';
       if (key != _lastLampKey && _phaseLampAllowed(key)) {
-        if (await lamp.writeFrames(ilinkFramesForPhase(state.phase))) {
+        if (await lamp
+            .writeFrames(ilinkFramesForPhase(state.phase, rgb: calmRgb))) {
           _lastLampKey = key;
           _lampFailKey = null;
         } else {
@@ -643,7 +718,9 @@ class FeedbackCoordinator {
           _lastMusicKey = state.phase;
         }
       } else {
+        final hubDecided = _lastMusicKey == state.phase;
         _lastMusicKey = null;
+        if (state.phase == 'focus') await _focusMusic(hubDecided);
       }
     } catch (error) {
       lastAudioError = error;
@@ -882,8 +959,21 @@ class FeedbackCoordinator {
       if (track != null && track != music.selectedTrack) {
         await music.selectTrack(track);
       } else if (track == null && on) {
-        // hub 는 곡을 정하지 않는다({"on": true}) — 사람이 설정에서 고른 소리로 튼다(V55).
-        await _selectPreferredTrack();
+        // hub 는 곡을 정하지 않는다({"on": true}) — 깨우기다. V57: 응원가 프로필이면 응원가, 아니면 고른 소리(V55).
+        if (wakeSong) {
+          if (music.selectedTrack != wakeSongTrack) {
+            await music.selectTrack(wakeSongTrack);
+          }
+        } else {
+          await _selectPreferredTrack();
+        }
+      }
+      if (on) {
+        // 깨우기는 원래 크기로. 되돌리기로 집중 음악이 돌아오면 다시 잔잔하게.
+        final calm = track != null &&
+            track != wakeSongTrack &&
+            _latest?.phase == 'focus';
+        await _setGain(calm ? focusMusicGain : 1);
       }
       if (on != music.isPlaying) await music.toggle();
     } on Object catch (error) {
