@@ -5,6 +5,7 @@ export class ThinQUiState {
     if(reply.status==='outcome_unconfirmed') this.uncertain=true;
     if(Object.hasOwn(reply,'post_enabled')) this.postEnabled=reply.post_enabled===true;
     if(reply.status==='session_revoked') {this.postEnabled=false;this.uncertain=false;}
+    if(reply.status==='reconciled') this.uncertain=false;   // a reviewed fresh GET, never a resend
   }
   transportFailure(duringWrite=false) { if(duringWrite) this.uncertain=true; }
   canPrepare() {return this.postEnabled&&!this.uncertain;}

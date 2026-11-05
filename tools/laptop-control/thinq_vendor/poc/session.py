@@ -1,5 +1,6 @@
 """Token-free worker session; native owns credentials, mode authorization and HTTPS."""
 
+import asyncio
 import copy
 import os
 import time
@@ -42,6 +43,28 @@ class SafeApiFailure(ApiFailure):
         )
 
 
+# StopTrial reasons the UI may show. Anything else stays the generic blocked status.
+PUBLIC_REASONS = frozenset({
+    "post_disabled_or_outcome_uncertain", "policy_handoff_required", "stage_forbidden", "power_control_disabled",
+    "previous_physical_confirmation_required", "already_in_requested_state", "baseline_changed",
+    "restore_not_authorized", "approval_invalid_or_expired", "external_change_detected",
+    "approval_or_session_expired_before_post", "policy_changed_or_live_post_blocked", "too_soon_after_previous_post",
+    "reconcile_requires_uncertain_outcome", "reconcile_state_unreadable", "reconcile_not_approved",
+    "target_changed_between_calls", "read_only_operation_blocked", "unsupported_operation",
+})
+
+
+# Device-selection stops carry English messages from the reused trial code; give them fixed public codes.
+SELECTION_REASONS = {
+    "Invalid device list": "device_list_invalid",
+    "Empty device list": "device_list_empty",
+    "No purifier in device list": "purifier_not_in_account",
+    "Purifier model differs": "purifier_model_differs",
+    "Multiple matching purifiers": "purifier_multiple",
+    "Device reporting unavailable": "purifier_not_reporting",
+}
+
+
 def error_category(error):
     if error.http_status == 401:
         return "authentication_error"
@@ -75,8 +98,16 @@ class Permit:
 
 
 class Session:
-    def __init__(self, sdk, context=None, clock=time.monotonic):
-        self.sdk, self.clock = sdk, clock
+    """intent_control (unified console / policy link): every prepare is a new user intent with its own nonce and
+    at most one POST. Repeating a value later is a new intent, not a resend. An uncertain outcome still locks all
+    new intents until a separate fresh GET is reviewed (`reconcile`); nothing is ever resent automatically.
+    Without intent_control the original one-shot trial stages (LOW then AUTO restore) are unchanged."""
+
+    READBACK_DELAYS = (1.5, 1.5, 2.0)   # extra GETs after a mismatched readback; never another POST
+    MIN_POST_INTERVAL = 5.0
+
+    def __init__(self, sdk, context=None, clock=time.monotonic, sleep=asyncio.sleep):
+        self.sdk, self.clock, self.sleep = sdk, clock, sleep
         self.authorization_valid = lambda: True
         self.before_post = lambda challenge, fresh: challenge.get("policy") is None
         self.policy_approval = None  # Host-only handoff; never accepted from JSON.
@@ -85,6 +116,8 @@ class Session:
         self.ctx.setdefault("attempted", [])
         self.ctx.setdefault("uncertain", False)
         self.ctx.setdefault("wind", "AUTO")
+        self.ctx.setdefault("intent_control", False)
+        self.ctx.setdefault("control_capable", self.ctx["enabled"])
         self.permit = Permit(self.ctx["enabled"], self.ctx.get("power_control") is True)
         self.io = DeviceIO(sdk, self.permit, probe)
         sdk.permit = self.permit
@@ -185,6 +218,8 @@ class Session:
             "no_external_change",
             "auth_session_id",
         }
+        if op == "reconcile" and set(request) - {"op", "backend", "approved"}:
+            raise StopTrial("unexpected_request_fields")
         if set(request) - allowed:
             raise StopTrial("unexpected_request_fields")
         if backend == "live_read_only" and op != "read":
@@ -214,22 +249,30 @@ class Session:
                 if backend == "live_manual"
                 else "fixture_user_attestation_only",
             }
+        if op == "reconcile":
+            return await self.reconcile(request)
         if op not in ("prepare", "execute"):
             raise StopTrial("unsupported_operation")
         if not self.ctx["enabled"] or self.ctx["uncertain"]:
             raise StopTrial("post_disabled_or_outcome_uncertain")
+        intents = self.ctx.get("intent_control") is True
         if op == "prepare":
             self.ctx.pop("challenge", None)
             value = request.get("value")
-            if self.ctx.get("policy_link") and self.policy_approval is None:
+            if self.ctx.get("policy_link") and self.policy_approval is None and self.ctx.get("combined_manual") is not True:
                 raise StopTrial("policy_handoff_required")
             power = value in ("POWER_ON", "POWER_OFF")
-            if value not in ("LOW", "AUTO", "POWER_ON", "POWER_OFF") or value in self.ctx["attempted"]:
+            if value not in ("LOW", "AUTO", "POWER_ON", "POWER_OFF") or (not intents and value in self.ctx["attempted"]):
                 raise StopTrial("stage_forbidden")
             if power and self.ctx.get("power_control") is not True:
                 raise StopTrial("power_control_disabled")
+            last = self.ctx.get("last_post_at")
+            if intents and last is not None and self.clock() - last < self.MIN_POST_INTERVAL:
+                raise StopTrial("too_soon_after_previous_post")
             previous = self.ctx.get("verified")
-            if ((self.policy_approval is not None or power or previous in ("POWER_ON", "POWER_OFF"))
+            # The user's body check is recorded evidence. With intents it no longer gates the next intent:
+            # the fresh Profile/State baseline check below already proves the device is where we think.
+            if (not intents and (self.policy_approval is not None or power or previous in ("POWER_ON", "POWER_OFF"))
                     and previous and self.ctx.get("physical") != previous):
                 raise StopTrial("previous_physical_confirmation_required")
             await self.read()
@@ -244,7 +287,7 @@ class Session:
                 expected = "AUTO" if value == "LOW" else "LOW"
                 if self.latest_state["airFlow"]["windStrength"] != expected:
                     raise StopTrial("baseline_changed")
-            if value == "AUTO" and self.policy_approval is None and (
+            if value == "AUTO" and self.policy_approval is None and not intents and (
                 self.ctx.get("verified") != "LOW"
                 or self.ctx.get("physical") != "LOW"
                 or baseline != self.ctx.get("low_config")
@@ -282,7 +325,14 @@ class Session:
             raise StopTrial("power_control_disabled")
         fresh = await self.read()  # Fresh profile AND state immediately before control.
         (power_profile_check if power else profile_check)(self.latest_profile)
-        if (power_config if power else config)(self.latest_state) != challenge["baseline"]:
+        current_baseline = (power_config if power else config)(self.latest_state)
+        if power and self.ctx.get("intent_control") is True:
+            # For a power intent only the power state can be an outside change. In AUTO the device itself moves
+            # airFlow.windStrengthDetail between reads, which used to cancel every automatic OFF.
+            changed = current_baseline.get("operation") != challenge["baseline"].get("operation")
+        else:
+            changed = current_baseline != challenge["baseline"]
+        if changed:
             raise StopTrial("external_change_detected")
         # A fresh GET can take longer than the approval/session lifetime.
         if not challenge["created"] <= self.clock() < challenge["deadline"] or not self.authorization_valid():
@@ -290,6 +340,7 @@ class Session:
         if not self.before_post(challenge, fresh):
             raise StopTrial("policy_changed_or_live_post_blocked")
         self.ctx["attempted"].append(value)  # never replay after timeout/response loss
+        self.ctx["last_post_at"] = self.clock()
         self.permit.enabled = True
         self.permit.policy_auto = bool(challenge.get("policy") and value == "AUTO")
         accepted = False
@@ -304,21 +355,26 @@ class Session:
                 "code": error.code,
                 "category": error_category(error),
             }
-        try:
-            readback = (
-                await self.read()
-            )  # separate GET even when POST response was lost
-            current = (power_config if power else config)(self.latest_state)
-            if power:
-                # Confirm power only. ON never writes AUTO or assumes a restored mode.
-                matched = current["operation"]["airPurifierOperationMode"] == value
-            else:
-                same_invariants = invariant(current) == invariant(challenge["baseline"])
-                matched = current["airFlow"]["windStrength"] == value and same_invariants
-        except (ApiFailure, StopTrial):
-            matched = False
-            current = None
-            readback = {}
+        # Separate GET even when the POST response was lost. Cloud state can lag the device, so with intents a
+        # mismatch is re-read a few times (GET only). The POST itself is never repeated.
+        delays = (0,) + (self.READBACK_DELAYS if self.ctx.get("intent_control") is True and accepted else ())
+        matched, current, readback = False, None, {}
+        for delay in delays:
+            if delay:
+                await self.sleep(delay)
+            try:
+                readback = await self.read()
+                current = (power_config if power else config)(self.latest_state)
+                if power:
+                    # Confirm power only. ON never writes AUTO or assumes a restored mode.
+                    matched = current["operation"]["airPurifierOperationMode"] == value
+                else:
+                    same_invariants = invariant(current) == invariant(challenge["baseline"])
+                    matched = current["airFlow"]["windStrength"] == value and same_invariants
+            except (ApiFailure, StopTrial):
+                matched, current, readback = False, None, {}
+            if matched:
+                break
         if not accepted or not matched:
             self.ctx["uncertain"] = True
         if accepted and matched:
@@ -339,6 +395,24 @@ class Session:
             "measured_at": None,
         }
 
+    async def reconcile(self, request):
+        """After an uncertain outcome: one fresh GET the user has reviewed becomes the new known state.
+        It unlocks new intents only; the uncertain command is not resent and its record is kept."""
+        if self.ctx.get("intent_control") is not True or not self.ctx["uncertain"]:
+            raise StopTrial("reconcile_requires_uncertain_outcome")
+        if request.get("approved") is not True:
+            raise StopTrial("reconcile_not_approved")
+        self.ctx.pop("challenge", None)
+        fresh = await self.read()
+        state = fresh.get("state")
+        if not isinstance(state, dict) or state.get("power") not in ("POWER_ON", "POWER_OFF"):
+            raise StopTrial("reconcile_state_unreadable")
+        self.ctx["uncertain"] = False
+        self.ctx["enabled"] = self.ctx["control_capable"] is True
+        self.ctx["verified"] = None
+        self.ctx.setdefault("reconciled", []).append(state.get("power"))
+        return {**fresh, "status": "reconciled", "physical_confirmed": False, "automatic_resend": False}
+
     async def safe(self, request):
         try:
             public = await self.handle(request)
@@ -351,9 +425,19 @@ class Session:
                 "category": error_category(error),
                 "physical_confirmed": False,
             }
-        except StopTrial:
+            step = {"async_get_device_list": "device_list", "async_get_device_profile": "profile",
+                    "async_get_device_status": "state", "async_post_device_control": "control"}.get(
+                        getattr(self.io, "last_method", None))
+            if step:
+                public["step"] = step
+        except StopTrial as stop:
             # Fixed vocabulary only; no arbitrary exceptions or response bodies.
             public = {"status": "blocked", "error": "precondition_or_approval_failed"}
+            reason = stop.args[0] if stop.args else None
+            if reason in PUBLIC_REASONS:
+                public["reason"] = reason
+            elif reason in SELECTION_REASONS:
+                public["reason"] = SELECTION_REASONS[reason]
         except Exception:
             self.ctx.pop("challenge", None)
             public = {"status": "error", "error": "safe_internal_error"}

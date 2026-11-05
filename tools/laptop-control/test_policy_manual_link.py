@@ -164,6 +164,94 @@ class PolicyLinkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.execute(challenge))["status"], "blocked")
         self.assertNotIn("post", self.sdk.calls)
 
+    def off_phase(self, *, state="IDLE", present=False, reasons=None, age=0, connected=True):
+        self.phase_seq += 1
+        module, _ = policy_support()
+        return {"envelope": {"schema_version": "1.0", "node": "hub", "boot_id": "synthetic-off-trial",
+                "seq": self.phase_seq, "data": {"source": "fsm", "fsm_state": state,
+                "phase": module.STATE_PHASE[state], "present": present, "reasons": reasons or []}},
+                "age_sec": age, "retained": False, "mqtt_connected": connected, "mqtt_epoch": "synthetic"}
+
+    async def off_candidate(self):
+        # Synthetic SDK and clock only; no live receiver, credentials or Cloud.
+        self.host = HostSession(Session(self.sdk, {"enabled": True, "backend": "live_manual",
+            "power_control": True, "policy_link": True, "policy_stage": "POWER_OFF"},
+            clock=lambda: self.now), clock=lambda: self.now)
+        self.phase_seq = 0
+        await self.call("read")
+        await self.call("policy", phase=self.off_phase(state="START", present=True))
+        for elapsed in range(10, 610, 10):
+            self.now = 1000. + elapsed
+            view = await self.call("policy", phase=self.off_phase(state="FOCUS_NPC"))
+            self.assertIsNone(view["proposal"])
+        self.now = 1610.
+        await self.call("read")  # Explicit synthetic GET; not automatic polling.
+        view = await self.call("policy", phase=self.off_phase(reasons=["absent_timeout"]))
+        self.assertEqual(view["proposal"]["value"], "off")
+        self.assertFalse(view["automatic_power"] or view["post_enabled"])
+        return view["proposal"]["proposal_id"]
+
+    async def accept_off(self, proposal_id):
+        result = await self.call("policy_respond", proposal_id=proposal_id, decision="accept", phase=self.off_phase())
+        self.assertNotIn("post", self.sdk.calls)
+        self.assertEqual(result["manual_approval"]["value"], "POWER_OFF")
+        return result["manual_approval"]
+
+    async def test_off_observation_mode_blocks_post_even_after_separate_ui_approval(self):
+        challenge = await self.accept_off(await self.off_candidate())
+        self.assertFalse(challenge["post_enabled"])
+        self.assertEqual((await self.execute(challenge, phase=self.off_phase()))["status"], "blocked")
+        self.assertNotIn("post", self.sdk.calls)
+
+    async def test_off_trial_explicit_mock_approval_posts_once_and_separates_physical_evidence(self):
+        proposal_id = await self.off_candidate()
+        self.host.session.ctx["policy_live_post"] = True
+        challenge = await self.accept_off(proposal_id)
+        result = await self.execute(challenge, phase=self.off_phase())
+        self.assertTrue(result["api_accepted"] and result["state_match"])
+        self.assertFalse(result["physical_confirmed"])
+        self.assertEqual(self.sdk.calls.count("post"), 1)
+        self.assertEqual((await self.execute(challenge, phase=self.off_phase()))["status"], "blocked")
+        self.assertEqual(self.sdk.calls.count("post"), 1)
+
+    async def test_off_returning_presence_before_accept_cancels_without_post(self):
+        proposal_id = await self.off_candidate()
+        with self.assertRaises(ValueError):
+            await self.call("policy_respond", proposal_id=proposal_id, decision="accept",
+                            phase=self.off_phase(present=True))
+        self.assertNotIn("post", self.sdk.calls)
+        self.assertNotIn("challenge", self.host.session.ctx)
+
+    async def test_off_returning_presence_after_accept_blocks_before_post(self):
+        proposal_id = await self.off_candidate()
+        self.host.session.ctx["policy_live_post"] = True
+        challenge = await self.accept_off(proposal_id)
+        result = await self.execute(challenge, phase=self.off_phase(present=True))
+        self.assertEqual(result["status"], "blocked")
+        self.assertNotIn("post", self.sdk.calls)
+
+    async def test_off_expired_proposal_is_not_reissued_on_return_or_fresh_get(self):
+        proposal_id = await self.off_candidate()
+        self.now += 31
+        with self.assertRaises(ValueError):
+            await self.call("policy_respond", proposal_id=proposal_id, decision="accept", phase=self.off_phase())
+        await self.call("read")
+        view = await self.call("policy", phase=self.off_phase())
+        self.assertIsNone(view["proposal"])
+        self.assertNotIn("post", self.sdk.calls)
+
+    async def test_off_disconnect_stale_or_expired_approval_blocks_before_post(self):
+        for fault in ("disconnect", "stale", "expired"):
+            self.setUp()
+            proposal_id = await self.off_candidate()
+            self.host.session.ctx["policy_live_post"] = True
+            challenge = await self.accept_off(proposal_id)
+            if fault == "expired":
+                self.now += 31
+            phase = self.off_phase(connected=fault != "disconnect", age=31 if fault == "stale" else 0)
+            self.assertEqual((await self.execute(challenge, phase=phase))["status"], "blocked")
+            self.assertNotIn("post", self.sdk.calls)
+
     async def test_presence_change_and_stale_hub_cancel_after_accept(self):
         for kind in ("presence", "stale"):
             self.setUp()

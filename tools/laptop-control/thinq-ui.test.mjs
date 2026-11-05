@@ -18,7 +18,7 @@ test('manual HTML refuses Fixture and read-only credentials and caches the verif
   assert.equal(requests,1);
 });
 
-async function manualUi({loseResponse=false,powerControl=false,policyLink=false,runMode='live-manual',expireSnapshot=false,sessionView=null}={}){
+async function manualUi({loseResponse=false,powerControl=false,policyLink=false,runMode='live-manual',expireSnapshot=false,sessionView=null,sensorPhase=null,combinedManual=false,physicalRejected=false,blockPrepare=null,busySnapshots=0}={}){
   const html=await readFile(new URL('./index.html',import.meta.url),'utf8');
   const inline=html.match(/<script type="module">([\s\S]*?)<\/script>/)[1].replace(/^import .*?;$/m,'');
   const elements=new Map(),requests=[],intervals=[];let preparedValue='LOW';
@@ -26,14 +26,16 @@ async function manualUi({loseResponse=false,powerControl=false,policyLink=false,
   const element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
   const buttons=['thinqConnect','thinqRead','thinqLow','thinqAuto','thinqPowerOff','thinqPowerOn','thinqExecute','thinqPhysical','thinqRevoke','closeInfo'];
   const context=vm.createContext({
-    document:{documentElement:{dataset:{runMode,powerControl:String(powerControl),policyLink:String(policyLink)}},getElementById:element,createElement:()=>new Element(),querySelectorAll:()=>buttons.map(element)},
+    document:{documentElement:{dataset:{runMode,powerControl:String(powerControl),policyLink:String(policyLink),combinedManual:String(combinedManual)}},getElementById:element,createElement:()=>new Element(),querySelectorAll:()=>buttons.map(element)},
     ThinQUiState,renderSnapshot:()=>{},performance:{now:()=>0},
     fetch:async(route,options)=>{
       const body=options?.body?JSON.parse(options.body):{};requests.push({route,body});
       let reply={pi4:''};
+      if(route==='/data')reply={thinq_phase:sensorPhase};
       if(route==='/api/thinq/connect')reply={status:'session_connected',mode:'live',access:'manual_control'};
       if(policyLink&&route==='/api/thinq/policy')reply=sessionView??{reason:'credential_session_required',proposal:null};
       if(body.op==='snapshot'&&expireSnapshot)throw Error('synthetic session expired');
+      if(body.op==='snapshot'&&busySnapshots>0){busySnapshots--;throw Error('이전 조작이 끝날 때까지 기다려 주세요');}
       if(policyLink&&route==='/api/thinq/policy-fixture')reply={manual_review:true,fixture_timeline:true,proposal:{proposal_id:'synthetic-proposal',operation:'set_power',value:'on'},post_enabled:false};
       if(policyLink&&route==='/api/thinq/policy-response'){
         preparedValue='POWER_ON';
@@ -41,14 +43,16 @@ async function manualUi({loseResponse=false,powerControl=false,policyLink=false,
           ...(body.decision==='accept'?{manual_approval:{status:'approval_required',nonce:'synthetic-policy-nonce',value:preparedValue,post_enabled:true}}:{})};
       }
       if(body.op==='read')reply={status:'read_ok',mode:'live',post_enabled:true};
+      if(body.op==='prepare'&&blockPrepare){reply={status:'blocked',reason:blockPrepare,post_enabled:true};return {ok:true,json:async()=>reply,blob:async()=>({})};}
+      if(body.op==='reconcile')reply={status:'reconciled',post_enabled:true};
       if(body.op==='prepare'){preparedValue=body.value;reply={status:'approval_required',nonce:'synthetic-one-use',value:body.value,post_enabled:true};}
       if(body.op==='execute'){
         if(loseResponse)throw Error('safe synthetic timeout');
         reply={status:'state_match',api_accepted:true,state_match:true,physical_confirmed:false,value:preparedValue,post_enabled:true};
       }
-      if(body.op==='physical_confirmation')reply={status:'user_attestation_recorded',physical_confirmed:true,post_enabled:true};
+      if(body.op==='physical_confirmation')reply=physicalRejected?{status:'blocked',post_enabled:true}:{status:'user_attestation_recorded',physical_confirmed:true,post_enabled:true};
       return {ok:true,json:async()=>reply,blob:async()=>({})};
-    },URL:{createObjectURL:()=> 'blob:fixture',revokeObjectURL(){}},setInterval(fn){intervals.push(fn);},setTimeout(){},window:{addEventListener(){}},
+    },URL:{createObjectURL:()=> 'blob:fixture',revokeObjectURL(){}},setInterval(fn){intervals.push(fn);},setTimeout(){},confirm:()=>true,window:{addEventListener(){}},
   });
   new vm.Script(inline).runInContext(context);
   return {element,requests,poll:()=>intervals[0]()};
@@ -403,4 +407,137 @@ test('policy popup has a local-only shortcut to the proposal card above sensors'
   assert.equal(element('thinqDialog').open,false);assert.equal(moved,true);
   assert.equal(requests.length,before);
   const legacy=await manualUi();assert.equal(legacy.element('thinqPolicyJump').hidden,true);
+});
+
+test('short absence demo is labelled separately and never pretends FSM entered IDLE',async()=>{
+  const sessionView={manual_review:true,session_active:true,session_origin:'attached',present:false,fsm_state:'FOCUS_NPC',
+    demo_absence_mode:true,hub_demo_speed:'fast',absence_elapsed_sec:5,absence_required_sec:5,reason:'demo_absence_elapsed',proposal:null};
+  const {element,requests,poll}=await manualUi({policyLink:true,powerControl:true,sessionView});
+  await poll();
+  const text=element('purifierPolicyState').textContent;
+  assert.match(text,/시연 전용/);assert.match(text,/부재 5\/5초/);assert.match(text,/Hub 빠른 시연 켜짐/);assert.match(text,/FSM FOCUS_NPC/);
+  assert.match(text,/IDLE 전환 아님/);assert.match(text,/자동 제어 OFF/);
+  assert.equal(requests.filter(r=>['read','prepare','execute'].includes(r.body.op)).length,0);
+});
+
+test('real absence display is separate from demo eligibility and Hub mode is informational',async()=>{
+  const sensorPhase={presence_observation:{fresh:true,present:false,absence_elapsed_sec:12}};
+  const sessionView={manual_review:true,present:false,fsm_state:'FOCUS_NPC',demo_absence_mode:true,
+    hub_demo_speed:'normal',absence_elapsed_sec:0,absence_required_sec:5,reason:'waiting_for_demo_presence_baseline',proposal:null};
+  const {element,requests,poll}=await manualUi({policyLink:true,powerControl:true,sessionView,sensorPhase});
+  await poll();
+  assert.match(element('purifierPresenceState').textContent,/부재 경과 12초/);
+  assert.match(element('purifierPolicyState').textContent,/OFF 판단용 부재 0\/5초/);
+  assert.match(element('purifierPolicyState').textContent,/꺼짐\(참고\)/);
+  sensorPhase.presence_observation.absence_elapsed_sec=20;
+  await poll();
+  assert.match(element('purifierPresenceState').textContent,/부재 경과 20초/);
+  assert.equal(element('purifierAccept').disabled,true);
+  assert.equal(requests.filter(r=>['read','prepare','execute'].includes(r.body.op)).length,0);
+});
+
+test('sensor absence display works without ThinQ auth and becomes unknown on stale data',async()=>{
+  const sensorPhase={presence_observation:{fresh:true,present:false,absence_elapsed_sec:9}};
+  const {element,requests,poll}=await manualUi({policyLink:true,powerControl:true,sensorPhase});
+  await poll();
+  assert.match(element('purifierPresenceState').textContent,/부재 경과 9초/);
+  sensorPhase.presence_observation={fresh:true,present:true,absence_elapsed_sec:0};
+  await poll();
+  assert.match(element('purifierPresenceState').textContent,/재실 · 수신 후 부재 경과 0초/);
+  sensorPhase.presence_observation={fresh:false,present:null,absence_elapsed_sec:999};
+  await poll();
+  assert.match(element('purifierPresenceState').textContent,/최신 데이터 대기/);
+  assert.doesNotMatch(element('purifierPresenceState').textContent,/999/);
+  assert.equal(requests.filter(r=>['read','prepare','execute'].includes(r.body.op)).length,0);
+});
+
+test('automatic OFF capability survives bootstrap cache and uses only authenticated policy transport',async()=>{
+  const calls=[];
+  const client=new ThinQSession({requiredAccess:'manual_control',expectedMode:'live',powerControl:true,policyLink:true,fetcher:async(url,options)=>{
+    if(url.endsWith('/bootstrap'))return {ok:true,json:async()=>({key:'a'.repeat(64),mode:'live',access:'manual_control',power_control:true,policy_link:true,automatic_off_enabled:true,policy_post_enabled:true,expires_in_seconds:1200})};
+    calls.push(JSON.parse(options.body));return {ok:true,json:async()=>({mode:'live',armed:true})};
+  }});
+  assert.equal((await client.connect()).automatic_off_enabled,true);
+  assert.equal((await client.connect()).automatic_off_enabled,true);
+  await client.call({op:'auto_off',action:'arm',approved:true,physical_online_confirmed:true,no_external_change:true,phase:{mqtt_connected:true}});
+  assert.equal(calls[0].op,'auto_off');
+  await assert.rejects(client.call({op:'auto_off',action:'arm',injected:true}));
+});
+
+test('automatic OFF arm requires the separate physical and preconsent checkbox',async()=>{
+  const {element,requests}=await manualUi({policyLink:true,powerControl:true});
+  await element('automaticOffArm').onclick();
+  assert.match(element('automaticOffState').textContent,/시작 안 됨 · 동의 체크/);   // shown under the button now
+  assert.equal(requests.filter(r=>r.route==='/api/thinq/auto-off').length,0);
+});
+
+test('unified console exposes manual buttons while retaining separate approval and policy cards',async()=>{
+  const {element,requests}=await manualUi({policyLink:true,powerControl:true,combinedManual:true});
+  await element('thinqConnect').onclick();await element('thinqRead').onclick();
+  for(const id of ['thinqLow','thinqAuto','thinqPowerOff','thinqPowerOn'])assert.equal(element(id).disabled,false);
+  await element('thinqLow').onclick();
+  assert.equal(element('thinqApproval').hidden,false);
+  assert.equal(element('thinqExecute').disabled,true);
+  assert.equal(requests.filter(r=>r.body.op==='execute').length,0);
+  assert.equal(element('purifierFixtureScenarios').hidden,true);
+});
+test('unified screen refuses an authentication backend lacking explicit combined capability',async()=>{
+  const client=new ThinQSession({combinedManual:true,fetcher:async()=>({ok:true,json:async()=>({key:'a'.repeat(64),expires_in_seconds:1200,mode:'live'})})});
+  await assert.rejects(client.connect(),/통합 모드/);
+});
+
+test('physical confirmation can be recovered after a page refresh without GET, prepare or POST',async()=>{
+  const {element,requests}=await manualUi({policyLink:true,powerControl:true,combinedManual:true});
+  await element('thinqConnect').onclick();
+  assert.equal(element('thinqPhysicalRecovery').hidden,false);
+  element('thinqPhysicalValue').value='POWER_OFF';element('thinqPhysicalValue').onchange();
+  assert.equal(element('thinqPhysical').hidden,false);
+  await element('thinqPhysical').onclick();
+  assert.equal(element('thinqPhysicalRecovery').hidden,true);
+  const confirmation=requests.find(r=>r.body.op==='physical_confirmation');
+  assert.equal(confirmation.body.value,'POWER_OFF');
+  assert.equal(requests.filter(r=>['read','prepare','execute'].includes(r.body.op)).length,0);
+});
+test('a rejected recovery retains a way to choose the correct last operation',async()=>{
+  const {element,requests}=await manualUi({policyLink:true,powerControl:true,combinedManual:true,physicalRejected:true});
+  await element('thinqConnect').onclick();
+  element('thinqPhysicalValue').value='LOW';element('thinqPhysicalValue').onchange();
+  await element('thinqPhysical').onclick();
+  assert.equal(element('thinqPhysicalRecovery').hidden,false);
+  assert.match(element('thinqResult').textContent,/기록하지 못했습니다/);
+  assert.equal(requests.filter(r=>r.body.op==='execute').length,0);
+});
+
+test('blocked replies show the server reason instead of the old trial start-state text',async()=>{
+  const {element}=await manualUi({blockPrepare:'too_soon_after_previous_post'});
+  await element('thinqConnect').onclick();await element('thinqRead').onclick();
+  await element('thinqLow').onclick();
+  assert.match(element('thinqResult').textContent,/5초 뒤/);
+  assert.doesNotMatch(element('thinqResult').textContent,/최초 상태/);
+});
+
+test('uncertain outcome offers reconcile: one GET-backed request, never a second execute, then unlocks',async()=>{
+  const {element,requests}=await manualUi({loseResponse:true});
+  await element('thinqConnect').onclick();await element('thinqRead').onclick();
+  assert.equal(element('thinqReconcileBox').hidden,true);
+  await element('thinqLow').onclick();
+  element('thinqOnline').checked=true;element('thinqUnchanged').checked=true;element('thinqUnchanged').onchange();
+  await element('thinqExecute').onclick();
+  assert.equal(element('thinqReconcileBox').hidden,false);
+  assert.equal(element('thinqLow').disabled,true);
+  await element('thinqReconcile').onclick();
+  assert.equal(requests.filter(r=>r.body.op==='reconcile').length,1);
+  assert.equal(requests.filter(r=>r.body.op==='execute').length,1);
+  assert.equal(element('thinqReconcileBox').hidden,true);
+  assert.equal(element('thinqLow').disabled,false);
+});
+
+test('one busy snapshot poll does not end the session; three in a row do',async()=>{
+  const {element,poll}=await manualUi({busySnapshots:3});
+  await element('thinqConnect').onclick();
+  await poll();await poll();
+  assert.doesNotMatch(element('thinqAuthSummary').textContent,/만료/);
+  assert.equal(element('thinqRead').disabled,false);
+  await poll();
+  assert.match(element('thinqAuthSummary').textContent,/만료 또는 연결 실패/);
 });

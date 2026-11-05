@@ -698,3 +698,15 @@ QoS 1, retain 없음. 연결이 끊긴 동안의 기록은 앱이 순서대로 �
 - PAT·실제 device ID·계정 정보는 payload에 넣지 않는다. 원격 발행 전 인증·ACL·TLS와 시간 동기화를 별도로 검증해야 한다. 기존 익명 1883을 안전하다고 가정하지 않는다.
 
 구현 범위와 실기 차단 조건: [ThinQ 통합 계약](../tools/laptop-control/THINQ-INTEGRATION.md).
+
+
+### PC 키보드 수집 비활성 상태 (노트북 사용자 선택)
+
+`deskmate/sensor/keystroke`의 Envelope·QoS·주기는 유지한다. 선택 필드
+`keyboard_capture_enabled`, `capture_status`로 사용자 선택을 구분한다.
+OFF는 `keyboard_capture_enabled:false`, `capture_status:"user_disabled"`, `valid:false`이며,
+키보드 특징·`typing_active`·`event_count`·`idle_ratio`는 보내지 않는다. 0이나 타이핑 없음으로 만들지 않는다.
+마우스의 `mouse_active`, `mouse_event_rate`, `input_active`는 실제 마우스 활동만 유지한다.
+기존 Hub는 typing_active가 없는 키 특징을 unavailable로, fatigue 경로는 valid=false를 무효 표본으로 처리한다.
+운영 Hub/FSM/개인화는 수정하지 않는다. 구버전 화면은 무효 표본으로 표시할 수 있으며,
+사용자 중지 여부는 노트북 HTML의 실제 수집기 상태를 기준으로 표시한다.

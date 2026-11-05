@@ -31,9 +31,17 @@ def finite(value):
 
 
 class AirPurifierPolicy:
-    def __init__(self, config, *, clock=time.monotonic, manual_review=False):
+    def __init__(self, config, *, clock=time.monotonic, manual_review=False, demo_absence=False):
         self.cfg = dict(config)
         self.manual_review = manual_review
+        self.demo_absence = demo_absence is True
+        if self.demo_absence and (not manual_review or not finite(config.get("demo_absence_off_sec"))
+                                 or config["demo_absence_off_sec"] <= 0):
+            raise ValueError("demo_absence_requires_manual_review_and_config")
+        self.absence_since = None
+        self.absence_samples = 0
+        self.demo_present_observed = False
+        self.hub_demo_speed = None
         self.manual_approval = None
         if config.get("automatic_power") is not False:
             raise ValueError("automatic_power_must_remain_disabled")
@@ -51,6 +59,7 @@ class AirPurifierPolicy:
         self.state = None
         self.present = None
         self.session = 0
+        self.occupancy = 0   # bumps when our own confirmed OFF ends a stay; the next return may propose ON again
         self.active_session = False
         self.session_open = False
         self.session_origin = None
@@ -83,6 +92,12 @@ class AirPurifierPolicy:
         f = fields.get(name, {}) if isinstance(fields, dict) else {}
         return f.get("value") if isinstance(f, dict) and f.get("valid") is True and f.get("status") == "ok" else None
 
+    def _clear_absence(self, *, forget_presence=False):
+        self.absence_since = None
+        self.absence_samples = 0
+        if forget_presence:
+            self.demo_present_observed = False
+
     def observe(self, phase, snapshot):
         now = self._now()
         # Duplicate polling cannot renew the original MQTT receipt.
@@ -94,6 +109,7 @@ class AirPurifierPolicy:
             if isinstance(epoch, str):
                 self.mqtt_epoch = epoch
             if connected is False or changed:
+                self._clear_absence(forget_presence=True)
                 self.active_session = False
                 self.present_since = None
                 self.off_pending = False
@@ -103,6 +119,8 @@ class AirPurifierPolicy:
                 boot, seq = env.get("boot_id"), env.get("seq")
                 proof = (isinstance(data, dict) and isinstance(data.get("fsm_state"), str) and data.get("source") == "fsm"
                          and data.get("phase") == STATE_PHASE.get(data.get("fsm_state")))
+                if self.demo_absence and not proof:
+                    self._clear_absence(forget_presence=True)
                 if self.session_origin == "attached" and not proof:
                     self.active_session = False
                     self.present_since = None
@@ -119,6 +137,7 @@ class AirPurifierPolicy:
                 if valid and boot not in self.retired_boots and (boot != self.boot or seq > self.seq):
                     new_boot = boot != self.boot
                     if boot != self.boot or self.hub_at is None or now - self.hub_at >= self.cfg["hub_max_age_sec"]:
+                        self._clear_absence(forget_presence=True)
                         if self.boot is not None and boot != self.boot:
                             self.retired_boots.add(self.boot)
                         self.active_session = False
@@ -130,6 +149,15 @@ class AirPurifierPolicy:
                     previous = self.state
                     self.boot, self.seq, self.hub_at = boot, seq, now - age
                     self.state, self.present = data["fsm_state"], data["present"]
+                    summary = data.get("sensor_summary")
+                    demo = summary.get("demo_mode") if isinstance(summary, dict) else None
+                    speed = None
+                    if isinstance(demo, dict) and type(demo.get("enabled")) is bool:
+                        if demo.get("speed") == "normal" or demo.get("speed") == "fast" and demo["enabled"]:
+                            speed = demo["speed"]
+                    # Hub mode is diagnostic. The explicit laptop demo opt-in
+                    # selects the reviewed short threshold without changing Hub.
+                    self.hub_demo_speed = speed
                     if self.state == "START" and not self.active_session:
                         if previous != "START" or not self.session_open:
                             self.session += 1
@@ -160,6 +188,21 @@ class AirPurifierPolicy:
                         self.session_open = False
                         self.session_origin = None
                         self.present_since = None
+                    if self.demo_absence:
+                        if not (proof and connected is True and self.active_session):
+                            self._clear_absence(forget_presence=True)
+                        elif self.present:
+                            # Seated again: the next absence is a new OFF case, even if the last OFF proposal expired,
+                            # was rejected or was blocked (it stays handled only for that absence). Not tied to the
+                            # absence counter, which a viewer reconnect can reset while the person is away.
+                            self.seen.discard(self._key("set_power", "off"))
+                            self._clear_absence()
+                            self.demo_present_observed = True
+                        elif self.demo_present_observed:
+                            if self.absence_since is None:
+                                # Start locally; never credit a cached packet's age.
+                                self.absence_since = now
+                            self.absence_samples += 1
         self.snapshot = copy.deepcopy(snapshot) if isinstance(snapshot, dict) else {}
         self.snapshot_at = now
         age, receipt, expiry = (self.snapshot.get(k) for k in ("api_age_sec", "received_at", "expires_at"))
@@ -176,8 +219,9 @@ class AirPurifierPolicy:
                 if self.baseline is not None and (power != self.baseline[0] or
                         isinstance(wind, str) and isinstance(self.baseline[1], str) and wind != self.baseline[1]):
                     self.manual_until = now + self.cfg["manual_hold_sec"]
+                    self._clear_absence(forget_presence=True)
                     self.off_pending = False
-                    self.seen.add((self.session, "set_power", "on"))
+                    self.seen.add(self._key("set_power", "on"))
                 self.baseline = state
             self.api_received = received
             if ready and self._field("total_pollution_level") in self.cfg["verified_bad_levels"]:
@@ -191,11 +235,14 @@ class AirPurifierPolicy:
 
     def _candidate(self, now):
         if self.clock_invalid:
+            self._clear_absence(forget_presence=True)
             return None, "clock_regressed"
         if self.mqtt_connected is False:
+            self._clear_absence(forget_presence=True)
             self.present_since = None
             return None, "hub_disconnected"
         if self.hub_at is None or now - self.hub_at >= self.cfg["hub_max_age_sec"]:
+            self._clear_absence(forget_presence=True)
             self.present_since = None
             return None, "hub_missing_or_stale"
         s = self.snapshot
@@ -214,6 +261,16 @@ class AirPurifierPolicy:
             return None, "power_unknown"
         if self.off_pending and self.state == "IDLE" and self.present is False and power == "POWER_ON":
             return ("set_power", "off", "fsm_absent_timeout"), None
+        if self.demo_absence and self.active_session and self.present is False and power == "POWER_ON":
+            if not self.demo_present_observed:
+                return None, "waiting_for_demo_presence_baseline"
+            # Only newly accepted MQTT receipts can advance the demo interval.
+            # Polling one frozen false frame cannot create a candidate.
+            if (self.mqtt_connected is True and self.demo_present_observed and self.absence_since is not None
+                    and self.absence_samples >= 2
+                    and self.hub_at - self.absence_since >= self.cfg["demo_absence_off_sec"]):
+                return ("set_power", "off", "demo_absence_elapsed"), None
+            return None, "waiting_for_demo_absence"
         if self.active_session and self.present is True:
             if power == "POWER_OFF" and self.present_since is not None and now - self.present_since >= self.cfg["presence_on_sec"]:
                 return ("set_power", "on", "present_after_session_start"), None
@@ -233,7 +290,7 @@ class AirPurifierPolicy:
     def view(self):
         now = self._now()
         candidate, reason = self._candidate(now)
-        key = (self.session, *candidate[:2]) if candidate else None
+        key = self._key(*candidate[:2]) if candidate else None
         if key in self.seen:
             candidate, reason = None, "already_handled_this_session"
         if self.pending and (candidate is None or self.pending["key"] != key or now >= self.pending["deadline"]):
@@ -253,9 +310,34 @@ class AirPurifierPolicy:
                 "session_origin": self.session_origin,
                 "presence_elapsed_sec": max(0, now - self.present_since) if self.present_since is not None else 0,
                 "presence_required_sec": self.cfg["presence_on_sec"],
+                "demo_absence_mode": self.demo_absence,
+                "hub_demo_speed": self.hub_demo_speed,
+                "absence_elapsed_sec": max(0, self.hub_at - self.absence_since)
+                    if self.absence_since is not None and self.hub_at is not None else 0,
+                "absence_required_sec": self.cfg.get("demo_absence_off_sec") if self.demo_absence else None,
                 "pollution_level": self._field("total_pollution_level"),
                 "reason": candidate[2] if candidate else reason, "proposal": proposal,
                 "result": copy.deepcopy(self.result), "persistence_basis": "api_reports_not_sensor_measurements"}
+
+    def _key(self, operation, value):
+        return (self.session, self.occupancy, operation, value)
+
+    def expect(self, value, *, manual=False):
+        """A command from this console was confirmed by GET readback. Move the baseline so the next snapshot is not
+        taken for an outside manual change (that would hold every proposal for manual_hold_sec).
+        Policy OFF ends this stay: the person who sits down next can get a new ON proposal in the same FSM session.
+        A manual console OFF is the user's own choice: hold proposals (no ON offer 30 s later) as before."""
+        power, wind = self.baseline if self.baseline is not None else (None, None)
+        if value in ("POWER_ON", "POWER_OFF"):
+            self.baseline = (value, None)   # ON resumes the device's own last mode; we never set or assume it
+            if value == "POWER_OFF" and manual:
+                self.manual_until = self._now() + self.cfg["manual_hold_sec"]
+                self.off_pending = False
+            elif value == "POWER_OFF":
+                self.occupancy += 1
+                self.off_pending = False
+        elif value in ("LOW", "AUTO"):
+            self.baseline = (power, value)
 
     def _connection_reviewable(self):
         # Unknown permits a human-review candidate only; never assert online.
@@ -267,7 +349,7 @@ class AirPurifierPolicy:
         now = self._now()
         candidate, _ = self._candidate(now)
         return bool(p and p["proposal_id"] == proposal_id and now < p["deadline"]
-                    and candidate and (self.session, *candidate[:2]) == p["key"])
+                    and candidate and self._key(*candidate[:2]) == p["key"])
 
     def respond(self, proposal_id, decision, *, manual=False):
         view = self.view()  # Recheck freshness, identity, state, manual hold and expiry.

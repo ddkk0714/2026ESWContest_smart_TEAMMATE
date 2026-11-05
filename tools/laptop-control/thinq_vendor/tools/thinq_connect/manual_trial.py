@@ -131,10 +131,13 @@ def public_state(state):
 class Transport:
     """Last network boundary: no redirects, one exact POST per approved stage."""
 
-    def __init__(self, session, execute=False, *, power_control=False, policy_control=False):
+    def __init__(self, session, execute=False, *, power_control=False, policy_control=False, intent_control=False):
         self.session, self.execute = session, execute
         self.power_control = power_control
         self.policy_control = policy_control
+        # intent_control: a repeated value is a new, separately approved intent. Each permit still allows exactly
+        # one POST and is consumed before I/O, so a lost response is never resent. Without it: one POST per value.
+        self.intent_control = intent_control
         self.target = None
         self.permit = None
         self.attempted = set()
@@ -153,11 +156,12 @@ class Transport:
         if (
             not self.execute
             or value not in (("LOW", "AUTO", "POWER_ON", "POWER_OFF") if self.power_control else ("LOW", "AUTO"))
-            or value in self.attempted
+            or (value in self.attempted and not self.intent_control)
             or self.permit is not None
         ):
             raise StopTrial("POST permit denied")
-        if value == "AUTO" and "LOW" not in self.attempted and not (self.policy_control and policy_auto):
+        if (value == "AUTO" and "LOW" not in self.attempted and not self.intent_control
+                and not (self.policy_control and policy_auto)):
             raise StopTrial("AUTO restore cannot precede LOW attempt")
         self.permit = value
 
@@ -190,7 +194,7 @@ class Transport:
                 or self.target is None
                 or value is None
                 or (value in ("POWER_ON", "POWER_OFF") and not self.power_control)
-                or value in self.attempted
+                or (value in self.attempted and not self.intent_control)
                 or parsed.path != f"/devices/{self.target}/control"
                 or kwargs.get("json") != control_payload(value)
             ):
@@ -216,6 +220,7 @@ class DeviceIO:
 
     async def call(self, method, *args, timeout=15):
         self.transport.last_status = None
+        self.last_method = method   # which API step failed, for a public error label (no IDs)
         try:
             return await getattr(self.sdk, method)(*args, timeout=timeout)
         except (StopTrial, ApiFailure):
@@ -238,7 +243,12 @@ class DeviceIO:
             and self.probe.summarize_device(item)["model_name"] == "AIR_910604_WW"
         ]
         if len(matches) != 1:
-            raise StopTrial("Exactly one matching purifier is required")
+            # Distinguish the causes for the UI without exposing any ID or model string.
+            if len(matches) > 1:
+                raise StopTrial("Multiple matching purifiers")
+            if any(self.probe.summarize_device(item)["device_type"] == "DEVICE_AIR_PURIFIER" for item in devices):
+                raise StopTrial("Purifier model differs")
+            raise StopTrial("No purifier in device list" if devices else "Empty device list")
         selected = matches[0]
         info = selected.get("deviceInfo")
         info = info if isinstance(info, dict) else {}

@@ -64,21 +64,28 @@ class InputCapture:
         self._down_at: dict[object, float] = {}     # 메모리 전용, 외부로 안 나감
         self._move_throttle = move_throttle_s
         self._last_move_t = 0.0
+        self.keyboard_enabled = True
+        self._generation = 0
+        self._running = False
 
     # ---------- 키보드 ----------
-    def _on_press(self, key):
-        t = time.monotonic()
-        if key in self._down_at:
-            return  # auto-repeat: 새 타건 아님 → 무시
-        self._down_at[key] = t
+    def _on_press(self, key, generation=None):
         with self._lock:
-            self._events.append(KeyEvent(t, classify(key), down=True))
+            if not self.keyboard_enabled or generation is not None and generation != self._generation:
+                return
+            if key in self._down_at:
+                return
+            self._down_at[key] = time.monotonic()
+            self._events.append(KeyEvent(self._down_at[key], classify(key), down=True))
 
-    def _on_release(self, key):
-        t = time.monotonic()
-        self._down_at.pop(key, None)
+    def _on_release(self, key, generation=None):
         with self._lock:
-            self._events.append(KeyEvent(t, classify(key), down=False))
+            if not self.keyboard_enabled or generation is not None and generation != self._generation:
+                return
+            if key not in self._down_at:
+                return
+            self._down_at.pop(key, None)
+            self._events.append(KeyEvent(time.monotonic(), classify(key), down=False))
 
     # ---------- 마우스 (좌표/버튼 무시, 활동만) ----------
     def _on_move(self, x, y):
@@ -100,19 +107,55 @@ class InputCapture:
             self._mouse.append(MouseEvent(time.monotonic(), "scroll"))
 
     # ---------- 수명주기 ----------
+    def _start_keyboard(self):
+        generation = self._generation
+        listener = keyboard.Listener(on_press=lambda key: self._on_press(key, generation),
+                                     on_release=lambda key: self._on_release(key, generation))
+        listener.start()
+        self._kb = listener
+
+    def set_keyboard_enabled(self, enabled):
+        if type(enabled) is not bool:
+            raise ValueError('boolean_required')
+        if enabled == self.keyboard_enabled and (not self._running or not enabled or self.keyboard_running()):
+            return
+        with self._lock:
+            self._generation += 1
+            self.keyboard_enabled = False
+            self._events.clear()
+            self._down_at.clear()
+            old, self._kb = self._kb, None
+        if old is not None:
+            old.stop()
+            old.join(timeout=2)
+            if old.is_alive():
+                self._kb = old
+                raise RuntimeError('keyboard_listener_did_not_stop')
+        with self._lock:
+            self.keyboard_enabled = enabled
+        if enabled and self._running:
+            self._start_keyboard()
+
+    def keyboard_running(self):
+        return bool(self.keyboard_enabled and self._kb is not None and self._kb.is_alive())
+
+    def mouse_running(self):
+        return bool(self._ms is not None and self._ms.is_alive())
+
     def start(self):
-        self._kb = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
-        self._ms = mouse.Listener(
-            on_move=self._on_move, on_click=self._on_click, on_scroll=self._on_scroll
-        )
-        self._kb.start()
+        self._running = True
+        self._ms = mouse.Listener(on_move=self._on_move, on_click=self._on_click, on_scroll=self._on_scroll)
         self._ms.start()
+        if self.keyboard_enabled:
+            self._start_keyboard()
 
     def stop(self):
-        for lst in (self._kb, self._ms):
-            if lst is not None:
-                lst.stop()
-        self._kb = self._ms = None
+        self._running = False
+        self.set_keyboard_enabled(False)
+        if self._ms is not None:
+            self._ms.stop()
+            self._ms.join(timeout=2)
+        self._ms = None
 
     # ---------- 조회 ----------
     def snapshot(self, since_t: float | None = None) -> list[KeyEvent]:
