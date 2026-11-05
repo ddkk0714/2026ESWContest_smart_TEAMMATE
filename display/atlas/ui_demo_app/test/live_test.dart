@@ -723,6 +723,29 @@ void main() {
       expect(m.page, DemoPage.report);
     });
 
+    test('V54: focus entered while a window was open starts once it closes', () {
+      final m = model();
+      DisplayState s(String fsm) => DisplayState.fromEnvelope(phase(fsm));
+      m.preferencesOpen = true; // 앱이 개발자 화면으로 켜졌다
+      m.followLive(s('FOCUS_PC'));
+      m.followLive(s('FOCUS_PC'));
+      expect(m.active, isFalse);
+      m.preferencesOpen = false; // 창을 닫았다 — hub 는 아직 집중
+      m.followLive(s('FOCUS_PC'));
+      expect(m.active, isTrue);
+    });
+
+    test('V54: a missed focus is forgotten if the hub leaves focus', () {
+      final m = model();
+      DisplayState s(String fsm) => DisplayState.fromEnvelope(phase(fsm));
+      m.preferencesOpen = true;
+      m.followLive(s('FOCUS_PC'));
+      m.followLive(s('IDLE'));
+      m.preferencesOpen = false;
+      m.followLive(s('IDLE'));
+      expect(m.active, isFalse);
+    });
+
     test('auto start off shows the start proposal instead', () {
       final m = model()..selectProfile(2);
       m.persona.preferences.autoStart = false;
