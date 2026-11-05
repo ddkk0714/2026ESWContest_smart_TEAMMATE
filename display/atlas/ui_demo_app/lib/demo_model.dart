@@ -169,6 +169,7 @@ class DemoModel extends ChangeNotifier {
   /// hub 가 REST(휴식) 상태다. 집중 상세가 쉬는 중 문구로 바뀌고 경과 시간을 멈춘다.
   bool resting = false;
   String? _liveFsm;
+  bool _missedFocus = false; // V54: 창이 열려 있어 미룬 hub 집중 진입
   final List<Persona> profiles;
   static List<Persona> defaultProfiles() => [
         Persona(name: '지우', job: '수험생', rounds: 12),
@@ -531,10 +532,15 @@ class DemoModel extends ChangeNotifier {
     _liveFsm = s.fsmState;
     if (postureLabel != null) posture = postureLabel;
     final focus = s.fsmState.startsWith('FOCUS_');
-    final enteredFocus =
-        focus && (previous == null || !previous.startsWith('FOCUS_'));
+    // V54(V51 기능 옮김): 설정·개발자 화면이 열려 있는 동안 hub 가 집중에 들어가면 그 순간을 미뤄 둔다. 창을 닫은 뒤
+    // hub 가 아직 집중이면 그때 들어간 것으로 본다(11-04·11-05: 앱이 개발자 화면으로 켜져 집중 진입을 놓치고 hub 는 계속 FOCUS).
+    if (!focus) _missedFocus = false;
+    final enteredFocus = focus &&
+        (previous == null || !previous.startsWith('FOCUS_') || _missedFocus);
     if (!active) {
+      if (enteredFocus && preferencesOpen) _missedFocus = true;
       if (enteredFocus && !preferencesOpen) {
+        _missedFocus = false;
         if (persona.preferences.autoStart) {
           start(automatic: true);
           timeline.add(s);

@@ -1221,7 +1221,9 @@ class _DemoShellState extends State<DemoShell> {
             SwitchListTile(
                 key: const ValueKey('demo-fast'),
                 title: const Text('빠른 진행'),
-                value: m.presentationEnabled,
+                // V54: 스위치는 hub 의 실제 빠른 시연 상태(state/phase demo_mode)를 따른다 — 개발자 화면(PC)에서 켜고 꺼도 맞는다.
+                // 연결 전이거나 hub 가 알려 주지 않으면 화면 쪽 발표 설정 값.
+                value: widget.live?.state?.demoFast ?? m.presentationEnabled,
                 onChanged: (v) {
                   m.configurePresentation(enabled: v);
                   widget.live?.setDemoSpeed(v);
