@@ -21,10 +21,15 @@ class Sample:
     data: dict[str, Any]
 
 
+def _int_or_none(v: Any) -> int | None:
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
 @dataclass
 class KeystrokeTick:
     received: float
     input_active: bool
+    keys: int | None = None          # 그 표본의 event_count(60 s 창 타건 수) — 늘었으면 방금 쳤다(재실 근거, 11-02)
 
 
 @dataclass
@@ -61,7 +66,8 @@ class SensorCache:
             setattr(self, kind, sample)
             if kind == "keystroke":
                 self.keystroke_history.append(
-                    KeystrokeTick(sample.received, bool(sample.data.get("input_active", False)))
+                    KeystrokeTick(sample.received, bool(sample.data.get("input_active", False)),
+                                  _int_or_none(sample.data.get("event_count")))
                 )
 
     def put_feedback(self, payload: dict[str, Any], *, received: float | None = None) -> None:

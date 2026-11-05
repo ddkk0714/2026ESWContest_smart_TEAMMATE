@@ -729,3 +729,34 @@ def test_reaction_learner_follows_active_profile(tmp_path):
     hub2, _, _ = _live(tmp_path, learning_cfg=lcfg)                       # 재시작: 정책·반응 학습 모두 dana 로
     assert hub2.active_profile_id == hub2.profile_id == "dana"
     assert hub2.learner.state_path == str(tmp_path / "dana" / "reaction.json")
+
+
+# ── 오판 표시(11-02, PC devview "오판" 버튼) ────────────────────────
+
+def test_misjudged_episode_is_not_learned(tmp_path):
+    rec, policy = _recorder(tmp_path)
+    eid, d = _open(rec, policy, _sit(posture_label="face_down", c_fatigue=0.85), "posture")
+    rec._episodes[eid]["opened_ts"] = 1000.0
+    rec.wake.start(eid, 1000.0, "face_down", 0.85)
+    rec._episodes[eid]["wake"] = True
+    before = json.loads(json.dumps(policy.stats[d.arm]))
+    assert rec.on_misjudge({"kind": "misjudge", "category": "피로 과다", "note": "안 졸림"}, ts=1005.0) == eid
+    cache = SensorCache()
+    for t, label in [(1010.0, "upright"), (1020.0, "upright"), (1030.0, "upright")]:
+        cache.put("keystroke", Sample(received=t, ts=t, seq=None, data={"typing_active": True, "input_active": True}))
+        rec._observe_signals(cache.snapshot(), t, label, 0.84)
+    rec._close(eid, status="measured", c_after=0.5, next_state="MONITOR")
+    assert policy.stats[d.arm] == before                                 # 깨우기 성공·닫을 때 효과 모두 반영 안 함
+    lines = read_records(rec.path)
+    ep = next(r for r in lines if r["schema_name"] == "personalize_episode")
+    assert ep["outcome"]["misjudged"]["category"] == "피로 과다"
+    assert any(r.get("kind") == "misjudge" and r["episode_id"] == eid for r in lines
+               if r["schema_name"] == "personalize_signal")
+
+
+def test_misjudge_without_open_episode_only_logs(tmp_path):
+    rec, policy = _recorder(tmp_path)
+    eid, d = _open(rec, policy, _sit(posture_label="upright"), "cognitive")
+    rec._episodes[eid]["opened_ts"] = 1000.0
+    assert rec.on_misjudge({"kind": "misjudge", "category": "재실"}, ts=1000.0 + 601) is None   # 창(600 s) 밖
+    assert "misjudged" not in rec._episodes[eid]

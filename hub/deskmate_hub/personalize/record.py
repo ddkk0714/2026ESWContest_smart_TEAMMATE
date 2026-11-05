@@ -303,7 +303,7 @@ class EpisodeRecorder:
             decision=decision if decision is not None else (logged or fallback_decision(result.gate, fsm_action=fsm_action)),
             ts=now)
         delivered = self.last_decision.delivered_gate if self.last_decision is not None else gate
-        self._episodes[eid] = {"cause": fsm["cause"], "gate": delivered, "upright_seen": False}
+        self._episodes[eid] = {"cause": fsm["cause"], "gate": delivered, "upright_seen": False, "opened_ts": now}
         trigger = self.wake.wants(fsm["cause"], label, drowsy, float(result.scores.c_fatigue))
         if trigger is not None:
             self.wake.start(eid, now, trigger, float(result.scores.c_fatigue))
@@ -452,6 +452,8 @@ class EpisodeRecorder:
             meta["wake_info"] = info
         mode = str((self.cfg.get("wake") or {}).get("effect_mode", "replace"))
         d = self.logger.decision_of(eid)
+        if meta is not None and meta.get("misjudged"):
+            d = None                                   # 오판으로 표시한 개입 — 학습하지 않는다(on_misjudge)
         if mode == "replace" and d is not None and self.policy is not None:
             # 10 분 C_fatigue 추세 대신 깨우기 결과로 효과 축을 바로 갱신한다(닫을 때 다시 갱신하지 않는다)
             self.policy.outcome(d, None, effect_override=reward)
@@ -485,6 +487,8 @@ class EpisodeRecorder:
             if meta is not None:
                 meta["implicit_neg"] = True
             d = sig.get("decision")
+            if meta is not None and meta.get("misjudged"):
+                d = None                               # 오판으로 표시한 개입 — 학습하지 않는다
             updated: list[str] = []
             if self.policy is not None and d is not None and not isinstance(d, dict):
                 updated = self.policy.implicit_feedback(d, float(sig["reward"]), arms=self._dim_targets(d))
@@ -537,6 +541,27 @@ class EpisodeRecorder:
         spec = self.policy.arms.get(decision.arm)
         return arm_commands(spec.device if spec else None)
 
+    def set_policy_enabled(self, on: bool) -> bool:
+        """개인화 켜기·끄기(11-02, devview 버튼 → feedback/user kind personalize_switch). 끄면 지금 사람 정책을 저장하고 내려
+        놓는다 — 결정은 FSM 기본(fallback)·학습 없음, 기록은 계속. 켜면 지금 사람의 policy.json 을 다시 읽고 첫 설정 프로필을
+        얹는다. 바뀌었으면 True."""
+        if not on:
+            if self.policy is None:
+                return False
+            self._save_policy()
+            self.policy = None
+            return True
+        if self.policy is not None:
+            return False
+        from .policy import InterventionPolicy
+
+        self.policy_path = os.path.join(self.profiles_root, self.active_profile_id, "policy.json")
+        self.policy = InterventionPolicy.load(self.policy_path, self.cfg)
+        prof, self.user_profile = self.user_profile, None
+        if prof:
+            self._apply_profile(prof, now=None, save=False)
+        return True
+
     def _save_policy(self) -> None:
         if self.policy is not None and self.policy_path:
             try:
@@ -564,9 +589,28 @@ class EpisodeRecorder:
             return None   # 한 에피소드에 피드백은 한 번(늦게 온 중복·timeout 뒤 수락은 버린다)
         self.logger.feedback(eid, verdict, ts=ts, response_ms=response_ms, request_id=request_id)
         d = self.logger.decision_of(eid)
-        if d is not None and self.policy is not None:
+        if d is not None and self.policy is not None and not self._episodes[eid].get("misjudged"):
             self.policy.feedback(d, verdict, now=ts)
             self._save_policy()
+        return eid
+
+    def on_misjudge(self, data: dict[str, Any], *, ts: float) -> str | None:
+        """feedback/user kind=misjudge(PC devview "오판" 버튼, 11-02) — 판정이 틀려 나간 개입은 개인화가 배우지 않는다.
+        아직 열린 에피소드 중 `misjudge.window_sec` 안에 열린 가장 최근 것을 표시한다. 그 뒤 카드 응답·깨우기 결과·
+        무드등 어둡게 하기·닫을 때의 효과가 정책을 움직이지 않는다(로그에는 misjudged 로 남는다). 이미 닫힌 개입은 못 뺀다."""
+        window = float((self.cfg.get("misjudge") or {}).get("window_sec", 600))
+        eid = next((e for e in reversed(list(self._episodes))
+                    if ts - float(self._episodes[e].get("opened_ts", ts)) <= window), None)
+        info = {"category": str(data.get("category") or "")[:32], "note": str(data.get("note") or "")[:200],
+                "ts_ms": int(ts * 1000)}
+        if eid is not None:
+            self._episodes[eid]["misjudged"] = info
+            text = f"오판 표시 → 이 개입은 학습에서 뺌({info['category'] or '기타'})"
+        else:
+            text = f"오판 표시({info['category'] or '기타'}) — 학습에서 뺄 열린 개입 없음"
+        self._log(f"[personalize] {text}")
+        self.logger.signal({"episode_id": eid, "session_id": self.session_id, "text_ko": text, "kind": "misjudge",
+                            "reward": None, "ts_ms": info["ts_ms"], "reason": info["category"], "detail": info})
         return eid
 
     # ── 닫기 ───────────────────────────────────────────────────
@@ -593,6 +637,8 @@ class EpisodeRecorder:
             rec["feedback"] = {"verdict": "auto_kept", "response_ms": None, "feedback_ts_ms": None, "request_id": None}
         verdict = (rec.get("feedback") or {}).get("verdict")
         d = self.logger.decision_of(eid)
+        if meta.get("misjudged"):
+            d = None                                   # 오판으로 표시한 개입 — 정책은 그대로, 기록만 남긴다
         if d is not None and self.policy is not None:
             if verdict == "auto_kept":
                 self.policy.feedback(d, "auto_kept", now=None)
@@ -603,7 +649,8 @@ class EpisodeRecorder:
             eid, status=status, c_fatigue_after=c_after, reward_accept=REWARD_ACCEPT.get(verdict, 0.0),
             posture_recovered=bool(meta.get("upright_seen")) if meta.get("cause") == "posture" else None,
             next_state=next_state, reward_effect_override=override,
-            extra={"wake": wake_info} if wake_info is not None else None)
+            extra={**({"wake": wake_info} if wake_info is not None else {}),
+                   **({"misjudged": meta["misjudged"]} if meta.get("misjudged") else {})} or None)
         if self.last_view is not None and self.last_view.get("episode_id") == eid:
             self.last_view = dict(self.last_view, closed=True, outcome=status)
         for rid, e in list(self._by_request.items()):

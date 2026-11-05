@@ -7,6 +7,9 @@
   enabled     false 면 토픽을 받아도 무시한다(운영 기본).
   timers      fast 일 때 덮을 fsm timers 키와 값. 아는 키만 쓴다. normal 로 돌아가면 켜기 전 값으로 되돌린다.
   max_on_sec  fast 로 둔 채 잊어도 이 시간 뒤 normal 로 돌아간다(0 이면 끄지 않음).
+  posture_delta  fast 일 때 덮을 ingest tof.posture_delta(자세 → 피로 증거) 값. 11-03 결선 대본: 뒤로 젖히기·거북목·턱 괴기도
+              시연에서는 개입까지 가야 한다("배속 모드에서는 판정 기준을 낮추거나 시간을 줄여야" — 사용자). normal 이면 되돌린다.
+  period_sec  fast 일 때 판정 주기(초). 11-03 사용자 "판정 주기 5초로" — 대본 8분. live.py 가 hub.period 로 쓴다.
 
 지금 모드는 state/phase sensor_summary.demo_mode 로 낸다 — 화면이 "빠른 시연" 배지를 띄운다.
 제한 Python(보드)에서 돈다 — 표준 라이브러리만.
@@ -20,13 +23,18 @@ SPEEDS = ("normal", "fast")
 
 class DemoSpeed:
     def __init__(self, cfg: dict[str, Any] | None, timers: dict[str, Any],
-                 on_log: Callable[[str], None] | None = None) -> None:
+                 on_log: Callable[[str], None] | None = None,
+                 posture_delta: dict[str, Any] | None = None) -> None:
         cfg = cfg or {}
         self.enabled = bool(cfg.get("enabled", False))
         self.max_on_sec = float(cfg.get("max_on_sec", 0) or 0)
         self._timers = timers                       # FSMEngine.tm 과 같은 dict — 바꾸면 다음 tick 부터 엔진이 읽는다
         self._fast = {k: float(v) for k, v in (cfg.get("timers") or {}).items() if k in timers}
         self._normal: dict[str, Any] = {}
+        self._delta = posture_delta if posture_delta is not None else {}   # ingest tof.posture_delta 와 같은 dict — 다음 frame 부터 읽힌다
+        self._fast_delta = {k: float(v) for k, v in (cfg.get("posture_delta") or {}).items() if k in self._delta}
+        self._normal_delta: dict[str, Any] = {}
+        self.period_sec = float(cfg.get("period_sec") or 0) or None   # fast 판정 주기(live.py 가 hub.period 로 쓴다). 없으면 그대로
         self.speed = "normal"
         self.since: float | None = None
         self.last_reason: str | None = None
@@ -55,10 +63,14 @@ class DemoSpeed:
         if speed == "fast":
             self._normal = {k: self._timers[k] for k in self._fast}
             self._timers.update(self._fast)
+            self._normal_delta = {k: self._delta[k] for k in self._fast_delta}
+            self._delta.update(self._fast_delta)
         else:
             self._timers.update(self._normal)
+            self._delta.update(self._normal_delta)
         self.speed, self.since, self.last_reason = speed, now, reason
-        changed = ", ".join(f"{k} {self._normal[k]}→{self._timers[k]}" for k in self._fast)
+        changed = ", ".join([f"{k} {self._normal[k]}→{self._timers[k]}" for k in self._fast]
+                            + [f"{k} {self._normal_delta[k]}→{self._delta[k]}" for k in self._fast_delta])
         self._log(f"[demo_fast] {speed} ({reason}) {changed}")
 
     def snapshot(self, now: float) -> dict[str, Any]:
@@ -66,6 +78,10 @@ class DemoSpeed:
         if self.speed == "fast" and self.since is not None:
             view["since"] = round(self.since, 3)
             view["timers"] = {k: self._timers[k] for k in self._fast}
+            if self._fast_delta:
+                view["posture_delta"] = {k: self._delta[k] for k in self._fast_delta}
+            if self.period_sec:
+                view["period_sec"] = self.period_sec
             if self.max_on_sec > 0:
                 view["remaining_s"] = max(0, int(self.max_on_sec - (now - self.since)))
         return view
