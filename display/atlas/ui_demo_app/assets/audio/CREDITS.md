@@ -67,3 +67,10 @@ Beethoven → Mozart → Bach → repeat.
 ## Alert chimes
 
 Files: chime_single.mp3, chime_soft.mp3, chime_alert.mp3. Synthesized from sine tones for this project on 2026-10-26; no third-party audio. Imported from PR83 e00a6f2.
+
+## Cafe music and white noise (V55)
+
+- Files: `cozy_coffee_jazz.mp3` (카페 음악), `river_birds.mp3` (백색 소음 — stream and birds).
+- Team-provided 3-minute recordings (`cozy_coffee_jazz_3min.m4a`, `river_birds_3min.m4a`), converted to
+  128 kb/s MP3 on 2026-11-05 to match the other bundled files. Source and license have not been supplied;
+  no license claim is made.
