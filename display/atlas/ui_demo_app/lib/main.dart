@@ -198,6 +198,7 @@ class _DemoAppState extends State<DemoApp> {
         live.publishProfile(persona);
         widget.tools?.setPlacement(persona.placement);
         widget.tools?.setFatigueColor(persona.preferences.fatigueWarmth);
+        widget.tools?.setMusicChoice(persona.sound);
       };
       model.onPlacement = live.sendPlacement;
       model.onReportReset = live.markReportStart;
@@ -208,6 +209,7 @@ class _DemoAppState extends State<DemoApp> {
       live.publishProfile(model.persona);
       widget.tools?.setPlacement(model.persona.placement);
       widget.tools?.setFatigueColor(model.persona.preferences.fatigueWarmth);
+      widget.tools?.setMusicChoice(model.persona.sound);
     }
     if (widget.ticking) {
       timer = Timer.periodic(const Duration(seconds: 1), (_) {

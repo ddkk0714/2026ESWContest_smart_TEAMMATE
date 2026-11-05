@@ -493,6 +493,32 @@ class FeedbackCoordinator {
   /// 지금 사람의 '피곤할 때 조명 색'(RGB). hub 가 피로 단계에서 무드등을 밝힐 때 이 색을 같이 쓴다. null 이면 색은 그대로.
   List<int>? fatigueRgb;
   void setFatigueColor(double warmth) => fatigueRgb = ilinkRgbForWarmth(warmth);
+
+  /// V55: 프로필 설정의 소리 선택(백색 소음 · 카페 음악 · 클래식 · 무음). null 이면 고른 적 없음 — 곡을 바꾸지 않는다.
+  String? musicChoice;
+
+  /// 소리 선택을 바꾼다. 음악이 나오는 중이면 바로 그 묶음의 곡으로 바꾸고, 무음이면 멈춘다.
+  Future<void> setMusicChoice(String sound) async {
+    if (musicChoice == sound) return;
+    musicChoice = sound;
+    if (!music.isPlaying) return;
+    try {
+      if (sound == '무음') {
+        await music.toggle();
+      } else {
+        await _selectPreferredTrack();
+      }
+    } catch (error) {
+      lastAudioError = error;
+    }
+  }
+
+  /// 지금 곡이 선호 묶음에 없으면 그 묶음 첫 곡으로. 선호가 없거나 모르는 이름이면 그대로.
+  Future<void> _selectPreferredTrack() async {
+    final group = musicGroups[musicChoice];
+    if (group == null || group.contains(music.selectedTrack)) return;
+    await music.selectTrack(group.first);
+  }
   String? _speakerAddress;
   String? get speakerAddress => _speakerAddress;
   bool _enabled = false;
@@ -855,6 +881,9 @@ class FeedbackCoordinator {
       if (volume != null) await music.setVolume(volume.toDouble());
       if (track != null && track != music.selectedTrack) {
         await music.selectTrack(track);
+      } else if (track == null && on) {
+        // hub 는 곡을 정하지 않는다({"on": true}) — 사람이 설정에서 고른 소리로 튼다(V55).
+        await _selectPreferredTrack();
       }
       if (on != music.isPlaying) await music.toggle();
     } on Object catch (error) {

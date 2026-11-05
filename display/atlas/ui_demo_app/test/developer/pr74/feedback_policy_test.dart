@@ -876,6 +876,41 @@ void main() {
       expect(c.lastMusicCommandId, 'm1');
     });
 
+    test('V55: on without a track plays the chosen sound', () async {
+      final music = _StateMusic();
+      final c = coordinator(music);
+      await c.setMusicChoice('카페 음악');
+      final result =
+          await c.handleControlCommand(musicCommand('m-cafe', {'on': true}));
+      expect(result?['status'], 'succeeded');
+      expect(music.isPlaying, isTrue);
+      expect(music.selectedTrack, 6);
+      expect((result?['actual'] as Map)['track_id'], 'cozy_coffee_jazz');
+      // 클래식이면 지금 곡이 클래식 묶음 안이라 그대로 둔다
+      final classic = _StateMusic();
+      final c2 = coordinator(classic);
+      await classic.selectTrack(3);
+      await c2.setMusicChoice('클래식');
+      await c2.handleControlCommand(musicCommand('m-classic', {'on': true}));
+      expect(classic.selectedTrack, 3);
+    });
+
+    test('V55: changing the sound while playing switches or stops', () async {
+      final music = _StateMusic();
+      final c = coordinator(music);
+      await c.setMusicChoice('카페 음악');
+      await c.handleControlCommand(musicCommand('m-on', {'on': true}));
+      await c.setMusicChoice('백색 소음');
+      expect(music.selectedTrack, 7);
+      expect(music.isPlaying, isTrue);
+      await c.setMusicChoice('무음');
+      expect(music.isPlaying, isFalse);
+      // 꺼져 있을 땐 고르기만 하고 틀지 않는다
+      await c.setMusicChoice('카페 음악');
+      expect(music.isPlaying, isFalse);
+      expect(music.selectedTrack, 7);
+    });
+
     test('undo sends previous back and restores the earlier music', () async {
       final music = _StateMusic(volume: .3);
       final c = coordinator(music);

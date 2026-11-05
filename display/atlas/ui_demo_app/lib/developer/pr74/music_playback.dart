@@ -16,7 +16,8 @@ abstract interface class MusicPlayback {
   Future<void> dispose();
 }
 
-/// Local assets, played in order and wrapped back to Debussy after Bach.
+/// Local assets. 클래식 여섯 곡은 차례로 돌고(바흐 뒤 드뷔시), V55 의 카페 음악·백색 소음은 한 곡을 되풀이한다
+/// ([musicGroups]). hub 의 track 번호와 맞물려 있으니 순서를 바꾸지 말고 뒤에만 더한다.
 const classicalPlaylist = [
   'audio/deskmate_test_music.mp3',
   'audio/chopin_nocturne_op9_no2.mp3',
@@ -24,6 +25,8 @@ const classicalPlaylist = [
   'audio/beethoven_fur_elise.mp3',
   'audio/mozart_sonata_k545_allegro.mp3',
   'audio/bach_prelude_bwv846.mp3',
+  'audio/cozy_coffee_jazz.mp3',
+  'audio/river_birds.mp3',
 ];
 
 const classicalTrackTitles = [
@@ -33,7 +36,20 @@ const classicalTrackTitles = [
   '베토벤 · 엘리제를 위하여',
   '모차르트 · 소나타 K.545 1악장',
   '바흐 · 프렐류드 BWV 846',
+  '카페 재즈',
+  '냇물과 새소리',
 ];
+
+/// 설정 '소리' 선택(Persona.sound) → 곡 묶음. 곡이 끝나면 같은 묶음 안에서 다음 곡(한 곡이면 그 곡을 다시).
+const musicGroups = {
+  '클래식': [0, 1, 2, 3, 4, 5],
+  '카페 음악': [6],
+  '백색 소음': [7],
+};
+
+/// [index] 가 든 묶음. 어느 묶음에도 없으면 그 곡 하나.
+List<int> musicGroupOf(int index) => musicGroups.values
+    .firstWhere((g) => g.contains(index), orElse: () => [index]);
 
 /// Small audio boundary so completion/pause races can be tested without a board.
 abstract interface class MusicTrackPlayer {
@@ -72,7 +88,8 @@ class AtlasMusicPlayback implements MusicPlayback {
     _completion = player.completed.listen((_) {
       unawaited(_enqueue(() async {
         if (!_prepared || !identical(player, _player)) return;
-        _index = (_index + 1) % classicalPlaylist.length;
+        final group = musicGroupOf(_index);
+        _index = group[(group.indexOf(_index) + 1) % group.length];
         _prepared = false;
         if (_playing) await _startTrack();
         _setPlaying(_playing);
