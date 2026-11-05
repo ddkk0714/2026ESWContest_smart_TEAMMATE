@@ -136,9 +136,9 @@ export class ThinQSession {
     if(body?.op==='policy_respond')allowed.push('proposal_id','decision');
     if(this.policyLink&&['execute','policy_respond'].includes(body?.op))allowed.push('phase');
     if(!body||Array.isArray(body)||Object.keys(body).some(k=>!allowed.includes(k))||
-      !['read','snapshot','observation','prepare','execute','physical_confirmation','revoke','policy','policy_fixture','policy_respond','auto_off'].includes(body.op)) throw new Error('허용되지 않은 ThinQ 요청이에요.');
+      !['read','snapshot','observation','prepare','execute','physical_confirmation','revoke','reconcile','policy','policy_fixture','policy_respond','auto_off'].includes(body.op)) throw new Error('허용되지 않은 ThinQ 요청이에요.');
     if(this.readOnly&&!['read','snapshot','revoke','policy'].includes(body.op)) throw new Error('Live 읽기 전용: 제어·export 요청 금지');
-    if(this.requiredAccess==='manual_control'&&!['read','snapshot','prepare','execute','physical_confirmation','revoke','policy',...(this.policyLink?['policy_respond','auto_off']:[])].includes(body.op)) throw new Error('수동 시험에서 허용되지 않은 요청이에요.');
+    if(this.requiredAccess==='manual_control'&&!['read','snapshot','prepare','execute','physical_confirmation','revoke','reconcile','policy',...(this.policyLink?['policy_respond','auto_off']:[])].includes(body.op)) throw new Error('수동 시험에서 허용되지 않은 요청이에요.');
     const response=await this.fetcher(this.baseUrl+'/call',{method:'POST',
       headers:{'Content-Type':'application/json','X-Deskmate-Session':this.key},body:JSON.stringify(body),
       signal:AbortSignal.timeout(90000)});
@@ -273,7 +273,7 @@ export async function main(args=process.argv.slice(2)) {
   const port=Number(options.port??8791);
   if(!Number.isInteger(port)||port<1024||port>65535) throw new Error('포트 범위 오류');
   const sessionMinutes=Number(options['session-minutes']??20);
-  if(![20,40].includes(sessionMinutes))throw new Error('세션 시간은 20분 또는 40분만 허용');
+  if(![20,40,60].includes(sessionMinutes))throw new Error('세션 시간은 20분·40분·60분만 허용');
   const powerControl=options['power-control']==='true';
   const policyLink=options['policy-link']==='true';
   const combinedManual=options['combined-manual']==='true';
