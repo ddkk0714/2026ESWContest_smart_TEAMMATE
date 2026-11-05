@@ -10,6 +10,7 @@ import re
 import time
 import uuid
 from collections import OrderedDict
+from pathlib import Path
 
 CMD_TOPIC = "deskmate/control/cmd"
 ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
@@ -22,10 +23,20 @@ class PhaseFeed:
         self.retired = set()
         self.mqtt_connected = None
         self.mqtt_epoch = None  # Local transport generation, never a Hub session ID.
+        self.observed_present = None
+        self.absence_started = None
+        try:
+            config = Path(__file__).resolve().parents[2] / "hub/deskmate_hub/config/air_purifier_policy.yaml"
+            value = json.loads(config.read_text())["hub_max_age_sec"]
+            self.observation_max_age = value if type(value) in (int, float) and math.isfinite(value) and value > 0 else None
+        except (OSError, ValueError, KeyError, TypeError):
+            self.observation_max_age = None  # Legacy standalone GET stays usable; no duration claim.
 
     def set_connected(self, connected):
         if connected is not self.mqtt_connected:
             self.mqtt_epoch = uuid.uuid4().hex
+            self.absence_started = None
+            self.observed_present = None
         self.mqtt_connected = connected
 
     def observe(self, topic, payload, *, retained=False):
@@ -51,6 +62,17 @@ class PhaseFeed:
                         return
                     self.retired.add(old["boot_id"])
             reasons = d.get("reasons")
+            now = self.clock()
+            gap = (self.received is not None and self.observation_max_age is not None
+                   and not 0 <= now - self.received < self.observation_max_age)
+            if gap or old and env["boot_id"] != old["boot_id"]:
+                self.absence_started = None
+                self.observed_present = None
+            if d["present"]:
+                self.absence_started = None
+            elif self.observed_present is not False or self.absence_started is None:
+                self.absence_started = now
+            self.observed_present = d["present"]
             self.envelope = {"schema_version": "1.0", "node": "hub", "boot_id": env["boot_id"], "seq": env["seq"],
                              "data": {"present": d["present"], "fsm_state": d["fsm_state"],
                                       "reasons": ["absent_timeout"] if isinstance(reasons, list) and "absent_timeout" in reasons else []}}
@@ -58,15 +80,31 @@ class PhaseFeed:
                 self.envelope["data"]["source"] = "fsm"
             if d.get("phase") in ("idle", "start", "focus", "fatigue", "recovery", "end"):
                 self.envelope["data"]["phase"] = d["phase"]
-            self.received = self.clock()
+            summary = d.get("sensor_summary")
+            demo = summary.get("demo_mode") if isinstance(summary, dict) else None
+            if (isinstance(demo, dict) and demo.get("speed") in ("fast", "normal")
+                    and type(demo.get("enabled")) is bool):
+                mode = {"speed": demo["speed"], "enabled": demo["enabled"]}
+                period = demo.get("period_sec")
+                if type(period) in (int, float) and math.isfinite(period) and period > 0:
+                    mode["period_sec"] = period
+                self.envelope["data"]["sensor_summary"] = {"demo_mode": mode}
+            self.received = now
         except (ValueError, KeyError, TypeError, AttributeError):
             return
 
     def view(self):
         if self.envelope is None:
             return None
+        now = self.clock()
+        fresh = (self.mqtt_connected is True and type(self.observed_present) is bool and self.observation_max_age is not None
+                 and 0 <= now - self.received < self.observation_max_age)
+        observation = {"fresh": fresh, "present": self.observed_present if fresh else None,
+                       "absence_elapsed_sec": max(0, now - self.absence_started)
+                           if fresh and self.observed_present is False and self.absence_started is not None else 0}
         return {"envelope": copy.deepcopy(self.envelope), "age_sec": self.clock() - self.received, "retained": False,
-                **({"mqtt_connected": self.mqtt_connected, "mqtt_epoch": self.mqtt_epoch} if self.mqtt_connected is not None else {})}
+                **({"mqtt_connected": self.mqtt_connected, "mqtt_epoch": self.mqtt_epoch,
+                    "presence_observation": observation} if self.mqtt_connected is not None else {})}
 
 
 class CommandObserver:

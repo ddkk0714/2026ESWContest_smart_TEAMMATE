@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "thinq_vendor"))
 from poc.session import Session
 from poc.session import OBSERVATION_FIELDS as FIELDS
+from automatic_off import AutomaticOff
 from thinq_bridge import ReadSnapshot
 from tools.thinq_connect.manual_trial import ApiFailure, StopTrial, Transport, control_payload
 
@@ -90,11 +91,13 @@ class HostSession:
         self.snapshot = ReadSnapshot(FIELDS, mode="fixture" if self.backend == "fixture" else "live", monotonic=clock)
         self.policy_module, self.policy_config = policy_support()
         self.policy_link = session.ctx.get("policy_link") is True
-        self.policy = self.policy_module.AirPurifierPolicy(self.policy_config, clock=clock, manual_review=self.policy_link) if self.policy_module else None
+        self.policy = self.policy_module.AirPurifierPolicy(self.policy_config, clock=clock, manual_review=self.policy_link,
+            demo_absence=session.ctx.get("demo_absence") is True) if self.policy_module else None
         self.session.before_post = self.check_policy_post
         self.fixture_policy_active = False
         self.policy_phase = None
         self.policy_phase_at = clock()
+        self.auto_off = AutomaticOff(self)
 
     def active(self):
         return not self.revoked and self.clock() < self.deadline
@@ -107,22 +110,32 @@ class HostSession:
                 "mode": "fixture" if self.backend == "fixture" else "live",
                 "power_control": self.session.ctx.get("power_control") is True,
                 "policy_link": self.policy_link,
+                "combined_manual": self.session.ctx.get("combined_manual") is True,
                 "session_lifetime_seconds": self.lifetime,
+                "automatic_off_enabled": self.auto_off.enabled(),
                 "policy_post_enabled": self.policy_link and self.backend == "live_manual" and self.session.ctx.get("policy_live_post") is True,
                 "access": "read_only" if self.backend == "live_read_only" or not self.session.ctx["enabled"] else "manual_control"}
 
     async def call(self, key, request):
         if not self.active() or not hmac.compare_digest(str(key), self.key):
             raise PermissionError("session_expired_or_invalid")
+        if isinstance(request, dict) and request.get('op') == 'auto_off' and request.get('action') == 'disarm':
+            if set(request) != {'op', 'action'}:
+                raise ValueError('unexpected_request_fields')
+            return {**await self.auto_off.call(request), 'mode': 'fixture' if self.backend == 'fixture' else 'live'}
         if self.lock.locked():
             raise RuntimeError("busy")
         if not isinstance(request, dict) or request.get("op") not in {
             "read", "snapshot", "observation", "prepare", "execute", "physical_confirmation", "revoke",
-            "policy", "policy_fixture", "policy_respond"
+            "policy", "policy_fixture", "policy_respond", "auto_off"
         }:
             raise ValueError("unsupported_operation")
         if self.backend == "live_read_only" and request["op"] not in {"read", "snapshot", "revoke", "policy"}:
             raise ValueError("live_read_only_operation_blocked")
+        if request['op'] == 'auto_off':
+            if set(request) - {'op', 'action', 'phase', 'approved', 'physical_online_confirmed', 'no_external_change'}:
+                raise ValueError('unexpected_request_fields')
+            return {**await self.auto_off.call(request), "mode": "fixture" if self.backend == "fixture" else "live"}
         allowed = {"op", "value", "nonce", "approved", "physical_online_confirmed", "no_external_change"}
         if request["op"] in {"policy", "policy_fixture", "policy_respond"}:
             allowed = {"policy": {"op", "phase"}, "policy_fixture": {"op", "scenario"},
@@ -171,6 +184,7 @@ class HostSession:
                 result["fixture_timeline"] = self.fixture_policy_active
                 result["manual_review"] = self.policy_link
                 result["connection"] = self.snapshot.view()["connection"]
+                result["automatic_off"] = self.auto_off.view()
                 return result
             if request["op"] == "snapshot":
                 return self.snapshot.view()
@@ -188,6 +202,8 @@ class HostSession:
                 self.session.ctx.pop("challenge", None)
                 return {"status": "blocked", "reason": "live_policy_post_requires_separate_authorization",
                         "post_enabled": False, "mode": "live", "snapshot": self.snapshot.view()}
+            if request['op'] == 'prepare' and self.session.ctx.get('combined_manual') is True:
+                self.auto_off.consent = None  # Manual intent cancels automatic consent.
             attempts = len(self.session.ctx["attempted"])
             policy_command = (self.session.ctx.get("challenge") or {}).get("policy") if request["op"] == "execute" else None
             if self.policy_link and request["op"] == "execute":
@@ -220,9 +236,19 @@ class HostSession:
             return public
 
     def check_policy_post(self, challenge, fresh):
+        if challenge.get('automatic_off') and challenge.get('value') != 'POWER_OFF':
+            return False
+        if challenge.get('automatic_off'):
+            self.auto_off.refresh_source()
+        if challenge.get('automatic_off') and not (self.auto_off.inflight and self.auto_off.valid()):
+            return False
         if not self.policy_link:
             return challenge.get("policy") is None
         approval = challenge.get("policy")
+        if approval is None and self.session.ctx.get('combined_manual') is True:
+            return (not challenge.get('automatic_off') and self.active()
+                    and self.session.ctx.get('policy_live_post') is True
+                    and challenge.get('value') in ('LOW', 'AUTO', 'POWER_ON', 'POWER_OFF'))
         stage = self.session.ctx.get("policy_stage")
         if stage is not None and challenge.get("value") != stage:
             return False
@@ -344,7 +370,7 @@ async def serve_fixture(*, allow_control=False, port=8792, power_control=False, 
         await runner.cleanup()
 
 
-async def serve(token, *, client_id, allow_control=False, port=8792, loopback=False, power_control=False, policy_link=False, policy_live_post=False, policy_stage=None, lifetime=1200):
+async def serve(token, *, client_id, allow_control=False, port=8792, loopback=False, power_control=False, policy_link=False, policy_live_post=False, policy_stage=None, demo_absence=False, automatic_off=False, combined_manual=False, lifetime=1200):
     from aiohttp import ClientSession, ClientTimeout, DummyCookieJar, web
     from thinqconnect.thinq_api import ThinQApi
 
@@ -353,7 +379,7 @@ async def serve(token, *, client_id, allow_control=False, port=8792, loopback=Fa
         transport = Transport(http, execute=allow_control, power_control=power_control, policy_control=policy_link)
         sdk = GuardedSdk(ThinQApi(session=transport, access_token=token,
                                   country_code="KR", client_id=client_id), transport)
-        host = HostSession(Session(sdk, {"enabled": allow_control, "backend": "live_manual" if allow_control else "live_read_only", "power_control": power_control, "policy_link": policy_link, "policy_live_post": policy_live_post, "policy_stage": policy_stage}), lifetime=lifetime)
+        host = HostSession(Session(sdk, {"enabled": allow_control, "backend": "live_manual" if allow_control else "live_read_only", "power_control": power_control, "policy_link": policy_link, "policy_live_post": policy_live_post, "policy_stage": policy_stage, "demo_absence": demo_absence, "automatic_off": automatic_off, "combined_manual": combined_manual}), lifetime=lifetime)
         runner = web.AppRunner(make_app(host, port=port), access_log=None)
         await runner.setup()
         # Docker publishes this container port on host 127.0.0.1 only.
@@ -453,9 +479,18 @@ def main():
     parser.add_argument("--policy-link", action="store_true", help="suggestion -> existing manual approval; Live POST blocked by default")
     parser.add_argument("--allow-policy-post", action="store_true", help="requires separate authorization; never automatic control")
     parser.add_argument("--policy-stage", choices=("POWER_ON", "POWER_OFF", "AUTO"), help="limit the separately authorized trial to one operation")
+    parser.add_argument("--demo-absence", action="store_true", help="explicit short absence demo; manual approval still required, never automatic POST")
+    parser.add_argument("--combined-manual", action="store_true", help="explicit unified manual controls plus policy suggestions; approvals still required")
+    parser.add_argument("--auto-off", action="store_true", help="explicit consent: one automatic OFF only; never ON")
     parser.add_argument("--session-minutes", type=int, choices=(20, 40), default=20)
     parser.add_argument("--port", type=int, default=8792)
     args = parser.parse_args()
+    if args.combined_manual and not (args.live_manual and args.power_control and args.policy_link and args.allow_policy_post and args.policy_stage is None):
+        raise SystemExit('combined_manual_requires_explicit_unified_mode')
+    if args.auto_off and not (args.demo_absence and args.allow_policy_post and (args.policy_stage == 'POWER_OFF' or args.combined_manual and args.policy_stage is None)):
+        raise SystemExit('automatic_off_requires_demo_and_OFF_only_authorization')
+    if args.demo_absence and not (args.policy_link and args.live_manual):
+        raise SystemExit("demo_absence_requires_live_manual_policy_mode")
     if args.policy_link and not (args.power_control and (args.live_manual or args.fixture and args.allow_control)):
         raise SystemExit("policy_link_requires_explicit_manual_or_fixture")
     if args.allow_policy_post and not (args.policy_link and args.live_manual):
@@ -495,7 +530,8 @@ def main():
     try:
         asyncio.run(serve(token, client_id=client_id, allow_control=args.allow_control or args.live_manual,
                           port=args.port, loopback=args.live_read_only or args.live_manual, power_control=args.power_control,
-                          policy_link=args.policy_link, policy_live_post=args.allow_policy_post, policy_stage=args.policy_stage, lifetime=args.session_minutes * 60))
+                          policy_link=args.policy_link, policy_live_post=args.allow_policy_post, policy_stage=args.policy_stage,
+                          demo_absence=args.demo_absence, automatic_off=args.auto_off, combined_manual=args.combined_manual, lifetime=args.session_minutes * 60))
     except KeyboardInterrupt:
         pass
     except Exception:

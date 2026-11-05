@@ -221,7 +221,7 @@ class Session:
         if op == "prepare":
             self.ctx.pop("challenge", None)
             value = request.get("value")
-            if self.ctx.get("policy_link") and self.policy_approval is None:
+            if self.ctx.get("policy_link") and self.policy_approval is None and self.ctx.get("combined_manual") is not True:
                 raise StopTrial("policy_handoff_required")
             power = value in ("POWER_ON", "POWER_OFF")
             if value not in ("LOW", "AUTO", "POWER_ON", "POWER_OFF") or value in self.ctx["attempted"]:

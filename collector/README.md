@@ -89,11 +89,11 @@ pytest collector/tests -v
 노트북을 Pi 4 와 같은 휴대폰 핫스팟에 붙인 뒤 저장소 루트에서:
 
 ```bash
-python -m collector --target hotspot    # = --broker 172.20.10.3 (Pi 4 wlan0)
-python -m collector --target lan        # = --broker 172.16.34.199 (연구실 LAN · Pi 5 직결)
+python -m collector --target hotspot    # = --broker <PI4_HOST> (Pi 4 wlan0)
+python -m collector --target lan        # = --broker <PI4_HOST> (연구실 LAN · Pi 5 직결)
 ```
 
-- 켜면 `[mqtt] connected → 172.20.10.3:1883` 이 뜨고 1초마다 `[PUB]` 줄이 나온다. 핫스팟이 끊기면 `disconnected (자동 재연결)` 뒤
+- 켜면 `[mqtt] connected → <PI4_HOST>:1883` 이 뜨고 1초마다 `[PUB]` 줄이 나온다. 핫스팟이 끊기면 `disconnected (자동 재연결)` 뒤
   1→30 s 백오프로 다시 붙는다. 그동안 값은 `logs/keystroke.jsonl` 에만 남는다.
 - Pi 4 에서 수신 확인: `ssh pi4-via-pi5 '/data/share/deskmate/bin/mosquitto_sub -h 127.0.0.1 -t deskmate/sensor/keystroke -v'`
 - hub 반영 확인: `deskmate/state/phase` 의 `sensor_summary.keystroke` 가 이 값이고, 타이핑하면 `context` 가 `npc` → `mixed`/`pc` 로
@@ -111,7 +111,7 @@ python -m collector --broker auto       # 같은 Wi-Fi 에서 DESKMATE hub 브�
 
 - 찾는 순서: 지난번 찾은 주소(`%LOCALAPPDATA%\DESKMATE\collector_broker.json`) → `--target` 별칭 주소 → 노트북 IPv4 마다 같은 /24 전체.
   1883 포트가 열린 기기 중 hub 의 retain 토픽(`deskmate/health/hub`·`deskmate/state/phase`)이 실제로 오는 브로커만 고른다
-  (핫스팟 공유기 등은 걸러진다). 11-02 핫스팟 실측: 힌트 없이 Pi 4 `172.20.10.6` 을 4.5 s 에 찾음.
+  (핫스팟 공유기 등은 걸러진다). 11-02 핫스팟 실측: 힌트 없이 Pi 4 `<PI4_HOST>` 을 4.5 s 에 찾음.
 - 처음엔 찾을 때까지 15 s 마다 다시 찾고, 붙은 뒤엔 30 s 넘게 끊기면(핫스팟·장소가 바뀐 경우) 다시 찾는다. 그 사이 값은
   `logs/keystroke.jsonl` 에만 남는다.
 - 로그인 때 창 없이 자동으로 켜기(Windows 작업 스케줄러, 현재 사용자):
@@ -144,3 +144,29 @@ collector/
 ├── publisher.py    공통 envelope 래핑 + paho-mqtt 발행 + 미연결 시 로컬 폴백 + health(LWT)
 └── tests/          합성 이벤트 단위 테스트
 ```
+
+### 노트북 HTML에서 키보드 캡처 선택
+
+상단 버튼은 실제 키보드 리스너를 중지/새로 시작한다. 마우스 리스너는 유지한다.
+전환마다 키 버퍼와 눌림 상태를 비우고 리스너 세대를 바꿔 이전 콜백의 입력 혼입을 막는다.
+수집기가 없거나 heartbeat가 5초 넘게 오래되면 미연결로 표시하며 자동 실행하지 않는다.
+
+현재 사용자 전용 `%LOCALAPPDATA%\DESKMATE\capture-control\`의 요청/상태 파일을 사용한다.
+파일에는 ON/OFF·프로세스 생존·ACK만 있고 키 이벤트·PAT·ThinQ 식별자는 없다.
+수집기는 사용자별 파일 잠금으로 중복 실행을 거부한다. 자동 시작 작업은 임의 변경하지 않는다.
+기존 버전 수집기에는 이 제어 인터페이스가 없으므로 미연결로 표시한다.
+
+Windows PowerShell에서 해당 worktree로 이동한 후 기존 의존성이 있는 Python으로 실행:
+
+```powershell
+# 실제 MQTT를 쓰지 않는 로컬 캡처/HTML 시험
+python -X utf8 -m collector --local-only
+# Pi와 연결한 후 사용할 기존 MQTT 실행 경로 (위 수집기를 먼저 종료)
+python -X utf8 -m collector --broker auto
+```
+
+`--local-only`는 키/마우스 캡처만 시험하며 MQTT 탐색·발행과 특징 로그 저장을 하지 않는다.
+OFF 선택은 재실행 후에도 유지한다. 실제 MQTT 모드에서는 동일 Envelope/주기에
+`valid:false`, `keyboard_capture_enabled:false`, `capture_status:user_disabled`를 보내며
+키보드 수치를 0으로 만들지 않는다. 마우스 활동은 별도로 유지한다.
+단, 기존 Hub의 과거 윈도우 이력은 소급 삭제하지 않는다. 운영 FSM·개인화 코드는 변경하지 않는다.

@@ -92,6 +92,27 @@ ssh -N -T -o BatchMode=yes -o StrictHostKeyChecking=yes \
   -L "127.0.0.2:8765:$PI4_LAN:8765" "root@$PI5_HOST"
 ```
 
+### 장시간 사용 시 노트북 중계 자동 재연결
+
+연결이 잠깐 끊기는 경우에는 위의 일회 SSH 대신 다음 감독 도구를 사용할 수 있다.
+이미 신뢰한 현재 주소와 known_hosts만 사용하며, 새 키를 자동 승인하지 않는다.
+
+```bash
+python3 tools/laptop-control/sensor_forward.py \
+  --pi5 "$PI5_HOST" --pi4-lan "$PI4_LAN" --known-hosts "$TRUST_FILE"
+# 기존 신원 확인이 alias를 사용한 경우에만 --host-key-alias "$TRUST_ALIAS" 추가
+```
+
+- 사용자가 Ctrl+C로 종료할 때까지 실행한다. 임시 중계에 있었던 2시간 자동 종료는 없다.
+- 네트워크 단절은 5/10/20/30초 간격(최대 30초)으로 재접속한다.
+- 호스트 키·인증·로컬 포트 충돌 오류는 재시도하지 않고 중단한다. 보안 검증을 완화하지 않는다.
+- SSH가 실행 중이라는 표시만으로 실제 센서 수신 성공을 보장하지 않는다.
+  devview의 MQTT 연결 상태, phase 시퀀스 증가와 수신 age를 별도로 확인한다.
+- devview는 기존 2초 재연결·재구독 루프를 그대로 사용한다. ThinQ 인증·HTML 서버 재시작은 필요 없다.
+  센서 단절로 무효화된 정책 제안은 자동 복원하지 않는다.
+- 로그는 고정된 오류 종류만 출력한다. PAT·Cloud·MQTT 발행·보드 서비스 조작은 없다.
+- 절전·WSL 종료·핫스팟 주소 변경까지 자동 해결하는 기능은 아니다. 주소 변경 시 검증 후 이 중계만 다시 실행한다.
+
 이 터널을 사용할 때 위의 PI4_HOST를 `127.0.0.2`로 지정한다. 기존 root SSH는 전송에만 사용하며 Native Service나 다른 패키지의 권한을 빌리지 않는다. loopback에만 bind하며 포트 충돌 시 다른 프로세스를 종료하지 말고 중단한다.
 
 ## 실패·종료·복구
