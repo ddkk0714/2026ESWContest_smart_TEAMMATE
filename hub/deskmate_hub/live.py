@@ -301,6 +301,8 @@ class LiveHub:
         # 빠른 시연 깨우기 규칙(demo_wake.py, control.yaml demo_wake:) — speed fast 일 때만 ACTION_POSTURE 기기를 도움 순서로 고른다
         self.demo_wake = DemoWake(self.control_cfg.get("demo_wake"))
         self._demo_plan: dict[str, Any] | None = None
+        self._demo_notice: dict[str, Any] | None = None          # 떠 있는 빠른 시연 안내 카드(바른 자세로 돌아오면 닫는다)
+        self._fatigue_label: str | None = None                    # FATIGUE 확정 순간의 자세 — 원인 판단이 흔들려도 시연 규칙에 쓴다
         self.rest_notifier = RestNotifier(
             self.control_cfg.get("rest_notice"), fsm_cfg=self.fsm_cfg, boot_id=self.boot_id,
             publish_request=self.publish_request, publish_control=rest_sink,
@@ -491,13 +493,35 @@ class LiveHub:
             summary["personalize_switch"] = "off" if self.personalize_off else "on"   # devview 개인화 버튼(11-02)
         # 빠른 시연(11-03 결선 대본): ACTION_POSTURE 에 들어온 tick 이면 밴딧 대신 도움 순서 규칙이 기기를 고른다(demo_wake.py)
         self._demo_plan = None
-        if (self.control is not None and self.demo_speed.speed == "fast" and self.personalize_recorder is not None
-                and result.state is State.ACTION_POSTURE and result.state is not prev_state):
-            profile = self.personalize_recorder.user_profile if isinstance(self.personalize_recorder.user_profile, dict) else {}
-            self._demo_plan = self.demo_wake.decide(self.personalize_recorder.last_posture_label, profile.get("focus_help"))
+        if self.demo_wake.enabled:                                 # 선풍기는 방 온도가 오를 때만(demo_wake warm_rise_c) — tick 마다 관측
+            env = view.fresh("env", now, float((self.ingest_cfg.get("freshness_sec") or {}).get("env", 30)))
+            temp = (env.data or {}).get("temp_c") if env is not None and (env.data or {}).get("temp_valid", True) else None
+            self.demo_wake.observe_temp(float(temp) if temp is not None else None, now)
+        # 11-05 실기: 젖힘·엎드림으로 졸음이 확정됐는데 원인 판단 tick 에 자세가 잠깐 upright 로 읽혀 원인이 환경(더위)으로 갔고,
+        # 환경 개입은 제안으로만 나가 선풍기 명령이 없었다(→ 휴식 제안 → 휴식 알림). 그래서 빠른 시연에서는
+        #   ACTION_POSTURE: 도움 순서 규칙. 지금 자세가 규칙에 없으면(흔들림) FATIGUE 확정 순간의 자세로.
+        #   ACTION_ENV    : 방 온도가 올랐으면 선풍기를 바로 켠다("더위 때문에 사람이 피로하면 선풍기가 켜져야지" — 사용자).
+        rec = self.personalize_recorder
+        if rec is not None and result.state is State.FATIGUE and prev_state is not State.FATIGUE:
+            self._fatigue_label = rec.last_posture_label
+        if (self.control is not None and self.demo_speed.speed == "fast" and rec is not None
+                and result.state in (State.ACTION_POSTURE, State.ACTION_ENV, State.ACTION_BREAK)
+                and result.state is not prev_state):
+            profile = rec.user_profile if isinstance(rec.user_profile, dict) else {}
+            remembered, self._fatigue_label = self._fatigue_label, None
+            label = rec.last_posture_label
+            if label not in self.demo_wake.rule_labels and remembered:
+                label = remembered                         # 원인 판단 tick 에 자세가 흔들렸으면 확정 순간의 자세
+            # 원인이 휴식(인지)으로 간 경우는 졸음 확정 직후 첫 개입일 때만 — 재시도의 휴식 제안은 원래 경로
+            if result.state is not State.ACTION_BREAK or remembered is not None:
+                self._demo_plan = self.demo_wake.decide(label, profile.get("focus_help"))
             if self._demo_plan is not None:
                 specs, specs_arm = self._demo_plan["specs"], self._demo_plan["arm"]
-                print(f"[demo_wake] {self._demo_plan['label']} → {self._demo_plan['arm']}", file=self.out, flush=True)
+                if specs:
+                    result.gate = GateMode.AUTO                # 시연 깨우기는 제안이 아니라 바로 실행
+                print(f"[demo_wake] {self._demo_plan['label']} → {self._demo_plan['arm']} "
+                      f"(원인 {'+'.join(self._demo_plan.get('causes') or [])} · 온도 상승 {self._demo_plan.get('temp_rise_c')} °C)",
+                      file=self.out, flush=True)
         if self.demo_wake.enabled:
             summary["demo_wake"] = self.demo_wake.snapshot()
         summary["posture_calib"] = self.posture_calib.snapshot()
@@ -573,6 +597,7 @@ class LiveHub:
             if self._demo_plan["kind"] == "notice":
                 self._deliver_demo_notice(result, now)
         else:
+            self._close_demo_notice(now)
             self._deliver_deviceless_arm(result, prev_state, specs, now, self._sound_pref())
         if (self.personalize_recorder is not None and self.personalize_recorder.last_episode_id
                 and self.pending_request is not None):
@@ -642,7 +667,10 @@ class LiveHub:
             return
         if getattr(self, "_absent_off_since", None) is None:
             self._absent_off_since = now
-        if now - self._absent_off_since >= float(cfg.get("after_sec", 60)):
+        after = float(cfg.get("after_sec", 60))
+        if self.demo_speed.speed == "fast" and self.demo_speed.absent_off_after_sec is not None:
+            after = self.demo_speed.absent_off_after_sec        # 빠른 시연(fsm.yaml demo_fast.absent_off_after_sec, 11-04)
+        if now - self._absent_off_since >= after:
             self._absent_off_armed = False
             print(f"[control] 자리 비움 {now - self._absent_off_since:.0f}s → 기기 끄기", file=self.out, flush=True)
             self._absent_off_ep = self.control.on_enter_action("ABSENT", "absent", GateMode.AUTO, now,
@@ -743,6 +771,19 @@ class LiveHub:
             if item.get("data", {}).get("auto"):
                 self.seq += 1
                 self._mark_card(now, item["data"]["expires_in_s"], kind)
+                self._demo_notice = item                     # 바른 자세로 돌아오면 닫는다(_close_demo_notice)
+
+    def _close_demo_notice(self, now: float) -> None:
+        """빠른 시연의 바른 자세 안내 카드: 자세가 upright 로 돌아온 tick 에 닫는다(11-05 사용자 "5초로 바꿔").
+        앱 알림판은 같은 request_id 를 새 것으로 바꾸므로 expires_in_s 를 0.1 로 다시 보내 바로 지나가게 한다."""
+        card = getattr(self, "_demo_notice", None)
+        rec = self.personalize_recorder
+        if card is None or rec is None or rec.last_posture_label != "upright":
+            return
+        self._demo_notice = None
+        closed = dict(card, ts=now, data=dict(card["data"], expires_in_s=0.1, closed_reason="posture_recovered"))
+        self.publish_request(closed)
+        print("[demo_wake] 바른 자세로 돌아옴 → 안내 카드 닫기", file=self.out, flush=True)
 
     def _pub_scores(self, result) -> tuple[float, bool]:
         """발행용 (c_fatigue, scores_valid). 자리 비움(이번 tick present false)이면 (0.0, False) — 부재면 환경 하나만 남아 재정규화가

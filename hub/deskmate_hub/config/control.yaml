@@ -93,6 +93,12 @@ demo_wake:
   mild_labels: [recline]
   deep_labels: [face_down, drowsy]
   default_order: [light, sound, wind]
+  # 11-05 사용자 "온도 영향 받아서 선풍기를 고른다" → "24도 말고 관측하다가 온도 상승하면 그때": 선풍기는 방 온도가
+  # 최근 warm_window_sec 의 가장 낮은 값보다 warm_rise_c 이상 올랐을 때만, 아니면 다음 순위(B 그대로면 조명+음악).
+  # env temp_c = ESP32 DHT22(0.1 °C 단위, 잡음 ±0.2). 시연에서 안 오르면 센서 가까이 손을 대 데운다.
+  warm_only: [wind]
+  warm_rise_c: 0.5
+  warm_window_sec: 600
   helps:
     light: [{target_id: desk_lamp, operation: adjust_brightness, value: {percent: 60, min_raw: 153}, undo: previous}]
     sound: [{target_id: music, operation: set_music, value: {"on": true}, undo_value: {"on": false}}]

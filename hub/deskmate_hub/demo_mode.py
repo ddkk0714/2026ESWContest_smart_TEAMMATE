@@ -10,6 +10,8 @@
   posture_delta  fast 일 때 덮을 ingest tof.posture_delta(자세 → 피로 증거) 값. 11-03 결선 대본: 뒤로 젖히기·거북목·턱 괴기도
               시연에서는 개입까지 가야 한다("배속 모드에서는 판정 기준을 낮추거나 시간을 줄여야" — 사용자). normal 이면 되돌린다.
   period_sec  fast 일 때 판정 주기(초). 11-03 사용자 "판정 주기 5초로" — 대본 8분. live.py 가 hub.period 로 쓴다.
+  absent_off_after_sec  fast 일 때 자리 비움 → 기기 끄기까지(초, control.yaml absent_off.after_sec 대신). 11-04 사용자
+              "자리비움 한번 뜨고 5초 안으로 주변기기 다 꺼지게". 한 tick 만 튄 부재(11-04 13:35:10)는 다음 tick 재실이면 안 끈다.
 
 지금 모드는 state/phase sensor_summary.demo_mode 로 낸다 — 화면이 "빠른 시연" 배지를 띄운다.
 제한 Python(보드)에서 돈다 — 표준 라이브러리만.
@@ -35,6 +37,8 @@ class DemoSpeed:
         self._fast_delta = {k: float(v) for k, v in (cfg.get("posture_delta") or {}).items() if k in self._delta}
         self._normal_delta: dict[str, Any] = {}
         self.period_sec = float(cfg.get("period_sec") or 0) or None   # fast 판정 주기(live.py 가 hub.period 로 쓴다). 없으면 그대로
+        self.absent_off_after_sec = (float(cfg["absent_off_after_sec"]) if cfg.get("absent_off_after_sec") is not None
+                                     else None)                       # fast 부재 끄기 시간(live._absent_off). 없으면 control.yaml 값
         self.speed = "normal"
         self.since: float | None = None
         self.last_reason: str | None = None

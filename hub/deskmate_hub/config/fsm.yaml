@@ -55,12 +55,13 @@ timers:
 # 실행 중에 덮었다 되돌린다. 판정 경로는 그대로, "얼마나 오래 이어져야 확정하나"만 줄인다. 운영 기본은 꺼 둔다(시연 프로파일이 켠다).
 demo_fast:
   enabled: false
-  max_on_sec: 1800                 # 켜 둔 채 잊어도 30 분 뒤 normal 로
+  max_on_sec: 3600                 # 켜 둔 채 잊어도 1 시간 뒤 normal 로 (11-05 사용자 "빠른 시연 1시간으로" — 30 분이면 리허설 뒤 발표 중에 꺼진다)
   period_sec: 5                    # 11-03 사용자 "판정 주기 5초로" — 결선 대본 8분. 운영 score_period_sec 10 은 그대로
+  absent_off_after_sec: 5          # 11-04 사용자 "자리비움 한번 뜨고 5초 안으로 주변기기 다 꺼지게" — demo-b 20 s 대신. 5 s 주기면 부재 두 tick 째
   timers:
     fatigue_elevated_hold_sec: 0   # 0 = 이번 tick 이 임계 위면 바로 의심(엔진 _hold_ok·_held 가 같은 뜻으로 본다)
     fatigue_confirm_hold_sec: 0    # 0 = 의심 다음 tick 에 임계 위면 바로 확정
-    monitor_window_sec: 20         # 11-03 결선 대본(8분): 깨운 뒤 지켜보는 시간. demo-b 60 이면 깨우기 한 번에 150 s 가 걸린다
+    monitor_window_sec: 5          # 11-03 결선 대본(8분): 깨운 뒤 지켜보는 시간(demo-b 60). 11-05 사용자 "5초로 바꿔" — 20 → 5
   # 11-03 결선 대본: 배속에서는 뒤로 젖히기·거북목·턱 괴기도 개입까지 간다(점수 0.80 = 확정 0.60 위). 어떤 개입인지는
   # control.yaml demo_wake(깨우기 = 도움 순서, 거북목·턱 괴기 = 바른 자세 안내)가 정한다. normal 로 돌아가면 ingest 값으로 되돌린다.
   posture_delta:
