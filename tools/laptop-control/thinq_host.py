@@ -95,6 +95,7 @@ class HostSession:
             demo_absence=session.ctx.get("demo_absence") is True) if self.policy_module else None
         self.session.before_post = self.check_policy_post
         self.fixture_policy_active = False
+        self.post_block = None
         self.policy_phase = None
         self.policy_phase_at = clock()
         self.auto_off = AutomaticOff(self)
@@ -202,14 +203,20 @@ class HostSession:
                 self.session.ctx.pop("challenge", None)
                 return {"status": "blocked", "reason": "live_policy_post_requires_separate_authorization",
                         "post_enabled": False, "mode": "live", "snapshot": self.snapshot.view()}
-            if request['op'] == 'prepare' and self.session.ctx.get('combined_manual') is True:
-                self.auto_off.consent = None  # Manual intent cancels automatic consent.
+            if (request['op'] == 'prepare' and self.session.ctx.get('combined_manual') is True
+                    and not self.auto_off.standing()):
+                self.auto_off.consent = None  # Trial mode: a manual intent cancels the automatic consent.
             attempts = len(self.session.ctx["attempted"])
-            policy_command = (self.session.ctx.get("challenge") or {}).get("policy") if request["op"] == "execute" else None
+            pending_challenge = (self.session.ctx.get("challenge") or {}) if request["op"] == "execute" else {}
+            policy_command = pending_challenge.get("policy")
+            automatic_command = pending_challenge.get("automatic_off") is True
             if self.policy_link and request["op"] == "execute":
                 self.set_policy_phase(request.get("phase"))
+            self.post_block = None
             reply = await self.session.safe({**{k: v for k, v in request.items() if k != "phase"}, "backend": self.backend})
             public = reply["public"]
+            if public.get("reason") == "policy_changed_or_live_post_blocked" and self.post_block:
+                public["detail"] = self.post_block
             if public.get("status") == "outcome_unconfirmed" or (
                 request["op"] == "execute" and len(self.session.ctx["attempted"]) > attempts
                 and public.get("status") != "state_match"
@@ -218,6 +225,10 @@ class HostSession:
                 public["post_enabled"] = False
             if request["op"] in ("read", "execute", "reconcile"):
                 self.snapshot.update(public)
+            if request["op"] == "execute" and public.get("status") == "state_match" and self.policy:
+                # A change this console made and confirmed (button or accepted proposal) is not an outside manual
+                # change: it must not hold the absence OFF for manual_hold_sec. ThinQ app/remote changes still do.
+                self.policy.expect(public.get("value"), manual=not (policy_command or automatic_command))
             if self.policy_link and self.policy and self.policy.result:
                 if request["op"] == "execute" and policy_command and policy_command["proposal_id"] == self.policy.result["proposal_id"]:
                     self.policy.result.update(status=public.get("status"), api_accepted=public.get("api_accepted") is True,
@@ -226,9 +237,6 @@ class HostSession:
                     verified = self.backend == "live_manual" and public.get("status") == "state_match"
                     self.policy.result.update(state_confirmed=verified,
                                               actual_value=self.policy.result["value"] if verified else None)
-                    if public.get("status") == "state_match":
-                        # Our own confirmed change must not look like a manual one to the policy.
-                        self.policy.expect(public.get("value"))
                 elif request["op"] == "physical_confirmation" and public.get("status") == "user_attestation_recorded":
                     self.policy.result.update(status="user_attestation_recorded", physical_confirmed=public["physical_confirmed"],
                                               physical_evidence=public["physical_evidence"])
@@ -239,28 +247,40 @@ class HostSession:
             return public
 
     def check_policy_post(self, challenge, fresh):
-        if challenge.get('automatic_off') and challenge.get('value') != 'POWER_OFF':
+        self.post_block = None   # fixed code of the condition that stopped this POST (shown with the blocked reply)
+        allowed = (self.auto_off.pending_value,) if self.auto_off.standing() else ('POWER_OFF',)
+        if challenge.get('automatic_off') and challenge.get('value') not in allowed:
+            self.post_block = 'auto_off_wrong_value'
             return False
         if challenge.get('automatic_off'):
             self.auto_off.refresh_source()
         if challenge.get('automatic_off') and not (self.auto_off.inflight and self.auto_off.valid()):
+            self.post_block = 'auto_off_' + (self.auto_off.invalid_reason() or 'not_inflight')
             return False
         if not self.policy_link:
             return challenge.get("policy") is None
         approval = challenge.get("policy")
         if approval is None and self.session.ctx.get('combined_manual') is True:
-            return (not challenge.get('automatic_off') and self.active()
-                    and self.session.ctx.get('policy_live_post') is True
-                    and challenge.get('value') in ('LOW', 'AUTO', 'POWER_ON', 'POWER_OFF'))
+            # A console button, or an automatic OFF whose consent/absence/presence checks passed just above.
+            ok = (self.active() and self.session.ctx.get('policy_live_post') is True
+                  and challenge.get('value') in ('LOW', 'AUTO', 'POWER_ON', 'POWER_OFF'))
+            if not ok:
+                self.post_block = 'live_post_disabled'
+            return ok
         stage = self.session.ctx.get("policy_stage")
         if stage is not None and challenge.get("value") != stage:
             return False
         if not approval or not self.policy or not self.phase_current():
+            self.post_block = 'hub_phase_stale' if approval and self.policy else 'no_policy_approval'
             return False
         self.snapshot.update(fresh)
         self.policy.observe(None if self.fixture_policy_active else self.current_policy_phase(), self.snapshot.view())
-        return (self.active() and self.policy.manual_valid(approval["proposal_id"])
-                and (self.backend == "fixture" or self.session.ctx.get("policy_live_post") is True))
+        ok = (self.active() and self.policy.manual_valid(approval["proposal_id"])
+              and (self.backend == "fixture" or self.session.ctx.get("policy_live_post") is True))
+        if not ok:
+            # Why the accepted proposal no longer holds (the policy's own fixed reason vocabulary).
+            self.post_block = 'proposal_' + str(self.policy.view().get('reason') or 'changed')
+        return ok
 
     def set_policy_phase(self, phase):
         self.policy_phase, self.policy_phase_at = copy.deepcopy(phase), self.clock()
@@ -489,7 +509,7 @@ def main():
     parser.add_argument("--demo-absence", action="store_true", help="explicit short absence demo; manual approval still required, never automatic POST")
     parser.add_argument("--combined-manual", action="store_true", help="explicit unified manual controls plus policy suggestions; approvals still required")
     parser.add_argument("--auto-off", action="store_true", help="explicit consent: one automatic OFF only; never ON")
-    parser.add_argument("--session-minutes", type=int, choices=(20, 40), default=20)
+    parser.add_argument("--session-minutes", type=int, choices=(20, 40, 60), default=20)   # 60: 11-06 시연 요청
     parser.add_argument("--port", type=int, default=8792)
     args = parser.parse_args()
     if args.combined_manual and not (args.live_manual and args.power_control and args.policy_link and args.allow_policy_post and args.policy_stage is None):

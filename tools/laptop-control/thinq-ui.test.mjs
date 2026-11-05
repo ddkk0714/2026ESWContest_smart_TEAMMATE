@@ -467,7 +467,7 @@ test('automatic OFF capability survives bootstrap cache and uses only authentica
 test('automatic OFF arm requires the separate physical and preconsent checkbox',async()=>{
   const {element,requests}=await manualUi({policyLink:true,powerControl:true});
   await element('automaticOffArm').onclick();
-  assert.match(element('thinqResult').textContent,/사전 동의/);
+  assert.match(element('automaticOffState').textContent,/시작 안 됨 · 동의 체크/);   // shown under the button now
   assert.equal(requests.filter(r=>r.route==='/api/thinq/auto-off').length,0);
 });
 

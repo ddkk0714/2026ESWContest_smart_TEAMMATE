@@ -260,3 +260,170 @@ class PolicyOwnCommandTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SelectionReasonTests(unittest.IsolatedAsyncioTestCase):
+    async def read_reason(self, devices):
+        sdk = FixtureSdk(copy.deepcopy(FIXTURE))
+
+        async def device_list(**kwargs):
+            return devices
+        sdk.async_get_device_list = device_list
+        session = Session(sdk, {"enabled": False, "backend": "fixture"})
+        return (await session.safe({"op": "read", "backend": "fixture"}))["public"].get("reason")
+
+    async def test_device_selection_stops_have_public_codes(self):
+        purifier = {"deviceId": "x", "deviceInfo": {"deviceType": "DEVICE_AIR_PURIFIER", "modelName": "AIR_910604_WW",
+                                                    "reportable": True}}
+        other = {"deviceId": "y", "deviceInfo": {"deviceType": "DEVICE_AIR_PURIFIER", "modelName": "OTHER",
+                                                 "reportable": True}}
+        washer = {"deviceId": "z", "deviceInfo": {"deviceType": "DEVICE_WASHER", "modelName": "W", "reportable": True}}
+        self.assertEqual(await self.read_reason([]), "device_list_empty")
+        self.assertEqual(await self.read_reason([washer]), "purifier_not_in_account")
+        self.assertEqual(await self.read_reason([other]), "purifier_model_differs")
+        self.assertEqual(await self.read_reason([purifier, dict(purifier, deviceId="w")]), "purifier_multiple")
+        silent = {"deviceId": "x", "deviceInfo": dict(purifier["deviceInfo"], reportable=False)}
+        self.assertEqual(await self.read_reason([silent]), "purifier_not_reporting")
+
+
+class ConsoleCommandPolicyTests(PolicyOwnCommandTests):
+    def test_console_on_then_absence_still_proposes_off(self):
+        """User turned it on with the console button (not a proposal), then left: absence OFF is not held."""
+        self.tick("START", True, "POWER_OFF")
+        self.p.expect("POWER_ON", manual=True)
+        self.tick("FOCUS_PC", True, "POWER_ON")
+        for _ in range(3):
+            view = self.tick("FOCUS_PC", False, "POWER_ON")
+        self.accept(view, "off")
+
+    def test_console_off_while_present_is_respected(self):
+        self.tick("START", True, "POWER_ON")
+        self.p.expect("POWER_OFF", manual=True)
+        view = self.sit_until_on_proposal()
+        self.assertIsNone(view["proposal"])
+        self.assertEqual(view["reason"], "manual_override")
+
+
+class UnifiedAutoOffTests(unittest.IsolatedAsyncioTestCase):
+    """Unified console (combined manual, intent_control): absence OFF reads ThinQ itself and may be re-armed."""
+
+    async def asyncSetUp(self):
+        import test_demo_absence as demo
+        self.frames = demo.DemoAbsenceTests()
+        self.frames.setUp()
+        self.sdk = FixtureSdk(copy.deepcopy(demo.FIXTURE))
+        self.host = HostSession(Session(self.sdk, {
+            'enabled': True, 'backend': 'fixture', 'power_control': True, 'policy_link': True, 'demo_absence': True,
+            'policy_live_post': True, 'combined_manual': True, 'intent_control': True, 'automatic_off': True},
+            clock=lambda: self.frames.now, sleep=no_sleep), clock=lambda: self.frames.now)
+        await self.host.call(self.host.key, {'op': 'read'})
+
+    async def call(self, action, t=0, *, present=True, **kwargs):
+        return await self.host.call(self.host.key, {'op': 'auto_off', 'action': action,
+                                                    'phase': self.frames.packet(t, present=present), **kwargs})
+
+    async def arm(self, t=0):
+        return await self.call('arm', t, approved=True, physical_online_confirmed=True, no_external_change=True)
+
+    async def test_stale_snapshot_is_refreshed_by_one_get_then_off(self):
+        self.assertTrue((await self.arm())['armed'])
+        for t in range(10, 200, 10):                   # sat 3+ minutes after the last manual read (hub keeps publishing)
+            await self.call('tick', t, present=True)
+        reads_before = self.sdk.calls.count('state')
+        for t in (200, 202, 206):                      # then left
+            r = await self.call('tick', t, present=False)
+        self.assertEqual(r['result']['status'], 'state_match', r)
+        self.assertGreater(self.sdk.calls.count('state'), reads_before)
+        self.assertEqual(self.sdk.calls.count('post'), 1)
+        self.assertEqual(self.sdk.power, 'POWER_OFF')
+
+    async def test_one_consent_runs_off_then_on_then_off_again(self):
+        """Demo auto mode: no question per proposal; one POST each; consent stands through return and re-absence."""
+        await self.arm()
+        for t in (1, 3, 6):
+            r = await self.call('tick', t, present=False)
+        self.assertEqual((r['result']['status'], r['result']['value']), ('state_match', 'POWER_OFF'), r)
+        self.assertTrue(r['armed'])
+        for t in range(8, 50, 2):                      # comes back and sits 30 s+
+            r = await self.call('tick', t, present=True)
+        self.assertEqual(self.sdk.power, 'POWER_ON', r)
+        self.assertEqual(r['result']['value'], 'POWER_ON')
+        for t in (52, 54, 58):                         # leaves again
+            r = await self.call('tick', t, present=False)
+        self.assertEqual(self.sdk.power, 'POWER_OFF', r)
+        self.assertEqual(self.sdk.calls.count('post'), 3)
+        self.assertEqual(r['runs'], 3)
+        for t in range(60, 80, 2):                     # still away: nothing more is sent
+            await self.call('tick', t, present=False)
+        self.assertEqual(self.sdk.calls.count('post'), 3)
+
+    async def test_off_when_the_hub_fsm_ends_the_session_on_absence(self):
+        """Real hub in fast demo: leaving goes FSM -> IDLE (absent_timeout), which ends the policy session."""
+        await self.arm()
+
+        def idle(t):
+            p = self.frames.packet(t, present=False)
+            p['envelope']['data'].update(fsm_state='IDLE', phase='idle', reasons=['absent_timeout'])
+            return p
+        for t in (2, 4, 6):
+            r = await self.host.call(self.host.key, {'op': 'auto_off', 'action': 'tick', 'phase': idle(t)})
+        self.assertEqual((r['result']['status'], r['result']['value']), ('state_match', 'POWER_OFF'), r)
+        self.assertEqual(self.sdk.calls.count('post'), 1)
+
+    async def test_console_button_does_not_drop_the_standing_consent(self):
+        await self.arm()
+        prepared = await self.host.call(self.host.key, {'op': 'prepare', 'value': 'POWER_OFF'})
+        self.assertEqual(prepared['status'], 'approval_required')
+        self.assertTrue(self.host.auto_off.view()['armed'])
+
+    async def test_disarm_stops_the_demo_auto_mode(self):
+        await self.arm()
+        await self.host.call(self.host.key, {'op': 'auto_off', 'action': 'disarm'})
+        for t in (1, 3, 6, 9):
+            r = await self.call('tick', t, present=False)
+        self.assertFalse(r['armed'])
+        self.assertEqual(self.sdk.calls.count('post'), 0)
+
+
+class AbsenceAgainTests(PolicyOwnCommandTests):
+    def test_ignored_off_proposal_comes_back_on_the_next_absence(self):
+        self.tick("START", True, "POWER_ON")
+        self.tick("FOCUS_PC", True, "POWER_ON")
+        for _ in range(3):
+            view = self.tick("FOCUS_PC", False, "POWER_ON")
+        self.assertEqual(view["proposal"]["value"], "off")
+        for _ in range(8):                             # proposal expires unanswered (TTL 30 s), still away
+            view = self.tick("FOCUS_PC", False, "POWER_ON")
+        self.assertEqual(view["reason"], "already_handled_this_session")
+        self.tick("FOCUS_PC", True, "POWER_ON")        # comes back, then leaves again
+        for _ in range(3):
+            view = self.tick("FOCUS_PC", False, "POWER_ON")
+        self.assertIsNotNone(view["proposal"], view["reason"])
+        self.assertEqual(view["proposal"]["value"], "off")
+
+
+class AutoWindDetailTests(IntentTests):
+    async def test_power_intent_ignores_auto_wind_detail_drift(self):
+        """In AUTO the device changes windStrengthDetail by itself between prepare and execute."""
+        self.make()
+        sdk = self.sdk
+        original = sdk.async_get_device_status
+        reads = {"n": 0}
+
+        async def drifting(target, **kwargs):
+            state = await original(target, **kwargs)
+            reads["n"] += 1
+            state["airFlow"]["windStrengthDetail"] = "LOW" if reads["n"] % 2 else "HIGH"
+            return state
+        sdk.async_get_device_status = drifting
+        _, result = await self.execute("POWER_OFF")
+        self.assertEqual(result["status"], "state_match", result)
+
+    async def test_power_change_between_prepare_and_execute_still_blocks(self):
+        self.make()
+        prepared = await self.call("prepare", value="POWER_OFF")
+        self.sdk.power = "POWER_OFF"                    # someone else turned it off in between
+        result = await self.call("execute", nonce=prepared["nonce"], approved=True,
+                                 physical_online_confirmed=True, no_external_change=True)
+        self.assertEqual((result["status"], result["reason"]), ("blocked", "external_change_detected"))
+        self.assertEqual(self.sdk.calls.count("post"), 0)

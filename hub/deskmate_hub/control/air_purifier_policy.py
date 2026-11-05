@@ -192,6 +192,10 @@ class AirPurifierPolicy:
                         if not (proof and connected is True and self.active_session):
                             self._clear_absence(forget_presence=True)
                         elif self.present:
+                            # Seated again: the next absence is a new OFF case, even if the last OFF proposal expired,
+                            # was rejected or was blocked (it stays handled only for that absence). Not tied to the
+                            # absence counter, which a viewer reconnect can reset while the person is away.
+                            self.seen.discard(self._key("set_power", "off"))
                             self._clear_absence()
                             self.demo_present_observed = True
                         elif self.demo_present_observed:
@@ -318,14 +322,18 @@ class AirPurifierPolicy:
     def _key(self, operation, value):
         return (self.session, self.occupancy, operation, value)
 
-    def expect(self, value):
-        """Our own approved command was confirmed by GET readback. Move the baseline so the next snapshot is not
-        taken for a manual change (that would hold every proposal for manual_hold_sec). A confirmed OFF ends this
-        stay: the person who sits down next can get a new ON proposal in the same FSM session."""
+    def expect(self, value, *, manual=False):
+        """A command from this console was confirmed by GET readback. Move the baseline so the next snapshot is not
+        taken for an outside manual change (that would hold every proposal for manual_hold_sec).
+        Policy OFF ends this stay: the person who sits down next can get a new ON proposal in the same FSM session.
+        A manual console OFF is the user's own choice: hold proposals (no ON offer 30 s later) as before."""
         power, wind = self.baseline if self.baseline is not None else (None, None)
         if value in ("POWER_ON", "POWER_OFF"):
             self.baseline = (value, None)   # ON resumes the device's own last mode; we never set or assume it
-            if value == "POWER_OFF":
+            if value == "POWER_OFF" and manual:
+                self.manual_until = self._now() + self.cfg["manual_hold_sec"]
+                self.off_pending = False
+            elif value == "POWER_OFF":
                 self.occupancy += 1
                 self.off_pending = False
         elif value in ("LOW", "AUTO"):

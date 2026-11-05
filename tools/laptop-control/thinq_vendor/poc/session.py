@@ -54,6 +54,17 @@ PUBLIC_REASONS = frozenset({
 })
 
 
+# Device-selection stops carry English messages from the reused trial code; give them fixed public codes.
+SELECTION_REASONS = {
+    "Invalid device list": "device_list_invalid",
+    "Empty device list": "device_list_empty",
+    "No purifier in device list": "purifier_not_in_account",
+    "Purifier model differs": "purifier_model_differs",
+    "Multiple matching purifiers": "purifier_multiple",
+    "Device reporting unavailable": "purifier_not_reporting",
+}
+
+
 def error_category(error):
     if error.http_status == 401:
         return "authentication_error"
@@ -314,7 +325,14 @@ class Session:
             raise StopTrial("power_control_disabled")
         fresh = await self.read()  # Fresh profile AND state immediately before control.
         (power_profile_check if power else profile_check)(self.latest_profile)
-        if (power_config if power else config)(self.latest_state) != challenge["baseline"]:
+        current_baseline = (power_config if power else config)(self.latest_state)
+        if power and self.ctx.get("intent_control") is True:
+            # For a power intent only the power state can be an outside change. In AUTO the device itself moves
+            # airFlow.windStrengthDetail between reads, which used to cancel every automatic OFF.
+            changed = current_baseline.get("operation") != challenge["baseline"].get("operation")
+        else:
+            changed = current_baseline != challenge["baseline"]
+        if changed:
             raise StopTrial("external_change_detected")
         # A fresh GET can take longer than the approval/session lifetime.
         if not challenge["created"] <= self.clock() < challenge["deadline"] or not self.authorization_valid():
@@ -407,12 +425,19 @@ class Session:
                 "category": error_category(error),
                 "physical_confirmed": False,
             }
+            step = {"async_get_device_list": "device_list", "async_get_device_profile": "profile",
+                    "async_get_device_status": "state", "async_post_device_control": "control"}.get(
+                        getattr(self.io, "last_method", None))
+            if step:
+                public["step"] = step
         except StopTrial as stop:
             # Fixed vocabulary only; no arbitrary exceptions or response bodies.
             public = {"status": "blocked", "error": "precondition_or_approval_failed"}
             reason = stop.args[0] if stop.args else None
             if reason in PUBLIC_REASONS:
                 public["reason"] = reason
+            elif reason in SELECTION_REASONS:
+                public["reason"] = SELECTION_REASONS[reason]
         except Exception:
             self.ctx.pop("challenge", None)
             public = {"status": "error", "error": "safe_internal_error"}

@@ -220,6 +220,7 @@ class DeviceIO:
 
     async def call(self, method, *args, timeout=15):
         self.transport.last_status = None
+        self.last_method = method   # which API step failed, for a public error label (no IDs)
         try:
             return await getattr(self.sdk, method)(*args, timeout=timeout)
         except (StopTrial, ApiFailure):
@@ -242,7 +243,12 @@ class DeviceIO:
             and self.probe.summarize_device(item)["model_name"] == "AIR_910604_WW"
         ]
         if len(matches) != 1:
-            raise StopTrial("Exactly one matching purifier is required")
+            # Distinguish the causes for the UI without exposing any ID or model string.
+            if len(matches) > 1:
+                raise StopTrial("Multiple matching purifiers")
+            if any(self.probe.summarize_device(item)["device_type"] == "DEVICE_AIR_PURIFIER" for item in devices):
+                raise StopTrial("Purifier model differs")
+            raise StopTrial("No purifier in device list" if devices else "Empty device list")
         selected = matches[0]
         info = selected.get("deviceInfo")
         info = info if isinstance(info, dict) else {}
