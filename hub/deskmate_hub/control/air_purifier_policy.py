@@ -59,6 +59,7 @@ class AirPurifierPolicy:
         self.state = None
         self.present = None
         self.session = 0
+        self.occupancy = 0   # bumps when our own confirmed OFF ends a stay; the next return may propose ON again
         self.active_session = False
         self.session_open = False
         self.session_origin = None
@@ -216,7 +217,7 @@ class AirPurifierPolicy:
                     self.manual_until = now + self.cfg["manual_hold_sec"]
                     self._clear_absence(forget_presence=True)
                     self.off_pending = False
-                    self.seen.add((self.session, "set_power", "on"))
+                    self.seen.add(self._key("set_power", "on"))
                 self.baseline = state
             self.api_received = received
             if ready and self._field("total_pollution_level") in self.cfg["verified_bad_levels"]:
@@ -285,7 +286,7 @@ class AirPurifierPolicy:
     def view(self):
         now = self._now()
         candidate, reason = self._candidate(now)
-        key = (self.session, *candidate[:2]) if candidate else None
+        key = self._key(*candidate[:2]) if candidate else None
         if key in self.seen:
             candidate, reason = None, "already_handled_this_session"
         if self.pending and (candidate is None or self.pending["key"] != key or now >= self.pending["deadline"]):
@@ -314,6 +315,22 @@ class AirPurifierPolicy:
                 "reason": candidate[2] if candidate else reason, "proposal": proposal,
                 "result": copy.deepcopy(self.result), "persistence_basis": "api_reports_not_sensor_measurements"}
 
+    def _key(self, operation, value):
+        return (self.session, self.occupancy, operation, value)
+
+    def expect(self, value):
+        """Our own approved command was confirmed by GET readback. Move the baseline so the next snapshot is not
+        taken for a manual change (that would hold every proposal for manual_hold_sec). A confirmed OFF ends this
+        stay: the person who sits down next can get a new ON proposal in the same FSM session."""
+        power, wind = self.baseline if self.baseline is not None else (None, None)
+        if value in ("POWER_ON", "POWER_OFF"):
+            self.baseline = (value, None)   # ON resumes the device's own last mode; we never set or assume it
+            if value == "POWER_OFF":
+                self.occupancy += 1
+                self.off_pending = False
+        elif value in ("LOW", "AUTO"):
+            self.baseline = (power, value)
+
     def _connection_reviewable(self):
         # Unknown permits a human-review candidate only; never assert online.
         return self.snapshot.get("connection") == "online" or (
@@ -324,7 +341,7 @@ class AirPurifierPolicy:
         now = self._now()
         candidate, _ = self._candidate(now)
         return bool(p and p["proposal_id"] == proposal_id and now < p["deadline"]
-                    and candidate and (self.session, *candidate[:2]) == p["key"])
+                    and candidate and self._key(*candidate[:2]) == p["key"])
 
     def respond(self, proposal_id, decision, *, manual=False):
         view = self.view()  # Recheck freshness, identity, state, manual hold and expiry.

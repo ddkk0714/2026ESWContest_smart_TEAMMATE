@@ -110,6 +110,7 @@ class AutomaticOff:
             # Consume the single automatic trial before any awaited GET/POST.
             self.inflight = True
             self.result = {'status': 'checking', 'post_attempted': False}
+            sent_before = len(h.session.ctx['attempted'])   # earlier intents may already include POWER_OFF
             try:
                 handoff = await h.call(h.key, {'op': 'policy_respond', 'decision': 'accept',
                     'proposal_id': proposal['proposal_id'], 'phase': request.get('phase')})
@@ -122,11 +123,11 @@ class AutomaticOff:
                     'phase': request.get('phase')})
                 self.result = {k: reply.get(k) for k in
                     ('status', 'api_accepted', 'state_match', 'physical_confirmed')}
-                self.result['post_attempted'] = 'POWER_OFF' in h.session.ctx['attempted']
+                self.result['post_attempted'] = len(h.session.ctx['attempted']) > sent_before
             except Exception:
                 # Never expose SDK exception text, retry, or restore power.
                 self.result = {'status': 'stopped',
-                    'post_attempted': 'POWER_OFF' in h.session.ctx['attempted']}
+                    'post_attempted': len(h.session.ctx['attempted']) > sent_before}
             finally:
                 self.consent = None
                 self.inflight = False

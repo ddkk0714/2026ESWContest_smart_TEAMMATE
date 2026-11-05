@@ -126,7 +126,7 @@ class HostSession:
         if self.lock.locked():
             raise RuntimeError("busy")
         if not isinstance(request, dict) or request.get("op") not in {
-            "read", "snapshot", "observation", "prepare", "execute", "physical_confirmation", "revoke",
+            "read", "snapshot", "observation", "prepare", "execute", "physical_confirmation", "revoke", "reconcile",
             "policy", "policy_fixture", "policy_respond", "auto_off"
         }:
             raise ValueError("unsupported_operation")
@@ -216,7 +216,7 @@ class HostSession:
             ):
                 self.session.ctx.update(uncertain=True, enabled=False)
                 public["post_enabled"] = False
-            if request["op"] in ("read", "execute"):
+            if request["op"] in ("read", "execute", "reconcile"):
                 self.snapshot.update(public)
             if self.policy_link and self.policy and self.policy.result:
                 if request["op"] == "execute" and policy_command and policy_command["proposal_id"] == self.policy.result["proposal_id"]:
@@ -226,6 +226,9 @@ class HostSession:
                     verified = self.backend == "live_manual" and public.get("status") == "state_match"
                     self.policy.result.update(state_confirmed=verified,
                                               actual_value=self.policy.result["value"] if verified else None)
+                    if public.get("status") == "state_match":
+                        # Our own confirmed change must not look like a manual one to the policy.
+                        self.policy.expect(public.get("value"))
                 elif request["op"] == "physical_confirmation" and public.get("status") == "user_attestation_recorded":
                     self.policy.result.update(status="user_attestation_recorded", physical_confirmed=public["physical_confirmed"],
                                               physical_evidence=public["physical_evidence"])
@@ -357,7 +360,8 @@ async def serve_fixture(*, allow_control=False, port=8792, power_control=False, 
     from aiohttp import web
     from poc.worker import FixtureSdk
     fixture = json.loads((Path(__file__).parent / "thinq_vendor/poc/fixture.json").read_text())
-    host = HostSession(Session(FixtureSdk(fixture), {"enabled": allow_control, "backend": "fixture", "power_control": power_control, "policy_link": policy_link}), lifetime=lifetime)
+    host = HostSession(Session(FixtureSdk(fixture), {"enabled": allow_control, "backend": "fixture", "power_control": power_control, "policy_link": policy_link,
+                                                                 "intent_control": policy_link}), lifetime=lifetime)
     runner = web.AppRunner(make_app(host, port=port), access_log=None)
     await runner.setup()
     await web.TCPSite(runner, "127.0.0.1", port).start()
@@ -376,10 +380,13 @@ async def serve(token, *, client_id, allow_control=False, port=8792, loopback=Fa
 
     async with ClientSession(trust_env=False, cookie_jar=DummyCookieJar(),
                              timeout=ClientTimeout(total=15)) as http:
-        transport = Transport(http, execute=allow_control, power_control=power_control, policy_control=policy_link)
+        # Unified console / policy link: repeated values are new, separately approved intents (no stage script).
+        intents = allow_control and (combined_manual or policy_link) and policy_stage is None
+        transport = Transport(http, execute=allow_control, power_control=power_control, policy_control=policy_link,
+                              intent_control=intents)
         sdk = GuardedSdk(ThinQApi(session=transport, access_token=token,
                                   country_code="KR", client_id=client_id), transport)
-        host = HostSession(Session(sdk, {"enabled": allow_control, "backend": "live_manual" if allow_control else "live_read_only", "power_control": power_control, "policy_link": policy_link, "policy_live_post": policy_live_post, "policy_stage": policy_stage, "demo_absence": demo_absence, "automatic_off": automatic_off, "combined_manual": combined_manual}), lifetime=lifetime)
+        host = HostSession(Session(sdk, {"enabled": allow_control, "backend": "live_manual" if allow_control else "live_read_only", "power_control": power_control, "policy_link": policy_link, "policy_live_post": policy_live_post, "policy_stage": policy_stage, "demo_absence": demo_absence, "automatic_off": automatic_off, "combined_manual": combined_manual, "intent_control": intents}), lifetime=lifetime)
         runner = web.AppRunner(make_app(host, port=port), access_log=None)
         await runner.setup()
         # Docker publishes this container port on host 127.0.0.1 only.

@@ -18,7 +18,7 @@ test('manual HTML refuses Fixture and read-only credentials and caches the verif
   assert.equal(requests,1);
 });
 
-async function manualUi({loseResponse=false,powerControl=false,policyLink=false,runMode='live-manual',expireSnapshot=false,sessionView=null,sensorPhase=null,combinedManual=false,physicalRejected=false}={}){
+async function manualUi({loseResponse=false,powerControl=false,policyLink=false,runMode='live-manual',expireSnapshot=false,sessionView=null,sensorPhase=null,combinedManual=false,physicalRejected=false,blockPrepare=null,busySnapshots=0}={}){
   const html=await readFile(new URL('./index.html',import.meta.url),'utf8');
   const inline=html.match(/<script type="module">([\s\S]*?)<\/script>/)[1].replace(/^import .*?;$/m,'');
   const elements=new Map(),requests=[],intervals=[];let preparedValue='LOW';
@@ -35,6 +35,7 @@ async function manualUi({loseResponse=false,powerControl=false,policyLink=false,
       if(route==='/api/thinq/connect')reply={status:'session_connected',mode:'live',access:'manual_control'};
       if(policyLink&&route==='/api/thinq/policy')reply=sessionView??{reason:'credential_session_required',proposal:null};
       if(body.op==='snapshot'&&expireSnapshot)throw Error('synthetic session expired');
+      if(body.op==='snapshot'&&busySnapshots>0){busySnapshots--;throw Error('이전 조작이 끝날 때까지 기다려 주세요');}
       if(policyLink&&route==='/api/thinq/policy-fixture')reply={manual_review:true,fixture_timeline:true,proposal:{proposal_id:'synthetic-proposal',operation:'set_power',value:'on'},post_enabled:false};
       if(policyLink&&route==='/api/thinq/policy-response'){
         preparedValue='POWER_ON';
@@ -42,6 +43,8 @@ async function manualUi({loseResponse=false,powerControl=false,policyLink=false,
           ...(body.decision==='accept'?{manual_approval:{status:'approval_required',nonce:'synthetic-policy-nonce',value:preparedValue,post_enabled:true}}:{})};
       }
       if(body.op==='read')reply={status:'read_ok',mode:'live',post_enabled:true};
+      if(body.op==='prepare'&&blockPrepare){reply={status:'blocked',reason:blockPrepare,post_enabled:true};return {ok:true,json:async()=>reply,blob:async()=>({})};}
+      if(body.op==='reconcile')reply={status:'reconciled',post_enabled:true};
       if(body.op==='prepare'){preparedValue=body.value;reply={status:'approval_required',nonce:'synthetic-one-use',value:body.value,post_enabled:true};}
       if(body.op==='execute'){
         if(loseResponse)throw Error('safe synthetic timeout');
@@ -49,7 +52,7 @@ async function manualUi({loseResponse=false,powerControl=false,policyLink=false,
       }
       if(body.op==='physical_confirmation')reply=physicalRejected?{status:'blocked',post_enabled:true}:{status:'user_attestation_recorded',physical_confirmed:true,post_enabled:true};
       return {ok:true,json:async()=>reply,blob:async()=>({})};
-    },URL:{createObjectURL:()=> 'blob:fixture',revokeObjectURL(){}},setInterval(fn){intervals.push(fn);},setTimeout(){},window:{addEventListener(){}},
+    },URL:{createObjectURL:()=> 'blob:fixture',revokeObjectURL(){}},setInterval(fn){intervals.push(fn);},setTimeout(){},confirm:()=>true,window:{addEventListener(){}},
   });
   new vm.Script(inline).runInContext(context);
   return {element,requests,poll:()=>intervals[0]()};
@@ -503,4 +506,38 @@ test('a rejected recovery retains a way to choose the correct last operation',as
   assert.equal(element('thinqPhysicalRecovery').hidden,false);
   assert.match(element('thinqResult').textContent,/기록하지 못했습니다/);
   assert.equal(requests.filter(r=>r.body.op==='execute').length,0);
+});
+
+test('blocked replies show the server reason instead of the old trial start-state text',async()=>{
+  const {element}=await manualUi({blockPrepare:'too_soon_after_previous_post'});
+  await element('thinqConnect').onclick();await element('thinqRead').onclick();
+  await element('thinqLow').onclick();
+  assert.match(element('thinqResult').textContent,/5초 뒤/);
+  assert.doesNotMatch(element('thinqResult').textContent,/최초 상태/);
+});
+
+test('uncertain outcome offers reconcile: one GET-backed request, never a second execute, then unlocks',async()=>{
+  const {element,requests}=await manualUi({loseResponse:true});
+  await element('thinqConnect').onclick();await element('thinqRead').onclick();
+  assert.equal(element('thinqReconcileBox').hidden,true);
+  await element('thinqLow').onclick();
+  element('thinqOnline').checked=true;element('thinqUnchanged').checked=true;element('thinqUnchanged').onchange();
+  await element('thinqExecute').onclick();
+  assert.equal(element('thinqReconcileBox').hidden,false);
+  assert.equal(element('thinqLow').disabled,true);
+  await element('thinqReconcile').onclick();
+  assert.equal(requests.filter(r=>r.body.op==='reconcile').length,1);
+  assert.equal(requests.filter(r=>r.body.op==='execute').length,1);
+  assert.equal(element('thinqReconcileBox').hidden,true);
+  assert.equal(element('thinqLow').disabled,false);
+});
+
+test('one busy snapshot poll does not end the session; three in a row do',async()=>{
+  const {element,poll}=await manualUi({busySnapshots:3});
+  await element('thinqConnect').onclick();
+  await poll();await poll();
+  assert.doesNotMatch(element('thinqAuthSummary').textContent,/만료/);
+  assert.equal(element('thinqRead').disabled,false);
+  await poll();
+  assert.match(element('thinqAuthSummary').textContent,/만료 또는 연결 실패/);
 });
