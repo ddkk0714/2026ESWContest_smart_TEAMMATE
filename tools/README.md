@@ -11,6 +11,7 @@
 | [`uart_mqtt_bridge.py`](uart_mqtt_bridge.py) | ESP32 USB(UART0) JSON 라인을 MQTT 센서 envelope로 변환하고 날짜별 JSONL로 기록 |
 | [`mqtt_scenario_sim.py`](mqtt_scenario_sim.py) | 합성 센서 시나리오(착석→타이핑→정적/졸음→회복→이탈)를 계약 그대로 MQTT 로 발행. ESP32·collector 없이 hub·Node-RED·Pi 5 리허설 |
 | [`rehearsal_local.py`](rehearsal_local.py) | amqtt 로컬 브로커 + mock 플러그 + sim(short·demo) + `hub run --config fsm.demo.yaml` 을 한 번에 띄우고 전이 요약(약 6분). `--host 0.0.0.0` 이면 Pi 5 앱도 붙는다 |
+| [`pi5_screen.py`](pi5_screen.py) | Pi 5 화면(시스템 팝업 포함)을 SSH 로 받아 PC 브라우저 `http://localhost:8099` 에 띄운다 — 보드 `WindowManager1.CaptureScreen` 을 쉬지 않고 돌려 초당 약 11~12 장(11-05 핫스팟 실측), 가장 최근 장만 보내 지연이 쌓이지 않는다. 앱 수정 없음. `python tools/pi5_screen.py [--host 172.20.10.2]` |
 | [`find-boards.ps1`](find-boards.ps1) | 휴대폰 핫스팟 등 지금 Wi-Fi 에서 Pi 4·Pi 5 를 MAC 으로 찾아 ssh 명령 출력, `-UpdateSshConfig` 면 `ssh atlas-hs`·`ssh pi5-hs` 별명 갱신 |
 | [`ui_step_sim.py`](ui_step_sim.py) | hub 없이 앱이 받는 메시지(state·request·report)를 10초 간격으로 보내 Pi 5 화면 흐름을 1~2분에 확인. 화면 응답을 콘솔에 표시 |
 | [`mqtt_watch.py`](mqtt_watch.py) | 실기 점검용 MQTT 감시(읽기 전용) — 토픽별로 점검에 필요한 값만 한 줄로. 점검표 `docs/field-checklist.md` |
