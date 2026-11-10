@@ -532,7 +532,7 @@ Detailed documents under `docs/` are written in Korean. The Korean version of th
 |---|---|---|---|---|
 | Team lead | Taehwan Kim | Overall coordination · schedule, sensor interfacing, ToF preprocessing · presence/posture classification, calibration, HW structure · pin map, mmWave testing | `firmware` · `hub/features` · `dataset/tof_sim_v5` · `hub/atlas-tof` | Presentation |
 | Member | Soyeon Park | Rule-based FSM inference engine, confidence formula · gate, work reports, keystroke pipeline, personalization | `hub/inference` · `ml` · `dataset/tof_sim` | Development photos · video |
-| Member | Myunghee Cho | Lightweight classifiers · on-device optimization, ThinQ integration, ESM labeling scheme, FSM architecture, requirements · data specs | `ml` · `hub/control` · `docs` | Repository management |
+| Member | Myeonghee Cho | Lightweight classifiers · on-device optimization, ThinQ integration, ESM labeling scheme, FSM architecture, requirements · data specs | `ml` · `hub/control` · `docs` | Repository management |
 | Member | Minhyuk Lee | ESP32 firmware · first-stage preprocessing, MQTT broker · topics, logging · time sync, ESP–Pi communication, CAD · housing, branding | `firmware` · `hub/ingest` | Notion organization |
 | Member | Minkyung Choi | Display UI, ThinQ integration, feedback handling · report visualization, IPK · D-Bus research, auxiliary sensor pipeline | `display` · `collector` | Materials management |
 
