@@ -73,6 +73,8 @@ struct IncomingPublish {
     std::uint16_t packet_id{};
 };
 bool parsePublish(const Packet& packet, IncomingPublish& out);
+// Retained appliance observations are not fresh sensor events. Other topics retain legacy behavior.
+bool forwardObservation(const Packet& packet, const IncomingPublish& message);
 }  // namespace mqtt_codec
 
 class MqttClient {

@@ -149,6 +149,20 @@ void liveTest(const std::string& spec)
 int main()
 {
     codecTests();
+    {
+        using namespace deskmate::mqtt_codec;
+        Packet packet;
+        IncomingPublish message;
+        auto raw = encodePublish("deskmate/sensor/appliance/reader/purifier", "{}", 1, true, 7);
+        check(decodePacket(raw.data(), raw.size(), packet) > 0 && parsePublish(packet, message),
+              "appliance retained packet decoded");
+        check(!forwardObservation(packet, message), "retained appliance observation rejected");
+        packet.flags &= ~0x01;
+        check(forwardObservation(packet, message), "fresh appliance observation accepted");
+        packet.flags |= 0x01;
+        message.topic = "deskmate/sensor/env/esp32";
+        check(forwardObservation(packet, message), "legacy sensor retained behavior preserved");
+    }
     if (const char* broker = std::getenv("DESKMATE_TEST_BROKER"); broker != nullptr && *broker != '\0') {
         liveTest(broker);
     } else {

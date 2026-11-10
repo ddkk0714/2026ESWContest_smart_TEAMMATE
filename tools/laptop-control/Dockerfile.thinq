@@ -3,5 +3,5 @@ RUN pip install --no-cache-dir thinqconnect==1.0.14
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY thinq_vendor /app/thinq_vendor
-COPY thinq_host.py /app/thinq_host.py
-CMD ["python", "thinq_host.py", "--allow-control"]
+COPY thinq_host.py thinq_bridge.py /app/
+CMD ["python", "thinq_host.py"]
