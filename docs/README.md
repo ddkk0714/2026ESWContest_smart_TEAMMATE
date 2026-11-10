@@ -1,43 +1,47 @@
-# DESKMATE 문서
+**English** | [한국어](README.ko.md)
 
-문서는 역할이 겹치지 않도록 계약, 현재 계획, 운영 참고로 나눈다. 과거 진행 이력과
-초안 계획은 별도로 보관하지 않으며, 현재 상태는 항상 로드맵에 반영한다.
+# DESKMATE documentation
 
-## 먼저 읽을 문서
+> Note: the detailed documents linked below are written in Korean. This index describes each one in English.
 
-| 문서 | 용도 |
+The documents are split into contracts, current plans, and operational references so their roles do not overlap. Past progress history and
+draft plans are not kept separately; the current status is always reflected in the roadmap.
+
+## Read these first
+
+| Document | Purpose |
 |---|---|
-| [`agent-briefing.md`](agent-briefing.md) | 작업 전 프로젝트 요약, 확정·미결정 사항, 안전 제약 |
-| [`roadmap.md`](roadmap.md) | 현재 구현 상태, 결선 간극, 주간 우선순위 |
-| [`development-rules.md`](development-rules.md) | 협업·Git·검증 규칙 |
-| [`plan/next-development-plan.md`](plan/next-development-plan.md) | 실기 없이 하는 다음 작업 W1~W7 과 Codex 프롬프트(10-01) |
-| [`plan/app-connection-robustness-plan.md`](plan/app-connection-robustness-plan.md) | 앱 연결 안정화 0~3단계 계획(완료, PR #30~#32) |
+| [`agent-briefing.md`](agent-briefing.md) | Pre-work project summary, decided and undecided items, safety constraints |
+| [`roadmap.md`](roadmap.md) | Current implementation status, gaps toward the finals, weekly priorities |
+| [`development-rules.md`](development-rules.md) | Collaboration · Git · verification rules |
+| [`plan/next-development-plan.md`](plan/next-development-plan.md) | Next tasks W1–W7 that can be done without hardware, and Codex prompts (10-01) |
+| [`plan/app-connection-robustness-plan.md`](plan/app-connection-robustness-plan.md) | App connection robustness plan, stages 0–3 (done, PR #30–#32) |
 
-## 구현 계약
+## Implementation contracts
 
-| 문서 | 기준 범위 |
+| Document | Scope |
 |---|---|
-| [`requirements-spec.md`](requirements-spec.md) | MVP 기능·비기능 요구사항과 수용 기준 |
-| [`data-spec.md`](data-spec.md) | 센서 특징, 유효성·정규화·통합 계약 |
-| [`fsm-spec.md`](fsm-spec.md) | FSM 상태·전이·점수·개입 규칙 |
-| [`mqtt-topics.md`](mqtt-topics.md) | MQTT topic과 payload 스키마 |
-| [`personalization-spec.md`](personalization-spec.md) | 사용자 맞춤 개입 선택 정책 3층 구조(규칙 FSM · 생활습관 프로필 · 컨텍스트 밴딧), 보상·취침 규칙·콜드 스타트·시연안 |
-| [`personalization-log.md`](personalization-log.md) | 개인화 로그 JSONL 한 줄 스키마(에피소드·세션 요약)와 예시 |
+| [`requirements-spec.md`](requirements-spec.md) | MVP functional and non-functional requirements and acceptance criteria |
+| [`data-spec.md`](data-spec.md) | Sensor features; validity, normalization, and integration contract |
+| [`fsm-spec.md`](fsm-spec.md) | FSM states, transitions, scores, and intervention rules |
+| [`mqtt-topics.md`](mqtt-topics.md) | MQTT topics and payload schemas |
+| [`personalization-spec.md`](personalization-spec.md) | Three-layer policy for choosing personalized interventions (rule FSM · lifestyle profile · contextual bandit), rewards, bedtime rules, cold start, demo plan |
+| [`personalization-log.md`](personalization-log.md) | One-line JSONL schema for personalization logs (episodes · session summaries) with examples |
 
-## 장비·배포·제출
+## Hardware · deployment · submission
 
-| 문서 | 용도 |
+| Document | Purpose |
 |---|---|
-| [`hardware.md`](hardware.md) | 장비 역할, 배선, 센서, BOM |
-| [`breadboard-esp32-node.md`](breadboard-esp32-node.md) | ESP32 노드 브레드보드 핀 배치(VL53L8CX ×2 · C1001 · 환경 센서 · Pi 4) — 핀 충돌 정리, 주소 배정, 첫 점검 |
-| [`atlas-build-handoff.md`](atlas-build-handoff.md) | Pi 5 Atlas IPK 빌드·실기 배포 점검 |
-| [`ilink-bluetooth-lamp.md`](ilink-bluetooth-lamp.md) | iLink BLE 조명 프로토콜·상태 피드백·PC 연결 절차 |
-| [`submission.md`](submission.md) | 결선 제출물·마감·시연 규칙 |
-| [`field-checklist.md`](field-checklist.md) | 실기 체크리스트 — 통신부터 센서·FSM·개입 화면·블루투스·시연까지, 기록표 포함 |
-| [`demo-scenario.md`](demo-scenario.md) | 5분 시연 동선·리허설 명령·무대 전 체크 |
-| [`demo-day-runbook.md`](demo-day-runbook.md) | **시연 당일 한 장** — 켜는 순서, 블루투스 규칙, 하지 말 것, 심사 질문 대비 |
-| [`security-privacy.md`](security-privacy.md) | 보고서용 보안·프라이버시 절 초안(수집하지 않는 것·온디바이스·저장 위치·남은 위험) |
-| [`dataset-survey.md`](dataset-survey.md) | 2단계 학습용 공개 데이터셋 조사 |
-| [`fatigue-pipeline-literature-review.md`](fatigue-pipeline-literature-review.md) | 피로·졸음 판정 전 과정(키스트로크·졸음 행동·mmWave 심박·실내 환경·경과 시간·개입·라벨)의 문헌·법령 근거와 현재 설정값 45개 대조, 우선 실측 항목(Word 판 `.docx` 함께) |
+| [`hardware.md`](hardware.md) | Device roles, wiring, sensors, BOM |
+| [`breadboard-esp32-node.md`](breadboard-esp32-node.md) | ESP32 node breadboard pin layout (VL53L8CX ×2 · C1001 · environment sensors · Pi 4) — pin conflict resolution, address assignment, first checks |
+| [`atlas-build-handoff.md`](atlas-build-handoff.md) | Pi 5 Atlas IPK build and on-device deployment checks |
+| [`ilink-bluetooth-lamp.md`](ilink-bluetooth-lamp.md) | iLink BLE lamp protocol, state feedback, PC connection procedure |
+| [`submission.md`](submission.md) | Finals deliverables, deadlines, demo rules |
+| [`field-checklist.md`](field-checklist.md) | Hands-on hardware checklist — from communication through sensors, FSM, intervention screens, Bluetooth, and the demo, with record sheets |
+| [`demo-scenario.md`](demo-scenario.md) | 5-minute demo flow, rehearsal commands, pre-stage checks |
+| [`demo-day-runbook.md`](demo-day-runbook.md) | **One-page demo-day sheet** — power-on order, Bluetooth rules, things not to do, prep for judges' questions |
+| [`security-privacy.md`](security-privacy.md) | Draft security and privacy section for the report (what is not collected · on-device processing · storage locations · remaining risks) |
+| [`dataset-survey.md`](dataset-survey.md) | Survey of public datasets for stage-2 training |
+| [`fatigue-pipeline-literature-review.md`](fatigue-pipeline-literature-review.md) | Literature and regulatory grounding for the whole fatigue/drowsiness pipeline (keystrokes · drowsy behavior · mmWave heart rate · indoor environment · elapsed time · interventions · labels), cross-checked against 45 current config values, and priority measurement items (with a Word `.docx` version) |
 
-계약을 바꾸는 변경은 해당 문서와 구현·테스트를 같은 커밋에서 함께 갱신한다.
+Changes that alter a contract update the relevant document together with the implementation and tests in the same commit.

@@ -1,25 +1,27 @@
-# dataset — L9 ToF 학습 데이터셋 구축
+**English** | [한국어](README.ko.md)
 
-목표: **VL53L9CX ToF(L9)만으로 앉은 자세·졸음을 판단**하는 모델을 학습하기 위한 데이터셋을 만든다.
+# dataset — building the L9 ToF training dataset
+
+Goal: build a dataset for training a model that **judges seated posture and drowsiness from the VL53L9CX ToF (L9) alone**.
 
 ```
-깊이 카메라(D435if) ─► depth_teacher ─► 프레임별 정답 라벨 (t_host)
-                                                │  시간 동기화
-L9 ToF ──────────────► (기록 도구, 예정) ─────────┴─► 학습 데이터셋 ─► ml/
+Depth camera (D435if) ─► depth_teacher ─► per-frame ground-truth labels (t_host)
+                                                │  time synchronization
+L9 ToF ────────────► (recording tool, planned) ─┴─► training dataset ─► ml/
 ```
 
-- 깊이 카메라 판정이 맞다고 보고, 같은 시각의 L9 프레임에 그 라벨을 붙인다.
-- 눈 깜빡임처럼 **L9로 직접 잴 수 있는 신호는 깊이 카메라 쪽 판정에 쓰지 않는다**
-  (교사 라벨이 학생 입력과 독립이어야 한다).
-- 깊이 카메라는 개발 PC에서 라벨을 만들 때만 쓴다. 제품(보드)에는 들어가지 않는다.
+- The depth camera's decisions are taken as correct, and those labels are attached to the L9 frames from the same moment.
+- **Signals that the L9 can measure directly, such as eye blinks, are not used for the depth camera's decisions**
+  (the teacher labels must be independent of the student's input).
+- The depth camera is used only on the development PC to produce labels. It is not part of the product (board).
 
-| 폴더 | 상태 | 내용 |
+| Folder | Status | Contents |
 |---|---|---|
-| `depth_teacher/` | 🟡 | D435if 깊이 카메라 자세·졸음 판정(교사). 검증 현황은 그 README |
-| L9 기록·동기화 | ⬜ | L9 프레임을 `t_host`(epoch 초)로 기록하고 교사 라벨과 맞추기. **L9 는 센서 실장 폴트로 보류** |
-| `tof_logger/` | 🟡 | **VL53L8CX 8×8** 원본 + 규칙 판정 + 지시 자세를 세션으로 기록(ESP32 `env:tof_logger`). 실기 확인 전 |
-| `tof_sim/` | 🟡 | MuJoCo 가상 L8 — 자세별 8×8 세션 생성, 펌웨어 규칙 재판정·MLP 기준선. 실기 전 시험용(점수는 실제 정확도 아님) |
-| `tof_sim_v5/` | 🟡 | MuJoCo 관절 몸·SMPL-X 합성 ToF 프레임 무한 생성 + 스트리밍 분류기(CNN→GRU, 9라벨: 7 자세 + 위치 재조정 + 거북목) 학습·export(ONNX) + 실측 녹화→npz 도구. 센서 무작위 배치 학습, Pi 4 `hub/atlas-tof` 가 이 모델을 돌린다. 실측 보정 전 |
+| `depth_teacher/` | 🟡 | D435if depth camera posture/drowsiness decisions (teacher). Validation status is in its README |
+| L9 recording & sync | ⬜ | Record L9 frames with `t_host` (epoch seconds) and align them with the teacher labels. **L9 is on hold due to a sensor mounting fault** |
+| `tof_logger/` | 🟡 | Records **VL53L8CX 8×8** raw data + rule-based decisions + instructed postures as sessions (ESP32 `env:tof_logger`). Not yet verified on hardware |
+| `tof_sim/` | 🟡 | MuJoCo virtual L8 — generates 8×8 sessions per posture, re-evaluates them with the firmware rules, MLP baseline. For testing before hardware (scores are not real accuracy) |
+| `tof_sim_v5/` | 🟡 | Endless generation of synthetic ToF frames from a MuJoCo articulated body / SMPL-X + training and export (ONNX) of a streaming classifier (CNN→GRU, 9 labels: 7 postures + reposition + forward head (turtle neck)) + tools for turning real recordings into npz. Trained with randomized sensor placement; the Pi 4 `hub/atlas-tof` runs this model. Not yet calibrated on real measurements |
 
-**커밋하지 않는 것**: 녹화본(`*.db3`, `*.mp4`), 세션 CSV, 기준 자세 파일(`data/`), 모델(`models/`).
-얼굴이 찍힌 영상과 개인 자세 기록이라 팀 규칙(수집 데이터 커밋 금지)을 따른다.
+**Not committed**: recordings (`*.db3`, `*.mp4`), session CSVs, reference posture files (`data/`), models (`models/`).
+These are videos showing faces and personal posture records, so the team rule (no committing of collected data) applies.
