@@ -6,3 +6,6 @@ display/atlas/app/atlas/** text eol=lf
 
 # stage2 피로 모델(portable CNN)은 바이트 지문(metadata.model_sha256)으로 검증한다 — Windows CRLF 변환이 끼면 보드에서 unavailable (10-25 실제로 발생).
 hub/deskmate_hub/config/stage2/* -text
+
+# Fusion CAD 아카이브는 바이너리다.
+*.f3d binary

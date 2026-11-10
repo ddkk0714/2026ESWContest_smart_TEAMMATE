@@ -222,6 +222,7 @@ Pi 5 는 `sh /data/share/deskmate/recovery/install.sh pi5 --runtime-only`. 전�
 ├── ml/                      공용 모델 학습 · 변환
 ├── dataset/                 MuJoCo ToF 시뮬 · 실측 기록 도구
 ├── tools/                   시나리오 시뮬 · 리허설 · 센서 모니터 · 복구 설치기 · ThinQ
+├── cad/                     하우징 조립 CAD (Fusion .f3d)
 └── docs/                    명세 · 하드웨어 · 시험 기록
 ```
 
@@ -504,6 +505,7 @@ Sources and conditions are in [`docs/sim-results/`](docs/sim-results) · [`docs/
 ├── ml/                      Shared-model training · conversion
 ├── dataset/                 MuJoCo ToF simulation · field recording tools
 ├── tools/                   Scenario simulation · rehearsal · sensor monitor · recovery installer · ThinQ
+├── cad/                     Housing assembly CAD (Fusion .f3d)
 └── docs/                    Specs · hardware · test records
 ```
 
