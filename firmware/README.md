@@ -1,248 +1,248 @@
-**English** | [한국어](README.ko.md)
+[English](README.EN.md) | **한국어**
 
-# firmware — ESP32 sensor edge node
+# firmware — ESP32 센서 말단 노드
 
-> [`pico2w_ble_fan/`](pico2w_ble_fan/README.md) in the same folder is not a sensor node; it is the firmware for the controlled `vent_fan` Bluetooth fan (Pico 2 W + L9110).
+> 같은 폴더의 [`pico2w_ble_fan/`](pico2w_ble_fan/README.md) 은 센서 노드가 아니라 제어 대상 `vent_fan` 블루투스 선풍기(Pico 2 W + L9110) 펌웨어다.
 
-Owners: Minhyuk Lee (firmware · MQTT) · Taehwan Kim (sensor interfacing · ToF preprocessing)
+담당: 이민혁 (펌웨어 · MQTT) · 김태환 (센서 인터페이싱 · ToF 전처리)
 
-One unit is placed inside the dock. It reads the mmWave and environment sensors, does first-stage preprocessing on the node (moving average, outlier removal, drowsiness FSM), and then
-sends the data to the Pi 4 as **UART2 binary frames (COBS + CRC-16/CCITT-FALSE)**. On 2026-09-11 we measured C1001 → ESP32 → Pi 4 `/dev/serial0` delivery on real hardware.
-For the VL53L9CX, the connection path (Path A: Pi 4 CSI-2 / Path B: ESP32 I2C 1 MHz binning) is pending a decision on 09-19; it attaches to this node only with Path B.
+도크 내부에 1대 배치되어 mmWave·환경 센서를 읽고 노드 단에서 1차 전처리(이동평균·이상치 제거·졸음 FSM)한 뒤
+**UART2 바이너리 프레임(COBS + CRC-16/CCITT-FALSE)** 으로 Pi 4 에 보낸다. 2026-09-11 에 C1001 → ESP32 → Pi 4 `/dev/serial0` 도달을 실측했다.
+VL53L9CX 는 연결 경로(Path A: Pi 4 CSI-2 / Path B: ESP32 I2C 1 MHz binning)가 09-19 결정 대기이며, Path B 일 때만 이 노드에 붙는다.
 
-> **Current status (2026-09-15):** `esp32_sensor_node/` now contains a PlatformIO project, `C1001Passive` based on the
-> official DFRobot C1001 library, a 5-state `DrowsyDetector`, and UART0 (USB) JSON output. The environment sensors are MVP stubs that, every 5 seconds,
-> output all values as `null` with the valid flags set to `false`.
+> **현재 상태(2026-09-15):** `esp32_sensor_node/`에 PlatformIO 프로젝트, 공식 DFRobot C1001 라이브러리 기반
+> `C1001Passive`, 5상태 `DrowsyDetector`, UART0(USB) JSON 출력이 들어왔다. 환경 센서는 MVP 스텁이며 5초마다
+> 모든 값을 `null`, valid 플래그를 `false`로 출력한다.
 >
-> **Added 2026-09-16:** UART2 now sends binary frames following the provisional protocol in `docs/data-spec.md` §13.1 —
-> `transport/frame.cpp` (header, CRC-16/CCITT-FALSE, COBS, `0x00` terminator), `include/frame_types.h` (TYPE 0x20 mmWave 1 Hz ·
-> 0x10 environment 0.2 Hz (valid_bits 0 when stubbed) · 0xF0 heartbeat 1 Hz). Build flags `-DDESKMATE_UART2_TX=1` (on by default),
-> `-DDESKMATE_FIRMWARE_VERSION`. Cross-checked against the Python codec (`hub/deskmate_hub/ingest/uart_frame.py`) with test vectors.
-> **An actual `pio run` build and UART verification on a real board have not been done yet.** Real drivers for the environment sensors (SCD41, BH1750, DHT22) are not implemented.
+> **2026-09-16 추가:** UART2 로 `docs/data-spec.md` §13.1 잠정 규약의 바이너리 프레임을 보낸다 —
+> `transport/frame.cpp`(헤더·CRC-16/CCITT-FALSE·COBS·`0x00` 종료), `include/frame_types.h`(TYPE 0x20 mmWave 1 Hz ·
+> 0x10 환경 0.2 Hz(스텁이면 valid_bits 0) · 0xF0 하트비트 1 Hz). 빌드 플래그 `-DDESKMATE_UART2_TX=1`(기본 켬),
+> `-DDESKMATE_FIRMWARE_VERSION`. Python 코덱(`hub/deskmate_hub/ingest/uart_frame.py`)과 test vector 로 교차 검증했다.
+> **`pio run` 실빌드와 실보드 UART 검증은 아직 안 했다.** 환경 센서 실제 드라이버(SCD41·BH1750·DHT22)는 미구현.
 >
-> **Updated 2026-09-29:** Both items above have since been resolved (09-16 real-board flash and real UART reception, PR #21 environment drivers).
-> The C1001 is read with a **receive-only non-blocking parser** (`sensors/c1001/C1001Passive.cpp`) instead of vendor polling. It does not drop
-> a single active report, and if reports stop for more than 2 s it wakes the sensor with a query (`nudgeIfSilent`). Before initialization, a 300 ms `probe()`
-> checks that the sensor is alive; if the sensor is absent, it reattaches with a backoff from 10 s up to 120 s. The drowsiness thresholds are in `DrowsyDetector.h`
-> with comments giving the measurement evidence, and the only knob for shortening the confirmation time for demos is `-DDESKMATE_DROWSY_HOLD_SCALE_PCT=<percent>`.
-> Host tests: `pio test -e native` (drowsiness 12 · environment validation 9). If gcc is not available, as on this PC, use Docker:
-> `docker run --rm -v "<firmware path>:/fw:ro" python:3.11 bash -c "apt-get -qq update && apt-get -qq install -y g++ && pip -q install platformio && cp -r /fw /tmp/fw && cd /tmp/fw && pio test -e native"`.
+> **2026-09-29 갱신:** 위 두 항목은 이후 해소됐다(09-16 실보드 플래시·UART 실수신, PR #21 환경 드라이버).
+> C1001 은 벤더 폴링 대신 **수신 전용 논블로킹 파서**(`sensors/c1001/C1001Passive.cpp`)로 읽는다. 능동 보고를
+> 하나도 버리지 않고, 보고가 2 s 넘게 끊기면 질의로 깨운다(`nudgeIfSilent`). 초기화 전에는 300 ms `probe()` 로
+> 생존을 확인하고, 센서가 없으면 10 s 부터 최대 120 s 까지 백오프하며 다시 붙는다. 졸음 판정 임계값은 실측 근거
+> 주석과 함께 `DrowsyDetector.h` 에 있고, 시연용 확정 시간 단축은 `-DDESKMATE_DROWSY_HOLD_SCALE_PCT=<퍼센트>` 하나다.
+> 호스트 테스트: `pio test -e native` (졸음 판정 12 · 환경 검증 9). 이 PC 처럼 gcc 가 없으면 Docker 로
+> `docker run --rm -v "<펌웨어 경로>:/fw:ro" python:3.11 bash -c "apt-get -qq update && apt-get -qq install -y g++ && pip -q install platformio && cp -r /fw /tmp/fw && cd /tmp/fw && pio test -e native"`.
 
-## Wiring and UART assignment (measured)
+## 배선·UART 할당 (실측)
 
-| Channel | Purpose | Pins |
+| 채널 | 용도 | 핀 |
 |---|---|---|
-| UART0 (`Serial`) | Debug monitor · `log2file` logging · segment marker input | USB |
+| UART0 (`Serial`) | 디버그 모니터 · `log2file` 로깅 · 구간 마커 입력 | USB |
 | UART1 (`Serial1`) | C1001 mmWave, 115200 8N1 | GPIO16 RX / GPIO17 TX |
-| UART2 | Pi 4 link, 115200 8N1 (target 460,800+) | GPIO25 TX → Pi 4 GPIO15 (physical 10) / GPIO26 RX ← Pi 4 GPIO14 (physical 8) |
+| UART2 | Pi 4 링크, 115200 8N1 (목표 460,800+) | GPIO25 TX → Pi 4 GPIO15(물리 10) / GPIO26 RX ← Pi 4 GPIO14(물리 8) |
 | I2C0 (`Wire`) | SCD41 `0x62` · BH1750 `0x23`, 100 kHz | GPIO21 SDA / GPIO22 SCL |
-| I2C1 (`Wire1`) | **VL53L8CX ×2**, 1 MHz. A `0x54` (changed by firmware) · B `0x52` | GPIO23 SDA / GPIO18 SCL · LPn A GPIO32 / B GPIO33 · NCS·SPI_I2C_N = GND |
+| I2C1 (`Wire1`) | **VL53L8CX ×2**, 1 MHz. A `0x54`(펌웨어가 바꿈) · B `0x52` | GPIO23 SDA / GPIO18 SCL · LPn A GPIO32 / B GPIO33 · NCS·SPI_I2C_N = GND |
 | GPIO27 | DHT22 DATA | |
 
-Full layout and pin conflict notes (LPn 16 and SPI_I2C_N 17 in 76EHwan/ESP32_VL53L8 collide with the C1001): [`docs/breadboard-esp32-node.md`](../docs/breadboard-esp32-node.md).
+전체 배치와 핀 충돌 정리(76EHwan/ESP32_VL53L8 의 LPn 16·SPI_I2C_N 17 은 C1001 과 겹침): [`docs/breadboard-esp32-node.md`](../docs/breadboard-esp32-node.md).
 
-GPIO16/17 are used for PSRAM on WROVER-family modules. This doesn't matter with the current `esp32dev` (WROOM), but move the pins if you change boards.
-A common GND is mandatory. Do not connect 5V directly to the Pi 4. If upload fails, hold BOOT and press EN once (`Wrong boot mode` = failed to enter upload mode).
+GPIO16/17 은 WROVER 계열에서 PSRAM 용이다. 현재 `esp32dev`(WROOM)라 무관하지만 보드를 바꾸면 핀을 옮긴다.
+공통 GND 필수. Pi 4 와 5V 를 직접 연결하지 않는다. 업로드가 안 되면 BOOT 를 누른 채 EN 을 한 번 누른다(`Wrong boot mode` = 업로드 모드 진입 실패).
 
-## Principles
+## 원칙
 
-- **Raw ToF data goes only as far as the Pi 4, in per-sensor 8×8 units (standard as of 2026-10-17).** Since the posture AI model was decided to run on the Pi 4 (whether as an MLP inside the hub or as a separate
-  service will be decided by measured performance — `docs/data-spec.md` §6.1 candidates A/B), this node passes the VL53L8CX raw 8×8 distance and status to the Pi 4 over UART `0x05`, **one
-  frame per sensor** (same frame_id and TS, 5 Hz). This is because the two sensors are aimed 8° outward, so their fields of view mostly overlap and stitching them into 16×8 would not form a single
-  scene; the Pi 4 runs inference per sensor and fuses the results. The 16×8 stitching in `TofArray` is an internal approximation used only for the rule-based estimator (`0x03`) and USB display.
-  Raw data is handled only on the wired UART and in Pi 4 memory; it never goes out to MQTT, logs, or the screen. A downscaled depth map (`0x01`) is a separate reservation, allowed at up to 2 Hz
-  only in an explicit debug/UI mode.
-- Every frame carries `SEQ` and `TS` (loss detection, alignment of the Pi 4 sliding window).
-- CRC-16 is applied only to UART binary frames. MQTT JSON from the Pi 4 onward carries no separate application-level CRC.
-- Even if instantaneous mmWave respiration/heart-rate values are sent, they are not the basis for Pi 4 decisions. The contract covers the body-motion moving average (τ=15 s), heart-rate median (120 s), arousal baseline (τ=600 s), and the drowsiness FSM state/evidence.
+- **ToF 원본은 센서별 8×8 단위로 Pi 4 까지만 간다(2026-10-17 표준).** 자세 AI 모델은 Pi 4 에서 돌리기로 해(허브 안 MLP 인지 별도
+  서비스인지는 실측 성능으로 정한다 — `docs/data-spec.md` §6.1 후보 A/B), 이 노드는 VL53L8CX 원본 8×8 거리·상태를 **센서마다 한
+  프레임씩** UART `0x05` 로 Pi 4 에 넘긴다(같은 frame_id·TS, 5 Hz). 두 센서는 바깥 8° 조준이라 시야가 대부분 겹쳐 16×8 로 붙이면 한
+  장면이 아니기 때문이고, Pi 4 는 센서별로 추론해 융합한다. `TofArray` 의 16×8 스티칭은 규칙 추정기(`0x03`)·USB 표시용 내부 근사다.
+  원본은 유선 UART 와 Pi 4 메모리 안에서만 다루고 MQTT·로그·화면으로는 나가지 않는다. 축소 depth map(`0x01`)은 명시적 디버그/UI
+  모드에서만 최대 2Hz 로 허용하는 별개 예약이다.
+- 모든 프레임에 `SEQ`·`TS` 를 넣는다(유실 감지·Pi 4 슬라이딩 윈도 정렬).
+- UART binary frame 에만 CRC-16 을 적용한다. Pi 4 이후 MQTT JSON 에는 별도 애플리케이션 CRC 를 넣지 않는다.
+- mmWave 순간 호흡·심박값은 보내더라도 Pi 4 판정 근거가 아니다. 체동 이동평균(τ=15 s)·심박 중앙값(120 s)·각성 기준선(τ=600 s)·졸음 FSM state/evidence 가 계약 대상이다.
 
-## Frame protocol (before contract finalization — `docs/data-spec.md` takes precedence)
+## 프레임 규약 (계약 확정 전 — `docs/data-spec.md` 가 우선)
 
 ```
-[SOF 1B][VER 1B][TYPE 1B][SEQ 2B][LEN 2B][TS 4B][PAYLOAD N][CRC16 2B]   → COBS encoded + trailing 0x00
+[SOF 1B][VER 1B][TYPE 1B][SEQ 2B][LEN 2B][TS 4B][PAYLOAD N][CRC16 2B]   → COBS 인코딩 + 끝 0x00
 ```
 
-| TYPE | Contents | Rate | Status |
+| TYPE | 내용 | 주기 | 상태 |
 |---|---|---|---|
-| 0x01 | (debug) binning depth map | ≤ 2 Hz | Reserved, not implemented. The temporary use for mmWave in the 09-11 experimental firmware was resolved by moving it to 0x20. The production raw grid is 0x05, so no conflict |
-| 0x03 / 0x04 | ToF `tof_feature` (26 B) / posture summary (4 B) — `src/sensors/tof/TofPayload.h` | 5 Hz / 1 Hz | **Implemented 10-16.** `docs/data-spec.md` §13.1. posture is the node's rule-based decision (fallback for the Pi 4 MLP) |
-| 0x05 | ToF raw 8×8 sensor frame `tof_grid` — 8 B header (grid_w, grid_h, sensor, sensors, frame_id, sensor_mask, flags, reserved) + dist i16×64 + status u8×64 = 200 B. One per sensor, same frame_id | 5 Hz × number of sensors | **Implemented 10-17.** Unit is per-sensor 8×8 (overlapping fields of view, LEN ≤ 256 B). Rationale and golden hex in `docs/data-spec.md` §13.1 |
-| 0x10 | Environment bundle (SCD41 CO₂ 2B + DHT22 T 2B + RH 2B + BH1750 lux 2B = 8B). SCD41 T/RH is not sent (no calibration, single sensor; decided 09-14) | 0.2 Hz | Not implemented |
-| **Unassigned** | mmWave drowsiness state + evidence + summary values (10–16 B) | 1 Hz | **TYPE assignment needed** |
-| 0xF0 | Status/heartbeat | 1 Hz | |
+| 0x01 | (디버그) binning depth map | ≤ 2 Hz | 예약·미구현. 09-11 실험 펌웨어의 mmWave 임시 사용은 0x20 으로 옮겨 해소. 운영 원본 격자는 0x05 라 충돌 없음 |
+| 0x03 / 0x04 | ToF `tof_feature`(26 B) / 자세 요약(4 B) — `src/sensors/tof/TofPayload.h` | 5 Hz / 1 Hz | **10-16 구현.** `docs/data-spec.md` §13.1. posture 는 노드 규칙 판정(Pi 4 MLP 의 폴백) |
+| 0x05 | ToF 원본 8×8 센서 프레임 `tof_grid` — 헤더 8 B(grid_w·grid_h·sensor·sensors·frame_id·sensor_mask·flags·reserved) + dist i16×64 + status u8×64 = 200 B. 센서마다 하나, 같은 frame_id | 5 Hz × 센서 수 | **10-17 구현.** 단위는 센서별 8×8(시야 겹침·LEN ≤ 256 B). 근거·골든 hex 는 `docs/data-spec.md` §13.1 |
+| 0x10 | 환경 묶음 (SCD41 CO₂ 2B + DHT22 T 2B + RH 2B + BH1750 lux 2B = 8B). SCD41 T/RH 는 보내지 않음(보정 없음·단일 센서, 09-14 확정) | 0.2 Hz | 미구현 |
+| **미배정** | mmWave 졸음 state + evidence + 요약값 (10~16 B) | 1 Hz | **TYPE 배정 필요** |
+| 0xF0 | 상태/하트비트 | 1 Hz | |
 
-## Structure (target)
+## 구조 (목표)
 
 ```
 esp32_sensor_node/
 ├── platformio.ini
-├── include/          config headers (node ID · pins · thresholds)
+├── include/          설정 헤더 (노드 ID · 핀 · 임계값)
 └── src/
     ├── main.cpp
-    ├── sensors/      c1001 (parser · DrowsyDetector) / scd41 / bh1750 / dht22 / vl53l9cx (Path B)
-    ├── preprocess/   moving average · outlier removal · feature extraction
-    └── transport/    uart2 framing (COBS · CRC-16) · heartbeat
+    ├── sensors/      c1001 (파서·DrowsyDetector) / scd41 / bh1750 / dht22 / vl53l9cx(Path B)
+    ├── preprocess/   이동평균 · 이상치 제거 · 특징 추출
+    └── transport/    uart2 프레이밍(COBS · CRC-16) · 하트비트
 ```
 
-## Development environment
+## 개발 환경
 
-PlatformIO (Arduino framework) or ESP-IDF.
-Board and library dependencies are pinned in `platformio.ini`.
+PlatformIO (Arduino 프레임워크) 또는 ESP-IDF.
+`platformio.ini` 에 보드 · 라이브러리 의존성을 고정한다.
 
-The ESP32 is wired to the Pi 4, so Wi-Fi credentials are not needed on the default path. If they become necessary, copy `include/secrets.h.example` to `include/secrets.h` and do not commit it.
+ESP32 는 Pi 4 와 유선이므로 Wi-Fi 자격증명이 기본 경로에 필요 없다. 필요해지면 `include/secrets.h.example` 를 복사해 `include/secrets.h` 로 쓰고 커밋하지 않는다.
 
-## ToF posture estimation (Path B preprocessing)
+## ToF 자세 추정 (Path B 전처리)
 
-`src/preprocess/tof/TofPosture.{h,cpp}` — multizone distance frame → the 7 geometric features from roadmap §4-4 →
-`docs/data-spec.md` §6.1 `tof_feature` (posture enum · `motion_score` · `head_delta_mm` · `nod_rate_hz`).
-It is pure C++ with no Arduino dependency. **From 10-17, posture model decisions belong to the Pi 4, and this rule-based decision is for comparison and fallback** — the raw grid goes to the
-Pi 4 via `0x05`, and the model on the Pi 4 (candidate A, hub `posture/tof_mlp.py` / candidate B, `deskmate_tofposture`; undecided) produces the posture.
-Nodding and drowsiness are temporal phenomena, so they continue to be decided here and sent in the `0x03` flags.
+`src/preprocess/tof/TofPosture.{h,cpp}` — 멀티존 거리 프레임 → roadmap §4-4 기하 특징 7종 →
+`docs/data-spec.md` §6.1 `tof_feature`(posture enum · `motion_score` · `head_delta_mm` · `nod_rate_hz`).
+Arduino 의존이 없는 순수 C++ 다. **10-17 부터 자세 모델 판정은 Pi 4 몫이고 이 규칙 판정은 비교·폴백용이다** — 원본 격자는 `0x05` 로
+Pi 4 에 가고, Pi 4 의 모델(후보 A 허브 `posture/tof_mlp.py` / 후보 B `deskmate_tofposture`, 미확정)이 자세를 낸다.
+끄덕임·졸음은 시간 현상이라 계속 여기서 판정해 `0x03` flags 로 보낸다.
 
-- **Postures:** upright · leaning forward · reclining · face-down (slumped on the desk) · chin-resting · nodding off · away from seat.
-  The definitions port two decision methods the team had already validated into ToF physical quantities — `display/atlas/camsvc/src/posture_pose`
-  (posture categories, decision order, hysteresis, 1.5 s hold) and `dataset/depth_teacher` (drowsiness from head dynamics alone).
-  We could not find any public dataset that covers seated posture with 8×8 or 54×42 ToF.
-- **Grid-agnostic.** VL53L9CX 54×42 raw, binning-downscaled grids (24×20 · 8×6 …), and VL53L8CX 8×8 are all handled by the same code.
-  RAM is set by `DESKMATE_TOF_MAX_ZONES` (default 2268 → about 35 KB). Objects are kept global/static.
-- **Flow.** zone status check (5·9, optionally 6·10) → 3-frame median · hold through short dropouts → foreground separation against
-  a background learned from the empty seat → 7 features + head/torso distance, head drop, arm columns → the first quiet 10 s after sitting down is taken as the "upright" baseline
-  → classification relative to the baseline → 1.5 s hold.
+- **자세:** 바른자세 · 상체 앞으로 · 뒤로 젖힘 · 엎드림 · 턱괴기 · 꾸벅 졸음 · 자리비움.
+  정의는 팀에 이미 검증된 두 판정을 ToF 물리량으로 옮겼다 — `display/atlas/camsvc/src/posture_pose`
+  (자세 범주·판정 순서·히스테리시스·1.5 s 유지)와 `dataset/depth_teacher`(머리 동역학만으로 졸음).
+  8×8·54×42 ToF 로 앉은 자세를 다룬 공개 데이터셋은 찾지 못했다.
+- **격자 무관.** VL53L9CX 54×42 원본, binning 축소(24×20 · 8×6 …), VL53L8CX 8×8 을 같은 코드로 처리한다.
+  RAM 은 `DESKMATE_TOF_MAX_ZONES`(기본 2268 → 약 35 KB)로 정한다. 객체는 전역·정적으로 둔다.
+- **흐름.** zone 상태값 판정(5·9, 선택 6·10) → 3프레임 중앙값 · 짧은 결측 유지 → 빈 자리에서 배운 배경 대비
+  전경 분리 → 특징 7종 + 머리·몸통 거리, 머리 낙차, 팔 기둥 → 앉은 뒤 처음 조용한 10 s 를 "바른 자세" 기준선으로
+  → 기준선 대비 분류 → 1.5 s 유지.
 
-| Posture | ToF decision (relative to baseline, on/off) | Source |
+| 자세 | ToF 판정 (기준선 대비, on/off) | 출처 |
 |---|---|---|
-| Chin-resting | Columns that are continuous from just below the head and at least 60 mm closer than the chest occupy at least 60%/40% of the upper-body rows, and the head does not drop as far as face-down | camsvc "chin-resting is a fact about the arm" |
-| Reclining | Head distance at least 1.11×/1.05× | camsvc shoulder width 0.90/0.95× ↔ distance ratio |
-| Face-down | Top of head drops at least 135/75 mm (row change × vertical FoV × distance) | camsvc head drop 0.35/0.20 shoulder width × 380 mm |
-| Leaning forward | Head at least 80 mm closer | depth_teacher lean_forward 5 cm |
-| Nodding off | Nods (drop of at least 40 mm within 0.2–1.5 s and 60% recovery within 1.5 s, torso within 80 mm) twice within 60 s, or still for 5 s with the head dropped as in a nod. 5 s hold | depth_teacher drowsiness |
+| 턱괴기 | 머리 바로 아래부터 끊김 없이 가슴보다 60 mm 이상 가까운 열이 상체 행의 60%/40% 이상, 머리는 엎드림만큼 안 내려감 | camsvc "턱괴기는 팔의 사실" |
+| 뒤로 젖힘 | 머리 거리 1.11배/1.05배 이상 | camsvc 어깨 폭 0.90/0.95배 ↔ 거리 비율 |
+| 엎드림 | 머리 꼭대기 하강 135/75 mm 이상 (행 변화 × 세로 시야각 × 거리) | camsvc 머리 낙차 0.35/0.20 어깨 폭 × 380 mm |
+| 상체 앞으로 | 머리 80 mm 이상 가까워짐 | depth_teacher lean_forward 5 cm |
+| 꾸벅 졸음 | 끄덕임(0.2~1.5 s 에 40 mm 이상 떨어지고 1.5 s 안에 60% 복귀, 몸통은 80 mm 이내) 60 s 안 2회, 또는 끄덕이듯 떨군 채 5 s 정지. 5 s 유지 | depth_teacher drowsiness |
 
-- **Thresholds** are all in `TofPostureConfig`. Even the values carried over from the sources include camera→ToF conversion assumptions (shoulder width 380 mm, rotation radius 15 cm),
-  so they must be calibrated against measurements recorded simultaneously with depth_teacher labels.
-- **Host tests:** `pio test -e native -f test_tof_posture` (28 — background separation · baseline · 6 postures · decision order ·
-  typing arms are not chin-resting · 1.5 s hold · robustness to dropouts/spikes · a single nod is not drowsiness · two nods / still with head dropped is drowsiness ·
-  upper-body bending / forward head (turtle neck) is not a nod · identical decisions across 4 grid types, etc.).
+- **임계값**은 전부 `TofPostureConfig` 에 있다. 출처를 옮긴 값도 카메라→ToF 환산 가정(어깨 폭 380 mm, 회전 반지름 15 cm)이
+  들어가 있으니 depth_teacher 라벨과 동시 녹화로 실측 보정해야 한다.
+- **호스트 테스트:** `pio test -e native -f test_tof_posture` (28개 — 배경 분리 · 기준선 · 6자세 · 판정 순서 ·
+  타이핑 팔은 턱괴기 아님 · 1.5 s 유지 · 결측/튐 내성 · 끄덕임 1회는 졸음 아님 · 2회·떨군 채 정지는 졸음 ·
+  상체 숙임·거북목은 끄덕임 아님 · 격자 4종 동일 판정 등).
 
-**2026-10-16: sensor connection, UART, and hub mapping are in (branch `feat/tof-node-hw`, not yet verified on hardware).**
+**2026-10-16: 센서 연결·UART·hub 매핑까지 들어갔다(브랜치 `feat/tof-node-hw`, 실기 미검증).**
 
-- `src/sensors/tof/TofArray.{h,cpp}` — reads two VL53L8CX (ST STM32duino 2.1.0) on `Wire1`, keeps them as per-sensor 8×8 (`sensorDistance(i)`, for 0x05),
-  and stitches them into a single grid only for the rule-based estimator, feeding it to `TofPostureEstimator` (the two fields of view mostly overlap, so stitching is an approximation — 10-17 standard). At boot, address assignment holds B's LPn low while changing A to 0x54; a dead sensor is retried every 5 s;
-  if only one survives, it falls back to 8×8. Placement and orientation via `-DDESKMATE_TOF_STACK_ROWS/FLIP_ROWS/FLIP_COLS/SWAP/COUNT`.
-- `src/sensors/tof/TofPayload.{h,cpp}` — encoders for TYPE 0x03 (26 B, 5 Hz) and 0x04 (4 B, 1 Hz). The 4 host tests in `test_tof_payload`
-  pin the same golden hex as hub `test_uart_frame`. A 1 B `tof_ok` was added to the 0xF0 heartbeat (firmware 0x0120).
-- `main.cpp` — ToF polling, UART transmission, USB `{"t":"tof_feature"}` at 1 Hz, boot status line (`VL53L8CX x2: ok_mask=3 grid=16x8`),
-  USB commands `b` (baseline), `g` (background), `r` (reset). `SET_LOOP_TASK_STACK_SIZE(16 KB)` — the ST driver uses 4 KB of stack.
-- hub: `ingest/uart_frame.py` decoder, `SensorCache.tof`, the posture signal via the `tof:` section of `ingest.yaml` (mmWave substitutes only when ToF is stale),
-  `sensor_summary.tof`, and `tof.posture` in the Pi 4 C++ native summary as well.
+- `src/sensors/tof/TofArray.{h,cpp}` — VL53L8CX 두 개(ST STM32duino 2.1.0)를 `Wire1` 에서 읽어 센서별 8×8(`sensorDistance(i)`, 0x05 용)로
+  두고, 규칙 추정기용으로만 한 격자로 붙여 `TofPostureEstimator` 에 넣는다(두 시야가 대부분 겹쳐 스티칭은 근사 — 10-17 표준). 부팅 때 B 의 LPn 을 눌러 둔 채 A 를 0x54 로 바꾸는 주소 배정, 죽은 센서 5 s 재시도,
+  한쪽만 살면 8×8 로 축소. 배치·방향은 `-DDESKMATE_TOF_STACK_ROWS/FLIP_ROWS/FLIP_COLS/SWAP/COUNT`.
+- `src/sensors/tof/TofPayload.{h,cpp}` — TYPE 0x03(26 B, 5 Hz)·0x04(4 B, 1 Hz) 인코더. 호스트 테스트 `test_tof_payload` 4개가
+  hub `test_uart_frame` 와 같은 golden hex 를 고정한다. 하트비트 0xF0 에 `tof_ok` 1 B 가 붙었다(펌웨어 0x0120).
+- `main.cpp` — ToF 폴링·UART 송신·USB `{"t":"tof_feature"}` 1 Hz·부팅 상태 줄(`VL53L8CX x2: ok_mask=3 grid=16x8`)·
+  USB 명령 `b`(기준선)·`g`(배경)·`r`(초기화). `SET_LOOP_TASK_STACK_SIZE(16 KB)` — ST 드라이버가 스택을 4 KB 쓴다.
+- hub: `ingest/uart_frame.py` 디코더, `SensorCache.tof`, `ingest.yaml` `tof:` 섹션으로 posture 신호(mmWave 대체는 ToF 가 낡았을 때만),
+  `sensor_summary.tof`, Pi 4 C++ 네이티브 요약에도 `tof.posture`.
 
-**2026-10-17: raw grid UART transmission (TYPE 0x05) — the posture AI model runs on the Pi 4.**
+**2026-10-17: 원본 격자 UART 전송(TYPE 0x05) — 자세 AI 모델은 Pi 4 에서 돈다.**
 
-- `TofPayload.{h,cpp}` `encodeTofSensorFrame` — packs `TofArray::sensorDistance(i)/sensorStatus(i)` (per-sensor 8×8 in scene orientation) into a
-  200 B frame per sensor. `writeTofGridUart` in `main.cpp` sends only live sensors at 5 Hz (`kTofGridPeriodMs`) after a new sample arrives,
-  with the same `TS` and `frame_id` on every frame, SEQ from a separate counter (`tof_grid_sequence`), and the applied FLIP/STACK/SWAP in `flags`.
-  Firmware version 0x0121. 6 host tests in `test_tof_payload` (2 golden frame hex strings shared with hub `test_uart_frame`).
-- Pi 4 side, candidate A (implemented in this commit): `TofGridAssembler` in `hub/deskmate_hub/ingest/uart_frame.py` assembles the frames and stores them in `SensorCache.tof_grid`,
-  and `hub/deskmate_hub/posture/tof_mlp.py` produces the posture with a pure-Python MLP without numpy (192→64→10, weights from `dataset/tof_sim/train_mlp.py`
-  converted with `export_mlp_json.py`). The 0x03 rule-based decision is kept as the fallback for when the MLP cannot produce a result.
-- Pi 4 side, candidate B (not yet in this repository): a separate service `deskmate_tofposture` (HTTP 8771, `dataset/tof_sim_v5` PostureNet CNN+GRU,
-  (2,8,8) input per sensor, GRU state retained, fusion of the two sensors) makes the decision, and `hub/atlas` only relays 0x05 to tcp:9100.
-  **Which of the two to use is undecided and will be determined by accuracy in measurement sessions.** Both assume per-sensor 8×8 inference + fusion (in candidate A, `tof_mlp.py`
-  does per-sensor baselines and inference, then sums the log-softmax outputs).
+- `TofPayload.{h,cpp}` `encodeTofSensorFrame` — `TofArray::sensorDistance(i)/sensorStatus(i)`(센서별 장면 방향 8×8)를 센서마다
+  200 B 프레임으로 싼다. `main.cpp` `writeTofGridUart` 가 새 표본이 생긴 뒤 5 Hz(`kTofGridPeriodMs`)로 살아 있는 센서만 보내며,
+  프레임마다 같은 `TS`·`frame_id`, SEQ 는 별도 카운터(`tof_grid_sequence`), `flags` 에 적용한 FLIP/STACK/SWAP 을 싣는다.
+  펌웨어 버전 0x0121. 호스트 테스트 `test_tof_payload` 6개(골든 프레임 hex 2개는 hub `test_uart_frame` 와 공유).
+- Pi 4 쪽 후보 A(이 커밋에 구현): `hub/deskmate_hub/ingest/uart_frame.py` `TofGridAssembler` 가 조립해 `SensorCache.tof_grid` 에 두고,
+  `hub/deskmate_hub/posture/tof_mlp.py` 가 numpy 없는 순수 Python MLP(192→64→10, `dataset/tof_sim/train_mlp.py` 가중치를
+  `export_mlp_json.py` 로 변환)로 자세를 낸다. 0x03 규칙 판정은 MLP 가 못 낼 때의 폴백으로 유지.
+- Pi 4 쪽 후보 B(이 저장소엔 아직 없음): 별도 서비스 `deskmate_tofposture`(HTTP 8771, `dataset/tof_sim_v5` PostureNet CNN+GRU,
+  센서당 (2,8,8) 입력·GRU 상태 유지·두 센서 융합)가 판정하고 `hub/atlas` 는 0x05 를 tcp:9100 으로 중계만 한다.
+  **둘 중 무엇을 쓸지는 미확정이며 실측 세션 정확도로 정한다.** 둘 다 센서별 8×8 추론 + 융합이 전제다(후보 A 는 `tof_mlp.py` 가
+  센서별 기준선·추론 뒤 log-softmax 합).
 
-**Not done yet: hardware testing.** Address assignment for the two sensors, sustaining 15 Hz ×2, grid orientation, and thresholds can only be known once attached to the board.
-For what to check on first power-up, see "처음 켤 때 보는 것" ("What to check on first power-up") in `docs/breadboard-esp32-node.md`. What to check on hardware for 0x05:
-whether Pi 4 `UART	{"type":5,...}` lines arrive at 5 Hz × 2 (number of sensors) (`uart_rx` CRC drop count 0), whether hub `UartStats.grids` increases by 5 per
-second (if frames are lost, `TofGridAssembler.discarded` increases), whether mmWave and environment frames get delayed at 115200 (if so, raise the Pi 4 link to
-460800 or increase `kTofGridPeriodMs`), whether only one frame is sent, with that sensor's number, when only one sensor is alive (`sensors` 1), and whether the
-per-sensor 8×8 orientation (FLIP/SWAP in `flags`) matches the orientation the model was trained on (check by raising a hand; see "방향 확인" ("Orientation check") in `dataset/tof_logger/README.md`).
+**아직 안 한 것: 실기.** 두 센서 주소 배정·15 Hz ×2 유지·격자 방향·임계값은 보드에 붙여 봐야 안다.
+처음 켤 때 볼 것은 `docs/breadboard-esp32-node.md` "처음 켤 때 보는 것". 0x05 에 대해 실기에서 볼 것:
+Pi 4 `UART	{"type":5,...}` 라인이 5 Hz × 2(센서 수) 로 들어오는지(`uart_rx` CRC 드롭 카운트 0), hub `UartStats.grids` 가 초당 5 씩
+느는지(프레임 유실이면 `TofGridAssembler.discarded` 증가), 115200 에서 mmWave·환경 프레임이 밀리지 않는지(밀리면 Pi 4 링크
+460800 로 올리거나 `kTofGridPeriodMs` 를 늘린다), 한쪽 센서만 살 때 그 센서 번호로 프레임 1개만 가는지(`sensors` 1), 센서별 8×8 의
+방향(`flags` 의 FLIP/SWAP)이 모델 학습 방향과 같은지(손 들기로 확인, `dataset/tof_logger/README.md` "방향 확인").
 
-**2026-10-17 measurement — rebuilt and reinstalled the Pi 4 hub IPK from `feat/tof-node-hw` (382e821) and confirmed 0x05 assembly on the board.**
-ESP32 firmware 0x0121, Pi 4 `/dev/serial0 → ttyAMA0` 115200 (getty in failed state, device node `g0_a5015` 660), service account u0_a5015,
-built in WSL docker `atlas-dev:latest` with `pip3 install --break-system-packages pyyaml paho-mqtt` →
-`source /opt/atlas-sdk-x86_64/environment-setup-armv8a-atlas-linux` → `arc build hub/atlas` (if the SDK environment is not sourced: `spawn cmake ENOENT`).
-4 consecutive 30 s reports (no person present, both sensors alive, `sensors_ok 3`):
+**2026-10-17 실측 — Pi 4 허브 IPK 를 `feat/tof-node-hw`(382e821) 기준으로 재빌드·재설치해 0x05 조립을 보드에서 확인.**
+ESP32 펌웨어 0x0121, Pi 4 `/dev/serial0 → ttyAMA0` 115200(getty 는 failed 상태, 노드는 `g0_a5015` 660), 서비스 계정 u0_a5015,
+빌드는 WSL docker `atlas-dev:latest` 에서 `pip3 install --break-system-packages pyyaml paho-mqtt` →
+`source /opt/atlas-sdk-x86_64/environment-setup-armv8a-atlas-linux` → `arc build hub/atlas`(SDK 환경을 안 읽으면 `spawn cmake ENOENT`).
+30 s 리포트 4회 연속(사람 없이, 센서 둘 다 살아 있는 상태 `sensors_ok 3`):
 
-- C++ `uart_rx`: `rx` 516 → 982 /30 s (≈15.5 frames/s total), **`discarded=0 crc_errors=0`**.
-- hub bridge (`[bridge] uart …`; from this commit, 30 s period, includes the 0x05 counters and MLP decisions): **`parts` +238–239 /30 s ≈ 7.9 /s = ≈4 Hz per sensor**
-  (not 5 Hz because of a firmware timer phase issue — fixed in measurement (2) below to 10.2 /s), **`grids` +119–120 /30 s ≈ 4.0 /s** (samples where both sensors' frames were collected),
-  **`grid_discarded=0`**, `dropped=0`, heartbeat ≈1 /s, `unknown={}`.
-- At 115200, 0x03/0x04, mmWave 0x20, and environment 0x10 all arrive together, and `/api/state` `sensor_summary` shows temp 23.9, humidity 47.9, lux 418, and mmwave
-  as-is — no delay. There is no reason to raise the link speed yet.
-- MLP (`[tof_mlp] 192→64→10 (8x8, mlp_sim60)`): called for every sample (`mlp frames` == `grids`). With the seat empty, no baseline is captured, so it is `unknown/0.0 used=0`,
-  and `sensor_summary.tof.posture_source` is `rule` (rule-based decision recline, `head_delta_mm` 605, `coverage_ratio` 0.07–0.13 = nobody present) — the fallback
-  working as designed. However, the MLP's `present=1` (zones within 150–1300 mm are 6% or more — apparently the desk surface, etc.) needs to be rechecked together with baseline capture and decisions when a person is seated.
-- Not checked yet: when only one sensor is alive (`sensors` 1), grid orientation (hand raise), MLP baseline and decision accuracy with a person seated.
-- For installation, instead of `arc install`, the build output `hub/atlas/build/arm64/deskmate_hub_service` (ELF including the zip payload) was copied over the service directory via scp,
-  followed by `chown u0_a5015:g0_a5015` and then `pi4-hub-activate.sh` (to avoid account reassignment). The board clock is about a day behind real time (journal 10-16 16:5x KST).
+- C++ `uart_rx`: `rx` 516 → 982 /30 s(전체 ≈15.5 프레임/s), **`discarded=0 crc_errors=0`**.
+- hub 브리지(`[bridge] uart …`, 이 커밋부터 30 s 주기·0x05 카운터·MLP 판정 포함): **`parts` +238~239 /30 s ≈ 7.9 /s = 센서당 ≈4 Hz**
+  (5 Hz 가 아닌 것은 펌웨어 타이머 위상 문제 — 아래 실측(2)에서 고쳐 10.2 /s), **`grids` +119~120 /30 s ≈ 4.0 /s**(두 센서 프레임이 다 모인 표본),
+  **`grid_discarded=0`**, `dropped=0`, 하트비트 ≈1 /s, `unknown={}`.
+- 115200 에서 0x03/0x04·mmWave 0x20·환경 0x10 이 같이 들어오고 `/api/state` `sensor_summary` 에 temp 23.9·humidity 47.9·lux 418·mmwave 가
+  그대로 찍힘 — 밀림 없음. 링크 속도를 올릴 이유는 아직 없다.
+- MLP(`[tof_mlp] 192→64→10 (8x8, mlp_sim60)`): 표본마다 호출된다(`mlp frames` == `grids`). 빈 자리라 기준선이 안 잡혀 `unknown/0.0 used=0`
+  이고 `sensor_summary.tof.posture_source` 는 `rule`(규칙 판정 recline, `head_delta_mm` 605·`coverage_ratio` 0.07~0.13 = 사람 없음) — 설계대로의
+  폴백. 다만 MLP 의 `present=1`(150~1300 mm 안 zone 이 6 % 이상 — 책상 면 등으로 보임)은 사람이 앉았을 때 기준선 포착·판정과 함께 다시 봐야 한다.
+- 아직 안 본 것: 한쪽 센서만 살 때(`sensors` 1), 격자 방향(손 들기), 사람 착석 시 MLP 기준선·판정 정확도.
+- 설치는 `arc install` 대신 빌드 산출물 `hub/atlas/build/arm64/deskmate_hub_service`(zip payload 포함 ELF)를 scp 로 서비스 디렉터리에 덮고
+  `chown u0_a5015:g0_a5015` 뒤 `pi4-hub-activate.sh` 를 돌렸다(계정 재할당을 피한다). 보드 시계는 실제보다 하루 가량 늦다(journal 10-16 16:5x KST).
 
-**2026-10-17 measurement (2) — 0x05/0x03 transmission rate made exactly 5 Hz; boot after ESP32 soft reset 13.3 s → 4.2 s.** Firmware 0x0122.
+**2026-10-17 실측(2) — 0x05/0x03 송신 주기를 정확히 5 Hz 로, ESP32 소프트 리셋 뒤 부팅 13.3 s → 4.2 s.** 펌웨어 0x0122.
 
-- **Transmission rate.** The ToF timer in `main.cpp` was changed from "overwrite the deadline with now" to `periodDue()` (advance the deadline by one period, and resync to
-  now if more than one period behind). The overwrite approach got caught on the phase of the 15 Hz samples (66 ms), so 0x05 came every 264 ms (≈4 Hz), and 0x03 lagged by the loop delay to 4.2 Hz.
-  Measured by capturing 8 s of raw data from Pi 4 `/dev/ttyAMA0` (with the hub not running, `stty -F /dev/ttyAMA0 115200 raw -echo; cat > /tmp/esp.bin`) and counting with
-  `split_stream/decode_frame` in `hub/deskmate_hub/ingest/uart_frame.py`: **0x05 80 frames = 10.17 /s (40 each for sensors 0 and 1), SEQ gaps 0**,
-  sample intervals mostly 198–199 ms (max 220); **0x03 40 = 5.09 /s**, intervals 198–200 ms (0x03 and 0x04 share SEQ, so they are contiguous when combined);
-  0x04, 0x20, 0xF0 1.02 /s, 0x10 0.25 /s, decode/CRC errors 0. Cumulative `tx_grid`/`tx_feature` counters were added to the USB `tof_feature` line — the 1 s differences
-  are 9.8–10.0 / 4.9–5.0 (30 s observation).
-- **Boot time.** The cause was `TofArray::parkStuckSensor()`. When only the ESP32 is reset, both sensors stay powered and keep ranging at their previous addresses (A 0x54, B 0x52),
-  **ignoring LPn LOW** (the scan shows `[all LPn low] 0x52,0x54`). In this state 0x52 responds to address ACK, `is_alive`, and register reads, but
-  calling `init()` with LPn LOW gave code 3 (NACK 2 | poll timeout 1) after a 2 s poll → `stop_ranging` 5 s timeout → 2 s poll = **spending 9.3 s and failing**
-  (the 0x56 "move out of the way" never succeeded once); afterwards, when `startSensor` raised LPn and ran init, it succeeded on the first try even while ranging (1.32 s each for A and B).
-  Fixes: (1) If both A's target address and 0x52 respond (a soft reset after the previous boot completed), the addresses don't overlap, so park is skipped.
-  (2) If only 0x52 responds (the previous boot was cut off before A's address change), only the SW reboot sequence at the very beginning of `vl53l8cx_init()` is sent (`softReboot`, ≈100 ms)
-  — the rebooted sensor is uninitialized, so it follows LPn LOW again and drops off the bus (measured `acks after=0`); from there it follows the same path as a power cycle.
-  (3) Removed the 0x56 candidate and `kTofParkedAddress`, and added a per-sensor diagnostic line `tof A: init=0 (1319 ms)`.
-  Measured (USB boot log, host time): in both soft resets, `VL53L8CX x2: ok_mask=3` at **4.16–4.17 s** (scan 0.4 s + A 1.32 s + B 1.32 s;
-  previously 13.33 s). The "only 0x52 responds" path was reproduced by resetting right after SW-rebooting A with a temporary USB command — `[all LPn low] 0x52` → `SW reboot,
+- **송신 주기.** `main.cpp` 의 ToF 타이머를 "기한을 now 로 덮기" 에서 `periodDue()`(기한을 period 씩 밀고, 한 주기 넘게 뒤처지면
+  now 로 재동기)로 바꿨다. 덮는 방식은 15 Hz 표본(66 ms) 위상에 걸려 0x05 가 264 ms(≈4 Hz), 0x03 이 루프 지연만큼 늦어 4.2 Hz 였다.
+  실측은 Pi 4 `/dev/ttyAMA0` 8 s raw 캡처(허브 미기동 상태, `stty -F /dev/ttyAMA0 115200 raw -echo; cat > /tmp/esp.bin`)를
+  `hub/deskmate_hub/ingest/uart_frame.py` `split_stream/decode_frame` 으로 센 것: **0x05 80 프레임 = 10.17 /s(센서 0·1 각 40), SEQ 갭 0**,
+  표본 간격 198~199 ms 가 대부분(최대 220); **0x03 40 = 5.09 /s**, 간격 198~200 ms(0x03·0x04 는 SEQ 를 같이 쓰므로 둘을 합쳐 연속);
+  0x04·0x20·0xF0 1.02 /s, 0x10 0.25 /s, 디코드·CRC 오류 0. USB `tof_feature` 줄에 누계 `tx_grid`/`tx_feature` 를 붙였다 — 1 s 차분이
+  9.8~10.0 / 4.9~5.0 (30 s 관측).
+- **부팅 시간.** 원인은 `TofArray::parkStuckSensor()` 였다. ESP32 만 리셋되면 두 센서는 전원이 유지돼 이전 주소(A 0x54·B 0x52)로
+  측거를 계속하며 **LPn LOW 를 무시한다**(스캔에 `[all LPn low] 0x52,0x54`). 이때 0x52 는 주소 ACK·`is_alive`·레지스터 읽기는 되지만
+  LPn 이 LOW 인 채 `init()` 을 걸면 코드 3(NACK 2 | 폴 타임아웃 1)으로 2 s 폴 → `stop_ranging` 5 s 타임아웃 → 2 s 폴 = **9.3 s 를 쓰고 실패**
+  했고(0x56 "치우기"는 한 번도 성공한 적 없음), 그 뒤 `startSensor` 가 LPn 을 올리고 init 하면 측거 중이어도 한 번에 됐다(A·B 각 1.32 s).
+  고친 것: (1) A 의 목표 주소와 0x52 가 둘 다 응답하면(이전 부팅이 끝까지 간 소프트 리셋) 주소가 안 겹치니 park 를 건너뛴다.
+  (2) 0x52 만 응답하면(이전 부팅이 A 의 주소 변경 전에 끊긴 경우) `vl53l8cx_init()` 맨 앞의 SW 리부트 시퀀스만 보낸다(`softReboot`, ≈100 ms)
+  — 리부트된 센서는 미초기화 상태라 LPn LOW 를 다시 따라 버스에서 빠지고(실측 `acks after=0`), 이후는 전원 재투입과 같은 경로다.
+  (3) 0x56 후보·`kTofParkedAddress` 제거, 센서별 `tof A: init=0 (1319 ms)` 진단 줄 추가.
+  실측(USB 부팅 로그, 호스트 시각): 소프트 리셋 2회 모두 `VL53L8CX x2: ok_mask=3` 가 **4.16~4.17 s**(스캔 0.4 s + A 1.32 s + B 1.32 s;
+  이전 13.33 s). "0x52 만 응답" 경로는 임시 USB 명령으로 A 를 SW 리부트한 직후 리셋해 재현 — `[all LPn low] 0x52` → `SW reboot,
   acks after=0` → `ok_mask=3` 4.17 s.
-  **Calling `stop_ranging()` first on an uninitialized sensor was not used**: the library polls bit 7 of register 0x06 10 ms × 500 times, so
-  on a sensor that hasn't booted it runs to the 5 s timeout (`vl53l8cx_api.c` `vl53l8cx_stop_ranging`). Register 0x06, which we looked at to detect ranging, is also 0x31 while ranging,
-  so bit 7 cannot distinguish the cases.
-- **The power-cycle path (both uninitialized, LPn normal) was also confirmed by measurement.** The code is unchanged (if 0x52 does not respond, park returns immediately; the `startSensor`
-  logic "init at 0x52 → change only A to 0x54" is unchanged). Captured from the moment the port reopened while unplugging and replugging USB-C (with all other sensors connected):
-  `tof A: init=0 (1320 ms)` → `tof B: init=0 (1319 ms)` → `VL53L8CX x2: ok_mask=3 grid=16x8`, and the `ms` of the following `tof_feature` = 3611.
-  That is, **both sensors OK at 3.6 s** in ESP32 time — the same as `ms`=3630 for the soft reset (the 4.2 s host-side figure includes ROM boot and 0.5 s of USB delay).
-  Because of the port enumeration delay (≈1 s), the scan and park lines could not be seen over USB. In the same boot, the SCD41 came up with `periodic measurement started`
-  (the `error=268` after a soft reset appears to be the SCD41 refusing re-initialization while still powered — the same kind of phenomenon as the ToF, a separate issue).
-- Pi 4 status note: at the time of this capture there was no hub process (`ps` 0, no `[bridge]` lines in the journal) — which is why the port could be read directly.
-  To bring the hub back up, run `pi4-hub-activate.sh`.
+  **미초기화 센서에 `stop_ranging()` 을 먼저 부르는 방법은 쓰지 않았다**: 라이브러리가 레지스터 0x06 bit 7 을 10 ms × 500 회 폴하므로
+  부팅 안 된 센서에서는 5 s 타임아웃까지 간다(`vl53l8cx_api.c` `vl53l8cx_stop_ranging`). 측거 중 판별용으로 본 0x06 도 측거 중 0x31 이라
+  bit 7 로는 못 가른다.
+- **전원 재투입 경로(둘 다 미초기화, LPn 정상)도 실측 확인.** 코드는 그대로다(0x52 무응답이면 park 즉시 return, `startSensor` 의
+  "0x52 로 init → A 만 0x54 로 변경" 로직 불변). USB-C 를 뽑았다 꽂으며 포트가 다시 열리는 순간부터 캡처(다른 센서 전부 연결된 상태):
+  `tof A: init=0 (1320 ms)` → `tof B: init=0 (1319 ms)` → `VL53L8CX x2: ok_mask=3 grid=16x8`, 직후 `tof_feature` 의 `ms`=3611.
+  즉 ESP32 시각으로 **3.6 s 에 두 센서 OK** — 소프트 리셋 때의 `ms`=3630 과 같다(호스트 기준 4.2 s 는 ROM 부트·USB 지연 0.5 s 포함).
+  포트 enumerate 지연(≈1 s) 때문에 스캔·park 줄은 USB 로 못 봤다. 같은 부팅에서 SCD41 은 `periodic measurement started` 로 올라왔다
+  (소프트 리셋 뒤의 `error=268` 은 SCD41 이 전원 유지 상태에서 재초기화를 거부한 것으로 보임 — ToF 와 같은 종류의 현상, 별건).
+- Pi 4 상태 메모: 이 캡처 시점에 허브 프로세스가 없었다(`ps` 0, 저널에 `[bridge]` 줄 없음) — 그래서 포트를 직접 읽을 수 있었다.
+  허브를 다시 올리려면 `pi4-hub-activate.sh`.
 
-**2026-10-17 PC diagnostics: raw 8×8 line `{"t":"tof_grid"}` toggled by USB command `z` + `tools/sensor_monitor.py`.** Firmware 0x0123.
-The same samples and the same `frame_id` as UART 0x05 are also output over USB as JSON, with 64 `d` (mm, -1) and 64 `st` (255) values per sensor (5 Hz, ≈1.1 kB per line).
-**It is off by default** and `z` toggles it (`# tof_grid usb on/off`), so the production output and the "no raw ToF in production" principle are unchanged — like the collection mode (`env:tof_logger`),
-it is viewed only on a development PC. `Serial.setTxBufferSize(4096)` enlarges the USB TX ring buffer so printing 1.1 kB does not block the loop (95 ms at 115200).
-`tools/sensor_monitor.py --port COM8` sends `z` at startup and sends it again on exit to turn it off. Measured: monitor received `tof_grid` at 4.99 Hz, and with it on,
-the `tx_grid`/`tx_feature` differences stayed at 10/5.
+**2026-10-17 PC 진단: USB 명령 `z` 로 켜는 원본 8×8 줄 `{"t":"tof_grid"}` + `tools/sensor_monitor.py`.** 펌웨어 0x0123.
+UART 0x05 와 같은 표본·같은 `frame_id` 를 센서별 `d`(mm, -1)·`st`(255) 64개씩 JSON 으로 USB 에도 낸다(5 Hz, 한 줄 ≈1.1 kB).
+**기본은 꺼져 있고** `z` 가 토글(`# tof_grid usb on/off`)이라 운영 출력·"운영 ToF raw 미전송" 원칙은 그대로다 — 수집 모드(`env:tof_logger`)처럼
+개발 PC 에서만 본다. `Serial.setTxBufferSize(4096)` 으로 USB TX 링 버퍼를 키워 1.1 kB 를 print 해도 루프가 안 막힌다(115200 에서 95 ms).
+`tools/sensor_monitor.py --port COM8` 이 시작할 때 `z` 를 보내고 끝날 때 다시 보내 끈다. 실측: 모니터 수신 `tof_grid` 4.99 Hz, 켠 상태에서
+`tx_grid`/`tx_feature` 차분 10/5 유지.
 
-**2026-10-17 fix for SCD41 `error=268` after soft reset + USB `i` environment I2C scan.** 268 = Sensirion `WriteError|I2cAddressNack`: when only the ESP32
-is reset, the SCD41 stays powered and the periodic measurement from the previous run keeps going, and in that state it does not even ACK its address for `start_periodic_measurement`
-(after a power cycle it works immediately — the same kind of issue as the ToF ignoring LPn). If `beginScd41` fails, it calls `stop_periodic_measurement` (500 ms) and then tries
-starting once more. USB `i` probes Wire (GPIO21/22) 0x08–0x77 and prints the ACKing addresses — measured `0x23,0x62` (BH1750, SCD41); right after flashing (soft reset),
-CO₂ 622 ppm was valid. The `i 환경 I2C 스캔` ("i environment I2C scan") button on the monitor page sends the same command.
+**2026-10-17 SCD41 소프트 리셋 뒤 `error=268` 수정 + USB `i` 환경 I2C 스캔.** 268 = Sensirion `WriteError|I2cAddressNack`: ESP32 만
+리셋되면 SCD41 은 전원이 유지돼 이전 실행의 주기 측정이 계속 돌고, 그 상태에서는 `start_periodic_measurement` 에 주소 ACK 조차 안 한다
+(전원 재투입 뒤에는 바로 된다 — ToF 의 LPn 무시와 같은 종류). `beginScd41` 이 실패하면 `stop_periodic_measurement`(500 ms) 뒤 한 번 더
+시작한다. USB `i` 는 Wire(GPIO21/22) 0x08~0x77 을 찔러 ACK 주소를 찍는다 — 실측 `0x23,0x62`(BH1750·SCD41), 플래시 직후(소프트 리셋)에도
+CO₂ 622 ppm 유효. 모니터 페이지의 `i 환경 I2C 스캔` 버튼이 같은 명령이다.
 
-**Training data collection mode (`env:tof_logger`, not production).** Reads the VL53L8CX 8×8 with the official ST library and sends raw zones and
-rule-based decisions to the PC as one-line JSON over USB (`{"t":"tof",...}`, 921600). `src/tof_logger/` is excluded from the production build
-(`build_src_filter` of `env:esp32dev`). For the PC-side collector, wiring, and orientation check, see [`dataset/tof_logger/README.md`](../dataset/tof_logger/README.md).
-Line format test: `pio test -e native -f test_tof_line`.
+**학습 데이터 수집 모드(`env:tof_logger`, 운영 아님).** VL53L8CX 8×8 을 ST 공식 라이브러리로 읽어 원본 zone 과
+규칙 판정을 USB 한 줄 JSON(`{"t":"tof",...}`, 921600)으로 PC 에 보낸다. `src/tof_logger/` 는 운영 빌드에서 빠진다
+(`env:esp32dev` 의 `build_src_filter`). PC 쪽 수집기·배선·방향 확인은 [`dataset/tof_logger/README.md`](../dataset/tof_logger/README.md).
+줄 형식 시험: `pio test -e native -f test_tof_line`.
 
-## Communication contract
+## 통신 계약
 
-See [`docs/data-spec.md`](../docs/data-spec.md) for the logical schema and [`docs/mqtt-topics.md`](../docs/mqtt-topics.md) for the MQTT mapping from the Pi 4 onward.
-Measurement records: Notion pages 「ESP32–Pi4 UART 하드웨어 연결·실측 검증」 ("ESP32–Pi4 UART hardware connection and measurement verification") and 「센서별 데이터·처리·전송 스펙」 ("Per-sensor data, processing, and transmission spec").
+논리 스키마는 [`docs/data-spec.md`](../docs/data-spec.md), Pi 4 이후 MQTT 매핑은 [`docs/mqtt-topics.md`](../docs/mqtt-topics.md) 참조.
+실측 기록: 노션 「ESP32–Pi4 UART 하드웨어 연결·실측 검증」, 「센서별 데이터·처리·전송 스펙」.
 
-### MVP USB (UART0) JSON lines
+### MVP USB(UART0) JSON 라인
 
-At 115200 8N1, one JSON object is written per line, terminated with `\n`. JSON sensor lines always start with `{"t":`, so
-they can coexist with ordinary debug logs on the same port.
+115200 8N1에서 한 줄에 JSON 객체 하나를 쓰고 `\n`으로 끝낸다. JSON 센서 줄은 반드시 `{"t":`로 시작하므로
+같은 포트의 일반 디버그 로그와 함께 쓸 수 있다.
 
 ```json
 {"t":"mmwave","ms":1234,"present":true,"motion_state":"still","motion_level":12,"distance_cm":87,"resp_bpm":15,"resp_valid":true,"heart_bpm":null,"heart_valid":false,"drowsy_state":"AWAKE","valid":true}
 {"t":"env","ms":5000,"co2_ppm":null,"temp_c":null,"humidity_pct":null,"lux":null,"co2_valid":false,"temp_valid":false,"humidity_valid":false,"lux_valid":false}
 ```
 
-- mmWave is 1 Hz; environment is 0.2 Hz (every 5 seconds).
-- `motion_state` is `none|still|active`; `drowsy_state` is `NOPERSON|NOLOCK|WARMUP|AWAKE|DROWSY`.
-- Invalid or missing values are output as `null` with the corresponding valid flag set to `false`.
-- Warmup, stillness duration, and motion level thresholds are adjusted in `build_flags` in `platformio.ini`.
-- Build: `cd firmware/esp32_sensor_node; pio run`
-- If upload fails, hold BOOT, press EN once, then upload.
+- mmWave는 1 Hz, 환경은 0.2 Hz(5초 간격)다.
+- `motion_state`는 `none|still|active`, `drowsy_state`는 `NOPERSON|NOLOCK|WARMUP|AWAKE|DROWSY`다.
+- 유효하지 않거나 없는 수치는 `null`로 출력하고 해당 valid 플래그를 `false`로 둔다.
+- warmup·정지 지속·motion level 임계값은 `platformio.ini`의 `build_flags`에서 조정한다.
+- 빌드: `cd firmware/esp32_sensor_node; pio run`
+- 업로드가 안 되면 BOOT를 누른 채 EN을 한 번 누른 뒤 업로드한다.
