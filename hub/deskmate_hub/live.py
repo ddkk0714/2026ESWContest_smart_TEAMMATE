@@ -31,6 +31,8 @@ from .co2_window import Co2WindowRule, load_co2_window_config
 from .rest_notice import RestNotifier
 from .arm_notice import ArmDeliverer
 from .demo_mode import DemoSpeed
+from .demo_wake import DemoWake
+from .posture_calib import PostureCalibrator
 from .personalization import PersonalizationRuntime, load_personalization_config
 from .personalization.privacy import PersonalizationPrivacy, load_privacy_config
 from .personalization.ondevice import OnDeviceLearner, load_ondevice_config
@@ -121,7 +123,8 @@ class LiveHub:
         self.engine = FSMEngine(self.fsm_cfg)
         # 빠른 시연(demo_mode.py, fsm.yaml demo_fast:): 화면 버튼 토픽으로 엔진 피로 유지 타이머를 줄였다 되돌린다
         self.demo_speed = DemoSpeed(self.fsm_cfg.get("demo_fast"), self.engine.tm,
-                                    on_log=lambda m: print(m, file=out, flush=True))
+                                    on_log=lambda m: print(m, file=out, flush=True),
+                                    posture_delta=(self.ingest_cfg.get("tof") or {}).get("posture_delta"))
         self.tracker = SessionTracker(
             elapsed_reset_on_rest=bool((self.ingest_cfg.get("elapsed") or {}).get("reset_on_rest", False)))
         self.privacy_cfg = privacy_cfg if privacy_cfg is not None else load_privacy_config()
@@ -203,6 +206,7 @@ class LiveHub:
         self.privacy.boot_id = self.boot_id
         self.seq = 0
         self.period = float(self.ingest_cfg.get("frame_period_sec") or self.fsm_cfg["timers"]["score_period_sec"])
+        self._normal_period = self.period
         self.esm_log_path = self.control_cfg.get("esm_log_path") or os.path.join("logs", f"esm-{self.boot_id}.jsonl")
         # 라벨 번호는 state/phase seq 와 따로 센다(seq 에 구멍이 나면 수신 측이 유실로 본다).
         self.personalization_cfg = personalization_cfg if personalization_cfg is not None else load_personalization_config()
@@ -219,6 +223,12 @@ class LiveHub:
             load_personalize_config() if load_personalize_config is not None else {})
         # 프로파일의 personalize: 절(정책 gate.conf_auto 등) — FSM 만 낮추고 정책이 0.75 로 남아 자동이 제안으로 깎이던 결함(10-24 PC 리허설)
         self.personalize_cfg = apply_section(self.personalize_cfg, "personalize", self.profile or "")
+        # 11-02 사용자 "지금은 개인화 하지 말아봐" — hub.env DESKMATE_PERSONALIZE=off 면 사람별로 고르고 배우는 것을 끈다:
+        # 개입 선택 정책(밴딧, 기록은 계속 — FSM 기본 개입이 나간다)과 카드 응답 반응 학습. 다시 켜려면 줄을 지우고 허브만 재시작.
+        self.personalize_off = os.environ.get("DESKMATE_PERSONALIZE", "").strip().lower() in ("off", "0", "false")
+        if self.personalize_off:
+            self.personalize_cfg = dict(self.personalize_cfg, enabled=False)
+            print("[personalize] DESKMATE_PERSONALIZE=off — 개입 선택 정책·반응 학습 끔(기록만)", file=self.out, flush=True)
         # `enabled: true` 면 3층 정책(InterventionPolicy, 순수 Python — Pi 4 에서도 돈다)도 켜서 결정 tick 에
         # arm·전달 게이트를 고르고 profiles/<profile_id>/policy.json 에 학습 상태를 저장한다.
         self.personalize_recorder: EpisodeRecorder | None = None
@@ -237,6 +247,9 @@ class LiveHub:
             self.personalize_recorder = EpisodeRecorder(
                 self.personalize_cfg, path, boot_id=self.boot_id, ingest_cfg=self.ingest_cfg,
                 on_log=lambda m: print(m, file=self.out), policy=policy, policy_path=policy_path)
+        # 사람별 자세 보정(posture_calib.py, 11-03): profiles/<profile_id>/posture_calib.json 이 있는 사람만 — 없으면 판정 그대로
+        self.posture_calib = PostureCalibrator(
+            self.personalize_recorder.profiles_root if self.personalize_recorder is not None else None)
         self.ondevice_cfg = ondevice_cfg if ondevice_cfg is not None else load_ondevice_config()
         self.ondevice = OnDeviceLearner(self.ondevice_cfg, self.privacy)
         # 피로 점수(공용 KSS 모델, docs/fatigue-dataset.md §6) — 관찰 전용, FSM 입력 아님. 모델 JSON 이 없으면 None.
@@ -259,6 +272,9 @@ class LiveHub:
             load_learning_config() if load_learning_config is not None else {})
         # 프로파일의 learning: 절(keep_floor 등) — 시연에서 공통모델 학습기(α 0.3)가 점수를 0.05 낮춰 첫 깨우기가 늦어지던 것(PC 리허설 10-25)
         self.learning_cfg = apply_section(self.learning_cfg, "learning", self.profile or "")
+        self._learning_on_cfg = bool(self.learning_cfg.get("enabled"))     # 개인화 버튼으로 다시 켤 때의 원래 값
+        if self.personalize_off:
+            self.learning_cfg = dict(self.learning_cfg, enabled=False)
         # 프로필 id 는 identity.active_profile_id 한 곳에서 — 개인화 정책·반응 학습 상태 파일이 같은 사람을 가리킨다
         self.profile_id = active_profile_id(self.learning_cfg, self.personalize_cfg)
         rec = self.personalize_recorder
@@ -282,6 +298,11 @@ class LiveHub:
         self.arm_deliverer = ArmDeliverer(self.control_cfg.get("arm_notice"), boot_id=self.boot_id,
                                           publish_request=self.publish_request, publish_control=arm_sink,
                                           on_log=lambda m: print(m, file=self.out, flush=True))
+        # 빠른 시연 깨우기 규칙(demo_wake.py, control.yaml demo_wake:) — speed fast 일 때만 ACTION_POSTURE 기기를 도움 순서로 고른다
+        self.demo_wake = DemoWake(self.control_cfg.get("demo_wake"))
+        self._demo_plan: dict[str, Any] | None = None
+        self._demo_notice: dict[str, Any] | None = None          # 떠 있는 빠른 시연 안내 카드(바른 자세로 돌아오면 닫는다)
+        self._fatigue_label: str | None = None                    # FATIGUE 확정 순간의 자세 — 원인 판단이 흔들려도 시연 규칙에 쓴다
         self.rest_notifier = RestNotifier(
             self.control_cfg.get("rest_notice"), fsm_cfg=self.fsm_cfg, boot_id=self.boot_id,
             publish_request=self.publish_request, publish_control=rest_sink,
@@ -302,6 +323,9 @@ class LiveHub:
     def tick_once(self, now: float | None = None) -> dict[str, Any]:
         now = time.time() if now is None else now
         view = self.cache.snapshot()
+        if self.personalize_recorder is not None:              # 프로필이 바뀌었으면 그 사람 보정으로(이 tick 의 프로필 메시지는 다음 tick 부터)
+            self.posture_calib.follow(self.personalize_recorder.active_profile_id)
+        view = self.posture_calib.apply(view)
         self._control_now = now
         # Observe before processing an acceptance: stale/invalid/new manual state
         # must invalidate a proposed command rather than be checked a tick later.
@@ -309,6 +333,16 @@ class LiveHub:
         for feedback, received in self.cache.pop_feedback_events():
             if feedback.get("kind") == "personalization":
                 self.privacy.handle(feedback)
+                continue
+            if feedback.get("kind") == "personalize_switch":
+                # devview "개인화 켜기·끄기" 버튼(11-02) — 재시작 없이. 허브가 다시 켜지면 hub.env DESKMATE_PERSONALIZE 로 돌아간다
+                if isinstance(feedback.get("on"), bool):
+                    self.set_personalize(feedback["on"])
+                continue
+            if feedback.get("kind") == "misjudge":
+                # PC devview "오판" 버튼(11-02) — 판정이 틀렸다는 표시. 개인화 학습에서만 뺀다(FSM·제어·ESM 아님)
+                if self.personalize_recorder is not None:
+                    self.personalize_recorder.on_misjudge(feedback, ts=now if received is None else min(now, received))
                 continue
             if feedback.get("kind") == "manual_adjust":
                 # 앱에서 사용자가 직접 조명을 바꿨다는 보고 — 개인화 암묵 신호 전용(ESM·제어 승인 아님, personalize/signals.py)
@@ -406,6 +440,10 @@ class LiveHub:
                 self.control_log.tick(now)
 
         self.demo_speed.observe(view.demo_mode, now)          # 엔진 tick 전에 — 이번 tick 부터 바뀐 유지 시간으로 본다
+        # 11-03 결선 대본(8분): 빠른 시연은 판정 주기도 줄인다(fsm.yaml demo_fast.period_sec). tick 루프(live·service_bridge)가
+        # 다음 tick 시각을 hub.period 로 잡으므로 다음 tick 부터 바뀐다. 운영 판정 주기(10 s)는 normal 에서 그대로.
+        self.period = ((self.demo_speed.period_sec or self._normal_period) if self.demo_speed.speed == "fast"
+                       else self._normal_period)
         frame = build_frame(view, now, self.ingest_cfg, self.tracker, fsm_state=self.engine.state)
         self._last_present = bool(frame.present)            # 발행용: 자리 비움이면 점수 0.0·scores_valid false (_pub_scores)
         request_kind = self._REQUEST_STATES.get(self.engine.state)
@@ -452,6 +490,41 @@ class LiveHub:
                 specs_arm = getattr(decision, "arm", None) if specs else None
             if self.personalize_recorder.last_view is not None:
                 summary["personalize"] = self.personalize_recorder.last_view
+            summary["personalize_switch"] = "off" if self.personalize_off else "on"   # devview 개인화 버튼(11-02)
+        # 빠른 시연(11-03 결선 대본): ACTION_POSTURE 에 들어온 tick 이면 밴딧 대신 도움 순서 규칙이 기기를 고른다(demo_wake.py)
+        self._demo_plan = None
+        if self.demo_wake.enabled:                                 # 선풍기는 방 온도가 오를 때만(demo_wake warm_rise_c) — tick 마다 관측
+            env = view.fresh("env", now, float((self.ingest_cfg.get("freshness_sec") or {}).get("env", 30)))
+            temp = (env.data or {}).get("temp_c") if env is not None and (env.data or {}).get("temp_valid", True) else None
+            self.demo_wake.observe_temp(float(temp) if temp is not None else None, now)
+        # 11-05 실기: 젖힘·엎드림으로 졸음이 확정됐는데 원인 판단 tick 에 자세가 잠깐 upright 로 읽혀 원인이 환경(더위)으로 갔고,
+        # 환경 개입은 제안으로만 나가 선풍기 명령이 없었다(→ 휴식 제안 → 휴식 알림). 그래서 빠른 시연에서는
+        #   ACTION_POSTURE: 도움 순서 규칙. 지금 자세가 규칙에 없으면(흔들림) FATIGUE 확정 순간의 자세로.
+        #   ACTION_ENV    : 방 온도가 올랐으면 선풍기를 바로 켠다("더위 때문에 사람이 피로하면 선풍기가 켜져야지" — 사용자).
+        rec = self.personalize_recorder
+        if rec is not None and result.state is State.FATIGUE and prev_state is not State.FATIGUE:
+            self._fatigue_label = rec.last_posture_label
+        if (self.control is not None and self.demo_speed.speed == "fast" and rec is not None
+                and result.state in (State.ACTION_POSTURE, State.ACTION_ENV, State.ACTION_BREAK)
+                and result.state is not prev_state):
+            profile = rec.user_profile if isinstance(rec.user_profile, dict) else {}
+            remembered, self._fatigue_label = self._fatigue_label, None
+            label = rec.last_posture_label
+            if label not in self.demo_wake.rule_labels and remembered:
+                label = remembered                         # 원인 판단 tick 에 자세가 흔들렸으면 확정 순간의 자세
+            # 원인이 휴식(인지)으로 간 경우는 졸음 확정 직후 첫 개입일 때만 — 재시도의 휴식 제안은 원래 경로
+            if result.state is not State.ACTION_BREAK or remembered is not None:
+                self._demo_plan = self.demo_wake.decide(label, profile.get("focus_help"))
+            if self._demo_plan is not None:
+                specs, specs_arm = self._demo_plan["specs"], self._demo_plan["arm"]
+                if specs:
+                    result.gate = GateMode.AUTO                # 시연 깨우기는 제안이 아니라 바로 실행
+                print(f"[demo_wake] {self._demo_plan['label']} → {self._demo_plan['arm']} "
+                      f"(원인 {'+'.join(self._demo_plan.get('causes') or [])} · 온도 상승 {self._demo_plan.get('temp_rise_c')} °C)",
+                      file=self.out, flush=True)
+        if self.demo_wake.enabled:
+            summary["demo_wake"] = self.demo_wake.snapshot()
+        summary["posture_calib"] = self.posture_calib.snapshot()
         if self.control is not None:
             # 제어 에피소드: ACTION_ENV 는 control.yaml 기본 명령으로, 다른 ACTION_* 는 정책이 기기 arm(조명 등)을
             # 골랐을 때만(specs 비어 있지 않음). ACTION_POSTURE 는 정책 결정이 아예 없을 때(specs None: 정책 꺼짐·fallback·
@@ -520,7 +593,12 @@ class LiveHub:
         self.seq += 1
         self.publish(envelope)
         self._maybe_request(result, prev_state, now)
-        self._deliver_deviceless_arm(result, prev_state, specs, now, self._sound_pref())
+        if self._demo_plan is not None:
+            if self._demo_plan["kind"] == "notice":
+                self._deliver_demo_notice(result, now)
+        else:
+            self._close_demo_notice(now)
+            self._deliver_deviceless_arm(result, prev_state, specs, now, self._sound_pref())
         if (self.personalize_recorder is not None and self.personalize_recorder.last_episode_id
                 and self.pending_request is not None):
             self.personalize_recorder.link_request(self.pending_request["data"]["request_id"])
@@ -574,6 +652,11 @@ class LiveHub:
                     self._absent_back_since = back = now
                 if now - back >= float(cfg.get("restore_after_sec", 10)):
                     self._absent_off_ep, self._absent_back_since = None, None
+                    # 11-03 결선 대본: A 가 떠난 자리에 B 가 앉으면(앱에서 사람 바꿈) A 의 조명·음악·선풍기를 되살리지 않는다
+                    if getattr(self, "_absent_off_profile", None) != self.active_profile_id:
+                        print(f"[control] 자리 복귀 — 다른 사람({self.active_profile_id})이라 이전 설정을 되돌리지 않음",
+                              file=self.out, flush=True)
+                        return
                     specs = restore_specs(ep.commands)
                     if specs:
                         print(f"[control] 자리 복귀 → 이전 설정으로 {len(specs)}건", file=self.out, flush=True)
@@ -584,11 +667,33 @@ class LiveHub:
             return
         if getattr(self, "_absent_off_since", None) is None:
             self._absent_off_since = now
-        if now - self._absent_off_since >= float(cfg.get("after_sec", 60)):
+        after = float(cfg.get("after_sec", 60))
+        if self.demo_speed.speed == "fast" and self.demo_speed.absent_off_after_sec is not None:
+            after = self.demo_speed.absent_off_after_sec        # 빠른 시연(fsm.yaml demo_fast.absent_off_after_sec, 11-04)
+        if now - self._absent_off_since >= after:
             self._absent_off_armed = False
             print(f"[control] 자리 비움 {now - self._absent_off_since:.0f}s → 기기 끄기", file=self.out, flush=True)
             self._absent_off_ep = self.control.on_enter_action("ABSENT", "absent", GateMode.AUTO, now,
                                                                specs=list(cfg["commands"]))
+            self._absent_off_profile = self.active_profile_id
+
+    def set_personalize(self, on: bool) -> None:
+        """개인화(개입 선택 정책 + 카드 응답 반응 학습)를 지금 켜거나 끈다. DESKMATE_PERSONALIZE=off 와 같은 뜻을 재시작 없이."""
+        rec = self.personalize_recorder
+        changed = rec.set_policy_enabled(on) if rec is not None else False
+        if on and self.learner is None and self._learning_on_cfg and ReactionLearner is not None:
+            self.learner = ReactionLearner(dict(self.learning_cfg, enabled=True, profile_id=self.profile_id), self.fsm_cfg,
+                                           state_path=self._learning_state_path,
+                                           on_log=lambda m: print(m, file=self.out, flush=True))
+            self.engine.score_adjust = self.learner.adjust
+            changed = True
+        elif not on and self.learner is not None:
+            self.learner = None
+            self.engine.score_adjust = None
+            changed = True
+        self.personalize_off = not on
+        print(f"[personalize] 개인화 {'켜기' if on else '끄기'} — 개입 선택 정책·반응 학습"
+              + ("" if changed else "(이미 그 상태)"), file=self.out, flush=True)
 
     def _follow_active_profile(self) -> None:
         """프로필 메시지로 사람이 바뀌었으면(personalize/record.py 사람별 정책) 반응 학습도 그 사람의 상태 파일로 갈아 끼운다.
@@ -653,6 +758,32 @@ class LiveHub:
             if item.get("data", {}).get("auto"):
                 self.seq += 1
                 self._mark_card(now, item["data"]["expires_in_s"], kind)      # 안내가 떠 있는 동안 환기·확인 카드는 기다린다
+
+    def _deliver_demo_notice(self, result, now: float) -> None:
+        """빠른 시연 규칙이 거북목·턱 괴기에 고른 바른 자세 안내(arm posture_card)를 카드로 낸다 — 밴딧 arm 전달과 같은 길."""
+        kind, prompt = self._REQUEST_STATES[result.state]
+        expires = float(self.fsm_cfg["timers"].get("focus_break_poll_sec", 180))
+        emitted = self.arm_deliverer.deliver(
+            state=result.state.value, kind=kind, prompt_code=prompt, gate=result.gate.value, arm="posture_card",
+            label="자세 안내 카드", channel="display", explanation=None, cause=result.cause, now=now, seq=self.seq,
+            sound_pref=self._sound_pref(), c_fatigue=self._pub_scores(result)[0], expires_in_s=expires)
+        for item in emitted:
+            if item.get("data", {}).get("auto"):
+                self.seq += 1
+                self._mark_card(now, item["data"]["expires_in_s"], kind)
+                self._demo_notice = item                     # 바른 자세로 돌아오면 닫는다(_close_demo_notice)
+
+    def _close_demo_notice(self, now: float) -> None:
+        """빠른 시연의 바른 자세 안내 카드: 자세가 upright 로 돌아온 tick 에 닫는다(11-05 사용자 "5초로 바꿔").
+        앱 알림판은 같은 request_id 를 새 것으로 바꾸므로 expires_in_s 를 0.1 로 다시 보내 바로 지나가게 한다."""
+        card = getattr(self, "_demo_notice", None)
+        rec = self.personalize_recorder
+        if card is None or rec is None or rec.last_posture_label != "upright":
+            return
+        self._demo_notice = None
+        closed = dict(card, ts=now, data=dict(card["data"], expires_in_s=0.1, closed_reason="posture_recovered"))
+        self.publish_request(closed)
+        print("[demo_wake] 바른 자세로 돌아옴 → 안내 카드 닫기", file=self.out, flush=True)
 
     def _pub_scores(self, result) -> tuple[float, bool]:
         """발행용 (c_fatigue, scores_valid). 자리 비움(이번 tick present false)이면 (0.0, False) — 부재면 환경 하나만 남아 재정규화가

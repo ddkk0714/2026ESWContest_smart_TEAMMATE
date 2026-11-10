@@ -35,6 +35,9 @@ presence:
   # 방을 나갔는데 mmWave 가 119 cm 정지 물체를 사람으로 잡던 문제. 앉아 있을 때 mmWave 는 47~60 cm(11-02 실측)
   tof_away_overrides: true
   tof_away_mm_min_cm: 90
+  # 11-02: 이 책상 PC 에서 최근 이만큼(s) 안에 키를 쳤으면(keydown_count 증가) 다른 센서가 비었다고 해도 재실(근거 keystroke).
+  # 턱 괴고 타이핑하는데 ToF 아랫줄이 비어 부재로 본 실기. 0 이면 끔
+  keystroke_keeps_present_sec: 15
 
 # MVP 지름길: 디스플레이 터치 대신 재실 상승엣지(IDLE 에서 present false→true)로 세션을 시작한다.
 auto_start_on_presence: true
