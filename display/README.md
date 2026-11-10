@@ -1,80 +1,80 @@
-**English** | [한국어](README.ko.md)
+[English](README.EN.md) | **한국어**
 
-# display — Raspberry Pi 5 display terminal
+# display — Raspberry Pi 5 디스플레이 단말
 
-## Development environment
+## 개발 환경
 
-The Atlas Flutter implementation and cross-builds are done in the Docker Compose environment described in [atlas/README.md](atlas/README.md). Vendor assets used by Docker are prepared in the gitignored `atlas/vendor/` inside the repo; no external paths are used in the Docker configuration.
+Atlas Flutter 기반 구현과 크로스 빌드는 [atlas/README.md](atlas/README.md)의 Docker Compose 환경에서 수행한다. Docker가 사용하는 공급사 자산은 레포 내부의 gitignore된 `atlas/vendor/`에 준비하며, 외부 경로를 Docker 설정에 사용하지 않는다.
 
-The actual iteration loop is `edit code and Docker cross-build on the dev PC → install and run on the Pi 5 over SSH →
-check the run console/DevTools logs → edit code`. The Pi 5 runs the `.ipk` app natively on AI Native OS
-and does not run Docker.
+실제 반복 단위는 `개발 PC에서 코드 수정·Docker 크로스 빌드 → SSH로 Pi 5 설치·실행 →
+run 콘솔/DevTools 로그 확인 → 코드 수정`이다. Pi 5는 AI Native OS에서 `.ipk` 앱을
+네이티브로 실행하며 Docker를 실행하지 않는다.
 
-Owner: Minkyung Choi
+담당: 최민경
 
-The output terminal of the desk-top display appliance. It subscribes to `deskmate/state/phase` and
-shows the current phase · suggestion cards · rest notices · work reports,
-and publishes user feedback to `deskmate/feedback/user`.
+책상 위 디스플레이형 가전의 출력 단말. `deskmate/state/phase` 를 구독해
+현재 국면 · 제안 카드 · 휴식 알림 · 작업 리포트를 표시하고,
+사용자 피드백을 `deskmate/feedback/user` 로 발행한다.
 
-## Screens (state-adaptive — the 4 screens from the poster)
+## 화면 (상태 적응형 — 포스터 기준 4화면)
 
-| Screen | Contents | Status |
+| 화면 | 내용 | 상태 |
 |---|---|---|
-| Standby (AOD) | Shows only the time · environment summary (CO₂ · illuminance · temperature/humidity) · presence | 🟡 The dashboard has an environment summary; a dedicated low-information standby screen is not yet separated |
-| Low-stimulus focus | A screen that reduces unnecessary information while focused. Tapping reveals details (focus time · environment · manual control) | 🟡 The dashboard always shows details. Low-stimulus/detail toggle not implemented |
-| Suggestion card / auto-action notice | In the `conf_suggest` (0.45) – `conf_auto` (0.75) range, accept / reject; at or above `conf_auto`, after-the-fact notice + undo. Shows the reason for the action | 🟡 Suggestion card and feedback sending exist. Auto-action notice, undo, and reason text not implemented |
-| Session report | At the end, a summary of focus time · state changes · intervention outcomes · main patterns | ⬜ Not implemented (`hub` `report.py` is scheduled to land in main via the `feat/merge-pending` PR) |
+| 대기 (AOD) | 시각 · 환경 요약(CO₂ · 조도 · 온습도) · 재실만 표시 | 🟡 대시보드에 환경 요약 있음, 대기 전용 저정보 화면은 미분리 |
+| 집중 저자극 | 몰입 중 불필요 정보를 줄인 화면. 터치 시 상세(집중 시간·환경·수동 제어) 노출 | 🟡 대시보드가 항상 상세를 보여줌. 저자극/상세 토글 미구현 |
+| 제안 카드 / 자동 실행 알림 | `conf_suggest`(0.45)~`conf_auto`(0.75) 구간은 수락 / 거절, `conf_auto` 이상은 사후 통지 + 되돌리기. 실행 이유 문구 표시 | 🟡 제안 카드·피드백 전송 있음. 자동 실행 알림·되돌리기·이유 문구 미구현 |
+| 세션 리포트 | 종료 시 집중 시간 · 상태 변화 · 개입 결과 · 주요 패턴 요약 | ⬜ 미구현 (`hub` `report.py` 는 `feat/merge-pending` PR 로 main 진입 예정) |
 
-Other development helper screens include an 18-state transition graph, a sensor test (Pi 4 `/api/test-frame`), a keystroke panel, and an audio playback toggle.
+그 밖에 개발 보조 화면으로 18상태 전이 그래프, 센서 테스트(Pi 4 `/api/test-frame`), 키스트로크 패널, 오디오 재생 토글이 있다.
 
-The **PC Keystroke** tab under the keyboard icon at the top shows the PC collector's hold time and inter-key interval (mean and
-standard deviation), rhythm coefficient of variation, space and correction ratios, mouse activity, and the trend of the last 60 samples.
-Over an MQTT connection it subscribes directly to `deskmate/sensor/keystroke` at 1 Hz; the HTTP development path
-uses the hub's summary values. Keyboard input on the board does not overwrite this tab's PC values.
-It distinguishes demo, collector waiting, no input, and reception lost for more than 5 seconds.
+상단 키보드 아이콘의 **PC 키스트로크** 탭은 PC 수집기의 유지 시간·입력 간격(평균과
+표준편차), 리듬 변동계수, 공백·교정 비율, 마우스 활동량과 최근 60개 표본 추이를 보여준다.
+MQTT 연결에서는 `deskmate/sensor/keystroke`를 1Hz로 직접 구독하며, HTTP 개발 경로는
+허브 요약값을 사용한다. 보드 키보드 입력은 이 탭의 PC 값을 덮어쓰지 않는다.
+데모·수집기 대기·미입력·5초 초과 수신 끊김을 구분한다.
 
-Connect the PC, Pi 4, and Pi 5 to the same network, set the Pi 4 MQTT address and port in the app's connection settings,
-then run the following from the repository root on the PC. The default port is 1883.
+PC와 Pi 4·Pi 5를 같은 네트워크에 연결하고 앱의 연결 설정에서 Pi 4 MQTT 주소·포트를
+지정한 뒤, PC 저장소 루트에서 아래를 실행한다. 기본 포트는 1883이다.
 
 ```bash
 python -m pip install -r collector/requirements.txt
 python -m collector --broker <Pi4-IP> --port 1883
 ```
 
-Bluetooth pairing alone does not send PC input features. In the current development plan and the collector
-implementation, the communication path is MQTT. Key contents are not transmitted, and the app's graphs reset when you leave the tab.
+Bluetooth 페어링만으로 PC 입력 특징이 전송되지는 않는다. 현재 개발계획서와 수집기
+구현의 통신 경로는 MQTT다. 키 내용은 전송하지 않으며, 앱 그래프는 탭을 나가면 초기화된다.
 
-## Feedback design
+## 피드백 설계
 
-The user's accept · reject · correct responses become the ESM labels for the stage-2 classifier as-is,
-so the feedback UI is also a **label collection channel**. Lowering the input burden determines how many labels we get.
+사용자의 수락 · 거절 · 정정이 그대로 2단계 분류기의 ESM 라벨이 되므로,
+피드백 UI 는 **라벨 수집 채널**이기도 하다. 입력 부담을 낮추는 게 라벨 양을 좌우한다.
 
-- A suggestion card must be answerable within 2 taps
-- A correction (`correct`) is a simple choice among the 4 phases
-- No response is also recorded as a signal (neither accept nor reject)
+- 제안 카드는 2탭 이내로 응답 가능해야 한다
+- 정정(`correct`)은 4개 국면 중 선택하는 단순 형태
+- 무응답도 하나의 신호로 기록한다 (수락도 거절도 아님)
 
-## Technology choice
+## 기술 선택
 
-We settled on **Atlas Flutter** on the Pi 5 AI Native OS Video Profile. The app source is in
-[`atlas/ui_env_app/`](atlas/ui_env_app/); the Atlas platform runner reviewed from the LG-provided sample was copied and then
-separated out with a DESKMATE-specific app ID and minimal permissions.
+Pi 5 AI Native OS Video Profile의 **Atlas Flutter**로 확정했다. 앱 소스는
+[`atlas/ui_env_app/`](atlas/ui_env_app/)에 있으며, LG 제공 샘플에서 검토한 Atlas 플랫폼 러너를 복사한 뒤
+DESKMATE 전용 앱 ID와 최소 권한으로 분리했다.
 
-- No hub URL set: the built-in demo cycles through 5 representative states.
-- `DESKMATE_HUB_URL` set: polls the Pi 4 preview API every 1 second and returns accept/reject (development fallback).
-- `DESKMATE_MQTT_HOST` set: **the final path.** Subscribes to `deskmate/state/phase` (retain) · `interaction/request` · `display/message` at QoS 1 and
-  publishes `feedback/user`. If both HTTP and MQTT are given, MQTT takes precedence.
+- 허브 URL 미지정: 화면 내장 데모가 5개 대표 상태를 순환한다.
+- `DESKMATE_HUB_URL` 지정: Pi 4 미리보기 API를 1초 간격으로 조회하고 수락·거절을 되돌린다(개발용 fallback).
+- `DESKMATE_MQTT_HOST` 지정: **최종 경로.** `deskmate/state/phase`(retain)·`interaction/request`·`display/message` 를 QoS 1 구독하고
+  `feedback/user` 를 발행한다. HTTP 와 동시에 주면 MQTT 우선.
 
-## Current deployment status (2026-09-14)
+## 현재 배포 상태 (2026-09-14)
 
-- Atlas Flutter app source and platform runner: implemented
-- Pi 4 synthetic FSM state and feedback connection (HTTP): implemented
-- MQTT subscribe/publish (`MqttStateSource`): implemented. However, **the hub does not publish over MQTT yet**, so so far it has been verified with Node-RED injection
-- Dashboard redesign · 18-state graph · keystroke panel · audio: implemented
-- Atlas SDK import procedure on the dev PC: implemented, assets excluded from Git
-- Release `.ipk` build and Pi 5 install/run: done
-- **Touch on real hardware: working** — touch confirmed after replacing the display on 2026-09-14 (the earlier `xhci-hcd.1` failure is history)
-- Auto-start on reboot: not implemented
-- Session report screen, low-stimulus/detail toggle, auto-action notice and undo: not implemented
+- Atlas Flutter 앱 소스와 플랫폼 러너: 구현됨
+- Pi 4 합성 FSM 상태·피드백 연결(HTTP): 구현됨
+- MQTT 구독·발행(`MqttStateSource`): 구현됨. 단 **hub 측 MQTT 발행이 아직 없어** 지금까지는 Node-RED 주입으로 확인함
+- 대시보드 재설계 · 18상태 그래프 · 키스트로크 패널 · 오디오: 구현됨
+- 개발 PC Atlas SDK import 절차: 구현됨, 자산은 Git 제외
+- release `.ipk` 생성과 Pi 5 설치·실행: 완료
+- **실기 터치: 정상** — 2026-09-14 디스플레이 교체 후 터치 동작 확인(이전 `xhci-hcd.1` 장애는 이력)
+- 재부팅 자동 시작: 미구현
+- 세션 리포트 화면, 저자극/상세 토글, 자동 실행 알림·되돌리기: 미구현
 
-> The Pi 5 practically requires a 27W PD adapter and an active cooler. Throttling under always-on display output +
-> heat directly affects long-running stability.
+> Pi 5 는 27W PD 어댑터와 액티브 쿨러가 사실상 필수다. 상시 화면 출력 +
+> 발열 조건에서 스로틀링이 나면 장시간 구동 안정성에 직결된다.

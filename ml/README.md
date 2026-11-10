@@ -1,56 +1,56 @@
-**English** | [한국어](README.ko.md)
+[English](README.EN.md) | **한국어**
 
-# ml — Stage-2 lightweight classifier training pipeline
+# ml — 2단계 경량 분류기 학습 파이프라인
 
-Owner: Myunghee Cho
+담당: 조명희
 
-Trains a lightweight classifier (2D CNN or MLP) **on the PC** using self-reported ESM labels,
-converts it to TFLite, and deploys it to the Raspberry Pi 4. The cloud is not used for inference.
+자가기록 ESM 라벨로 경량 분류기(CNN 2D 또는 MLP)를 **PC에서 학습**하고,
+TFLite 로 변환해 Raspberry Pi 4 에 배포한다. 클라우드는 추론에 사용하지 않는다.
 
-## Positioning
+## 위치 설정
 
-The stage-2 classifier is a **proof of concept (demonstration)**. The backbone of the system's completeness is the stage-1 rule FSM;
-the classifier complements and validates it. The system must work even if accuracy falls short of the target.
+2단계 분류기는 **개념 실증(demonstration)** 이다. 완성도의 축은 1단계 규칙 FSM 이고,
+분류기는 이를 보완 · 검증한다. 정확도가 목표치에 못 미쳐도 시스템은 동작해야 한다.
 
-Why we frame it this way: it is hard to collect enough ESM labels within 2 months,
-and for cognitive states like focus and fatigue, the ground truth itself is very noisy.
+이렇게 잡는 이유: ESM 라벨을 2개월 내 충분히 모으기 어렵고,
+집중 · 피로 같은 인지상태는 정답 자체의 노이즈가 크다.
 
-## Constraints
+## 제약
 
-| Item | Target |
+| 항목 | 목표 |
 |---|---|
-| Model size | Tens to hundreds of KB (reference: ST HPD 5th generation, fewer than 10,000 weights per neural network · 29KB Flash) |
-| Inference latency | Must fit within the 500ms decision-cycle budget |
-| Deployment format | TFLite, on-device on the Pi 4 |
+| 모델 크기 | 수십 ~ 수백 KB (참조: ST HPD 5세대, 신경망당 가중치 10,000개 미만 · Flash 29KB) |
+| 추론 지연 | 판정 사이클 500ms 예산 안에 들어올 것 |
+| 배포 형식 | TFLite, Pi 4 온디바이스 |
 
-## Layout
+## 구조
 
 ```
 ml/
-├── datasets/       collected data (gitignored — do not commit)
-├── training/       preprocessing · training · evaluation scripts
-├── models/         converted .tflite (gitignored, only deployed builds go to releases)
+├── datasets/       수집 데이터 (gitignore — 커밋 금지)
+├── training/       전처리 · 학습 · 평가 스크립트
+├── models/         변환된 .tflite (gitignore, 배포본만 릴리스로)
 ├── export_tflite.py
 └── requirements.txt
 ```
 
-## Data
+## 데이터
 
-| Source | License · handling |
+| 출처 | 라이선스 · 취급 |
 |---|---|
-| Self-reported ESM labels | Collected by team members, **private — do not commit to the repository** |
-| ST VL53L8CX Hand Posture Dataset | Attribution required |
-| nQSI Dataset (nQ Medical) | Reference for keystroke fatigue research |
+| 자가기록 ESM 라벨 | 팀원 수집, **비공개 — 저장소에 커밋 금지** |
+| ST VL53L8CX Hand Posture Dataset | 출처 표기 |
+| nQSI Dataset (nQ Medical) | 키스트로크 피로 연구 참조 |
 
-`datasets/` and `models/` are blocked by `.gitignore`.
-Data lives on the team Google Drive; only download scripts and checksums are committed here.
+`datasets/` 와 `models/` 는 `.gitignore` 로 막혀 있다.
+데이터는 팀 구글 드라이브에 두고, 여기에는 다운로드 스크립트와 체크섬만 커밋한다.
 
-## Training windows and augmentation pipeline
+## 학습 창·증강 파이프라인
 
-`training/build_dataset.py` reads a synthetic dry-run or matching pairs of `frames-*.jsonl` and `state-*.jsonl`
-and builds 6 tick × 17 feature windows. `--esm` can override with correction labels. After splitting
-train/eval by session, it applies noise · time warping · sensor dropout · baseline shift · sensitivity scaling **to training windows only**.
-Real logs and ESM files are not put in the repository.
+`training/build_dataset.py` 는 합성 dry-run 또는 짝이 맞는 `frames-*.jsonl`·`state-*.jsonl` 을
+읽어 6 tick × 17특징 창을 만든다. `--esm` 으로 정정 라벨을 덮을 수 있다. 세션 단위로
+학습·평가를 나눈 뒤 **학습 창에만** 잡음·시간 변형·센서 결측·기준선 이동·민감도 배율을 적용한다.
+실제 로그와 ESM 파일은 저장소에 넣지 않는다.
 
 ```sh
 python -m pip install -r ml/requirements.txt
@@ -59,29 +59,29 @@ python ml/training/evidence.py ml/datasets/synth-v1 --out docs/ml-augmentation-e
 python -m pytest ml -q
 ```
 
-The outputs are `ml/datasets/<name>/windows.npz` and `manifest.json`. The NPZ's `meta` is
-a JSON string array ordered as training windows followed by evaluation windows, holding the session ID · start tick · label source · augmentation type · split.
-The accuracy in the evidence document is a sanity check against synthetic weak labels and should not be read as real-world performance.
-Columns that are not sensor measurements, such as breathing and elapsed time (`augment.EXEMPT`), get no noise · offset · scaling.
-The evidence document also includes a class-weighted softmax (checking the rare rest class) and **robustness to missing data and individual differences** (applying dropout · baseline shift · sensitivity differences to evaluation windows
-and comparing training on original vs. augmented data). Public dataset candidates are in [`docs/dataset-survey.md`](../docs/dataset-survey.md).
+출력은 `ml/datasets/<name>/windows.npz` 와 `manifest.json` 이다. NPZ의 `meta` 는
+학습 창 다음 평가 창 순서의 JSON 문자열 배열이며 세션 ID·시작 tick·라벨 출처·증강 종류·분할을 담는다.
+증거 문서의 정확도는 합성 약한 라벨에 대한 sanity check이며 실사용 성능으로 해석하지 않는다.
+호흡·경과 시간처럼 센서 측정값이 아닌 칸(`augment.EXEMPT`)에는 잡음·오프셋·배율을 넣지 않는다.
+증거 문서에는 클래스 가중 소프트맥스(드문 rest 확인)와 **결측·개인차 내성**(평가 창에 결측·기준선 이동·민감도 차이를 입혀
+원본 학습 vs 증강 학습 비교)이 함께 실린다. 공개 데이터셋 후보는 [`docs/dataset-survey.md`](../docs/dataset-survey.md).
 
-## ESM labeling scheme
+## ESM 라벨링 체계
 
-User feedback from the display terminal (`accept` / `reject` / `correct`) becomes the label as-is.
-Rather than building a separate labeling app, using the feedback UI as the label collection channel
-is better for gathering enough labels. The label schema will be recorded in this document once finalized.
+디스플레이 단말의 사용자 피드백(`accept` / `reject` / `correct`)이 그대로 라벨이 된다.
+별도 라벨링 앱을 만들기보다 피드백 UI 를 라벨 수집 채널로 쓰는 편이
+라벨 양 확보에 유리하다. 라벨 스키마는 이 문서에 확정 후 기록한다.
 
 
-## Next development for stage-2 personalization
+## 2단계 개인화 다음 개발
 
-The development order follows the [stage-2 personalization plan](../docs/plan/personalization-stage2-plan.md),
-and the input/output and metadata contract follows the [model contract](../docs/personalization-model-contract.md).
-The shared 1D CNN and per-user head retraining · comparison · fallback have been implemented and verified by running them. TFLite conversion and real inference on the PC have also been verified; the hub observation hookup is disabled by default.
-Training commands and results are in [shared model training](../docs/common-model-training.md).
+개발 순서는 [개인화 2단계 계획](../docs/plan/personalization-stage2-plan.md),
+입출력·metadata 계약은 [모델 계약](../docs/personalization-model-contract.md)을 따른다.
+공통 1D CNN과 개인 head 재학습·비교·폴백 구현 및 실행 검증을 완료했다. TFLite 변환과 PC 실제 추론 검증까지 완료했으며 hub 관찰 연결은 기본 비활성이다.
+학습 명령과 결과는 [공통 모델 학습](../docs/common-model-training.md)에 있다.
 
-Per-user head commands and results are in [per-user head retraining](../docs/personal-head-training.md).
+개인 head 명령과 결과는 [개인 head 재학습](../docs/personal-head-training.md)에 있다.
 
-Conversion commands and results are in [TFLite validation](../docs/tflite-export-validation.md).
+변환 명령과 결과는 [TFLite 검증](../docs/tflite-export-validation.md)에 있다.
 
-Observation comparison commands and results are in [same-frame comparison](../docs/model-replay-comparison.md). Fusion is not applied.
+관찰 비교 명령과 결과는 [동일 프레임 비교](../docs/model-replay-comparison.md)에 있다. fusion은 적용하지 않는다.
