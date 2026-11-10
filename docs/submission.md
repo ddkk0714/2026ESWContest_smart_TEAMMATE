@@ -8,7 +8,7 @@
 |---|---|---|---|
 | 개발 완료 보고서 | `2026ESWContest_스마트가전_TEAMMATE_개발완료보고서` | **20 page 이내, PDF** | 구글폼 파일 첨부 |
 | 소스코드 | `github.com/ddkk0714/2026ESWContest_smart_TEAMMATE` | — | 구글폼에 GitHub 링크 입력 |
-| 시연 동영상 | 제목: `2026ESWContest_스마트가전_TEAMMATE_시연동영상` | YouTube 업로드 | 구글폼에 YouTube 링크 입력 |
+| 시연 동영상 | 제목: `2026ESWContest_스마트가전_TEAMMATE_시연동영상` · [YouTube](https://www.youtube.com/watch?v=7c-AGWE3HJg) | YouTube 업로드 | 구글폼에 YouTube 링크 입력 |
 | 작품소개서 | `2026ESWContest_스마트가전_TEAMMATE_작품소개서` | **2 page 이내, 한글/워드** | 구글폼 파일 첨부 |
 | 개발 작품 | — | 최소 1개 이상 | 결선 시 지참 |
 
@@ -31,7 +31,8 @@
 - [ ] 자가기록 ESM 라벨 등 비공개 데이터가 커밋되지 않았는지
 - [ ] 저장소 **public** 전환 (심사위원 접근 가능해야 함)
 - [ ] LICENSE 확인 · 사용한 오픈소스 출처 표기
-- [ ] README 에 시연 영상 · 보고서 링크 추가
+- [x] README 에 시연 영상 링크 추가 ([YouTube](https://www.youtube.com/watch?v=7c-AGWE3HJg))
+- [ ] README 에 보고서 링크 추가
 
 ## 서류 작성 기준 (2026-09-14)
 

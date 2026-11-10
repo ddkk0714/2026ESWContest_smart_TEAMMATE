@@ -2,7 +2,7 @@
 
 # ml — Stage-2 lightweight classifier training pipeline
 
-Owner: Myunghee Cho
+Owner: Myeonghee Cho
 
 Trains a lightweight classifier (2D CNN or MLP) **on the PC** using self-reported ESM labels,
 converts it to TFLite, and deploys it to the Raspberry Pi 4. The cloud is not used for inference.
