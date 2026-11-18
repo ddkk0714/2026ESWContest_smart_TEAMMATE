@@ -270,11 +270,13 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
         /* 10-24 Pi 5: ATLAS GATT Connect refused this fan on its public address before even calling BlueZ;
          * the iLink lamp it does accept uses a random static one. Advertise the board's own address with the
          * top two bits set (2C:CF:.. -> EC:CF:..), which stays the same across reboots. */
+        addr[0] |= 0xc0; /* must happen before the set — gap_random_address_set copies the bytes at once */
         gap_random_address_set(addr);
-        addr[0] |= 0xc0;
         printf("[fan] BLE up as DESKMATE-FAN %s (random static)\n", bd_addr_to_str(addr));
         memset(null_addr, 0, sizeof(null_addr));
-        gap_advertisements_set_params(160, 320, 0, 0, null_addr, 0x07, 0x00); /* 100-200 ms, connectable */
+        /* 30-60 ms, connectable. Pi 5 shares one antenna with its Wi-Fi hotspot and an A2DP speaker, so its
+         * scan windows are short and sparse; advertising three times as often gives them more to catch. */
+        gap_advertisements_set_params(48, 96, 0, 0, null_addr, 0x07, 0x00);
         gap_advertisements_set_data(sizeof(adv_data), (uint8_t *)adv_data);
         gap_scan_response_set_data(sizeof(scan_resp_data), (uint8_t *)scan_resp_data);
         gap_advertisements_enable(1);
@@ -364,7 +366,13 @@ int main(void) {
     if (watchdog_caused_reboot()) printf("[fan] restarted by watchdog\n");
 
     l2cap_init();
+    /* BlueZ drops an unpaired LE device about 30 s after it disconnects, and Gatt.Connect then fails without
+     * even reaching the controller ("Device with supplied address is not available") until the app scans
+     * again. Accept bonding so Pi 5 can keep us in its device list. Just Works — the fan has no keypad and
+     * no secret to protect; a central that never pairs still connects exactly as before. */
     sm_init();
+    sm_set_io_capabilities(IO_CAPABILITY_NO_INPUT_NO_OUTPUT);
+    sm_set_authentication_requirements(SM_AUTHREQ_BONDING);
     att_server_init(profile_data, att_read_callback, att_write_callback);
     hci_event_callback_registration.callback = &packet_handler;
     hci_add_event_handler(&hci_event_callback_registration);
