@@ -5,6 +5,8 @@
 **제24회 임베디드SW경진대회 · 스마트 가전 부문 · 팀 TEAMMATE**
 **비접촉 센싱 기반 인지상태 모니터링 스마트 데스크**
 
+🏆 **수상: 스마트 가전 부문 입선 — 한국임베디드AX산업협회 회장상**
+
 > **책상 위에 두기만 하면, 묻기 전에 먼저 움직이는 가전.**
 > ToF 자세 · 60 GHz mmWave · 키 입력 타이밍 · 환경 4종 신호를 융합해 작업 상태(시작 · 몰입 · 피로 · 종료)를 **10초마다** 판정하고,
 > 피로의 원인(환경 · 자세 · 경과)에 맞는 개입 하나를 골라 조명 · 선풍기 · 휴식 안내를 **제안하거나 되돌릴 수 있게 자동 실행**한다.
@@ -285,6 +287,8 @@ Pi 5 는 `sh /data/share/deskmate/recovery/install.sh pi5 --runtime-only`. 전�
 
 **24th Embedded Software Contest (Korea) · Smart Home Appliance Track · Team TEAMMATE**
 **A smart desk that monitors cognitive state with contactless sensing**
+
+🏆 **Award: Honorable Mention (입선), Smart Home Appliance Track — President's Award of the Korea Embedded AX Industry Association (한국임베디드AX산업협회 회장상)**
 
 > **Just place it on your desk — it acts before you have to ask.**
 > DESKMATE fuses four signal groups — ToF posture, 60 GHz mmWave, keystroke timing, and the room environment — to infer your work state (start · focus · fatigue · end) **every 10 seconds**.
