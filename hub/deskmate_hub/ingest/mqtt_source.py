@@ -94,4 +94,4 @@ class MqttSource:
         self._log("[mqtt] disconnected (자동 재연결)")
 
     def _on_message(self, client, userdata, msg) -> None:
-        route_mqtt_message(self.cache, msg.topic, msg.payload, time.time())
+        route_mqtt_message(self.cache, msg.topic, msg.payload, time.time(), retained=bool(msg.retain))

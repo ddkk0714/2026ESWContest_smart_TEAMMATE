@@ -682,3 +682,19 @@ QoS 1, retain 없음. 연결이 끊긴 동안의 기록은 앱이 순서대로 �
 `event`: `session_start`(kss, sleep_hours_last_night, profile{chronotype, usual_sleep_h, work_type}) ·
 `kss`(kss 1~9, prompt_ts, response_ms) · `sleepy` · `prompt_missed`(prompt_ts) · `session_end`(kss).
 프로필 슬롯 이름(A~F)은 보내지 않고 `profile_id` 만 보낸다.
+
+
+### ThinQ 노트북 Gateway 호스트 시험 계약 (2026-11-04)
+
+호스트 구현·Fixture/Mock 시험용이다. 운영 브로커 발행, 보드 배포, Live MQTT 제어는 미검증이며 기본 연결하지 않는다.
+
+- 관측 토픽: `deskmate/sensor/appliance/{source}/{logical_device_id}`. 현재 논리 ID 예시는 `thinq-reader/purifier-one`이다. QoS 0, retain=false.
+- Envelope: `schema_name=appliance_observation`, `schema_version=1.0`, `node`, `logical_device_id`, `boot_id`, `seq`, `ts`, `expires_at`, `api_received_at`, `data`. 시각은 Unix 초이며 발행·API 수신·Hub 수신 시각을 구분한다. API 수신 시각은 실제 센서 측정 시각을 보증하지 않는다.
+- `data`: `mode=fixture|live`, `api_status`, `connection=unknown|offline`, `observations`. 필드별 값·유효성·품질·`measured_at=null`·`unit=null`을 검증한다. PM 단위와 PM2의 물리적 의미는 미확인이다. 상세 allowlist는 `hub/deskmate_hub/ingest/appliance.py:validate`가 기준이다.
+- retained·중복·역순·만료·미래 시각·wall-clock 역행을 차단한다. 캐시 표시와 export 반복은 새 측정 또는 새 API 수신으로 취급하지 않는다. 시계 동기화 문제를 TTL 완화로 우회하지 않는다.
+- Hub는 출처별 `ApplianceCache`에만 저장하며 기존 ESP32 `env`를 덮어쓰지 않는다. 화면용 `sensor_summary.appliances`를 추론 후 추가하며 FSM 점수·DeviceRegistry 수동 조작 감지에는 사용하지 않는다. stale 현재값과 역사적 last_good을 구분한다.
+- 기존 `deskmate/control/cmd`의 air_purifier 명령은 관찰만 한다. 명령 ID·만료·retained·중복·대상·operation·gate를 검사해도 사용자 승인 증명이 되지 않는다. LOW/AUTO 외 제어, 자동 제어, Undo는 실행하지 않는다.
+- `deskmate/control/result`는 기존 Mock DeviceGateway 계약으로만 호스트 왕복 검증했다. 노트북 observer는 POST 또는 결과 publish 기능이 없다. POST 접수·GET readback·물리 동작 확인을 서로 대체하지 않는다.
+- PAT·실제 device ID·계정 정보는 payload에 넣지 않는다. 원격 발행 전 인증·ACL·TLS와 시간 동기화를 별도로 검증해야 한다. 기존 익명 1883을 안전하다고 가정하지 않는다.
+
+구현 범위와 실기 차단 조건: [ThinQ 통합 계약](../tools/laptop-control/THINQ-INTEGRATION.md).

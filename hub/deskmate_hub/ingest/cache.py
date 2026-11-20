@@ -11,6 +11,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from .appliance import ApplianceCache
+
 
 @dataclass
 class Sample:
@@ -55,6 +57,9 @@ class SensorCache:
     keystroke_history: deque = field(default_factory=lambda: deque(maxlen=1800))
     seq_gaps: dict[str, int] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    # Independent display-only ThinQ observations; never overwrite ESP32 env.
+    appliances: ApplianceCache = field(default_factory=ApplianceCache)
 
     # ---- 쓰기 (수신 스레드) ----
     def put(self, kind: str, sample: Sample) -> None:
